@@ -5,19 +5,89 @@ namespace Rig.Analysis;
 
 internal static class CallGraphBuilder
 {
+    private sealed record CallGraphContext(
+        IReadOnlyDictionary<string, MethodModel> Methods,
+        IReadOnlyList<EffectRule> DispatchRules,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> DispatchIndex);
+
     public static IReadOnlyList<CallGraphInfo> Build(
         IReadOnlyList<EntryPointInfo> entryPoints,
         IReadOnlyList<SourceModel> sources,
-        IReadOnlyList<EffectInfo> effects)
+        IReadOnlyList<EffectInfo> effects,
+        IReadOnlyList<EffectRule> dispatchRules)
     {
         var methods = sources
             .SelectMany(source => FindApplicationMethods(source, effects))
             .GroupBy(method => method.Key, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
 
+        var dispatchIndex = BuildDispatchIndex(sources);
+        var context = new CallGraphContext(methods, dispatchRules, dispatchIndex);
+
         return entryPoints
-            .Select(entryPoint => BuildCallGraph(entryPoint, sources, methods))
+            .Select(entryPoint => BuildCallGraph(entryPoint, sources, context))
             .ToArray();
+    }
+
+    private static IReadOnlyDictionary<string, IReadOnlyList<string>> BuildDispatchIndex(
+        IReadOnlyList<SourceModel> sources)
+    {
+        var index = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+        foreach (var source in sources)
+        {
+            foreach (var classDecl in source.Root.DescendantNodes().OfType<ClassDeclarationSyntax>())
+            {
+                if (source.SemanticModel.GetDeclaredSymbol(classDecl) is not INamedTypeSymbol classSymbol)
+                {
+                    continue;
+                }
+
+                foreach (var iface in classSymbol.AllInterfaces)
+                {
+                    if (!IsMessageHandlerInterface(iface.OriginalDefinition) || iface.TypeArguments.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    var messageKey = iface.TypeArguments[0].OriginalDefinition.ToDisplayString();
+
+                    var handleMethod = classDecl.Members
+                        .OfType<MethodDeclarationSyntax>()
+                        .FirstOrDefault(m => m.Identifier.ValueText is "Handle" or "HandleAsync");
+
+                    if (handleMethod is null ||
+                        source.SemanticModel.GetDeclaredSymbol(handleMethod) is not IMethodSymbol handleSymbol)
+                    {
+                        continue;
+                    }
+
+                    var methodKey = RoslynSymbolHelpers.GetMethodKey(handleSymbol);
+
+                    if (!index.TryGetValue(messageKey, out var handlers))
+                    {
+                        index[messageKey] = handlers = [];
+                    }
+
+                    if (!handlers.Contains(methodKey, StringComparer.Ordinal))
+                    {
+                        handlers.Add(methodKey);
+                    }
+                }
+            }
+        }
+
+        return index.ToDictionary(
+            kvp => kvp.Key,
+            kvp => (IReadOnlyList<string>)kvp.Value.AsReadOnly(),
+            StringComparer.Ordinal);
+    }
+
+    private static bool IsMessageHandlerInterface(INamedTypeSymbol iface)
+    {
+        var ns = iface.ContainingNamespace?.ToDisplayString();
+        return ns is "MediatR" or "Mediator" &&
+               iface.Name is "IRequestHandler" or "ICommandHandler" or "IQueryHandler" or "INotificationHandler";
     }
 
     private static IEnumerable<MethodModel> FindApplicationMethods(SourceModel source, IReadOnlyList<EffectInfo> effects)
@@ -51,17 +121,17 @@ internal static class CallGraphBuilder
     private static CallGraphInfo BuildCallGraph(
         EntryPointInfo entryPoint,
         IReadOnlyList<SourceModel> sources,
-        IReadOnlyDictionary<string, MethodModel> methods)
+        CallGraphContext context)
     {
         var nodes = new List<CallGraphNodeInfo>();
         var visited = new HashSet<string>(StringComparer.Ordinal);
 
-        var entryNode = CreateEntryNode(entryPoint, sources, methods);
+        var entryNode = CreateEntryNode(entryPoint, sources, context);
         nodes.Add(entryNode.Node);
 
         foreach (var call in entryNode.Calls)
         {
-            VisitMethod(call.Key, methods, nodes, visited);
+            VisitMethod(call.Key, context, nodes, visited);
         }
 
         return new CallGraphInfo(entryPoint.DisplayName, nodes);
@@ -70,19 +140,17 @@ internal static class CallGraphBuilder
     private static (CallGraphNodeInfo Node, IReadOnlyList<ResolvedCall> Calls) CreateEntryNode(
         EntryPointInfo entryPoint,
         IReadOnlyList<SourceModel> sources,
-        IReadOnlyDictionary<string, MethodModel> methods)
+        CallGraphContext context)
     {
-        if (entryPoint.Kind == "mvc")
-        {
-            var method = methods.Values.FirstOrDefault(method =>
-                string.Equals(method.FilePath, entryPoint.FilePath, StringComparison.OrdinalIgnoreCase) &&
-                method.Line == entryPoint.Line);
+        var method = context.Methods.Values.FirstOrDefault(method =>
+            string.Equals(method.FilePath, entryPoint.FilePath, StringComparison.OrdinalIgnoreCase) &&
+            method.Line == entryPoint.Line);
 
-            if (method is not null)
-            {
-                var calls = ResolveCalls(method.Body, method.SemanticModel, methods);
-                return (CreateNode(entryPoint.DisplayName, entryPoint.FilePath, entryPoint.Line, calls, [], "high", "compilation", "mvc_action_symbol"), calls.Application);
-            }
+        if (method is not null)
+        {
+            var calls = ResolveCalls(method.Body, method.SemanticModel, context);
+            var reason = entryPoint.Kind == "mvc" ? "mvc_action_symbol" : "handler_method_symbol";
+            return (CreateNode(entryPoint.DisplayName, entryPoint.FilePath, entryPoint.Line, calls, [], "high", "compilation", reason), calls.Application);
         }
 
         var source = sources.First(source => string.Equals(source.FilePath, entryPoint.FilePath, StringComparison.OrdinalIgnoreCase));
@@ -92,7 +160,7 @@ internal static class CallGraphBuilder
 
         if (invocation is not null)
         {
-            var calls = ResolveMinimalApiHandlerCalls(invocation, source.SemanticModel, methods);
+            var calls = ResolveMinimalApiHandlerCalls(invocation, source.SemanticModel, context);
             return (CreateNode(entryPoint.DisplayName, entryPoint.FilePath, entryPoint.Line, calls, [], "high", "compilation", "minimal_api_handler_symbol"), calls.Application);
         }
 
@@ -102,7 +170,7 @@ internal static class CallGraphBuilder
     private static ResolvedCallSet ResolveMinimalApiHandlerCalls(
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel,
-        IReadOnlyDictionary<string, MethodModel> methods)
+        CallGraphContext context)
     {
         var handler = invocation.ArgumentList.Arguments.Skip(1).FirstOrDefault()?.Expression;
         if (handler is null)
@@ -112,7 +180,7 @@ internal static class CallGraphBuilder
 
         if (handler is ParenthesizedLambdaExpressionSyntax or SimpleLambdaExpressionSyntax or AnonymousMethodExpressionSyntax)
         {
-            return ResolveCalls(handler, semanticModel, methods);
+            return ResolveCalls(handler, semanticModel, context);
         }
 
         var methodSymbol = RoslynSymbolHelpers.ResolveMethodSymbol(handler, semanticModel);
@@ -122,28 +190,28 @@ internal static class CallGraphBuilder
         }
 
         var key = RoslynSymbolHelpers.GetMethodKey(methodSymbol);
-        return methods.TryGetValue(key, out var method)
+        return context.Methods.TryGetValue(key, out var method)
             ? new ResolvedCallSet([new ResolvedCall(key, method.Symbol)], [])
             : new ResolvedCallSet([], [CreateExternalBoundaryCall(handler, semanticModel, methodSymbol)]);
     }
 
     private static void VisitMethod(
         string key,
-        IReadOnlyDictionary<string, MethodModel> methods,
+        CallGraphContext context,
         List<CallGraphNodeInfo> nodes,
         HashSet<string> visited)
     {
-        if (!visited.Add(key) || !methods.TryGetValue(key, out var method))
+        if (!visited.Add(key) || !context.Methods.TryGetValue(key, out var method))
         {
             return;
         }
 
-        var calls = ResolveCalls(method.Body, method.SemanticModel, methods);
+        var calls = ResolveCalls(method.Body, method.SemanticModel, context);
         nodes.Add(CreateNode(method.Symbol, method.FilePath, method.Line, calls, method.Effects, "high", "compilation", "direct_symbol_match"));
 
         foreach (var call in calls.Application)
         {
-            VisitMethod(call.Key, methods, nodes, visited);
+            VisitMethod(call.Key, context, nodes, visited);
         }
     }
 
@@ -172,7 +240,7 @@ internal static class CallGraphBuilder
     private static ResolvedCallSet ResolveCalls(
         SyntaxNode root,
         SemanticModel semanticModel,
-        IReadOnlyDictionary<string, MethodModel> methods)
+        CallGraphContext context)
     {
         var calls = new List<ResolvedCall>();
         var boundaryCalls = new List<BoundaryCallInfo>();
@@ -187,19 +255,86 @@ internal static class CallGraphBuilder
             }
 
             var key = RoslynSymbolHelpers.GetMethodKey(methodSymbol);
-            if (!methods.TryGetValue(key, out var method))
+            if (context.Methods.TryGetValue(key, out var method))
             {
-                boundaryCalls.Add(CreateExternalBoundaryCall(invocation, semanticModel, methodSymbol));
+                if (!calls.Any(call => string.Equals(call.Key, key, StringComparison.Ordinal)))
+                {
+                    calls.Add(new ResolvedCall(key, method.Symbol));
+                }
                 continue;
             }
 
-            if (!calls.Any(call => string.Equals(call.Key, key, StringComparison.Ordinal)))
+            var dispatched = TryResolveDispatch(invocation, semanticModel, methodSymbol, context);
+            if (dispatched is not null)
             {
-                calls.Add(new ResolvedCall(key, method.Symbol));
+                foreach (var dispatch in dispatched)
+                {
+                    if (!calls.Any(call => string.Equals(call.Key, dispatch.Key, StringComparison.Ordinal)))
+                    {
+                        calls.Add(dispatch);
+                    }
+                }
+                continue;
             }
+
+            boundaryCalls.Add(CreateExternalBoundaryCall(invocation, semanticModel, methodSymbol));
         }
 
         return new ResolvedCallSet(calls, boundaryCalls);
+    }
+
+    private static IReadOnlyList<ResolvedCall>? TryResolveDispatch(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel,
+        IMethodSymbol methodSymbol,
+        CallGraphContext context)
+    {
+        var matchingRule = context.DispatchRules.FirstOrDefault(rule => IsDispatchCall(methodSymbol, rule));
+        if (matchingRule is null)
+        {
+            return null;
+        }
+
+        var argumentType = GetInvocationArgumentType(invocation, semanticModel);
+        if (argumentType is null || !context.DispatchIndex.TryGetValue(argumentType, out var handlerKeys))
+        {
+            return null;
+        }
+
+        var resolved = handlerKeys
+            .Where(hk => context.Methods.ContainsKey(hk))
+            .Select(hk => new ResolvedCall(hk, context.Methods[hk].Symbol))
+            .ToArray();
+
+        return resolved.Length > 0 ? resolved : null;
+    }
+
+    private static bool IsDispatchCall(IMethodSymbol methodSymbol, EffectRule rule)
+    {
+        if (!rule.Methods.Contains(methodSymbol.Name, StringComparer.Ordinal))
+        {
+            return false;
+        }
+
+        if (rule.DeclaringTypes is null || rule.DeclaringTypes.Count == 0)
+        {
+            return false;
+        }
+
+        var containingType = methodSymbol.ContainingType.OriginalDefinition.ToDisplayString();
+        return rule.DeclaringTypes.Any(dt =>
+            string.Equals(dt, containingType, StringComparison.Ordinal) ||
+            containingType.Contains(dt, StringComparison.Ordinal));
+    }
+
+    private static string? GetInvocationArgumentType(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel)
+    {
+        var argument = invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression;
+        return argument is null
+            ? null
+            : semanticModel.GetTypeInfo(argument).Type?.OriginalDefinition.ToDisplayString();
     }
 
     private static BoundaryCallInfo CreateExternalBoundaryCall(

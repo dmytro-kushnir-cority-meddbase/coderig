@@ -196,7 +196,8 @@
       "resource": "argument_type",
       "confidence": "medium",
       "basis": "compilation+profile",
-      "reason": "mediatr_send"
+      "reason": "mediatr_send",
+      "treatAsDispatch": true
     },
     {
       "provider": "mediatr",
@@ -206,7 +207,8 @@
       "resource": "argument_type",
       "confidence": "medium",
       "basis": "compilation+profile",
-      "reason": "mediatr_publish"
+      "reason": "mediatr_publish",
+      "treatAsDispatch": true
     },
     {
       "provider": "redis",

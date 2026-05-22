@@ -25,7 +25,7 @@ public sealed class CleanArchitecturePlaygroundTests
             },
             ignoreOrder: true);
 
-        result.Effects.Count().ShouldBe(24);
+        result.Effects.Count().ShouldBe(18);
 
         result.Effects.ShouldContain(effect =>
             effect.Provider == "efcore" &&
@@ -64,17 +64,20 @@ public sealed class CleanArchitecturePlaygroundTests
             effect.Method == "SendAsync" &&
             effect.Resource == "MailKit.Net.Smtp.SmtpClient");
 
-        result.Effects.ShouldContain(effect =>
-            effect.Provider == "mediatr" &&
-            effect.Operation == "send" &&
-            effect.Method == "Send" &&
-            effect.Resource == "Clean.Architecture.UseCases.Contributors.List.ListContributorsQuery");
+        result.Effects.ShouldNotContain(effect =>
+            effect.Provider == "mediatr");
 
-        result.Effects.ShouldContain(effect =>
-            effect.Provider == "mediatr" &&
-            effect.Operation == "publish" &&
-            effect.Method == "Publish" &&
-            effect.Resource == "Clean.Architecture.Core.ContributorAggregate.Events.ContributorDeletedEvent");
+        var postGraph = result.CallGraphs
+            .Where(g => g.EntryPoint == "fastendpoint POST /Contributors")
+            .ShouldHaveSingleItem();
+        postGraph.Nodes.Select(n => n.Symbol).ShouldContain(s =>
+            s.Contains("CreateContributorHandler", StringComparison.Ordinal));
+
+        var deleteGraph = result.CallGraphs
+            .Where(g => g.EntryPoint == "fastendpoint DELETE /Contributors/{ContributorId:int}")
+            .ShouldHaveSingleItem();
+        deleteGraph.Nodes.Select(n => n.Symbol).ShouldContain(s =>
+            s.Contains("DeleteContributorHandler", StringComparison.Ordinal));
 
         result.Effects.ShouldNotContain(effect =>
             effect.Provider == "efcore" &&

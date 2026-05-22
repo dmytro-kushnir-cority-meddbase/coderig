@@ -138,7 +138,8 @@ internal sealed record EffectRule(
     string Resource,
     string Confidence,
     string Basis,
-    string Reason)
+    string Reason,
+    bool TreatAsDispatch = false)
 {
     public bool Matches(string methodName)
     {

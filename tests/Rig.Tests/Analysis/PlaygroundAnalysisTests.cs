@@ -64,11 +64,6 @@ public sealed class PlaygroundAnalysisTests
             effect.Resource == "MailKit.Net.Smtp.SmtpClient");
 
         result.Effects.ShouldContain(effect =>
-            effect.Provider == "mediatr" &&
-            effect.Operation == "send" &&
-            effect.Resource == "EntryPointEffects.Api.Services.FixtureCommand");
-
-        result.Effects.ShouldContain(effect =>
             effect.Provider == "repository" &&
             effect.Operation == "write" &&
             effect.Resource == "Ardalis.SharedKernel.IRepository<T>");

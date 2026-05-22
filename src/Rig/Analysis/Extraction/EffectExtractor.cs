@@ -25,7 +25,7 @@ internal static class EffectExtractor
                 source.SemanticModel.GetEnclosingSymbol(invocation.SpanStart) as IMethodSymbol,
                 source.SemanticModel);
 
-            foreach (var rule in rules.Effects.Where(rule => Matches(rule, candidate)))
+            foreach (var rule in rules.Effects.Where(rule => !rule.TreatAsDispatch && Matches(rule, candidate)))
             {
                 var effect = TryCreateEffect(rule, methodName, invocation, memberAccess, source.FilePath, line, source.SemanticModel);
                 if (effect is not null)
