@@ -27,7 +27,7 @@ Status: `committed`
 
 ### Phase 1: Core Indexing Skeleton
 
-Status: `todo`
+Status: `in_progress`
 
 - [x] .NET CLI project
 - [ ] `.sln` input handling
@@ -53,7 +53,7 @@ Status: `todo`
 
 ### Phase 3: Entry Points and Callgraph
 
-Status: `todo`
+Status: `in_progress`
 
 - [x] Minimal API entrypoint detection
 - [x] MVC entrypoint detection
@@ -65,7 +65,7 @@ Status: `todo`
 
 ### Phase 4: HTTP, EF Core, and Redis Effects
 
-Status: `todo`
+Status: `in_progress`
 
 - [x] HttpClient effects
 - [x] simple host/path resolution
@@ -76,7 +76,7 @@ Status: `todo`
 
 ### Phase 5: Effect Contexts and Observations
 
-Status: `todo`
+Status: `in_progress`
 
 - [x] loop/foreach/while contexts
 - [ ] LINQ effectful lambda contexts
@@ -90,12 +90,12 @@ Status: `todo`
 
 ### Phase 6: Built-In Packs and Playground Expansion
 
-Status: `todo`
+Status: `in_progress`
 
 - [ ] Milestone 0 built-in profile packs
-- [ ] Minimal API playground
-- [ ] MVC playground
-- [ ] deterministic regression tests
+- [x] Minimal API playground
+- [x] MVC playground
+- [x] deterministic regression tests
 
 ### Phase 7: Diff and Agent Projections
 
@@ -128,7 +128,24 @@ Verification:
   - `dotnet run --project src/Rig -- callgraph "minapi GET /minapi/teams/{id}"` prints 4 nodes with inline effects.
 
 Commit:
-  - this commit
+  - `08639b0 Add shallow callgraph output`
+
+## Next Suggested Slice
+
+Slice: Roslyn-backed observations and symbol resolution
+Phase: 2/3
+Status: `todo`
+
+Contract:
+  - load `.slnx` through Roslyn/MSBuild workspace.
+  - fail loudly on compilation errors.
+  - emit method and invocation observations as explicit records.
+  - resolve `TeamWorkflow` and `BillingClient` calls by symbol rather than string names.
+  - preserve current `rig entrypoints`, `rig effects`, and `rig callgraph` output.
+
+Notes:
+  - keep the current syntax analyzer as a temporary fallback only if it helps the transition.
+  - use `/p:UseSharedCompilation=false` while compiler-server timeouts remain possible.
 
 Use this template when starting one:
 
