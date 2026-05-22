@@ -1,6 +1,6 @@
-﻿namespace Rig.Storage;
+namespace Rig.Storage;
 
-internal sealed class EffectEntity
+public sealed class EffectEntity
 {
     public string RunId { get; set; } = "";
 

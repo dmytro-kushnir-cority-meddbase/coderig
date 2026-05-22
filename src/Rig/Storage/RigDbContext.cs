@@ -4,12 +4,12 @@ using Microsoft.EntityFrameworkCore.Design;
 namespace Rig.Storage;
 
 // Used only by `dotnet ef dbcontext optimize` at design time
-internal sealed class RigDbContextDesignTimeFactory : IDesignTimeDbContextFactory<RigDbContext>
+public sealed class RigDbContextDesignTimeFactory : IDesignTimeDbContextFactory<RigDbContext>
 {
     public RigDbContext CreateDbContext(string[] args) => new("design-time.db");
 }
 
-internal sealed class RigDbContext(string databasePath) : DbContext
+public sealed class RigDbContext(string databasePath) : DbContext
 {
     public DbSet<RunEntity> Runs => Set<RunEntity>();
 
@@ -40,7 +40,6 @@ internal sealed class RigDbContext(string databasePath) : DbContext
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
         optionsBuilder.UseSqlite($"Data Source={databasePath}");
-        optionsBuilder.UseModel(RigDbContextModel.Instance);
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

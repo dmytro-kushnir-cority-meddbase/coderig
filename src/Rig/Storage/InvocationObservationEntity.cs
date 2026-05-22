@@ -1,6 +1,6 @@
-﻿namespace Rig.Storage;
+namespace Rig.Storage;
 
-internal sealed class InvocationObservationEntity
+public sealed class InvocationObservationEntity
 {
     public string RunId { get; set; } = "";
 

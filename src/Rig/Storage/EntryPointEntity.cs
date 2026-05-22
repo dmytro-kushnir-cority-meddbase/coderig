@@ -1,6 +1,6 @@
-﻿namespace Rig.Storage;
+namespace Rig.Storage;
 
-internal sealed class EntryPointEntity
+public sealed class EntryPointEntity
 {
     public string RunId { get; set; } = "";
 

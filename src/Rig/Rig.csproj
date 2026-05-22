@@ -6,11 +6,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <EFOptimizeContext>true</EFOptimizeContext>
-    <EFOptimizeContextOutputDir>Storage/Compiled</EFOptimizeContextOutputDir>
-    <EFOptimizeContextNamespace>Rig.Storage</EFOptimizeContextNamespace>
+    <EFScaffoldModelStage>build</EFScaffoldModelStage>
+    <EFOutputDir>Storage/Compiled</EFOutputDir>
+    <EFTargetNamespace>Rig.Storage</EFTargetNamespace>
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="Storage/Compiled/**" />
     <PackageReference Include="Microsoft.Build.Framework" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Build.Locator" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" />

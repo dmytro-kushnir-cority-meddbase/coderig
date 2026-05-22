@@ -1,6 +1,6 @@
-﻿namespace Rig.Storage;
+namespace Rig.Storage;
 
-internal sealed class RunEntity
+public sealed class RunEntity
 {
     public string Id { get; set; } = "";
 

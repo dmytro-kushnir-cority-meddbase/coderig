@@ -1,6 +1,6 @@
-﻿namespace Rig.Storage;
+namespace Rig.Storage;
 
-internal sealed class CallGraphNodeEntity
+public sealed class CallGraphNodeEntity
 {
     public string RunId { get; set; } = "";
 
