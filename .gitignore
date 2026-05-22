@@ -2,6 +2,7 @@ bin/
 obj/
 TestResults/
 .rig/
+.rig-bin/
 .idea/
 *.user
 *.suo

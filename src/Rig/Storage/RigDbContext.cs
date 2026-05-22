@@ -1,6 +1,13 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Design;
 
 namespace Rig.Storage;
+
+// Used only by `dotnet ef dbcontext optimize` at design time
+internal sealed class RigDbContextDesignTimeFactory : IDesignTimeDbContextFactory<RigDbContext>
+{
+    public RigDbContext CreateDbContext(string[] args) => new("design-time.db");
+}
 
 internal sealed class RigDbContext(string databasePath) : DbContext
 {
@@ -28,9 +35,12 @@ internal sealed class RigDbContext(string databasePath) : DbContext
 
     public DbSet<CallGraphBoundaryCallEntity> CallGraphBoundaryCalls => Set<CallGraphBoundaryCallEntity>();
 
+    public DbSet<CallGraphNodeEffectEntity> CallGraphNodeEffects => Set<CallGraphNodeEffectEntity>();
+
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
         optionsBuilder.UseSqlite($"Data Source={databasePath}");
+        optionsBuilder.UseModel(RigDbContextModel.Instance);
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -123,6 +133,13 @@ internal sealed class RigDbContext(string databasePath) : DbContext
             entity.ToTable("callgraph_boundary_calls");
             entity.HasKey(call => new { call.RunId, call.GraphIndex, call.NodeIndex, call.BoundaryCallIndex });
             entity.HasIndex(call => new { call.RunId, call.Kind });
+        });
+
+        modelBuilder.Entity<CallGraphNodeEffectEntity>(entity =>
+        {
+            entity.ToTable("callgraph_node_effects");
+            entity.HasKey(link => new { link.RunId, link.GraphIndex, link.NodeIndex, link.LinkIndex });
+            entity.HasIndex(link => new { link.RunId, link.GraphIndex, link.NodeIndex });
         });
     }
 }

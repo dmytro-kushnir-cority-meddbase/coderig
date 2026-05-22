@@ -30,7 +30,9 @@ public static class CliApplication
             "entrypoints" => await RunEntryPointsAsync(output, error, workingDirectory),
             "effects" => await RunEffectsAsync(output, error, workingDirectory),
             "callgraph" => await RunCallGraphAsync(args, output, error, workingDirectory),
+            "di" => await RunDiAsync(output, error, workingDirectory),
             "files" => await RunFilesAsync(args, output, error, workingDirectory),
+            "profile" => await RunProfileAsync(args, output, error, workingDirectory),
             _ => UnknownCommand(args[0], error)
         };
     }
@@ -55,6 +57,7 @@ public static class CliApplication
         output.WriteLine("  rig entrypoints");
         output.WriteLine("  rig callgraph <entrypoint-id>");
         output.WriteLine("  rig effects --entrypoint <entrypoint-id>");
+        output.WriteLine("  rig di");
         output.WriteLine("  rig files --skipped");
         output.WriteLine("  rig profile validate");
     }
@@ -155,6 +158,49 @@ public static class CliApplication
         }
 
         return 0;
+    }
+
+    private static async Task<int> RunDiAsync(TextWriter output, TextWriter error, string workingDirectory)
+    {
+        var result = await LoadLatestOrErrorAsync(error, workingDirectory);
+        if (result is null)
+        {
+            return 2;
+        }
+
+        output.WriteLine("DI Registrations");
+        foreach (var reg in result.DiRegistrations
+            .OrderBy(r => r.ServiceType, StringComparer.Ordinal)
+            .ThenBy(r => r.Lifetime, StringComparer.Ordinal))
+        {
+            output.WriteLine($"  {reg.ServiceType}");
+            output.WriteLine($"    impl={reg.ImplementationType ?? "(self)"} lifetime={reg.Lifetime} kind={reg.RegistrationKind}");
+            output.WriteLine($"    conf={reg.Confidence} basis={reg.Basis} reason={reg.Reason}");
+            output.WriteLine($"    loc={Path.GetFileName(reg.FilePath)}:{reg.Line}");
+        }
+
+        return 0;
+    }
+
+    private static Task<int> RunProfileAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
+    {
+        if (args.Length < 2 || args[1] != "validate")
+        {
+            error.WriteLine("Usage: rig profile validate");
+            return Task.FromResult(2);
+        }
+
+        try
+        {
+            var _ = AnalysisRuleSet.LoadForSolution(workingDirectory);
+            output.WriteLine("Profile: valid");
+            return Task.FromResult(0);
+        }
+        catch (Exception exception)
+        {
+            error.WriteLine($"Profile: invalid — {exception.Message}");
+            return Task.FromResult(2);
+        }
     }
 
     private static async Task<int> RunFilesAsync(

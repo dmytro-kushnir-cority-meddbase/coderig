@@ -5,6 +5,9 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <EFOptimizeContext>true</EFOptimizeContext>
+    <EFOptimizeContextOutputDir>Storage/Compiled</EFOptimizeContextOutputDir>
+    <EFOptimizeContextNamespace>Rig.Storage</EFOptimizeContextNamespace>
   </PropertyGroup>
 
   <ItemGroup>
@@ -12,8 +15,11 @@
     <PackageReference Include="Microsoft.Build.Locator" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" />
     <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.MSBuild" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tasks" PrivateAssets="all" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <PackageReference Include="System.CommandLine" />
+    <PackageReference Include="Microsoft.NET.StringTools" PrivateAssets="all" ExcludeAssets="runtime"/>
   </ItemGroup>
 
   <ItemGroup>
