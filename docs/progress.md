@@ -31,13 +31,13 @@ Status: `todo`
 
 - [x] .NET CLI project
 - [ ] `.sln` input handling
-- [ ] `.slnx` input handling
+- [x] `.slnx` input handling
 - [ ] immutable run creation
 - [ ] SQLite/EF Core storage
 - [ ] profile loading and strict validation
 - [ ] appsettings parser
 - [ ] source inventory and skip decisions
-- [ ] first playground solution
+- [x] first playground solution
 
 ### Phase 2: Roslyn Observations and MS DI
 
@@ -55,8 +55,8 @@ Status: `todo`
 
 Status: `todo`
 
-- [ ] Minimal API entrypoint detection
-- [ ] MVC entrypoint detection
+- [x] Minimal API entrypoint detection
+- [x] MVC entrypoint detection
 - [ ] application-only bounded callgraph
 - [ ] external boundary nodes
 - [ ] unresolved call nodes
@@ -67,11 +67,11 @@ Status: `todo`
 
 Status: `todo`
 
-- [ ] HttpClient effects
-- [ ] simple host/path resolution
-- [ ] EF Core read effects
-- [ ] EF Core write/commit/transaction effects
-- [ ] Redis read/write/delete effects
+- [x] HttpClient effects
+- [x] simple host/path resolution
+- [x] EF Core read effects
+- [x] EF Core write/commit effects
+- [x] Redis read/write effects
 - [ ] effects linked to callgraph nodes
 
 ### Phase 5: Effect Contexts and Observations
@@ -110,17 +110,20 @@ Status: `todo`
 
 ## Current Slice
 
-Slice: CLI project skeleton and command summary
-Phase: 1
+Slice: EntryPointEffects playground with entrypoint and effect tracking
+Phase: 1/3/4
 Status: `committed`
 
 Contract:
-  - `rig` with no arguments prints the initial human-readable command summary.
-  - unknown commands return exit code 2 with an actionable error.
-  - package versions are pinned from nuget.org stable versions checked through the NuGet API.
+  - playground solution contains Minimal API and MVC entrypoints.
+  - playground solution contains HttpClient, EF Core, and Redis effects.
+  - `rig index playgrounds/EntryPointEffects/EntryPointEffects.slnx` reports 4 entrypoints and 6 effects.
+  - `rig entrypoints` prints Minimal API and MVC entrypoints.
+  - `rig effects` prints HTTP, EF Core, and Redis effects with confidence/basis/reason metadata.
 
 Verification:
-  - `dotnet test RuntimeIntelligenceGraph.slnx` passes with 2 tests.
+  - `dotnet test RuntimeIntelligenceGraph.slnx` passes with 4 tests.
+  - `dotnet build playgrounds/EntryPointEffects/EntryPointEffects.slnx` passes.
 
 Commit:
   - this commit

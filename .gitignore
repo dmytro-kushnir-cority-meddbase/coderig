@@ -1,6 +1,7 @@
 bin/
 obj/
 TestResults/
+.rig/
 *.user
 *.suo
 *.nupkg
