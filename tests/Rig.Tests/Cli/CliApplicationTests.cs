@@ -1,4 +1,4 @@
-using FluentAssertions;
+using Shouldly;
 using Rig.Cli;
 
 namespace Rig.Tests.Cli;
@@ -13,18 +13,17 @@ public sealed class CliApplicationTests
 
         var exitCode = await CliApplication.RunAsync([], output, error);
 
-        exitCode.Should().Be(0);
-        error.ToString().Should().BeEmpty();
-        output.ToString().Should().ContainAll(
-            "Runtime Intelligence Graph",
-            "Usage:",
-            "rig index <solution>",
-            "rig runs",
-            "rig entrypoints",
-            "rig callgraph <entrypoint-id>",
-            "rig effects --entrypoint <entrypoint-id>",
-            "rig files --skipped",
-            "rig profile validate");
+        exitCode.ShouldBe(0);
+        error.ToString().ShouldBeEmpty();
+        output.ToString().ShouldContain("Runtime Intelligence Graph");
+        output.ToString().ShouldContain("Usage:");
+        output.ToString().ShouldContain("rig index <solution>");
+        output.ToString().ShouldContain("rig runs");
+        output.ToString().ShouldContain("rig entrypoints");
+        output.ToString().ShouldContain("rig callgraph <entrypoint-id>");
+        output.ToString().ShouldContain("rig effects --entrypoint <entrypoint-id>");
+        output.ToString().ShouldContain("rig files --skipped");
+        output.ToString().ShouldContain("rig profile validate");
     }
 
     [Fact]
@@ -35,9 +34,9 @@ public sealed class CliApplicationTests
 
         var exitCode = await CliApplication.RunAsync(["wat"], output, error);
 
-        exitCode.Should().Be(2);
-        output.ToString().Should().BeEmpty();
-        error.ToString().Should().Contain("Unknown command: wat");
+        exitCode.ShouldBe(2);
+        output.ToString().ShouldBeEmpty();
+        error.ToString().ShouldContain("Unknown command: wat");
     }
 
     [Fact]
@@ -50,71 +49,68 @@ public sealed class CliApplicationTests
 
         var indexExitCode = await CliApplication.RunAsync(["index", solutionPath], output, error, workingDirectory);
 
-        indexExitCode.Should().Be(0);
-        error.ToString().Should().BeEmpty();
-        output.ToString().Should().ContainAll("Run:", "EntryPoints: 5", "Effects: 19");
-        File.Exists(Path.Combine(workingDirectory, ".rig", "rig.db")).Should().BeTrue();
+        indexExitCode.ShouldBe(0);
+        error.ToString().ShouldBeEmpty();
+        output.ToString().ShouldContain("Run:");
+        output.ToString().ShouldContain("EntryPoints: 5");
+        output.ToString().ShouldContain("Effects: 19");
+        File.Exists(Path.Combine(workingDirectory, ".rig", "rig.db")).ShouldBeTrue();
 
         output.GetStringBuilder().Clear();
         var runsExitCode = await CliApplication.RunAsync(["runs"], output, error, workingDirectory);
 
-        runsExitCode.Should().Be(0);
-        output.ToString().Should().ContainAll(
-            "Runs",
-            solutionPath,
-            "entrypoints=5 effects=19",
-            "di=");
+        runsExitCode.ShouldBe(0);
+        output.ToString().ShouldContain("Runs");
+        output.ToString().ShouldContain(solutionPath);
+        output.ToString().ShouldContain("entrypoints=5 effects=19");
+        output.ToString().ShouldContain("di=");
 
         output.GetStringBuilder().Clear();
         var entrypointsExitCode = await CliApplication.RunAsync(["entrypoints"], output, error, workingDirectory);
 
-        entrypointsExitCode.Should().Be(0);
-        output.ToString().Should().ContainAll(
-            "minapi GET /minapi/teams/{id}",
-            "mvc POST api/teams",
-            "fastendpoint POST /fastendpoints/teams");
+        entrypointsExitCode.ShouldBe(0);
+        output.ToString().ShouldContain("minapi GET /minapi/teams/{id}");
+        output.ToString().ShouldContain("mvc POST api/teams");
+        output.ToString().ShouldContain("fastendpoint POST /fastendpoints/teams");
 
         output.GetStringBuilder().Clear();
         var effectsExitCode = await CliApplication.RunAsync(["effects"], output, error, workingDirectory);
 
-        effectsExitCode.Should().Be(0);
-        output.ToString().Should().ContainAll(
-            "http GET billing.example/invoices/{teamId}",
-            "efcore read AppDbContext.Teams",
-            "efcore commit AppDbContext",
-            "efcore schema AppDbContext.Database",
-            "efcore raw_sql AppDbContext.Database",
-            "redis read team:{teamId}",
-            "redis write team:{name}",
-            "smtp send MailKit.Net.Smtp.SmtpClient",
-            "mediatr send EntryPointEffects.Api.Services.FixtureCommand",
-            "repository write Ardalis.SharedKernel.IRepository<T>",
-            "OBS looped_effect ctx=foreach",
-            "OBS parallel_fanout ctx=Task.WhenAll");
+        effectsExitCode.ShouldBe(0);
+        output.ToString().ShouldContain("http GET billing.example/invoices/{teamId}");
+        output.ToString().ShouldContain("efcore read AppDbContext.Teams");
+        output.ToString().ShouldContain("efcore commit AppDbContext");
+        output.ToString().ShouldContain("efcore schema AppDbContext.Database");
+        output.ToString().ShouldContain("efcore raw_sql AppDbContext.Database");
+        output.ToString().ShouldContain("redis read team:{teamId}");
+        output.ToString().ShouldContain("redis write team:{name}");
+        output.ToString().ShouldContain("smtp send MailKit.Net.Smtp.SmtpClient");
+        output.ToString().ShouldContain("mediatr send EntryPointEffects.Api.Services.FixtureCommand");
+        output.ToString().ShouldContain("repository write Ardalis.SharedKernel.IRepository<T>");
+        output.ToString().ShouldContain("OBS looped_effect ctx=foreach");
+        output.ToString().ShouldContain("OBS parallel_fanout ctx=Task.WhenAll");
 
         output.GetStringBuilder().Clear();
         var filesExitCode = await CliApplication.RunAsync(["files", "--skipped"], output, error, workingDirectory);
 
-        filesExitCode.Should().Be(0);
-        output.ToString().Should().ContainAll(
-            "Skipped Files",
-            "GeneratedEndpoint.g.cs",
-            "basis=profile",
-            "reason=generated_fixture");
+        filesExitCode.ShouldBe(0);
+        output.ToString().ShouldContain("Skipped Files");
+        output.ToString().ShouldContain("GeneratedEndpoint.g.cs");
+        output.ToString().ShouldContain("basis=profile");
+        output.ToString().ShouldContain("reason=generated_fixture");
 
         output.GetStringBuilder().Clear();
         var callgraphExitCode = await CliApplication.RunAsync(["callgraph", "minapi GET /minapi/teams/{id}"], output, error, workingDirectory);
 
-        callgraphExitCode.Should().Be(0);
-        output.ToString().Should().ContainAll(
-            "Callgraph: minapi GET /minapi/teams/{id}",
-            "TeamWorkflow.LoadTeamSummaryAsync",
-            "BillingClient.LoadInvoiceAsync",
-            "BillingClient.LoadInvoicesAsync",
-            "BOUNDARY external HttpClient.GetStringAsync",
-            "EFFECT efcore read AppDbContext.Teams",
-            "OBS looped_effect ctx=foreach",
-            "OBS parallel_fanout ctx=Task.WhenAll");
+        callgraphExitCode.ShouldBe(0);
+        output.ToString().ShouldContain("Callgraph: minapi GET /minapi/teams/{id}");
+        output.ToString().ShouldContain("TeamWorkflow.LoadTeamSummaryAsync");
+        output.ToString().ShouldContain("BillingClient.LoadInvoiceAsync");
+        output.ToString().ShouldContain("BillingClient.LoadInvoicesAsync");
+        output.ToString().ShouldContain("BOUNDARY external HttpClient.GetStringAsync");
+        output.ToString().ShouldContain("EFFECT efcore read AppDbContext.Teams");
+        output.ToString().ShouldContain("OBS looped_effect ctx=foreach");
+        output.ToString().ShouldContain("OBS parallel_fanout ctx=Task.WhenAll");
     }
 
     private static string PlaygroundSolutionPath()

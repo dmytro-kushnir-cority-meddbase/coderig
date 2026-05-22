@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using FluentAssertions;
+using Shouldly;
 using Rig.Analysis;
 
 namespace Rig.Tests.Analysis;
@@ -14,65 +14,69 @@ public sealed class CleanArchitecturePlaygroundTests
 
         var result = await SolutionAnalyzer.AnalyzeAsync(solutionPath);
 
-        result.EntryPoints.Select(entryPoint => entryPoint.DisplayName).Should().BeEquivalentTo(
-            "fastendpoint DELETE /Contributors/{ContributorId:int}",
-            "fastendpoint GET /Contributors",
-            "fastendpoint GET /Contributors/{ContributorId:int}",
-            "fastendpoint POST /Contributors",
-            "fastendpoint PUT /Contributors/{ContributorId:int}");
+        result.EntryPoints.Select(entryPoint => entryPoint.DisplayName).ShouldBe(
+            new[]
+            {
+                "fastendpoint DELETE /Contributors/{ContributorId:int}",
+                "fastendpoint GET /Contributors",
+                "fastendpoint GET /Contributors/{ContributorId:int}",
+                "fastendpoint POST /Contributors",
+                "fastendpoint PUT /Contributors/{ContributorId:int}"
+            },
+            ignoreOrder: true);
 
-        result.Effects.Should().HaveCount(24);
+        result.Effects.Count().ShouldBe(24);
 
-        result.Effects.Should().Contain(effect =>
+        result.Effects.ShouldContain(effect =>
             effect.Provider == "efcore" &&
             effect.Operation == "read" &&
             effect.Method == "ToListAsync" &&
             effect.Resource == "AppDbContext.Contributors");
 
-        result.Effects.Should().Contain(effect =>
+        result.Effects.ShouldContain(effect =>
             effect.Provider == "efcore" &&
             effect.Operation == "raw_sql" &&
             effect.Method == "ExecuteSqlInterpolatedAsync" &&
             effect.Resource == "AppDbContext.Database" &&
             effect.Observations.Any(observation => observation.Type == "looped_effect" && observation.Context == "for"));
 
-        result.Effects.Should().Contain(effect =>
+        result.Effects.ShouldContain(effect =>
             effect.Provider == "efcore" &&
             effect.Operation == "schema" &&
             effect.Method == "EnsureCreatedAsync" &&
             effect.Resource == "AppDbContext.Database");
 
-        result.Effects.Should().Contain(effect =>
+        result.Effects.ShouldContain(effect =>
             effect.Provider == "efcore" &&
             effect.Operation == "schema" &&
             effect.Method == "MigrateAsync" &&
             effect.Resource == "AppDbContext.Database");
 
-        result.Effects.Should().Contain(effect =>
+        result.Effects.ShouldContain(effect =>
             effect.Provider == "repository" &&
             effect.Operation == "write" &&
             effect.Method == "AddAsync" &&
             effect.Resource == "Ardalis.SharedKernel.IRepository<T>");
 
-        result.Effects.Should().Contain(effect =>
+        result.Effects.ShouldContain(effect =>
             effect.Provider == "smtp" &&
             effect.Operation == "send" &&
             effect.Method == "SendAsync" &&
             effect.Resource == "MailKit.Net.Smtp.SmtpClient");
 
-        result.Effects.Should().Contain(effect =>
+        result.Effects.ShouldContain(effect =>
             effect.Provider == "mediatr" &&
             effect.Operation == "send" &&
             effect.Method == "Send" &&
             effect.Resource == "Clean.Architecture.UseCases.Contributors.List.ListContributorsQuery");
 
-        result.Effects.Should().Contain(effect =>
+        result.Effects.ShouldContain(effect =>
             effect.Provider == "mediatr" &&
             effect.Operation == "publish" &&
             effect.Method == "Publish" &&
             effect.Resource == "Clean.Architecture.Core.ContributorAggregate.Events.ContributorDeletedEvent");
 
-        result.Effects.Should().NotContain(effect =>
+        result.Effects.ShouldNotContain(effect =>
             effect.Provider == "efcore" &&
             effect.Operation == "pending_write" &&
             effect.Method == "Add" &&
@@ -122,6 +126,6 @@ public sealed class CleanArchitecturePlaygroundTests
         var error = await process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
 
-        process.ExitCode.Should().Be(0, output + Environment.NewLine + error);
+        process.ExitCode.ShouldBe(0, output + Environment.NewLine + error);
     }
 }
