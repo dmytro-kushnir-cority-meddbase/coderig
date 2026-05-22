@@ -65,5 +65,24 @@ public sealed class PlaygroundAnalysisTests
             effect.Observations.Any(observation =>
                 observation.Type == "parallel_fanout" &&
                 observation.Context == "Task.WhenAll"));
+
+        var minApiGetGraph = result.CallGraphs.Should().ContainSingle(graph =>
+            graph.EntryPoint == "minapi GET /minapi/teams/{id}").Subject;
+
+        minApiGetGraph.Nodes.Select(node => node.Symbol).Should().Contain(
+            "minapi GET /minapi/teams/{id}",
+            "TeamWorkflow.LoadTeamSummaryAsync",
+            "BillingClient.LoadInvoiceAsync",
+            "BillingClient.LoadInvoicesAsync");
+
+        minApiGetGraph.Nodes.Should().Contain(node =>
+            node.Symbol == "TeamWorkflow.LoadTeamSummaryAsync" &&
+            node.Effects.Any(effect => effect.Provider == "efcore" && effect.Operation == "read") &&
+            node.Effects.Any(effect => effect.Provider == "redis" && effect.Resource == "team:{relatedTeamId}"));
+
+        minApiGetGraph.Nodes.Should().Contain(node =>
+            node.Symbol == "BillingClient.LoadInvoicesAsync" &&
+            node.Effects.Any(effect => effect.Observations.Any(observation =>
+                observation.Type == "parallel_fanout")));
     }
 }

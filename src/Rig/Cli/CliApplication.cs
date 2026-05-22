@@ -28,6 +28,7 @@ public static class CliApplication
             "index" => await RunIndexAsync(args, output, error, workingDirectory),
             "entrypoints" => await RunEntryPointsAsync(output, error, workingDirectory),
             "effects" => await RunEffectsAsync(output, error, workingDirectory),
+            "callgraph" => await RunCallGraphAsync(args, output, error, workingDirectory),
             _ => UnknownCommand(args[0], error)
         };
     }
@@ -117,6 +118,62 @@ public static class CliApplication
             foreach (var observation in effect.Observations)
             {
                 output.WriteLine($"    OBS {observation.Type} ctx={observation.Context} conf={observation.Confidence} basis={observation.Basis} reason={observation.Reason}");
+            }
+        }
+
+        return 0;
+    }
+
+    private static async Task<int> RunCallGraphAsync(
+        string[] args,
+        TextWriter output,
+        TextWriter error,
+        string workingDirectory)
+    {
+        if (args.Length < 2)
+        {
+            error.WriteLine("Missing entrypoint id.");
+            error.WriteLine("Usage: rig callgraph <entrypoint-id>");
+            return 2;
+        }
+
+        var result = await LoadLatestOrErrorAsync(error, workingDirectory);
+        if (result is null)
+        {
+            return 2;
+        }
+
+        var entryPoint = string.Join(' ', args.Skip(1));
+        var callGraph = result.CallGraphs.FirstOrDefault(graph =>
+            string.Equals(graph.EntryPoint, entryPoint, StringComparison.Ordinal));
+
+        if (callGraph is null)
+        {
+            error.WriteLine($"Callgraph not found: {entryPoint}");
+            return 2;
+        }
+
+        output.WriteLine($"Callgraph: {callGraph.EntryPoint}");
+        output.WriteLine($"Nodes: {callGraph.Nodes.Count}");
+
+        foreach (var node in callGraph.Nodes)
+        {
+            output.WriteLine($"  {node.Symbol}");
+            output.WriteLine($"    conf={node.Confidence} basis={node.Basis} reason={node.Reason}");
+            output.WriteLine($"    loc={Path.GetFileName(node.FilePath)}:{node.Line}");
+
+            foreach (var call in node.Calls)
+            {
+                output.WriteLine($"    CALL {call}");
+            }
+
+            foreach (var effect in node.Effects)
+            {
+                output.WriteLine($"    EFFECT {effect.Provider} {effect.Operation} {effect.Resource}");
+                foreach (var observation in effect.Observations)
+                {
+                    output.WriteLine($"      OBS {observation.Type} ctx={observation.Context} conf={observation.Confidence} basis={observation.Basis} reason={observation.Reason}");
+                }
             }
         }
 

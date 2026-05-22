@@ -45,6 +45,7 @@ public static class SolutionAnalyzer
     public static async Task<AnalysisResult> AnalyzeAsync(string solutionPath, CancellationToken cancellationToken = default)
     {
         var sourceFiles = DiscoverSourceFiles(solutionPath);
+        var sources = new List<SourceModel>();
         var entryPoints = new List<EntryPointInfo>();
         var effects = new List<EffectInfo>();
 
@@ -54,13 +55,16 @@ public static class SolutionAnalyzer
             var tree = CSharpSyntaxTree.ParseText(text, cancellationToken: cancellationToken, path: sourceFile);
             var root = await tree.GetRootAsync(cancellationToken);
             var fields = FieldTypeIndex.Create(root);
+            sources.Add(new SourceModel(sourceFile, tree, root, fields));
 
             entryPoints.AddRange(FindMinimalApiEntryPoints(root, tree, sourceFile));
             entryPoints.AddRange(FindMvcEntryPoints(root, tree, sourceFile));
             effects.AddRange(FindEffects(root, tree, sourceFile, fields));
         }
 
-        return new AnalysisResult(entryPoints, effects);
+        var callGraphs = BuildCallGraphs(entryPoints, sources, effects);
+
+        return new AnalysisResult(entryPoints, effects, callGraphs);
     }
 
     private static IReadOnlyList<string> DiscoverSourceFiles(string solutionPath)
@@ -534,6 +538,231 @@ public static class SolutionAnalyzer
         return tree.GetLineSpan(node.Span).StartLinePosition.Line + 1;
     }
 
+    private static IReadOnlyList<CallGraphInfo> BuildCallGraphs(
+        IReadOnlyList<EntryPointInfo> entryPoints,
+        IReadOnlyList<SourceModel> sources,
+        IReadOnlyList<EffectInfo> effects)
+    {
+        var methods = sources
+            .SelectMany(source => FindApplicationMethods(source, effects))
+            .ToDictionary(method => method.Symbol, StringComparer.Ordinal);
+
+        return entryPoints
+            .Select(entryPoint => BuildCallGraph(entryPoint, sources, methods))
+            .ToArray();
+    }
+
+    private static IEnumerable<MethodModel> FindApplicationMethods(SourceModel source, IReadOnlyList<EffectInfo> effects)
+    {
+        foreach (var method in source.Root.DescendantNodes().OfType<MethodDeclarationSyntax>())
+        {
+            if (method.Parent is not ClassDeclarationSyntax containingClass)
+            {
+                continue;
+            }
+
+            var symbol = $"{containingClass.Identifier.ValueText}.{method.Identifier.ValueText}";
+            var line = GetLine(source.Tree, method);
+            var methodEffects = effects
+                .Where(effect => string.Equals(effect.FilePath, source.FilePath, StringComparison.OrdinalIgnoreCase))
+                .Where(effect => IsLineInside(source.Tree, method, effect.Line))
+                .ToArray();
+
+            yield return new MethodModel(
+                symbol,
+                source.FilePath,
+                line,
+                method,
+                source.Fields,
+                BuildMethodVariableTypes(method, source.Fields),
+                methodEffects);
+        }
+    }
+
+    private static CallGraphInfo BuildCallGraph(
+        EntryPointInfo entryPoint,
+        IReadOnlyList<SourceModel> sources,
+        IReadOnlyDictionary<string, MethodModel> methods)
+    {
+        var nodes = new List<CallGraphNodeInfo>();
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+
+        var entryNode = CreateEntryNode(entryPoint, sources, methods);
+        nodes.Add(entryNode.Node);
+
+        foreach (var call in entryNode.Calls)
+        {
+            VisitMethod(call, methods, nodes, visited);
+        }
+
+        return new CallGraphInfo(entryPoint.DisplayName, nodes);
+    }
+
+    private static (CallGraphNodeInfo Node, IReadOnlyList<string> Calls) CreateEntryNode(
+        EntryPointInfo entryPoint,
+        IReadOnlyList<SourceModel> sources,
+        IReadOnlyDictionary<string, MethodModel> methods)
+    {
+        if (entryPoint.Kind == "mvc")
+        {
+            var method = methods.Values.FirstOrDefault(method =>
+                string.Equals(method.FilePath, entryPoint.FilePath, StringComparison.OrdinalIgnoreCase) &&
+                method.Line == entryPoint.Line);
+
+            if (method is not null)
+            {
+                var calls = ResolveCalls(method.Body, method.VariableTypes, methods);
+                return (CreateNode(entryPoint.DisplayName, entryPoint.FilePath, entryPoint.Line, calls, []), calls);
+            }
+        }
+
+        var source = sources.First(source => string.Equals(source.FilePath, entryPoint.FilePath, StringComparison.OrdinalIgnoreCase));
+        var invocation = source.Root.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .FirstOrDefault(invocation => GetLine(source.Tree, invocation) == entryPoint.Line);
+
+        if (invocation is not null)
+        {
+            var variableTypes = BuildMinimalApiVariableTypes(invocation);
+            var calls = ResolveCalls(invocation, variableTypes, methods);
+            return (CreateNode(entryPoint.DisplayName, entryPoint.FilePath, entryPoint.Line, calls, []), calls);
+        }
+
+        return (CreateNode(entryPoint.DisplayName, entryPoint.FilePath, entryPoint.Line, [], []), []);
+    }
+
+    private static void VisitMethod(
+        string symbol,
+        IReadOnlyDictionary<string, MethodModel> methods,
+        List<CallGraphNodeInfo> nodes,
+        HashSet<string> visited)
+    {
+        if (!visited.Add(symbol) || !methods.TryGetValue(symbol, out var method))
+        {
+            return;
+        }
+
+        var calls = ResolveCalls(method.Body, method.VariableTypes, methods);
+        nodes.Add(CreateNode(method.Symbol, method.FilePath, method.Line, calls, method.Effects));
+
+        foreach (var call in calls)
+        {
+            VisitMethod(call, methods, nodes, visited);
+        }
+    }
+
+    private static CallGraphNodeInfo CreateNode(
+        string symbol,
+        string filePath,
+        int line,
+        IReadOnlyList<string> calls,
+        IReadOnlyList<EffectInfo> effects)
+    {
+        return new CallGraphNodeInfo(
+            symbol,
+            filePath,
+            line,
+            "medium",
+            "heuristic",
+            "syntax_local_resolution",
+            calls,
+            effects);
+    }
+
+    private static IReadOnlyList<string> ResolveCalls(
+        SyntaxNode root,
+        IReadOnlyDictionary<string, string> variableTypes,
+        IReadOnlyDictionary<string, MethodModel> methods)
+    {
+        var calls = new List<string>();
+
+        foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
+            {
+                continue;
+            }
+
+            if (memberAccess.Expression is not IdentifierNameSyntax receiver)
+            {
+                continue;
+            }
+
+            if (!variableTypes.TryGetValue(receiver.Identifier.ValueText, out var typeName))
+            {
+                continue;
+            }
+
+            var symbol = $"{typeName}.{memberAccess.Name.Identifier.ValueText}";
+            if (methods.ContainsKey(symbol) && !calls.Contains(symbol, StringComparer.Ordinal))
+            {
+                calls.Add(symbol);
+            }
+        }
+
+        return calls;
+    }
+
+    private static IReadOnlyDictionary<string, string> BuildMethodVariableTypes(
+        MethodDeclarationSyntax method,
+        FieldTypeIndex fields)
+    {
+        var variableTypes = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var field in fields.All)
+        {
+            variableTypes[field.Key] = field.Value;
+        }
+
+        foreach (var parameter in method.ParameterList.Parameters)
+        {
+            if (parameter.Type is not null)
+            {
+                variableTypes[parameter.Identifier.ValueText] = GetSimpleTypeName(parameter.Type);
+            }
+        }
+
+        return variableTypes;
+    }
+
+    private static IReadOnlyDictionary<string, string> BuildMinimalApiVariableTypes(InvocationExpressionSyntax invocation)
+    {
+        var variableTypes = new Dictionary<string, string>(StringComparer.Ordinal);
+        var handler = invocation.ArgumentList.Arguments.Skip(1).FirstOrDefault()?.Expression;
+
+        if (handler is ParenthesizedLambdaExpressionSyntax lambda)
+        {
+            foreach (var parameter in lambda.ParameterList.Parameters)
+            {
+                if (parameter.Type is not null)
+                {
+                    variableTypes[parameter.Identifier.ValueText] = GetSimpleTypeName(parameter.Type);
+                }
+            }
+        }
+
+        return variableTypes;
+    }
+
+    private static bool IsLineInside(SyntaxTree tree, SyntaxNode node, int line)
+    {
+        var span = tree.GetLineSpan(node.Span);
+        var start = span.StartLinePosition.Line + 1;
+        var end = span.EndLinePosition.Line + 1;
+        return line >= start && line <= end;
+    }
+
+    private static string GetSimpleTypeName(TypeSyntax type)
+    {
+        return type switch
+        {
+            IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+            QualifiedNameSyntax qualified => qualified.Right.Identifier.ValueText,
+            GenericNameSyntax generic => generic.Identifier.ValueText,
+            _ => type.ToString()
+        };
+    }
+
     private sealed class FieldTypeIndex
     {
         private readonly Dictionary<string, string> fieldTypes;
@@ -569,5 +798,22 @@ public static class SolutionAnalyzer
         {
             return fieldTypes.GetValueOrDefault(fieldName);
         }
+
+        public IReadOnlyDictionary<string, string> All => fieldTypes;
     }
+
+    private sealed record SourceModel(
+        string FilePath,
+        SyntaxTree Tree,
+        SyntaxNode Root,
+        FieldTypeIndex Fields);
+
+    private sealed record MethodModel(
+        string Symbol,
+        string FilePath,
+        int Line,
+        MethodDeclarationSyntax Body,
+        FieldTypeIndex Fields,
+        IReadOnlyDictionary<string, string> VariableTypes,
+        IReadOnlyList<EffectInfo> Effects);
 }

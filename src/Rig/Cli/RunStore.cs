@@ -3,19 +3,14 @@ using Rig.Analysis;
 
 namespace Rig.Cli;
 
-internal sealed class RunStore
+internal sealed class RunStore(string workingDirectory)
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true
     };
 
-    private readonly string storeDirectory;
-
-    public RunStore(string workingDirectory)
-    {
-        storeDirectory = Path.Combine(workingDirectory, ".rig");
-    }
+    private readonly string storeDirectory = Path.Combine(workingDirectory, ".rig");
 
     public async Task SaveLatestAsync(AnalysisResult result, CancellationToken cancellationToken = default)
     {

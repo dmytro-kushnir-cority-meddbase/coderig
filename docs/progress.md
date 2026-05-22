@@ -57,10 +57,10 @@ Status: `todo`
 
 - [x] Minimal API entrypoint detection
 - [x] MVC entrypoint detection
-- [ ] application-only bounded callgraph
+- [x] application-only bounded callgraph
 - [ ] external boundary nodes
 - [ ] unresolved call nodes
-- [ ] edge confidence/basis/reason
+- [x] edge confidence/basis/reason
 - [ ] cycle detection
 
 ### Phase 4: HTTP, EF Core, and Redis Effects
@@ -72,7 +72,7 @@ Status: `todo`
 - [x] EF Core read effects
 - [x] EF Core write/commit effects
 - [x] Redis read/write effects
-- [ ] effects linked to callgraph nodes
+- [x] effects linked to callgraph nodes
 
 ### Phase 5: Effect Contexts and Observations
 
@@ -110,22 +110,22 @@ Status: `todo`
 
 ## Current Slice
 
-Slice: Effect contexts for looped and parallel fanout effects
-Phase: 5
+Slice: Shallow callgraph with inline effects
+Phase: 3/4
 Status: `committed`
 
 Contract:
-  - playground solution contains a Redis read inside `foreach`.
-  - playground solution contains an HttpClient call inside `Task.WhenAll`.
-  - analyzer emits `looped_effect` on the Redis effect.
-  - analyzer emits `parallel_fanout` on the HTTP effect.
-  - `rig effects` prints observation lines under affected effects.
+  - analyzer emits a callgraph per detected entrypoint.
+  - Minimal API GET entrypoint reaches `TeamWorkflow.LoadTeamSummaryAsync`.
+  - `TeamWorkflow.LoadTeamSummaryAsync` reaches both billing client methods.
+  - callgraph nodes include inline EF Core, Redis, and HTTP effects.
+  - `rig callgraph "minapi GET /minapi/teams/{id}"` prints calls, effects, and observations.
 
 Verification:
   - `dotnet test RuntimeIntelligenceGraph.slnx` passes with 4 tests.
   - `dotnet build playgrounds/EntryPointEffects/EntryPointEffects.slnx` passes.
   - `dotnet run --project src/Rig -- index playgrounds/EntryPointEffects/EntryPointEffects.slnx` reports 4 entrypoints and 8 effects.
-  - `dotnet run --project src/Rig -- effects` prints `OBS looped_effect` and `OBS parallel_fanout`.
+  - `dotnet run --project src/Rig -- callgraph "minapi GET /minapi/teams/{id}"` prints 4 nodes with inline effects.
 
 Commit:
   - this commit

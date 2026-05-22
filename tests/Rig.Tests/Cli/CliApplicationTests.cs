@@ -74,6 +74,19 @@ public sealed class CliApplicationTests
             "redis write team:{name}",
             "OBS looped_effect ctx=foreach",
             "OBS parallel_fanout ctx=Task.WhenAll");
+
+        output.GetStringBuilder().Clear();
+        var callgraphExitCode = await CliApplication.RunAsync(["callgraph", "minapi GET /minapi/teams/{id}"], output, error, workingDirectory);
+
+        callgraphExitCode.Should().Be(0);
+        output.ToString().Should().ContainAll(
+            "Callgraph: minapi GET /minapi/teams/{id}",
+            "TeamWorkflow.LoadTeamSummaryAsync",
+            "BillingClient.LoadInvoiceAsync",
+            "BillingClient.LoadInvoicesAsync",
+            "EFFECT efcore read AppDbContext.Teams",
+            "OBS looped_effect ctx=foreach",
+            "OBS parallel_fanout ctx=Task.WhenAll");
     }
 
     private static string PlaygroundSolutionPath()

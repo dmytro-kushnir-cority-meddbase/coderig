@@ -9,6 +9,8 @@ EF Core, Redis, and loop/parallel execution contexts.
 The current product direction is captured in [docs/mvp-spec.md](docs/mvp-spec.md).
 Shared project vocabulary lives in
 [docs/ubiquitous-language.md](docs/ubiquitous-language.md).
+Current implementation handover notes live in
+[docs/handover.md](docs/handover.md).
 
 ## Implementation Workflow
 
