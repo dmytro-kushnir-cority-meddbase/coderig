@@ -7,6 +7,10 @@
     <Nullable>enable</Nullable>
     <EFOptimizeContext>true</EFOptimizeContext>
     <EFScaffoldModelStage>build</EFScaffoldModelStage>
+    <!-- TODO: EFPrecompileQueriesStage is disabled because Microsoft.Build.* (pulled in by Roslyn workspace loading)
+         conflicts with the MSBuild version EF Tasks tries to load for query precompilation.
+         Fix: move Roslyn analysis into a separate Rig.Analysis.csproj that doesn't reference MSBuild packages,
+         keep only EF + CLI in this project, then re-enable EFPrecompileQueriesStage=publish. -->
     <EFPrecompileQueriesStage>never</EFPrecompileQueriesStage>
     <EFOutputDir>Storage/Compiled</EFOutputDir>
     <EFTargetNamespace>Rig.Storage</EFTargetNamespace>

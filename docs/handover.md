@@ -1,7 +1,102 @@
 # Handover
 
-Current handover after refactoring `SolutionAnalyzer` into focused analysis
-components.
+Current handover after read/write decoupling, new CLI commands, EF compiled model, and R2R performance work.
+
+## Current State
+
+The repo contains a CLI-first .NET 10 prototype.
+
+Working commands:
+
+```text
+dotnet run --project src/Rig -- index playgrounds/EntryPointEffects/EntryPointEffects.slnx
+dotnet run --project src/Rig -- runs
+dotnet run --project src/Rig -- entrypoints
+dotnet run --project src/Rig -- effects
+dotnet run --project src/Rig -- di
+dotnet run --project src/Rig -- files --skipped
+dotnet run --project src/Rig -- callgraph "minapi GET /minapi/teams/{id}"
+dotnet run --project src/Rig -- profile validate
+```
+
+Published R2R binary at `.rig-bin/Rig.exe` (gitignored). Build with:
+```
+dotnet publish src/Rig -c Release -r win-x64 /p:PublishReadyToRun=true -o .rig-bin
+```
+Timings: baseline 67ms | `rig effects` ~370ms | `rig callgraph` ~370ms (vs ~2800ms with `dotnet run`).
+
+## Architecture
+
+**Read/write decoupling**: `RunStore.SaveAsync` writes to ~12 normalized tables.
+`LoadLatestAsync` reads from those tables and reconstructs `AnalysisResult` in memory —
+the `runs.AnalysisResultJson` blob is still written but never read.
+
+**`callgraph_node_effects` join table**: links per-node effects (`CallGraphNodeInfo.Effects`)
+to the global `effects` table via `(RunId, GraphIndex, NodeIndex, LinkIndex) → EffectIndex`.
+
+**EF compiled model**: auto-generated at build time by `Microsoft.EntityFrameworkCore.Tasks`.
+`EFScaffoldModelStage=build` triggers regeneration whenever the model changes.
+Generated files land in `Storage/Compiled/*.g.cs` (gitignored). No manual `dotnet ef` needed.
+EF query precompilation is disabled (`EFPrecompileQueriesStage=never`) — conflicts with
+MSBuild.Framework version pulled in by Roslyn; TODO in `Rig.csproj` tracks the fix.
+
+**MCP opportunity**: 370ms per CLI call is fine for humans but too slow for agentic loops.
+An MCP server would load DB once and serve tool calls in <5ms. `ModelContextProtocol`
+NuGet package (Microsoft) is the SDK. Index (`rig index`) stays a separate CLI step.
+
+## Playgrounds
+
+- `playgrounds/EntryPointEffects/EntryPointEffects.slnx` — primary indexed target.
+  5 entrypoints, 17 effects (after MediatR dispatch resolution).
+- `playgrounds/CleanArchitecture/` — vendored public CleanArchitecture solution.
+  5 FastEndpoints entrypoints, 24 effects including EF/repository/SMTP/MediatR.
+
+## Verification
+
+```text
+dotnet test                    # 5 tests, all green
+.\.rig-bin\Rig.exe effects     # ~370ms with R2R binary
+```
+
+## Important Caveats
+
+- Callgraph traversal does not yet use DI facts to resolve interface/service calls.
+- Constructor injection resolution, cycles, and richer dynamic dispatch are not fully implemented.
+- EF query precompilation conflict: fix requires splitting Roslyn analysis into `Rig.Analysis.csproj`.
+- Profiles not implemented. Detection is rule-driven; `rig.rules.json` beside the solution extends rules.
+
+## Recommended Next Slice
+
+**MCP server** — wrap `LoadLatestAsync` + `AnalysisResult` behind MCP tools.
+Tools: `rig_effects`, `rig_entrypoints`, `rig_callgraph`, `rig_di`, `rig_files`.
+Server starts once, holds DB state in memory, drops per-call cost to <5ms.
+Unblocks agent-driven analysis (Copilot, Claude) without subprocess overhead.
+
+After that: **cycle detection** — annotate back-edges in callgraph traversal and expose in CLI.
+
+## Useful Files
+
+- `docs/mvp-spec.md`
+- `docs/ubiquitous-language.md`
+- `docs/progress.md`
+- `docs/sqlite-persistence-notes.md`
+- `src/Rig/Rules/builtin-rules.json`
+- `src/Rig/Analysis/SolutionAnalyzer.cs`
+- `src/Rig/Analysis/AnalysisResult.cs`
+- `src/Rig/Analysis/CallGraph/CallGraphBuilder.cs`
+- `src/Rig/Analysis/Extraction/`
+- `src/Rig/Analysis/Inventory/SolutionSourceLoader.cs`
+- `src/Rig/Analysis/Rules/AnalysisRuleSet.cs`
+- `src/Rig/Cli/CliApplication.cs`
+- `src/Rig/Cli/RunStore.cs`
+- `src/Rig/Storage/RigDbContext.cs`
+- `playgrounds/EntryPointEffects/EntryPointEffects.slnx`
+- `playgrounds/EntryPointEffects/rig.rules.json`
+- `playgrounds/CleanArchitecture/Clean.Architecture.slnx`
+- `tests/Rig.Tests/Analysis/PlaygroundAnalysisTests.cs`
+- `tests/Rig.Tests/Analysis/CleanArchitecturePlaygroundTests.cs`
+- `tests/Rig.Tests/Cli/CliApplicationTests.cs`
+
 
 ## Current State
 

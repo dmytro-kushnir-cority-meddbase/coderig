@@ -108,52 +108,65 @@ Status: `todo`
 - [ ] `--effect-paths`
 - [ ] compact callgraph projections
 
+## Completed Slices (recent)
+
+### MediatR dispatch resolution
+Status: `committed` (2a49a20)
+- `treatAsDispatch` rule flag routes `mediator.Send`/`Publish` to handler implementations.
+- CallGraphBuilder builds a dispatch index from DI facts and resolves handler types.
+- EntryPointEffects playground: 17 effects (previously 19 before deduplication).
+
+### Read/write decoupling + new CLI commands
+Status: `committed` (6fba295)
+- `LoadLatestAsync` replaced: reads from ~10 normalized tables instead of JSON blob.
+- New `callgraph_node_effects` join table links per-node effects to global effects table.
+- `rig di` command — lists DI registrations from DB.
+- `rig profile validate` — validates solution-local rules file.
+
+### Performance: R2R binary + EF compiled model
+Status: `committed` (d35847d / 3e3fa13)
+- R2R published binary at `.rig-bin/Rig.exe` (gitignored).
+- EF compiled model auto-generated via `Microsoft.EntityFrameworkCore.Tasks` MSBuild package.
+  `EFScaffoldModelStage=build` regenerates `Storage/Compiled/*.g.cs` on every build; directory gitignored.
+- EF query precompilation disabled (`EFPrecompileQueriesStage=never`) — conflicts with MSBuild.Framework
+  version pulled in by Roslyn workspace loading; TODO comment left in csproj.
+- Timings (R2R + compiled model): baseline 67ms | `rig effects` 372ms | `rig callgraph` 370ms.
+  Previously with `dotnet run`: ~2800ms.
+
 ## Current Slice
 
-Slice: Generic class-inheritance entrypoint rules
-Phase: 3/6
-Status: `verified`
-
-Contract:
-  - model framework entrypoints as external JSON rules, not custom C# detectors.
-  - allow solution-local `rig.rules.json` to extend entrypoint, effect, DI, and file rules.
-  - match host classes by Roslyn base-type inheritance chain.
-  - use configured route-provider, route-builder, handler method, and override requirements.
-  - add declaring-type filters to effect rules so method-name-only matches do not produce false positives.
-  - preserve current playground behavior except for the new fixture entrypoint.
-
-Verification:
-  - `dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false` passes with 5 tests.
-  - `dotnet build RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false -warnaserror` passes with 0 warnings.
-  - `playgrounds/CleanArchitecture` vendors the public CleanArchitecture target without `.git`, IDE folders, or build outputs.
-  - `CleanArchitecturePlaygroundTests` restores the vendored solution and asserts the reconciled 5 entrypoints and 24 effects.
-  - `dotnet run --project src/Rig -- index $env:TEMP\coderig-targets\CleanArchitecture\Clean.Architecture.slnx` reports 5 FastEndpoints entrypoints and 24 effects.
-  - `dotnet run --project src/Rig -- entrypoints` lists CleanArchitecture `DELETE/GET/POST/PUT /Contributors...` plus `GET /Contributors`.
-  - `dotnet run --project src/Rig -- effects` no longer reports `MimeMessage.*.Add` as EF Core pending writes.
-  - independent source inspection reconciled current output against CleanArchitecture:
-    current rules now detect `ExecuteAsync` and `HandleAsync` FastEndpoints endpoints, chained EF `ToListAsync`,
-    startup migration/seed SQL, Ardalis repository effects, MailKit SMTP effects, and Mediator/MediatR send/publish.
-
-Commit:
-  - pending
-
-## Next Suggested Slice
-
-Slice: Expand generic entrypoint/rule matching coverage
-Phase: 2/3
+Slice: MCP server (in-process state preservation)
+Phase: 7+
 Status: `todo`
 
 Contract:
-  - support additional handler methods such as FastEndpoints `HandleAsync` through JSON only.
-  - improve EF query-chain resource extraction so `DbSet...ToListAsync()` chains resolve back to the root DbSet.
-  - add declarative effect rules for EF migration/raw SQL methods and MailKit SMTP.
-  - add optional type/namespace receiver filters for DI registration rules.
-  - expose class-inheritance rule docs/examples for solution-local `rig.rules.json`.
-  - preserve current CLI output.
+  - wrap existing `RunStore.LoadLatestAsync` + `AnalysisResult` behind an MCP tool server.
+  - server starts once, loads DB into memory, serves tool calls in <10ms (no per-call EF startup).
+  - tools: `rig_effects`, `rig_entrypoints`, `rig_callgraph`, `rig_di`, `rig_files`.
+  - index (`rig index`) remains a separate CLI invocation that writes to DB; server picks up changes on next start or via a reload tool.
+  - this unblocks agent-driven analysis workflows (Copilot, Claude, etc.) without subprocess overhead.
 
 Notes:
+  - 370ms per call is acceptable for human CLI use but too slow for agentic loops (10–50 calls/session).
+  - in-memory state after first load would drop per-call cost to <5ms.
+  - `ModelContextProtocol` NuGet package (Microsoft) provides the server SDK.
+  - EFPrecompileQueriesStage conflict (see TODO in Rig.csproj) is a candidate for resolution
+    once Roslyn analysis is split into a separate `Rig.Analysis.csproj`.
+
+## Next Suggested Slice
+
+Slice: Cycle detection in callgraph
+Phase: 3
+Status: `todo`
+
+Contract:
+  - detect back-edges during callgraph traversal and annotate affected nodes.
+  - expose cycles in CLI output (`rig callgraph` shows cycle markers).
+  - add a test asserting cycle detection on a synthetic playground fixture.
+
+Notes:
+  - `VisitMethod` already uses a `visited` HashSet to prevent infinite loops but does not report cycles.
   - use `/p:UseSharedCompilation=false` while compiler-server timeouts remain possible.
-  - after this, use DI facts for constructor/interface call resolution.
 
 Use this template when starting one:
 
