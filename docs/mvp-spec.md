@@ -134,6 +134,24 @@ Profiles define:
 
 Profiles should be declarative first. Compiled plugin APIs are deferred.
 
+Prefer simple targeted rules and composition over custom detector code. If a
+framework pattern looks tempting to solve with a bespoke Roslyn walker, first
+try to express it by composing reusable matcher primitives such as
+type/namespace filters, inheritance filters, invocation filters, declaring or
+receiver type filters, attributes, route-provider methods, file/project filters,
+and exact symbol matches. Add a small reusable rule primitive before adding a
+framework-specific detector whenever that keeps the behavior declarative.
+
+Custom code-backed extractors are reserved for patterns that cannot be modeled
+coherently as data. They should be the exception, because one-off detector code
+does not scale across built-in packs, local conventions, or solution-specific
+profiles.
+
+Rule predicates compose with `AND`: every optional predicate present on a rule
+must match before the rule emits. Express `OR` as parallel rules with the same
+output shape. Multiple matches at the same code location are evidence worth
+preserving, not a reason to bury framework-specific branching in detector code.
+
 ## Evidence Metadata
 
 Facts, edges, effects, and observations must carry explicit evidence metadata:
@@ -257,8 +275,9 @@ Later packs:
 - `cloud.gcp.pubsub`
 - `observability.otel`
 
-Built-ins should be declarative where practical. Code-backed named extractors
-are acceptable when the DSL cannot express a framework pattern cleanly.
+Built-ins should be declarative by default. Code-backed named extractors are
+acceptable only when reusable matcher primitives cannot express a framework
+pattern cleanly.
 
 ### Matcher Scope
 

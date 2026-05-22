@@ -6,6 +6,7 @@ namespace Rig.Analysis;
 internal sealed record AnalysisRuleSet(
     IReadOnlyList<MinimalApiEntryPointRule> MinimalApiEntryPoints,
     IReadOnlyList<MvcHttpAttributeRule> MvcHttpAttributes,
+    IReadOnlyList<ClassInheritanceEntryPointRule> ClassInheritanceEntryPoints,
     IReadOnlyList<EffectRule> Effects,
     IReadOnlyList<DiRegistrationRule> DiRegistrations,
     IReadOnlyList<FileRule> FileInclude,
@@ -32,6 +33,21 @@ internal sealed record AnalysisRuleSet(
 
         return builtIn with
         {
+            MinimalApiEntryPoints = builtIn.MinimalApiEntryPoints
+                .Concat(document?.EntryPoints?.MinimalApi ?? [])
+                .ToArray(),
+            MvcHttpAttributes = builtIn.MvcHttpAttributes
+                .Concat(document?.EntryPoints?.MvcHttpAttributes ?? [])
+                .ToArray(),
+            ClassInheritanceEntryPoints = builtIn.ClassInheritanceEntryPoints
+                .Concat(document?.EntryPoints?.ClassInheritance ?? [])
+                .ToArray(),
+            Effects = builtIn.Effects
+                .Concat(document?.Effects ?? [])
+                .ToArray(),
+            DiRegistrations = builtIn.DiRegistrations
+                .Concat(document?.DiRegistrations ?? [])
+                .ToArray(),
             FileInclude = builtIn.FileInclude
                 .Concat(document?.Files?.Include?.Select(rule => rule.ToFileRule("include")) ?? [])
                 .ToArray(),
@@ -78,6 +94,7 @@ internal sealed record AnalysisRuleSet(
         return new AnalysisRuleSet(
             document.EntryPoints?.MinimalApi ?? [],
             document.EntryPoints?.MvcHttpAttributes ?? [],
+            document.EntryPoints?.ClassInheritance ?? [],
             document.Effects ?? [],
             document.DiRegistrations ?? [],
             document.Files?.Include?.Select(rule => rule.ToFileRule("include")).ToArray() ?? [],
@@ -98,10 +115,26 @@ internal sealed record MinimalApiEntryPointRule(string Method, string HttpMethod
 
 internal sealed record MvcHttpAttributeRule(string Attribute, string HttpMethod);
 
+internal sealed record ClassInheritanceEntryPointRule(
+    string Id,
+    string Kind,
+    IReadOnlyList<string> BaseTypes,
+    IReadOnlyList<string> RouteProviderMethods,
+    IReadOnlyList<RouteMethodRule> RouteMethods,
+    IReadOnlyList<string> HandlerMethods,
+    bool RequireOverride);
+
+internal sealed record RouteMethodRule(string Method, string HttpMethod);
+
 internal sealed record EffectRule(
     string Provider,
     string Operation,
     IReadOnlyList<string> Methods,
+    IReadOnlyList<string>? DeclaringTypes,
+    IReadOnlyList<string>? ReceiverTypes,
+    IReadOnlyList<string>? ContainingNamespaces,
+    IReadOnlyList<string>? ContainingTypes,
+    IReadOnlyList<string>? ContainingMethods,
     string Resource,
     string Confidence,
     string Basis,
@@ -141,6 +174,8 @@ internal sealed class EntryPointRulesDocument
     public List<MinimalApiEntryPointRule>? MinimalApi { get; set; }
 
     public List<MvcHttpAttributeRule>? MvcHttpAttributes { get; set; }
+
+    public List<ClassInheritanceEntryPointRule>? ClassInheritance { get; set; }
 }
 
 internal sealed class FileRulesSection

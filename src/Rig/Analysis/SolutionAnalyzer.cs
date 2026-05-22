@@ -53,6 +53,7 @@ public static class SolutionAnalyzer
     {
         var entryPoints = EntryPointExtractor.FindMinimalApiEntryPoints(source, rules)
             .Concat(EntryPointExtractor.FindMvcEntryPoints(source, rules))
+            .Concat(EntryPointExtractor.FindClassInheritanceEntryPoints(source, rules))
             .ToArray();
 
         return new SourceExtractionResult(

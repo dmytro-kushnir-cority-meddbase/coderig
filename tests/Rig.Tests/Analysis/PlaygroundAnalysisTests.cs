@@ -31,7 +31,8 @@ public sealed class PlaygroundAnalysisTests
             "minapi GET /minapi/teams/{id}",
             "minapi POST /minapi/teams",
             "mvc GET api/teams/{id}",
-            "mvc POST api/teams");
+            "mvc POST api/teams",
+            "fastendpoint POST /fastendpoints/teams");
 
         result.Effects.Should().Contain(effect =>
             effect.Provider == "http" &&
@@ -42,6 +43,31 @@ public sealed class PlaygroundAnalysisTests
             effect.Provider == "efcore" &&
             effect.Operation == "read" &&
             effect.Resource == "AppDbContext.Teams");
+
+        result.Effects.Should().Contain(effect =>
+            effect.Provider == "efcore" &&
+            effect.Operation == "schema" &&
+            effect.Resource == "AppDbContext.Database");
+
+        result.Effects.Should().Contain(effect =>
+            effect.Provider == "efcore" &&
+            effect.Operation == "raw_sql" &&
+            effect.Resource == "AppDbContext.Database");
+
+        result.Effects.Should().Contain(effect =>
+            effect.Provider == "smtp" &&
+            effect.Operation == "send" &&
+            effect.Resource == "MailKit.Net.Smtp.SmtpClient");
+
+        result.Effects.Should().Contain(effect =>
+            effect.Provider == "mediatr" &&
+            effect.Operation == "send" &&
+            effect.Resource == "EntryPointEffects.Api.Services.FixtureCommand");
+
+        result.Effects.Should().Contain(effect =>
+            effect.Provider == "repository" &&
+            effect.Operation == "write" &&
+            effect.Resource == "Ardalis.SharedKernel.IRepository<T>");
 
         result.Effects.Should().Contain(effect =>
             effect.Provider == "efcore" &&

@@ -38,6 +38,27 @@ absolute paths, timestamps, run IDs, generated IDs, and line endings.
 Use short spikes for unfamiliar Roslyn/MSBuild behavior, but either delete spike
 code or turn the learning into a failing fixture test before productizing it.
 
+## Rule-First Extraction
+
+Prefer simple targeted rules and composition over bespoke detector code.
+
+The scalable path is to express framework knowledge as data whenever the shape
+can be described with existing primitives: type/namespace filters, inheritance
+filters, invocation filters, attributes, route-builder calls, declaring types,
+receiver types, file/project filters, and small composed predicates.
+
+Custom C# extraction logic is acceptable only when the pattern cannot be
+expressed cleanly by extending the rule model. In that case, first ask whether a
+small reusable matcher primitive would make the rule declarative. Avoid
+framework-specific one-off walkers; they are quick locally but do not scale
+across packs, local conventions, or user profiles.
+
+Rule predicates compose with `AND`: every optional predicate present on a rule
+must match before the rule emits. Leave a predicate absent to avoid constraining
+that dimension. Express `OR` as parallel rules with the same output shape; if
+multiple rules fire for the same code location, keep that overlap visible as
+evidence rather than hiding it inside detector code.
+
 ## Progress Tracking
 
 Track progress in three layers:

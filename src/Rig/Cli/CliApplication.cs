@@ -72,7 +72,21 @@ public static class CliApplication
             return 2;
         }
 
-        var result = await SolutionAnalyzer.AnalyzeAsync(args[1]);
+        AnalysisResult result;
+        try
+        {
+            result = await SolutionAnalyzer.AnalyzeAsync(args[1]);
+        }
+        catch (InvalidOperationException exception)
+        {
+            error.WriteLine("Failed to load solution for analysis.");
+            error.WriteLine(exception.Message);
+            error.WriteLine("Ensure the target solution has been restored and builds successfully, then retry.");
+            error.WriteLine($"  dotnet restore {args[1]}");
+            error.WriteLine($"  dotnet build {args[1]}");
+            return 2;
+        }
+
         var runId = await new RunStore(workingDirectory).SaveAsync(args[1], result);
 
         output.WriteLine($"Indexed: {Path.GetFullPath(args[1])}");

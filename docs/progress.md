@@ -110,42 +110,50 @@ Status: `todo`
 
 ## Current Slice
 
-Slice: Parallel per-file extraction
-Phase: performance/refactor
+Slice: Generic class-inheritance entrypoint rules
+Phase: 3/6
 Status: `verified`
 
 Contract:
-  - keep solution loading and source inventory sequential/global.
-  - run per-file extractors in parallel over the deterministically sorted source set.
-  - return immutable per-source extraction results and merge them deterministically.
-  - keep global derived work, especially callgraph construction, after file extraction.
-  - preserve current CLI output.
+  - model framework entrypoints as external JSON rules, not custom C# detectors.
+  - allow solution-local `rig.rules.json` to extend entrypoint, effect, DI, and file rules.
+  - match host classes by Roslyn base-type inheritance chain.
+  - use configured route-provider, route-builder, handler method, and override requirements.
+  - add declaring-type filters to effect rules so method-name-only matches do not produce false positives.
+  - preserve current playground behavior except for the new fixture entrypoint.
 
 Verification:
-  - `dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false` passes with 4 tests.
+  - `dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false` passes with 5 tests.
   - `dotnet build RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false -warnaserror` passes with 0 warnings.
-  - `dotnet run --project src/Rig -- index playgrounds/EntryPointEffects/EntryPointEffects.slnx` reports 4 entrypoints and 8 effects.
-  - `dotnet run --project src/Rig -- runs` lists persisted run metadata with `di=4`.
-  - `dotnet run --project src/Rig -- callgraph "minapi GET /minapi/teams/{id}"` prints 5 compilation-backed nodes with inline effects, external boundaries, and an unresolved boundary.
+  - `playgrounds/CleanArchitecture` vendors the public CleanArchitecture target without `.git`, IDE folders, or build outputs.
+  - `CleanArchitecturePlaygroundTests` restores the vendored solution and asserts the reconciled 5 entrypoints and 24 effects.
+  - `dotnet run --project src/Rig -- index $env:TEMP\coderig-targets\CleanArchitecture\Clean.Architecture.slnx` reports 5 FastEndpoints entrypoints and 24 effects.
+  - `dotnet run --project src/Rig -- entrypoints` lists CleanArchitecture `DELETE/GET/POST/PUT /Contributors...` plus `GET /Contributors`.
+  - `dotnet run --project src/Rig -- effects` no longer reports `MimeMessage.*.Add` as EF Core pending writes.
+  - independent source inspection reconciled current output against CleanArchitecture:
+    current rules now detect `ExecuteAsync` and `HandleAsync` FastEndpoints endpoints, chained EF `ToListAsync`,
+    startup migration/seed SQL, Ardalis repository effects, MailKit SMTP effects, and Mediator/MediatR send/publish.
 
 Commit:
   - pending
 
 ## Next Suggested Slice
 
-Slice: Use DI facts for constructor/interface call resolution
+Slice: Expand generic entrypoint/rule matching coverage
 Phase: 2/3
 Status: `todo`
 
 Contract:
-  - map constructor-injected fields/properties back to DI facts.
-  - resolve interface/service calls to implementation calls where DI facts are exact.
-  - label DI-derived edges with confidence, basis, reason, and evidence.
+  - support additional handler methods such as FastEndpoints `HandleAsync` through JSON only.
+  - improve EF query-chain resource extraction so `DbSet...ToListAsync()` chains resolve back to the root DbSet.
+  - add declarative effect rules for EF migration/raw SQL methods and MailKit SMTP.
+  - add optional type/namespace receiver filters for DI registration rules.
+  - expose class-inheritance rule docs/examples for solution-local `rig.rules.json`.
   - preserve current CLI output.
 
 Notes:
   - use `/p:UseSharedCompilation=false` while compiler-server timeouts remain possible.
-  - then add `rig di` or a general facts query surface so DI facts are visible without inspecting JSON/SQLite.
+  - after this, use DI facts for constructor/interface call resolution.
 
 Use this template when starting one:
 

@@ -18,6 +18,23 @@
       { "attribute": "HttpDeleteAttribute", "httpMethod": "DELETE" },
       { "attribute": "HttpPatch", "httpMethod": "PATCH" },
       { "attribute": "HttpPatchAttribute", "httpMethod": "PATCH" }
+    ],
+    "classInheritance": [
+      {
+        "id": "dotnet.fastendpoints.execute",
+        "kind": "fastendpoint",
+        "baseTypes": [ "FastEndpoints.Endpoint" ],
+        "routeProviderMethods": [ "Configure" ],
+        "routeMethods": [
+          { "method": "Get", "httpMethod": "GET" },
+          { "method": "Post", "httpMethod": "POST" },
+          { "method": "Put", "httpMethod": "PUT" },
+          { "method": "Delete", "httpMethod": "DELETE" },
+          { "method": "Patch", "httpMethod": "PATCH" }
+        ],
+        "handlerMethods": [ "ExecuteAsync", "HandleAsync" ],
+        "requireOverride": true
+      }
     ]
   },
   "effects": [
@@ -25,6 +42,7 @@
       "provider": "http",
       "operation": "GET",
       "methods": [ "GetAsync", "GetStringAsync", "GetFromJsonAsync" ],
+      "declaringTypes": [ "System.Net.Http.HttpClient" ],
       "resource": "http_argument",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -34,6 +52,7 @@
       "provider": "http",
       "operation": "POST",
       "methods": [ "PostAsync", "PostAsJsonAsync" ],
+      "declaringTypes": [ "System.Net.Http.HttpClient" ],
       "resource": "http_argument",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -43,6 +62,7 @@
       "provider": "http",
       "operation": "PUT",
       "methods": [ "PutAsync", "PutAsJsonAsync" ],
+      "declaringTypes": [ "System.Net.Http.HttpClient" ],
       "resource": "http_argument",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -52,6 +72,7 @@
       "provider": "http",
       "operation": "DELETE",
       "methods": [ "DeleteAsync" ],
+      "declaringTypes": [ "System.Net.Http.HttpClient" ],
       "resource": "http_argument",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -61,7 +82,8 @@
       "provider": "efcore",
       "operation": "read",
       "methods": [ "ToListAsync", "FirstAsync", "FirstOrDefaultAsync", "SingleAsync", "SingleOrDefaultAsync", "AnyAsync", "CountAsync", "FindAsync" ],
-      "resource": "ef_dbset_receiver",
+      "declaringTypes": [ "Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions", "Microsoft.EntityFrameworkCore.DbSet" ],
+      "resource": "ef_query_root",
       "confidence": "medium",
       "basis": "compilation+heuristic",
       "reason": "dbset_materialization"
@@ -70,6 +92,7 @@
       "provider": "efcore",
       "operation": "commit",
       "methods": [ "SaveChanges", "SaveChangesAsync" ],
+      "declaringTypes": [ "Microsoft.EntityFrameworkCore.DbContext" ],
       "resource": "ef_context_receiver",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -79,15 +102,117 @@
       "provider": "efcore",
       "operation": "pending_write",
       "methods": [ "Add", "AddAsync", "Update", "Remove" ],
+      "declaringTypes": [ "Microsoft.EntityFrameworkCore.DbSet" ],
       "resource": "ef_dbset_receiver",
       "confidence": "medium",
       "basis": "compilation+heuristic",
       "reason": "change_tracker"
     },
     {
+      "provider": "efcore",
+      "operation": "schema",
+      "methods": [ "EnsureCreated", "EnsureCreatedAsync", "Migrate", "MigrateAsync" ],
+      "receiverTypes": [ "Microsoft.EntityFrameworkCore.Infrastructure.DatabaseFacade" ],
+      "resource": "ef_database_facade",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "database_schema_operation"
+    },
+    {
+      "provider": "efcore",
+      "operation": "raw_sql",
+      "methods": [ "ExecuteSqlRaw", "ExecuteSqlRawAsync", "ExecuteSqlInterpolated", "ExecuteSqlInterpolatedAsync" ],
+      "receiverTypes": [ "Microsoft.EntityFrameworkCore.Infrastructure.DatabaseFacade" ],
+      "resource": "ef_database_facade",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "raw_sql_operation"
+    },
+    {
+      "provider": "efcore",
+      "operation": "raw_sql",
+      "methods": [ "FromSqlRaw", "FromSqlInterpolated" ],
+      "receiverTypes": [ "Microsoft.EntityFrameworkCore.DbSet" ],
+      "resource": "ef_query_root",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "raw_sql_operation"
+    },
+    {
+      "provider": "repository",
+      "operation": "read",
+      "methods": [ "GetByIdAsync", "FirstOrDefaultAsync", "ListAsync", "CountAsync", "AnyAsync" ],
+      "receiverTypes": [ "IReadRepository", "IRepository", "Ardalis.SharedKernel.IReadRepository", "Ardalis.SharedKernel.IRepository", "Ardalis.Specification.IReadRepositoryBase", "Ardalis.Specification.IRepositoryBase" ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "repository_read_method"
+    },
+    {
+      "provider": "repository",
+      "operation": "write",
+      "methods": [ "AddAsync", "UpdateAsync", "DeleteAsync", "Add", "Update", "Delete" ],
+      "receiverTypes": [ "IRepository", "Ardalis.SharedKernel.IRepository", "Ardalis.Specification.IRepositoryBase" ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "repository_write_method"
+    },
+    {
+      "provider": "smtp",
+      "operation": "connect",
+      "methods": [ "Connect", "ConnectAsync" ],
+      "receiverTypes": [ "MailKit.Net.Smtp.SmtpClient", "System.Net.Mail.SmtpClient" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "smtp_connect_method"
+    },
+    {
+      "provider": "smtp",
+      "operation": "send",
+      "methods": [ "Send", "SendAsync", "SendMailAsync" ],
+      "receiverTypes": [ "MailKit.Net.Smtp.SmtpClient", "System.Net.Mail.SmtpClient" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "smtp_send_method"
+    },
+    {
+      "provider": "smtp",
+      "operation": "disconnect",
+      "methods": [ "Disconnect", "DisconnectAsync" ],
+      "receiverTypes": [ "MailKit.Net.Smtp.SmtpClient" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "smtp_disconnect_method"
+    },
+    {
+      "provider": "mediatr",
+      "operation": "send",
+      "methods": [ "Send" ],
+      "declaringTypes": [ "MediatR.ISender", "MediatR.IMediator", "Mediator.ISender", "Mediator.IMediator" ],
+      "resource": "argument_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "mediatr_send"
+    },
+    {
+      "provider": "mediatr",
+      "operation": "publish",
+      "methods": [ "Publish" ],
+      "declaringTypes": [ "MediatR.IPublisher", "MediatR.IMediator", "Mediator.IPublisher", "Mediator.IMediator" ],
+      "resource": "argument_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "mediatr_publish"
+    },
+    {
       "provider": "redis",
       "operation": "read",
       "methods": [ "StringGet", "StringGetAsync", "HashGet", "HashGetAsync" ],
+      "declaringTypes": [ "StackExchange.Redis.IDatabase", "StackExchange.Redis.IDatabaseAsync" ],
       "resource": "string_argument",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -97,6 +222,7 @@
       "provider": "redis",
       "operation": "write",
       "methods": [ "StringSet", "StringSetAsync", "HashSet", "HashSetAsync" ],
+      "declaringTypes": [ "StackExchange.Redis.IDatabase", "StackExchange.Redis.IDatabaseAsync" ],
       "resource": "string_argument",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -106,6 +232,7 @@
       "provider": "redis",
       "operation": "delete",
       "methods": [ "KeyDelete", "KeyDeleteAsync" ],
+      "declaringTypes": [ "StackExchange.Redis.IDatabase", "StackExchange.Redis.IDatabaseAsync" ],
       "resource": "string_argument",
       "confidence": "high",
       "basis": "compilation+profile",

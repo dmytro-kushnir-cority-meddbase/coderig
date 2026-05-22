@@ -1,4 +1,5 @@
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Rig.Analysis;
@@ -76,6 +77,43 @@ internal static class EntryPointExtractor
         }
     }
 
+    public static IEnumerable<EntryPointInfo> FindClassInheritanceEntryPoints(
+        SourceModel source,
+        AnalysisRuleSet rules)
+    {
+        foreach (var typeDeclaration in source.Root.DescendantNodes().OfType<ClassDeclarationSyntax>())
+        {
+            var typeSymbol = source.SemanticModel.GetDeclaredSymbol(typeDeclaration);
+            if (typeSymbol is null)
+            {
+                continue;
+            }
+
+            foreach (var rule in rules.ClassInheritanceEntryPoints.Where(rule => HasBaseType(typeSymbol, rule.BaseTypes)))
+            {
+                var route = FindRoute(typeDeclaration, rule, source.SemanticModel);
+
+                foreach (var method in typeDeclaration.Members.OfType<MethodDeclarationSyntax>())
+                {
+                    var methodName = method.Identifier.ValueText;
+                    if (!rule.HandlerMethods.Contains(methodName, StringComparer.Ordinal) ||
+                        (rule.RequireOverride && !IsOverride(method, source.SemanticModel)))
+                    {
+                        continue;
+                    }
+
+                    yield return new EntryPointInfo(
+                        rule.Kind,
+                        route?.HttpMethod ?? "UNKNOWN",
+                        route?.Route ?? typeSymbol.ToDisplayString(),
+                        $"{rule.Kind} {route?.HttpMethod ?? "UNKNOWN"} {route?.Route ?? typeSymbol.ToDisplayString()}",
+                        source.FilePath,
+                        RoslynSymbolHelpers.GetLine(source.Tree, method));
+                }
+            }
+        }
+    }
+
     private static (string Method, string? Route)? FindHttpAttribute(
         SyntaxList<AttributeListSyntax> attributes,
         AnalysisRuleSet rules)
@@ -114,5 +152,99 @@ internal static class EntryPointExtractor
         }
 
         return $"{prefix.TrimEnd('/')}/{suffix.TrimStart('/')}".Trim('/');
+    }
+
+    private static bool HasBaseType(INamedTypeSymbol typeSymbol, IReadOnlyList<string> baseTypes)
+    {
+        for (var current = typeSymbol.BaseType; current is not null; current = current.BaseType)
+        {
+            var name = current.OriginalDefinition.ToDisplayString();
+            if (baseTypes.Any(baseType => TypeMatches(name, baseType)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TypeMatches(string actualType, string ruleType)
+    {
+        return string.Equals(actualType, ruleType, StringComparison.Ordinal)
+            || actualType.StartsWith($"{ruleType}<", StringComparison.Ordinal)
+            || actualType.EndsWith($".{ruleType}", StringComparison.Ordinal)
+            || actualType.Contains($".{ruleType}<", StringComparison.Ordinal);
+    }
+
+    private static bool IsOverride(MethodDeclarationSyntax method, SemanticModel semanticModel)
+    {
+        if (method.Modifiers.Any(SyntaxKind.OverrideKeyword))
+        {
+            return true;
+        }
+
+        return semanticModel.GetDeclaredSymbol(method)?.IsOverride == true;
+    }
+
+    private static (string HttpMethod, string Route)? FindRoute(
+        ClassDeclarationSyntax typeDeclaration,
+        ClassInheritanceEntryPointRule rule,
+        SemanticModel semanticModel)
+    {
+        foreach (var invocation in typeDeclaration.Members
+            .OfType<MethodDeclarationSyntax>()
+            .Where(method => rule.RouteProviderMethods.Contains(method.Identifier.ValueText, StringComparer.Ordinal))
+            .SelectMany(method => method.DescendantNodes().OfType<InvocationExpressionSyntax>()))
+        {
+            var methodName = GetInvocationMethodName(invocation);
+            if (methodName is null)
+            {
+                continue;
+            }
+
+            var routeMethod = rule.RouteMethods.FirstOrDefault(routeMethod =>
+                string.Equals(routeMethod.Method, methodName, StringComparison.Ordinal));
+            if (routeMethod is null)
+            {
+                continue;
+            }
+
+            var route = ResolveString(invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression, semanticModel);
+            if (string.IsNullOrWhiteSpace(route))
+            {
+                continue;
+            }
+
+            return (routeMethod.HttpMethod, route);
+        }
+
+        return null;
+    }
+
+    private static string? GetInvocationMethodName(InvocationExpressionSyntax invocation)
+    {
+        return invocation.Expression switch
+        {
+            MemberAccessExpressionSyntax memberAccess => memberAccess.Name.Identifier.ValueText,
+            IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+            _ => null
+        };
+    }
+
+    private static string? ResolveString(ExpressionSyntax? expression, SemanticModel semanticModel)
+    {
+        if (expression is null)
+        {
+            return null;
+        }
+
+        var literal = expression.GetLiteralString();
+        if (!string.IsNullOrWhiteSpace(literal))
+        {
+            return literal;
+        }
+
+        var constant = semanticModel.GetConstantValue(expression);
+        return constant is { HasValue: true, Value: string value } ? value : null;
     }
 }

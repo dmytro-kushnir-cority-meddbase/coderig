@@ -52,7 +52,7 @@ public sealed class CliApplicationTests
 
         indexExitCode.Should().Be(0);
         error.ToString().Should().BeEmpty();
-        output.ToString().Should().ContainAll("Run:", "EntryPoints: 4", "Effects: 8");
+        output.ToString().Should().ContainAll("Run:", "EntryPoints: 5", "Effects: 19");
         File.Exists(Path.Combine(workingDirectory, ".rig", "rig.db")).Should().BeTrue();
 
         output.GetStringBuilder().Clear();
@@ -62,7 +62,7 @@ public sealed class CliApplicationTests
         output.ToString().Should().ContainAll(
             "Runs",
             solutionPath,
-            "entrypoints=4 effects=8",
+            "entrypoints=5 effects=19",
             "di=");
 
         output.GetStringBuilder().Clear();
@@ -71,7 +71,8 @@ public sealed class CliApplicationTests
         entrypointsExitCode.Should().Be(0);
         output.ToString().Should().ContainAll(
             "minapi GET /minapi/teams/{id}",
-            "mvc POST api/teams");
+            "mvc POST api/teams",
+            "fastendpoint POST /fastendpoints/teams");
 
         output.GetStringBuilder().Clear();
         var effectsExitCode = await CliApplication.RunAsync(["effects"], output, error, workingDirectory);
@@ -81,8 +82,13 @@ public sealed class CliApplicationTests
             "http GET billing.example/invoices/{teamId}",
             "efcore read AppDbContext.Teams",
             "efcore commit AppDbContext",
+            "efcore schema AppDbContext.Database",
+            "efcore raw_sql AppDbContext.Database",
             "redis read team:{teamId}",
             "redis write team:{name}",
+            "smtp send MailKit.Net.Smtp.SmtpClient",
+            "mediatr send EntryPointEffects.Api.Services.FixtureCommand",
+            "repository write Ardalis.SharedKernel.IRepository<T>",
             "OBS looped_effect ctx=foreach",
             "OBS parallel_fanout ctx=Task.WhenAll");
 
