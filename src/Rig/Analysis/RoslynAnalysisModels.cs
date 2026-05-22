@@ -14,6 +14,13 @@ internal sealed record SolutionSourceSet(
     IReadOnlyList<SourceFileInfo> SourceFiles,
     IReadOnlyList<SourceModel> IndexedSources);
 
+internal sealed record SourceExtractionResult(
+    IReadOnlyList<EntryPointInfo> EntryPoints,
+    IReadOnlyList<EffectInfo> Effects,
+    IReadOnlyList<DiRegistrationInfo> DiRegistrations,
+    IReadOnlyList<MethodObservationInfo> MethodObservations,
+    IReadOnlyList<InvocationObservationInfo> InvocationObservations);
+
 internal sealed record SourceModel(
     string ProjectName,
     string FilePath,

@@ -110,15 +110,15 @@ Status: `todo`
 
 ## Current Slice
 
-Slice: Solution analyzer responsibility split
-Phase: refactor
+Slice: Parallel per-file extraction
+Phase: performance/refactor
 Status: `verified`
 
 Contract:
-  - reduce `SolutionAnalyzer` to orchestration.
-  - split Roslyn loading, rule loading, source inventory, extractors, observations, and callgraph building into focused files.
-  - keep public `SolutionAnalyzer.AnalyzeAsync` contract unchanged.
-  - scan for dead code after the move.
+  - keep solution loading and source inventory sequential/global.
+  - run per-file extractors in parallel over the deterministically sorted source set.
+  - return immutable per-source extraction results and merge them deterministically.
+  - keep global derived work, especially callgraph construction, after file extraction.
   - preserve current CLI output.
 
 Verification:
@@ -127,7 +127,6 @@ Verification:
   - `dotnet run --project src/Rig -- index playgrounds/EntryPointEffects/EntryPointEffects.slnx` reports 4 entrypoints and 8 effects.
   - `dotnet run --project src/Rig -- runs` lists persisted run metadata with `di=4`.
   - `dotnet run --project src/Rig -- callgraph "minapi GET /minapi/teams/{id}"` prints 5 compilation-backed nodes with inline effects, external boundaries, and an unresolved boundary.
-  - dead-code scan found no stale moved helper methods or duplicate private model types.
 
 Commit:
   - pending

@@ -11,26 +11,28 @@ public static class SolutionAnalyzer
         var sourceSet = await SolutionSourceLoader.LoadAsync(solutionFullPath, rules, cancellationToken);
         var sources = sourceSet.IndexedSources;
 
-        var entryPoints = new List<EntryPointInfo>();
-        var effects = new List<EffectInfo>();
-        var diRegistrations = new List<DiRegistrationInfo>();
+        var extractionResults = sources
+            .AsParallel()
+            .AsOrdered()
+            .Select(source => ExtractSource(source, rules))
+            .ToArray();
 
-        foreach (var source in sources)
-        {
-            entryPoints.AddRange(EntryPointExtractor.FindMinimalApiEntryPoints(source, rules));
-            entryPoints.AddRange(EntryPointExtractor.FindMvcEntryPoints(source, rules));
-            effects.AddRange(EffectExtractor.FindEffects(source, rules));
-            diRegistrations.AddRange(DiRegistrationExtractor.FindDiRegistrations(source, rules));
-        }
-
-        var methodObservations = sources
-            .SelectMany(RoslynObservationExtractor.FindMethodObservations)
+        var entryPoints = extractionResults
+            .SelectMany(result => result.EntryPoints)
+            .ToArray();
+        var effects = extractionResults
+            .SelectMany(result => result.Effects)
+            .ToArray();
+        var diRegistrations = extractionResults
+            .SelectMany(result => result.DiRegistrations)
+            .ToArray();
+        var methodObservations = extractionResults
+            .SelectMany(result => result.MethodObservations)
             .OrderBy(observation => observation.FilePath, StringComparer.OrdinalIgnoreCase)
             .ThenBy(observation => observation.Line)
             .ToArray();
-
-        var invocationObservations = sources
-            .SelectMany(RoslynObservationExtractor.FindInvocationObservations)
+        var invocationObservations = extractionResults
+            .SelectMany(result => result.InvocationObservations)
             .OrderBy(observation => observation.FilePath, StringComparer.OrdinalIgnoreCase)
             .ThenBy(observation => observation.Line)
             .ToArray();
@@ -45,5 +47,19 @@ public static class SolutionAnalyzer
             callGraphs,
             methodObservations,
             invocationObservations);
+    }
+
+    private static SourceExtractionResult ExtractSource(SourceModel source, AnalysisRuleSet rules)
+    {
+        var entryPoints = EntryPointExtractor.FindMinimalApiEntryPoints(source, rules)
+            .Concat(EntryPointExtractor.FindMvcEntryPoints(source, rules))
+            .ToArray();
+
+        return new SourceExtractionResult(
+            entryPoints,
+            EffectExtractor.FindEffects(source, rules).ToArray(),
+            DiRegistrationExtractor.FindDiRegistrations(source, rules).ToArray(),
+            RoslynObservationExtractor.FindMethodObservations(source).ToArray(),
+            RoslynObservationExtractor.FindInvocationObservations(source).ToArray());
     }
 }
