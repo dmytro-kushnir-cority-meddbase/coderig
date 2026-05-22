@@ -52,7 +52,18 @@ public sealed class CliApplicationTests
 
         indexExitCode.Should().Be(0);
         error.ToString().Should().BeEmpty();
-        output.ToString().Should().ContainAll("EntryPoints: 4", "Effects: 8");
+        output.ToString().Should().ContainAll("Run:", "EntryPoints: 4", "Effects: 8");
+        File.Exists(Path.Combine(workingDirectory, ".rig", "rig.db")).Should().BeTrue();
+
+        output.GetStringBuilder().Clear();
+        var runsExitCode = await CliApplication.RunAsync(["runs"], output, error, workingDirectory);
+
+        runsExitCode.Should().Be(0);
+        output.ToString().Should().ContainAll(
+            "Runs",
+            solutionPath,
+            "entrypoints=4 effects=8",
+            "di=");
 
         output.GetStringBuilder().Clear();
         var entrypointsExitCode = await CliApplication.RunAsync(["entrypoints"], output, error, workingDirectory);
@@ -76,6 +87,16 @@ public sealed class CliApplicationTests
             "OBS parallel_fanout ctx=Task.WhenAll");
 
         output.GetStringBuilder().Clear();
+        var filesExitCode = await CliApplication.RunAsync(["files", "--skipped"], output, error, workingDirectory);
+
+        filesExitCode.Should().Be(0);
+        output.ToString().Should().ContainAll(
+            "Skipped Files",
+            "GeneratedEndpoint.g.cs",
+            "basis=profile",
+            "reason=generated_fixture");
+
+        output.GetStringBuilder().Clear();
         var callgraphExitCode = await CliApplication.RunAsync(["callgraph", "minapi GET /minapi/teams/{id}"], output, error, workingDirectory);
 
         callgraphExitCode.Should().Be(0);
@@ -84,6 +105,7 @@ public sealed class CliApplicationTests
             "TeamWorkflow.LoadTeamSummaryAsync",
             "BillingClient.LoadInvoiceAsync",
             "BillingClient.LoadInvoicesAsync",
+            "BOUNDARY external HttpClient.GetStringAsync",
             "EFFECT efcore read AppDbContext.Teams",
             "OBS looped_effect ctx=foreach",
             "OBS parallel_fanout ctx=Task.WhenAll");

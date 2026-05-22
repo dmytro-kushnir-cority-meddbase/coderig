@@ -1,0 +1,11 @@
+{
+  "files": {
+    "exclude": [
+      {
+        "id": "entrypoint-effects.generated-fixture",
+        "glob": "**/Generated/*.g.cs",
+        "reason": "generated_fixture"
+      }
+    ]
+  }
+}

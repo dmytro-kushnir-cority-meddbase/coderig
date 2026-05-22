@@ -22,6 +22,7 @@ public sealed class TeamWorkflow
         var teams = await _db.Teams.ToListAsync();
         var cached = await _redis.StringGetAsync($"team:{teamId}");
         var invoice = await _billingClient.LoadInvoiceAsync(teamId);
+        ObserveDynamicBoundary(invoice);
         var relatedTeamIds = new[] { teamId, teamId + 1 };
 
         foreach (var relatedTeamId in relatedTeamIds)
@@ -44,5 +45,10 @@ public sealed class TeamWorkflow
         _db.Teams.Add(new Team { Name = name });
         await _db.SaveChangesAsync();
         await _redis.StringSetAsync($"team:{name}", name);
+    }
+
+    private static void ObserveDynamicBoundary(dynamic value)
+    {
+        value.UnresolvedRuntimeCall();
     }
 }

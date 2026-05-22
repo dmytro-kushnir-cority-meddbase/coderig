@@ -1,6 +1,7 @@
 # Handover
 
-Current handover after the shallow callgraph slice.
+Current handover after refactoring `SolutionAnalyzer` into focused analysis
+components.
 
 ## Current State
 
@@ -10,8 +11,10 @@ Working commands:
 
 ```text
 dotnet run --project src/Rig -- index playgrounds/EntryPointEffects/EntryPointEffects.slnx
+dotnet run --project src/Rig -- runs
 dotnet run --project src/Rig -- entrypoints
 dotnet run --project src/Rig -- effects
+dotnet run --project src/Rig -- files --skipped
 dotnet run --project src/Rig -- callgraph "minapi GET /minapi/teams/{id}"
 ```
 
@@ -30,7 +33,39 @@ The analyzer currently emits:
 - entrypoints
 - effects
 - effect observations
-- shallow application callgraphs with inline effects
+- source file inventory with indexed/skipped classifications
+- DI registration facts
+- method observations backed by Roslyn symbols
+- invocation observations backed by Roslyn symbols
+- shallow application callgraphs with inline effects, direct symbol edges,
+  external boundaries, and unresolved boundaries
+
+Persistence now writes immutable runs to `.rig/rig.db` through EF Core/SQLite.
+The store keeps the full `AnalysisResult` projection as JSON for stable CLI
+reads and also writes queryable tables for source files, entrypoints, effects,
+effect observations, DI registrations, method observations, invocation
+observations, callgraphs, callgraph nodes, node calls, and boundary calls.
+Source file rows include status, confidence, basis, reason, and evidence.
+
+Current built-in detection rules live in `src/Rig/Rules/builtin-rules.json`.
+That file externalizes the implemented Minimal API entrypoint rules, MVC HTTP
+attribute rules, HTTP/EF Core/Redis effect rules, DI registration rules, and
+built-in file rules. `rig.rules.json` beside the solution currently extends
+file include/exclude globs; the playground uses it to exclude a generated
+fixture.
+
+`SolutionAnalyzer` is now orchestration only. The old 1,135-line file was split
+into focused components:
+
+- `Analysis/Inventory/SolutionSourceLoader.cs`
+- `Analysis/Rules/AnalysisRuleSet.cs`
+- `Analysis/Extraction/EntryPointExtractor.cs`
+- `Analysis/Extraction/EffectExtractor.cs`
+- `Analysis/Extraction/DiRegistrationExtractor.cs`
+- `Analysis/Extraction/RoslynObservationExtractor.cs`
+- `Analysis/CallGraph/CallGraphBuilder.cs`
+- `Analysis/RoslynSymbolHelpers.cs`
+- `Analysis/RoslynAnalysisModels.cs`
 
 ## Verification
 
@@ -38,56 +73,75 @@ Last verified with:
 
 ```text
 dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false
-dotnet build playgrounds/EntryPointEffects/EntryPointEffects.slnx /p:UseSharedCompilation=false
+dotnet build RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false -warnaserror
 dotnet run --project src/Rig -- index playgrounds/EntryPointEffects/EntryPointEffects.slnx
+dotnet run --project src/Rig -- runs
 dotnet run --project src/Rig -- callgraph "minapi GET /minapi/teams/{id}"
 ```
+
+Dead-code scan after the refactor found no stale moved helper methods or
+duplicate private model types.
 
 The `/p:UseSharedCompilation=false` flag avoids intermittent compiler-server
 timeouts observed during this slice.
 
 ## Important Caveats
 
-This is still a syntax-based prototype.
+This is still a prototype, but solution loading and local call resolution now
+use Roslyn/MSBuild workspace compilations and `SemanticModel` symbol lookup.
 
 Current callgraph resolution is intentionally shallow:
 
-- Minimal API lambda parameters are mapped by syntax.
-- MVC actions are matched by file and start line.
-- Method calls resolve through visible parameter and field type names.
-- Constructor injection, MS DI registration facts, interfaces, dynamic dispatch,
-  external boundary nodes, cycles, and unresolved call nodes are not fully
-  modeled yet.
+- Minimal API inline lambdas are traversed directly from the endpoint handler.
+- MVC actions are matched by file and start line, then traversed by symbol.
+- Direct calls to in-solution methods resolve by Roslyn method symbols.
+- External and unresolved calls are now explicit boundary calls on callgraph
+  nodes.
+- MS DI registration facts are emitted, but callgraph traversal does not yet use
+  them to resolve interface/service calls.
+- Constructor injection resolution, interfaces, cycles, and richer dynamic
+  dispatch modeling are not fully implemented yet.
 
-Persistence is still `.rig/latest.json`, not SQLite immutable runs.
+See `docs/sqlite-persistence-notes.md` for the current decision on not storing
+the full AST as the primary index. Short version: persist compact
+symbol/reference observations first; keep full AST dumps as possible future
+diagnostic artifacts.
 
 Profiles are not implemented yet. Current effect detection is hard-coded.
 
 ## Recommended Next Slice
 
-Move from syntax-only callgraph to Roslyn-backed symbols for the same playground
-contract.
+Use the emitted MS DI registration facts for constructor/interface callgraph
+resolution.
 
 Suggested contract:
 
-- load `.slnx` through Roslyn/MSBuild workspace
-- fail loudly on compilation errors
-- emit method/invocation observations
-- resolve `TeamWorkflow` and `BillingClient` calls by symbol, not string names
+- map constructor-injected fields/properties back to DI facts
+- resolve interface/service calls to implementation calls where DI facts are
+  exact
+- label DI-derived edges with confidence, basis, reason, and evidence
 - preserve current CLI output
 
-Keep the current syntax analyzer as a temporary fallback only if useful. The
-product spec wants ground truth from Roslyn AST/symbol observations, so this is
-the next architectural pressure point.
+After that, add `rig di` or a general facts query surface so DI facts are
+visible without inspecting JSON/SQLite.
 
 ## Useful Files
 
 - `docs/mvp-spec.md`
 - `docs/ubiquitous-language.md`
 - `docs/progress.md`
+- `docs/sqlite-persistence-notes.md`
+- `src/Rig/Rules/builtin-rules.json`
 - `src/Rig/Analysis/SolutionAnalyzer.cs`
 - `src/Rig/Analysis/AnalysisResult.cs`
+- `src/Rig/Analysis/CallGraph/CallGraphBuilder.cs`
+- `src/Rig/Analysis/Extraction/`
+- `src/Rig/Analysis/Inventory/SolutionSourceLoader.cs`
+- `src/Rig/Analysis/Rules/AnalysisRuleSet.cs`
 - `src/Rig/Cli/CliApplication.cs`
+- `src/Rig/Cli/RunStore.cs`
+- `src/Rig/Storage/RigDbContext.cs`
 - `playgrounds/EntryPointEffects/EntryPointEffects.slnx`
+- `playgrounds/EntryPointEffects/rig.rules.json`
 - `tests/Rig.Tests/Analysis/PlaygroundAnalysisTests.cs`
 - `tests/Rig.Tests/Cli/CliApplicationTests.cs`

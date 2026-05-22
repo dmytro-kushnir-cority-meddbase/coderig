@@ -32,22 +32,22 @@ Status: `in_progress`
 - [x] .NET CLI project
 - [ ] `.sln` input handling
 - [x] `.slnx` input handling
-- [ ] immutable run creation
-- [ ] SQLite/EF Core storage
+- [x] immutable run creation
+- [x] SQLite/EF Core storage
 - [ ] profile loading and strict validation
 - [ ] appsettings parser
-- [ ] source inventory and skip decisions
+- [x] source inventory and skip decisions
 - [x] first playground solution
 
 ### Phase 2: Roslyn Observations and MS DI
 
-Status: `todo`
+Status: `in_progress`
 
-- [ ] Roslyn solution loading
-- [ ] compilation failure reporting
-- [ ] symbol/method/invocation observations
+- [x] Roslyn solution loading
+- [x] compilation failure reporting
+- [x] symbol/method/invocation observations
 - [ ] string-template extraction
-- [ ] MS DI registration facts
+- [x] MS DI registration facts
 - [ ] hosted service detection
 - [ ] evidence metadata on facts
 
@@ -58,8 +58,8 @@ Status: `in_progress`
 - [x] Minimal API entrypoint detection
 - [x] MVC entrypoint detection
 - [x] application-only bounded callgraph
-- [ ] external boundary nodes
-- [ ] unresolved call nodes
+- [x] external boundary nodes
+- [x] unresolved call nodes
 - [x] edge confidence/basis/reason
 - [ ] cycle detection
 
@@ -92,7 +92,7 @@ Status: `in_progress`
 
 Status: `in_progress`
 
-- [ ] Milestone 0 built-in profile packs
+- [x] current entrypoint/effect/file/DI rules externalized
 - [x] Minimal API playground
 - [x] MVC playground
 - [x] deterministic regression tests
@@ -110,42 +110,43 @@ Status: `todo`
 
 ## Current Slice
 
-Slice: Shallow callgraph with inline effects
-Phase: 3/4
-Status: `committed`
+Slice: Solution analyzer responsibility split
+Phase: refactor
+Status: `verified`
 
 Contract:
-  - analyzer emits a callgraph per detected entrypoint.
-  - Minimal API GET entrypoint reaches `TeamWorkflow.LoadTeamSummaryAsync`.
-  - `TeamWorkflow.LoadTeamSummaryAsync` reaches both billing client methods.
-  - callgraph nodes include inline EF Core, Redis, and HTTP effects.
-  - `rig callgraph "minapi GET /minapi/teams/{id}"` prints calls, effects, and observations.
+  - reduce `SolutionAnalyzer` to orchestration.
+  - split Roslyn loading, rule loading, source inventory, extractors, observations, and callgraph building into focused files.
+  - keep public `SolutionAnalyzer.AnalyzeAsync` contract unchanged.
+  - scan for dead code after the move.
+  - preserve current CLI output.
 
 Verification:
-  - `dotnet test RuntimeIntelligenceGraph.slnx` passes with 4 tests.
-  - `dotnet build playgrounds/EntryPointEffects/EntryPointEffects.slnx` passes.
+  - `dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false` passes with 4 tests.
+  - `dotnet build RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false -warnaserror` passes with 0 warnings.
   - `dotnet run --project src/Rig -- index playgrounds/EntryPointEffects/EntryPointEffects.slnx` reports 4 entrypoints and 8 effects.
-  - `dotnet run --project src/Rig -- callgraph "minapi GET /minapi/teams/{id}"` prints 4 nodes with inline effects.
+  - `dotnet run --project src/Rig -- runs` lists persisted run metadata with `di=4`.
+  - `dotnet run --project src/Rig -- callgraph "minapi GET /minapi/teams/{id}"` prints 5 compilation-backed nodes with inline effects, external boundaries, and an unresolved boundary.
+  - dead-code scan found no stale moved helper methods or duplicate private model types.
 
 Commit:
-  - `08639b0 Add shallow callgraph output`
+  - pending
 
 ## Next Suggested Slice
 
-Slice: Roslyn-backed observations and symbol resolution
+Slice: Use DI facts for constructor/interface call resolution
 Phase: 2/3
 Status: `todo`
 
 Contract:
-  - load `.slnx` through Roslyn/MSBuild workspace.
-  - fail loudly on compilation errors.
-  - emit method and invocation observations as explicit records.
-  - resolve `TeamWorkflow` and `BillingClient` calls by symbol rather than string names.
-  - preserve current `rig entrypoints`, `rig effects`, and `rig callgraph` output.
+  - map constructor-injected fields/properties back to DI facts.
+  - resolve interface/service calls to implementation calls where DI facts are exact.
+  - label DI-derived edges with confidence, basis, reason, and evidence.
+  - preserve current CLI output.
 
 Notes:
-  - keep the current syntax analyzer as a temporary fallback only if it helps the transition.
   - use `/p:UseSharedCompilation=false` while compiler-server timeouts remain possible.
+  - then add `rig di` or a general facts query surface so DI facts are visible without inspecting JSON/SQLite.
 
 Use this template when starting one:
 

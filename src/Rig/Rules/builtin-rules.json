@@ -1,0 +1,136 @@
+{
+  "entrypoints": {
+    "minimalApi": [
+      { "method": "MapGet", "httpMethod": "GET" },
+      { "method": "MapPost", "httpMethod": "POST" },
+      { "method": "MapPut", "httpMethod": "PUT" },
+      { "method": "MapDelete", "httpMethod": "DELETE" },
+      { "method": "MapPatch", "httpMethod": "PATCH" }
+    ],
+    "mvcHttpAttributes": [
+      { "attribute": "HttpGet", "httpMethod": "GET" },
+      { "attribute": "HttpGetAttribute", "httpMethod": "GET" },
+      { "attribute": "HttpPost", "httpMethod": "POST" },
+      { "attribute": "HttpPostAttribute", "httpMethod": "POST" },
+      { "attribute": "HttpPut", "httpMethod": "PUT" },
+      { "attribute": "HttpPutAttribute", "httpMethod": "PUT" },
+      { "attribute": "HttpDelete", "httpMethod": "DELETE" },
+      { "attribute": "HttpDeleteAttribute", "httpMethod": "DELETE" },
+      { "attribute": "HttpPatch", "httpMethod": "PATCH" },
+      { "attribute": "HttpPatchAttribute", "httpMethod": "PATCH" }
+    ]
+  },
+  "effects": [
+    {
+      "provider": "http",
+      "operation": "GET",
+      "methods": [ "GetAsync", "GetStringAsync", "GetFromJsonAsync" ],
+      "resource": "http_argument",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "httpclient_method_match"
+    },
+    {
+      "provider": "http",
+      "operation": "POST",
+      "methods": [ "PostAsync", "PostAsJsonAsync" ],
+      "resource": "http_argument",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "httpclient_method_match"
+    },
+    {
+      "provider": "http",
+      "operation": "PUT",
+      "methods": [ "PutAsync", "PutAsJsonAsync" ],
+      "resource": "http_argument",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "httpclient_method_match"
+    },
+    {
+      "provider": "http",
+      "operation": "DELETE",
+      "methods": [ "DeleteAsync" ],
+      "resource": "http_argument",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "httpclient_method_match"
+    },
+    {
+      "provider": "efcore",
+      "operation": "read",
+      "methods": [ "ToListAsync", "FirstAsync", "FirstOrDefaultAsync", "SingleAsync", "SingleOrDefaultAsync", "AnyAsync", "CountAsync", "FindAsync" ],
+      "resource": "ef_dbset_receiver",
+      "confidence": "medium",
+      "basis": "compilation+heuristic",
+      "reason": "dbset_materialization"
+    },
+    {
+      "provider": "efcore",
+      "operation": "commit",
+      "methods": [ "SaveChanges", "SaveChangesAsync" ],
+      "resource": "ef_context_receiver",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "dbcontext_commit"
+    },
+    {
+      "provider": "efcore",
+      "operation": "pending_write",
+      "methods": [ "Add", "AddAsync", "Update", "Remove" ],
+      "resource": "ef_dbset_receiver",
+      "confidence": "medium",
+      "basis": "compilation+heuristic",
+      "reason": "change_tracker"
+    },
+    {
+      "provider": "redis",
+      "operation": "read",
+      "methods": [ "StringGet", "StringGetAsync", "HashGet", "HashGetAsync" ],
+      "resource": "string_argument",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "stackexchange_redis_method_match"
+    },
+    {
+      "provider": "redis",
+      "operation": "write",
+      "methods": [ "StringSet", "StringSetAsync", "HashSet", "HashSetAsync" ],
+      "resource": "string_argument",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "stackexchange_redis_method_match"
+    },
+    {
+      "provider": "redis",
+      "operation": "delete",
+      "methods": [ "KeyDelete", "KeyDeleteAsync" ],
+      "resource": "string_argument",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "stackexchange_redis_method_match"
+    }
+  ],
+  "diRegistrations": [
+    { "methods": [ "AddScoped" ], "lifetime": "scoped", "registrationKind": "service_registration", "reason": "msdi_addscoped" },
+    { "methods": [ "AddTransient" ], "lifetime": "transient", "registrationKind": "service_registration", "reason": "msdi_addtransient" },
+    { "methods": [ "AddSingleton" ], "lifetime": "singleton", "registrationKind": "service_registration", "reason": "msdi_addsingleton" },
+    { "methods": [ "TryAddScoped" ], "lifetime": "scoped", "registrationKind": "tryadd_service_registration", "reason": "msdi_tryaddscoped" },
+    { "methods": [ "TryAddTransient" ], "lifetime": "transient", "registrationKind": "tryadd_service_registration", "reason": "msdi_tryaddtransient" },
+    { "methods": [ "TryAddSingleton" ], "lifetime": "singleton", "registrationKind": "tryadd_service_registration", "reason": "msdi_tryaddsingleton" },
+    { "methods": [ "AddHostedService" ], "lifetime": "singleton", "registrationKind": "hosted_service", "reason": "msdi_hosted_service" },
+    { "methods": [ "AddHttpClient" ], "lifetime": "transient", "registrationKind": "http_client", "reason": "msdi_http_client" },
+    { "methods": [ "AddDbContext" ], "lifetime": "scoped", "registrationKind": "dbcontext", "reason": "efcore_adddbcontext" }
+  ],
+  "files": {
+    "exclude": [
+      { "id": "dotnet.generated.g", "glob": "**/*.g.cs", "reason": "generated_source" },
+      { "id": "dotnet.generated.generated", "glob": "**/*.generated.cs", "reason": "generated_source" },
+      { "id": "dotnet.generated.designer", "glob": "**/*.designer.cs", "reason": "generated_source" },
+      { "id": "dotnet.generated.folder", "glob": "**/Generated/**", "reason": "generated_source" },
+      { "id": "dotnet.test.folder", "glob": "**/tests/**", "reason": "test_source" }
+    ],
+    "testProjectPatterns": [ "*Tests", "*.Tests" ]
+  }
+}

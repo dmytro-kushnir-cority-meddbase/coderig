@@ -26,9 +26,11 @@ public static class CliApplication
         return args[0] switch
         {
             "index" => await RunIndexAsync(args, output, error, workingDirectory),
+            "runs" => await RunRunsAsync(output, workingDirectory),
             "entrypoints" => await RunEntryPointsAsync(output, error, workingDirectory),
             "effects" => await RunEffectsAsync(output, error, workingDirectory),
             "callgraph" => await RunCallGraphAsync(args, output, error, workingDirectory),
+            "files" => await RunFilesAsync(args, output, error, workingDirectory),
             _ => UnknownCommand(args[0], error)
         };
     }
@@ -71,11 +73,28 @@ public static class CliApplication
         }
 
         var result = await SolutionAnalyzer.AnalyzeAsync(args[1]);
-        await new RunStore(workingDirectory).SaveLatestAsync(result);
+        var runId = await new RunStore(workingDirectory).SaveAsync(args[1], result);
 
         output.WriteLine($"Indexed: {Path.GetFullPath(args[1])}");
+        output.WriteLine($"Run: {runId}");
         output.WriteLine($"EntryPoints: {result.EntryPoints.Count}");
         output.WriteLine($"Effects: {result.Effects.Count}");
+
+        return 0;
+    }
+
+    private static async Task<int> RunRunsAsync(TextWriter output, string workingDirectory)
+    {
+        var runs = await new RunStore(workingDirectory).ListRunsAsync();
+
+        output.WriteLine("Runs");
+        foreach (var run in runs)
+        {
+            output.WriteLine($"  {run.Id}");
+            output.WriteLine($"    indexed={run.CreatedAtUtc:u}");
+            output.WriteLine($"    solution={run.SolutionPath}");
+            output.WriteLine($"    entrypoints={run.EntryPointCount} effects={run.EffectCount} di={run.DiRegistrationCount} methods={run.MethodObservationCount} invocations={run.InvocationObservationCount}");
+        }
 
         return 0;
     }
@@ -124,6 +143,37 @@ public static class CliApplication
         return 0;
     }
 
+    private static async Task<int> RunFilesAsync(
+        string[] args,
+        TextWriter output,
+        TextWriter error,
+        string workingDirectory)
+    {
+        if (args.Length != 2 || args[1] != "--skipped")
+        {
+            error.WriteLine("Usage: rig files --skipped");
+            return 2;
+        }
+
+        var result = await LoadLatestOrErrorAsync(error, workingDirectory);
+        if (result is null)
+        {
+            return 2;
+        }
+
+        output.WriteLine("Skipped Files");
+        foreach (var sourceFile in result.SourceFiles
+            .Where(sourceFile => sourceFile.Status == "skipped")
+            .OrderBy(sourceFile => sourceFile.FilePath, StringComparer.OrdinalIgnoreCase))
+        {
+            output.WriteLine($"  {Path.GetFileName(sourceFile.FilePath)}");
+            output.WriteLine($"    project={sourceFile.ProjectName} conf={sourceFile.Confidence} basis={sourceFile.Basis} reason={sourceFile.Reason}");
+            output.WriteLine($"    path={sourceFile.FilePath}");
+        }
+
+        return 0;
+    }
+
     private static async Task<int> RunCallGraphAsync(
         string[] args,
         TextWriter output,
@@ -165,6 +215,12 @@ public static class CliApplication
             foreach (var call in node.Calls)
             {
                 output.WriteLine($"    CALL {call}");
+            }
+
+            foreach (var boundaryCall in node.BoundaryCalls)
+            {
+                output.WriteLine($"    BOUNDARY {boundaryCall.Kind} {boundaryCall.Method}");
+                output.WriteLine($"      conf={boundaryCall.Confidence} basis={boundaryCall.Basis} reason={boundaryCall.Reason}");
             }
 
             foreach (var effect in node.Effects)

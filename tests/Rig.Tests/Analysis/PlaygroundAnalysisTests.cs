@@ -21,6 +21,12 @@ public sealed class PlaygroundAnalysisTests
 
         var result = await SolutionAnalyzer.AnalyzeAsync(solutionPath);
 
+        result.SourceFiles.Should().Contain(sourceFile =>
+            sourceFile.Status == "skipped" &&
+            sourceFile.Basis == "profile" &&
+            sourceFile.Reason == "generated_fixture" &&
+            sourceFile.FilePath.EndsWith("GeneratedEndpoint.g.cs", StringComparison.OrdinalIgnoreCase));
+
         result.EntryPoints.Select(entryPoint => entryPoint.DisplayName).Should().BeEquivalentTo(
             "minapi GET /minapi/teams/{id}",
             "minapi POST /minapi/teams",
@@ -66,12 +72,32 @@ public sealed class PlaygroundAnalysisTests
                 observation.Type == "parallel_fanout" &&
                 observation.Context == "Task.WhenAll"));
 
+        result.MethodObservations.Should().Contain(observation =>
+            observation.DisplayName == "TeamWorkflow.LoadTeamSummaryAsync" &&
+            observation.Symbol.Contains("EntryPointEffects.Api.Services.TeamWorkflow.LoadTeamSummaryAsync", StringComparison.Ordinal));
+
+        result.InvocationObservations.Should().Contain(observation =>
+            observation.ContainingMethodSymbol.Contains("EntryPointEffects.Api.Controllers.TeamsController.Get", StringComparison.Ordinal) &&
+            observation.TargetSymbol.Contains("EntryPointEffects.Api.Services.TeamWorkflow.LoadTeamSummaryAsync", StringComparison.Ordinal) &&
+            observation.Basis == "compilation");
+
+        result.DiRegistrations.Should().Contain(registration =>
+            registration.ServiceType.Contains("EntryPointEffects.Api.Services.TeamWorkflow", StringComparison.Ordinal) &&
+            registration.Lifetime == "scoped" &&
+            registration.Reason == "msdi_addscoped");
+
+        result.DiRegistrations.Should().Contain(registration =>
+            registration.RegistrationKind == "http_client" &&
+            registration.ImplementationType != null &&
+            registration.ImplementationType.Contains("EntryPointEffects.Api.Services.BillingClient", StringComparison.Ordinal));
+
         var minApiGetGraph = result.CallGraphs.Should().ContainSingle(graph =>
             graph.EntryPoint == "minapi GET /minapi/teams/{id}").Subject;
 
         minApiGetGraph.Nodes.Select(node => node.Symbol).Should().Contain(
             "minapi GET /minapi/teams/{id}",
             "TeamWorkflow.LoadTeamSummaryAsync",
+            "TeamWorkflow.ObserveDynamicBoundary",
             "BillingClient.LoadInvoiceAsync",
             "BillingClient.LoadInvoicesAsync");
 
@@ -84,5 +110,17 @@ public sealed class PlaygroundAnalysisTests
             node.Symbol == "BillingClient.LoadInvoicesAsync" &&
             node.Effects.Any(effect => effect.Observations.Any(observation =>
                 observation.Type == "parallel_fanout")));
+
+        minApiGetGraph.Nodes.Should().Contain(node =>
+            node.Symbol == "BillingClient.LoadInvoiceAsync" &&
+            node.BoundaryCalls.Any(call =>
+                call.Kind == "external" &&
+                call.Method == "HttpClient.GetStringAsync"));
+
+        minApiGetGraph.Nodes.Should().Contain(node =>
+            node.Symbol == "TeamWorkflow.ObserveDynamicBoundary" &&
+            node.BoundaryCalls.Any(call =>
+                call.Kind == "unresolved" &&
+                call.Reason == "unresolved_call_target"));
     }
 }
