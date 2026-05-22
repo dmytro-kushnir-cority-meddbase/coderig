@@ -29,7 +29,7 @@ Status: `committed`
 
 Status: `todo`
 
-- [ ] .NET CLI project
+- [x] .NET CLI project
 - [ ] `.sln` input handling
 - [ ] `.slnx` input handling
 - [ ] immutable run creation
@@ -110,7 +110,20 @@ Status: `todo`
 
 ## Current Slice
 
-No active implementation slice yet.
+Slice: CLI project skeleton and command summary
+Phase: 1
+Status: `committed`
+
+Contract:
+  - `rig` with no arguments prints the initial human-readable command summary.
+  - unknown commands return exit code 2 with an actionable error.
+  - package versions are pinned from nuget.org stable versions checked through the NuGet API.
+
+Verification:
+  - `dotnet test RuntimeIntelligenceGraph.slnx` passes with 2 tests.
+
+Commit:
+  - this commit
 
 Use this template when starting one:
 
