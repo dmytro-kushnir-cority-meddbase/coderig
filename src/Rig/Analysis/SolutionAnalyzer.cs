@@ -247,19 +247,19 @@ public static class SolutionAnalyzer
             var httpEffect = TryCreateHttpEffect(methodName, invocation, sourceFile, line);
             if (httpEffect is not null)
             {
-                yield return httpEffect;
+                yield return AttachObservations(invocation, httpEffect);
             }
 
             var efEffect = TryCreateEfEffect(methodName, memberAccess, sourceFile, line, fields);
             if (efEffect is not null)
             {
-                yield return efEffect;
+                yield return AttachObservations(invocation, efEffect);
             }
 
             var redisEffect = TryCreateRedisEffect(methodName, invocation, sourceFile, line);
             if (redisEffect is not null)
             {
-                yield return redisEffect;
+                yield return AttachObservations(invocation, redisEffect);
             }
         }
     }
@@ -301,7 +301,8 @@ public static class SolutionAnalyzer
             line,
             "high",
             "compilation+profile",
-            "httpclient_method_match");
+            "httpclient_method_match",
+            []);
     }
 
     private static EffectInfo? TryCreateEfEffect(
@@ -328,7 +329,8 @@ public static class SolutionAnalyzer
                 line,
                 "medium",
                 "compilation+heuristic",
-                "dbset_materialization");
+                "dbset_materialization",
+                []);
         }
 
         if (methodName is "SaveChanges" or "SaveChangesAsync")
@@ -348,7 +350,8 @@ public static class SolutionAnalyzer
                 line,
                 "high",
                 "compilation+profile",
-                "dbcontext_commit");
+                "dbcontext_commit",
+                []);
         }
 
         if (methodName is "Add" or "AddAsync" or "Update" or "Remove")
@@ -368,7 +371,8 @@ public static class SolutionAnalyzer
                 line,
                 "medium",
                 "compilation+heuristic",
-                "change_tracker");
+                "change_tracker",
+                []);
         }
 
         return null;
@@ -408,7 +412,86 @@ public static class SolutionAnalyzer
             line,
             "high",
             "compilation+profile",
-            "stackexchange_redis_method_match");
+            "stackexchange_redis_method_match",
+            []);
+    }
+
+    private static EffectInfo AttachObservations(InvocationExpressionSyntax invocation, EffectInfo effect)
+    {
+        var observations = new List<EffectObservationInfo>();
+
+        var loop = FindLoopContext(invocation);
+        if (loop is not null)
+        {
+            observations.Add(new EffectObservationInfo(
+                "looped_effect",
+                loop.Value.Context,
+                loop.Value.Detail,
+                "high",
+                "compilation",
+                "effect_inside_loop"));
+        }
+
+        var fanout = FindParallelFanoutContext(invocation);
+        if (fanout is not null)
+        {
+            observations.Add(new EffectObservationInfo(
+                "parallel_fanout",
+                fanout.Value.Context,
+                fanout.Value.Detail,
+                "high",
+                "compilation",
+                "effect_inside_parallel_fanout"));
+        }
+
+        return effect with { Observations = observations };
+    }
+
+    private static (string Context, string Detail)? FindLoopContext(InvocationExpressionSyntax invocation)
+    {
+        foreach (var ancestor in invocation.Ancestors())
+        {
+            switch (ancestor)
+            {
+                case ForEachStatementSyntax forEach:
+                    return ("foreach", $"{forEach.Identifier.ValueText} in {forEach.Expression}");
+                case ForStatementSyntax:
+                    return ("for", "for");
+                case WhileStatementSyntax:
+                    return ("while", "while");
+            }
+        }
+
+        return null;
+    }
+
+    private static (string Context, string Detail)? FindParallelFanoutContext(InvocationExpressionSyntax invocation)
+    {
+        foreach (var ancestor in invocation.Ancestors().OfType<InvocationExpressionSyntax>())
+        {
+            if (ancestor.Expression is not MemberAccessExpressionSyntax memberAccess)
+            {
+                continue;
+            }
+
+            var methodName = memberAccess.Name.Identifier.ValueText;
+            var receiver = memberAccess.Expression.ToString();
+
+            if (string.Equals(receiver, "Task", StringComparison.Ordinal) &&
+                string.Equals(methodName, "WhenAll", StringComparison.Ordinal))
+            {
+                return ("Task.WhenAll", "Task.WhenAll");
+            }
+
+            if (string.Equals(receiver, "Parallel", StringComparison.Ordinal) &&
+                (string.Equals(methodName, "ForEach", StringComparison.Ordinal) ||
+                 string.Equals(methodName, "ForEachAsync", StringComparison.Ordinal)))
+            {
+                return ($"Parallel.{methodName}", $"Parallel.{methodName}");
+            }
+        }
+
+        return null;
     }
 
     private static string NormalizeHttpResource(string url)

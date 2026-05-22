@@ -22,6 +22,14 @@ public sealed class TeamWorkflow
         var teams = await _db.Teams.ToListAsync();
         var cached = await _redis.StringGetAsync($"team:{teamId}");
         var invoice = await _billingClient.LoadInvoiceAsync(teamId);
+        var relatedTeamIds = new[] { teamId, teamId + 1 };
+
+        foreach (var relatedTeamId in relatedTeamIds)
+        {
+            await _redis.StringGetAsync($"team:{relatedTeamId}");
+        }
+
+        await _billingClient.LoadInvoicesAsync(relatedTeamIds);
 
         return new
         {

@@ -13,4 +13,10 @@ public sealed class BillingClient
     {
         return await _httpClient.GetStringAsync($"https://billing.example/invoices/{teamId}");
     }
+
+    public async Task<string[]> LoadInvoicesAsync(IReadOnlyList<int> teamIds)
+    {
+        return await Task.WhenAll(teamIds.Select(teamId =>
+            _httpClient.GetStringAsync($"https://billing.example/invoices/{teamId}")));
+    }
 }

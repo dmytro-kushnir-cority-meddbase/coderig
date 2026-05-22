@@ -114,6 +114,10 @@ public static class CliApplication
             output.WriteLine($"  {effect.Provider} {effect.Operation} {effect.Resource}");
             output.WriteLine($"    method={effect.Method} conf={effect.Confidence} basis={effect.Basis} reason={effect.Reason}");
             output.WriteLine($"    loc={Path.GetFileName(effect.FilePath)}:{effect.Line}");
+            foreach (var observation in effect.Observations)
+            {
+                output.WriteLine($"    OBS {observation.Type} ctx={observation.Context} conf={observation.Confidence} basis={observation.Basis} reason={observation.Reason}");
+            }
         }
 
         return 0;

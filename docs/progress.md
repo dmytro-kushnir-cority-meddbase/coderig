@@ -78,13 +78,13 @@ Status: `todo`
 
 Status: `todo`
 
-- [ ] loop/foreach/while contexts
+- [x] loop/foreach/while contexts
 - [ ] LINQ effectful lambda contexts
-- [ ] `Task.WhenAll`
+- [x] `Task.WhenAll`
 - [ ] `Parallel.ForEach`
 - [ ] `Parallel.ForEachAsync`
-- [ ] `looped_effect`
-- [ ] `parallel_fanout`
+- [x] `looped_effect`
+- [x] `parallel_fanout`
 - [ ] `unresolved_resource`
 - [ ] `unresolved_call_target`
 
@@ -110,20 +110,22 @@ Status: `todo`
 
 ## Current Slice
 
-Slice: EntryPointEffects playground with entrypoint and effect tracking
-Phase: 1/3/4
+Slice: Effect contexts for looped and parallel fanout effects
+Phase: 5
 Status: `committed`
 
 Contract:
-  - playground solution contains Minimal API and MVC entrypoints.
-  - playground solution contains HttpClient, EF Core, and Redis effects.
-  - `rig index playgrounds/EntryPointEffects/EntryPointEffects.slnx` reports 4 entrypoints and 6 effects.
-  - `rig entrypoints` prints Minimal API and MVC entrypoints.
-  - `rig effects` prints HTTP, EF Core, and Redis effects with confidence/basis/reason metadata.
+  - playground solution contains a Redis read inside `foreach`.
+  - playground solution contains an HttpClient call inside `Task.WhenAll`.
+  - analyzer emits `looped_effect` on the Redis effect.
+  - analyzer emits `parallel_fanout` on the HTTP effect.
+  - `rig effects` prints observation lines under affected effects.
 
 Verification:
   - `dotnet test RuntimeIntelligenceGraph.slnx` passes with 4 tests.
   - `dotnet build playgrounds/EntryPointEffects/EntryPointEffects.slnx` passes.
+  - `dotnet run --project src/Rig -- index playgrounds/EntryPointEffects/EntryPointEffects.slnx` reports 4 entrypoints and 8 effects.
+  - `dotnet run --project src/Rig -- effects` prints `OBS looped_effect` and `OBS parallel_fanout`.
 
 Commit:
   - this commit

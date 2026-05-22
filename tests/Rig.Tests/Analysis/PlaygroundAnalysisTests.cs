@@ -51,5 +51,19 @@ public sealed class PlaygroundAnalysisTests
             effect.Provider == "redis" &&
             effect.Operation == "write" &&
             effect.Resource == "team:{name}");
+
+        result.Effects.Should().Contain(effect =>
+            effect.Provider == "redis" &&
+            effect.Resource == "team:{relatedTeamId}" &&
+            effect.Observations.Any(observation =>
+                observation.Type == "looped_effect" &&
+                observation.Context == "foreach"));
+
+        result.Effects.Should().Contain(effect =>
+            effect.Provider == "http" &&
+            effect.Resource == "billing.example/invoices/{teamId}" &&
+            effect.Observations.Any(observation =>
+                observation.Type == "parallel_fanout" &&
+                observation.Context == "Task.WhenAll"));
     }
 }

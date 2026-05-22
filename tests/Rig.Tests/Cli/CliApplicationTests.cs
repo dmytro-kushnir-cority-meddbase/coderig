@@ -52,7 +52,7 @@ public sealed class CliApplicationTests
 
         indexExitCode.Should().Be(0);
         error.ToString().Should().BeEmpty();
-        output.ToString().Should().ContainAll("EntryPoints: 4", "Effects: 6");
+        output.ToString().Should().ContainAll("EntryPoints: 4", "Effects: 8");
 
         output.GetStringBuilder().Clear();
         var entrypointsExitCode = await CliApplication.RunAsync(["entrypoints"], output, error, workingDirectory);
@@ -71,7 +71,9 @@ public sealed class CliApplicationTests
             "efcore read AppDbContext.Teams",
             "efcore commit AppDbContext",
             "redis read team:{teamId}",
-            "redis write team:{name}");
+            "redis write team:{name}",
+            "OBS looped_effect ctx=foreach",
+            "OBS parallel_fanout ctx=Task.WhenAll");
     }
 
     private static string PlaygroundSolutionPath()

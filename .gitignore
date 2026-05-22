@@ -2,6 +2,7 @@ bin/
 obj/
 TestResults/
 .rig/
+.idea/
 *.user
 *.suo
 *.nupkg
