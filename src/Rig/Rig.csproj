@@ -7,6 +7,7 @@
     <Nullable>enable</Nullable>
     <EFOptimizeContext>true</EFOptimizeContext>
     <EFScaffoldModelStage>build</EFScaffoldModelStage>
+    <EFPrecompileQueriesStage>never</EFPrecompileQueriesStage>
     <EFOutputDir>Storage/Compiled</EFOutputDir>
     <EFTargetNamespace>Rig.Storage</EFTargetNamespace>
   </PropertyGroup>
