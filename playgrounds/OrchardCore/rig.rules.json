@@ -69,6 +69,136 @@
       "confidence": "high",
       "basis": "compilation+profile",
       "reason": "orchard_signal_token"
+    },
+    {
+      "provider": "filestore",
+      "operation": "read",
+      "methods": [ "GetFileInfoAsync", "GetDirectoryInfoAsync", "GetDirectoryContentAsync" ],
+      "receiverTypes": [ "OrchardCore.FileStorage.IFileStore", "OrchardCore.Media.IMediaFileStore" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "ifilestore_read_method"
+    },
+    {
+      "provider": "filestore",
+      "operation": "write",
+      "methods": [ "CreateFileFromStreamAsync", "TryCreateDirectoryAsync", "TryCopyFileAsync", "TryMoveFileAsync" ],
+      "receiverTypes": [ "OrchardCore.FileStorage.IFileStore", "OrchardCore.Media.IMediaFileStore" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "ifilestore_write_method"
+    },
+    {
+      "provider": "filestore",
+      "operation": "delete",
+      "methods": [ "TryDeleteFileAsync", "TryDeleteDirectoryAsync" ],
+      "receiverTypes": [ "OrchardCore.FileStorage.IFileStore", "OrchardCore.Media.IMediaFileStore" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "ifilestore_delete_method"
+    },
+    {
+      "provider": "openiddict",
+      "operation": "read",
+      "methods": [ "FindByIdAsync", "FindByClientIdAsync", "FindByNameAsync", "FindByPhysicalIdAsync", "CountAsync", "ListAsync" ],
+      "receiverTypes": [ "OpenIddict.Abstractions.IOpenIddictApplicationManager", "OpenIddict.Abstractions.IOpenIddictScopeManager", "OpenIddict.Abstractions.IOpenIddictTokenManager", "OpenIddict.Abstractions.IOpenIddictAuthorizationManager" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "openiddict_manager_read"
+    },
+    {
+      "provider": "openiddict",
+      "operation": "write",
+      "methods": [ "CreateAsync", "UpdateAsync", "PopulateAsync" ],
+      "receiverTypes": [ "OpenIddict.Abstractions.IOpenIddictApplicationManager", "OpenIddict.Abstractions.IOpenIddictScopeManager", "OpenIddict.Abstractions.IOpenIddictTokenManager", "OpenIddict.Abstractions.IOpenIddictAuthorizationManager" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "openiddict_manager_write"
+    },
+    {
+      "provider": "openiddict",
+      "operation": "delete",
+      "methods": [ "DeleteAsync", "PruneAsync", "RevokeAsync", "RevokeBySubjectAsync" ],
+      "receiverTypes": [ "OpenIddict.Abstractions.IOpenIddictApplicationManager", "OpenIddict.Abstractions.IOpenIddictScopeManager", "OpenIddict.Abstractions.IOpenIddictTokenManager", "OpenIddict.Abstractions.IOpenIddictAuthorizationManager" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "openiddict_manager_delete"
+    },
+    {
+      "provider": "document_manager",
+      "operation": "read",
+      "methods": [ "GetOrCreateImmutableAsync", "GetOrCreateMutableAsync" ],
+      "receiverTypes": [ "OrchardCore.Documents.IDocumentManager" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "idocumentmanager_read"
+    },
+    {
+      "provider": "document_manager",
+      "operation": "write",
+      "methods": [ "UpdateAsync" ],
+      "receiverTypes": [ "OrchardCore.Documents.IDocumentManager" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "idocumentmanager_write"
+    },
+    {
+      "provider": "shell_settings",
+      "operation": "read",
+      "methods": [ "LoadSettingsAsync" ],
+      "receiverTypes": [ "OrchardCore.Environment.Shell.Configuration.IShellSettingsManager" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "ishellsettingsmanager_read"
+    },
+    {
+      "provider": "shell_settings",
+      "operation": "write",
+      "methods": [ "SaveSettingsAsync" ],
+      "receiverTypes": [ "OrchardCore.Environment.Shell.Configuration.IShellSettingsManager" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "ishellsettingsmanager_write"
+    },
+    {
+      "provider": "deployment",
+      "operation": "write",
+      "methods": [ "ImportFromFileAsync" ],
+      "receiverTypes": [ "OrchardCore.Deployment.IDeploymentTargetHandler" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "ideploymenttargethandler_import"
+    },
+    {
+      "provider": "display_manager",
+      "operation": "read",
+      "methods": [ "BuildEditorAsync", "BuildDisplayAsync" ],
+      "receiverTypes": [ "OrchardCore.DisplayManagement.IDisplayManager" ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "idisplaymanager_read"
+    },
+    {
+      "provider": "display_manager",
+      "operation": "write",
+      "methods": [ "UpdateEditorAsync" ],
+      "receiverTypes": [ "OrchardCore.DisplayManagement.IDisplayManager" ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "idisplaymanager_write"
     }
   ],
   "files": {

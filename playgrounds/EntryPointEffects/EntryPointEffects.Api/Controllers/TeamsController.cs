@@ -46,4 +46,14 @@ public sealed class TeamsController : ControllerBase
         await _repository.AddAsync(new Team { Name = request.Name });
         return Accepted();
     }
+
+    // Method-group delegate test fixture:
+    // _repository.GetAllAsync is passed as a method group to Task.Run (not a lambda).
+    // The method group scan should follow it to TeamRepository.GetAllAsync → EF Core effect.
+    [HttpGet("via-method-group")]
+    public async Task<IActionResult> ListViaMethodGroup()
+    {
+        var teams = await Task.Run(_repository.GetAllAsync);
+        return Ok(teams);
+    }
 }

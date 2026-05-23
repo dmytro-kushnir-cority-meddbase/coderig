@@ -263,6 +263,12 @@ internal static class CallGraphBuilder
 
         foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
+            // nameof(...) is a compile-time operator, not a runtime call.
+            if (invocation.Expression is IdentifierNameSyntax { Identifier.ValueText: "nameof" })
+            {
+                continue;
+            }
+
             var methodSymbol = RoslynSymbolHelpers.ResolveMethodSymbol(invocation, semanticModel);
             if (methodSymbol is null)
             {
@@ -307,6 +313,63 @@ internal static class CallGraphBuilder
             }
 
             boundaryCalls.Add(CreateExternalBoundaryCall(invocation, semanticModel, methodSymbol));
+        }
+
+        // Scan for method group references used as delegates — these are not InvocationExpressionSyntax
+        // so the loop above misses them. Common in functional pipelines:
+        //   items.Select(repo.GetAsync)          ← MemberAccessExpressionSyntax argument
+        //   pipeline.Then(HandleAsync)            ← IdentifierNameSyntax argument
+        //   Func<int,Task> fn = repo.GetAsync;   ← initializer
+        foreach (var node in root.DescendantNodes())
+        {
+            if (node is not (IdentifierNameSyntax or MemberAccessExpressionSyntax))
+            {
+                continue;
+            }
+
+            // Skip the Name (right-hand) portion of a member access to avoid double-processing.
+            // The whole MemberAccessExpressionSyntax (e.g. repo.GetAsync) is processed as one unit.
+            if (node is IdentifierNameSyntax &&
+                node.Parent is MemberAccessExpressionSyntax parentMember &&
+                parentMember.Name == node)
+            {
+                continue;
+            }
+
+            // Skip if this node is the callee expression of an invocation — already handled above.
+            if (node.Parent is InvocationExpressionSyntax parentCall && parentCall.Expression == node)
+            {
+                continue;
+            }
+
+            var groupSymbolInfo = semanticModel.GetSymbolInfo(node);
+            if (groupSymbolInfo.Symbol is not IMethodSymbol groupSymbol)
+            {
+                continue;
+            }
+
+            var groupKey = RoslynSymbolHelpers.GetMethodKey(groupSymbol);
+
+            var singleImplGroup = TryResolveSingleImplDispatch(groupSymbol, context);
+            if (singleImplGroup is not null)
+            {
+                if (!calls.Any(c => string.Equals(c.Key, singleImplGroup.Key, StringComparison.Ordinal)))
+                {
+                    calls.Add(singleImplGroup);
+                }
+                continue;
+            }
+
+            if (context.Methods.TryGetValue(groupKey, out var groupMethod))
+            {
+                if (!calls.Any(c => string.Equals(c.Key, groupKey, StringComparison.Ordinal)))
+                {
+                    calls.Add(new ResolvedCall(groupKey, groupMethod.Symbol));
+                }
+            }
+
+            // No boundary call for unresolved method group references — the containing invocation
+            // (e.g. Enumerable.Select) already represents the call site in the boundary list.
         }
 
         return new ResolvedCallSet(calls, boundaryCalls);
@@ -424,7 +487,12 @@ internal static class CallGraphBuilder
     {
         return node switch
         {
-            InvocationExpressionSyntax invocation => RoslynSymbolHelpers.TryGetMemberName(invocation),
+            // Member access: _foo.Bar() → "Bar"
+            InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax m } => m.Name.Identifier.ValueText,
+            // Bare call: Foo() → "Foo" (e.g. controller methods called without 'this.')
+            InvocationExpressionSyntax { Expression: IdentifierNameSyntax id } => id.Identifier.ValueText,
+            // Generic: Foo<T>() → "Foo"
+            InvocationExpressionSyntax { Expression: GenericNameSyntax g } => g.Identifier.ValueText,
             MemberAccessExpressionSyntax memberAccess => memberAccess.Name.Identifier.ValueText,
             IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
             _ => null
