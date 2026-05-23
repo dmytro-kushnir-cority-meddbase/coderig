@@ -57,7 +57,7 @@ public static class CliApplication
         output.WriteLine("  rig index <solution>");
         output.WriteLine("  rig runs");
         output.WriteLine("  rig entrypoints");
-        output.WriteLine("  rig callgraph <index>");
+        output.WriteLine("  rig callgraph <index> [--focus]");
         output.WriteLine("  rig effects [--entrypoint <index>]");
         output.WriteLine("  rig di");
         output.WriteLine("  rig files --skipped");
@@ -280,9 +280,11 @@ public static class CliApplication
         if (args.Length < 2 || !int.TryParse(args[1], out var entryPointIndex))
         {
             error.WriteLine("Missing or invalid entrypoint index.");
-            error.WriteLine("Usage: rig callgraph <index>");
+            error.WriteLine("Usage: rig callgraph <index> [--focus]");
             return 2;
         }
+
+        var focusMode = args.Contains("--focus");
 
         await using var context = OpenContext(workingDirectory);
         var runId = await Reads.GetLatestRunIdAsync(context);
@@ -299,21 +301,42 @@ public static class CliApplication
             return 2;
         }
 
-        output.WriteLine($"Callgraph: [{entryPointIndex}] {callGraph.EntryPoint}");
-        output.WriteLine($"Nodes: {callGraph.Nodes.Count}");
+        var allNodes = callGraph.Nodes;
+        IReadOnlyList<CallGraphNodeInfo> nodes;
+        HashSet<string>? effectReachable = null;
 
-        foreach (var node in callGraph.Nodes)
+        if (focusMode)
+        {
+            effectReachable = ComputeEffectReachable(allNodes);
+            nodes = allNodes.Where(n => effectReachable.Contains(n.Symbol)).ToArray();
+        }
+        else
+        {
+            nodes = allNodes;
+        }
+
+        var focusSuffix = focusMode ? " (focused)" : "";
+        var nodeCountSuffix = focusMode ? $" / {allNodes.Count} on effect paths" : "";
+        output.WriteLine($"Callgraph: [{entryPointIndex}] {callGraph.EntryPoint}{focusSuffix}");
+        output.WriteLine($"Nodes: {nodes.Count}{nodeCountSuffix}");
+
+        foreach (var node in nodes)
         {
             output.WriteLine($"  {Path.GetFileName(node.FilePath)}:{node.Line}  {node.Symbol}");
 
             foreach (var call in node.Calls)
             {
+                if (focusMode && effectReachable is not null && !effectReachable.Contains(call))
+                    continue;
                 output.WriteLine($"    CALL {call}");
             }
 
-            foreach (var boundaryCall in node.BoundaryCalls)
+            if (!focusMode)
             {
-                output.WriteLine($"    BOUNDARY {boundaryCall.Kind} {boundaryCall.Method}");
+                foreach (var boundaryCall in node.BoundaryCalls)
+                {
+                    output.WriteLine($"    BOUNDARY {boundaryCall.Kind} {boundaryCall.Method}");
+                }
             }
 
             foreach (var effect in node.Effects)
@@ -325,6 +348,48 @@ public static class CliApplication
         }
 
         return 0;
+    }
+
+    private static HashSet<string> ComputeEffectReachable(
+        IReadOnlyList<CallGraphNodeInfo> nodes)
+    {
+        // Build reverse edges: callee symbol → set of caller symbols
+        var callers = new Dictionary<string, HashSet<string>>();
+        foreach (var node in nodes)
+        {
+            foreach (var call in node.Calls)
+            {
+                if (!callers.TryGetValue(call, out var callerSet))
+                {
+                    callerSet = [];
+                    callers[call] = callerSet;
+                }
+                callerSet.Add(node.Symbol);
+            }
+        }
+
+        // BFS backward from effect nodes to find all ancestors
+        var reachable = new HashSet<string>();
+        var queue = new Queue<string>();
+
+        foreach (var node in nodes.Where(n => n.Effects.Count > 0))
+        {
+            if (reachable.Add(node.Symbol))
+                queue.Enqueue(node.Symbol);
+        }
+
+        while (queue.Count > 0)
+        {
+            var symbol = queue.Dequeue();
+            if (!callers.TryGetValue(symbol, out var callerSet)) continue;
+            foreach (var caller in callerSet)
+            {
+                if (reachable.Add(caller))
+                    queue.Enqueue(caller);
+            }
+        }
+
+        return reachable;
     }
 
     private static RigDbContext OpenContext(string workingDirectory)
