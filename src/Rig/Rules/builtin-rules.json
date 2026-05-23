@@ -239,6 +239,226 @@
       "confidence": "high",
       "basis": "compilation+profile",
       "reason": "stackexchange_redis_method_match"
+    },
+    {
+      "provider": "aws_s3",
+      "operation": "write",
+      "methods": [ "PutObjectAsync", "CopyObjectAsync" ],
+      "receiverTypes": [ "Amazon.S3.IAmazonS3" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "amazons3_write_method"
+    },
+    {
+      "provider": "aws_s3",
+      "operation": "read",
+      "methods": [ "GetObjectAsync", "GetObjectMetadataAsync", "ListObjectsV2Async" ],
+      "receiverTypes": [ "Amazon.S3.IAmazonS3" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "amazons3_read_method"
+    },
+    {
+      "provider": "aws_s3",
+      "operation": "delete",
+      "methods": [ "DeleteObjectAsync", "DeleteObjectsAsync" ],
+      "receiverTypes": [ "Amazon.S3.IAmazonS3" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "amazons3_delete_method"
+    },
+    {
+      "provider": "azure_blob",
+      "operation": "write",
+      "methods": [ "UploadAsync" ],
+      "receiverTypes": [ "Azure.Storage.Blobs.BlobClient", "Azure.Storage.Blobs.BlockBlobClient", "Azure.Storage.Blobs.AppendBlobClient" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "azureblob_write_method"
+    },
+    {
+      "provider": "azure_blob",
+      "operation": "read",
+      "methods": [ "DownloadAsync", "DownloadContentAsync", "ExistsAsync", "GetPropertiesAsync" ],
+      "receiverTypes": [ "Azure.Storage.Blobs.BlobClient", "Azure.Storage.Blobs.BlockBlobClient" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "azureblob_read_method"
+    },
+    {
+      "provider": "azure_blob",
+      "operation": "delete",
+      "methods": [ "DeleteAsync", "DeleteIfExistsAsync" ],
+      "receiverTypes": [ "Azure.Storage.Blobs.BlobClient", "Azure.Storage.Blobs.BlobContainerClient", "Azure.Storage.Blobs.BlockBlobClient" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "azureblob_delete_method"
+    },
+    {
+      "provider": "azure_blob",
+      "operation": "query",
+      "methods": [ "GetBlobsAsync", "GetBlobsByHierarchyAsync" ],
+      "receiverTypes": [ "Azure.Storage.Blobs.BlobContainerClient" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "azureblob_list_method"
+    },
+    {
+      "provider": "azure_search",
+      "operation": "query",
+      "methods": [ "SearchAsync" ],
+      "receiverTypes": [ "Azure.Search.Documents.SearchClient" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "azuresearch_query_method"
+    },
+    {
+      "provider": "azure_search",
+      "operation": "write",
+      "methods": [ "UploadDocumentsAsync", "MergeOrUploadDocumentsAsync", "MergeDocumentsAsync" ],
+      "receiverTypes": [ "Azure.Search.Documents.SearchClient" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "azuresearch_write_method"
+    },
+    {
+      "provider": "azure_search",
+      "operation": "delete",
+      "methods": [ "DeleteDocumentsAsync" ],
+      "receiverTypes": [ "Azure.Search.Documents.SearchClient" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "azuresearch_delete_method"
+    },
+    {
+      "provider": "azure_search",
+      "operation": "index_write",
+      "methods": [ "CreateIndexAsync", "CreateOrUpdateIndexAsync" ],
+      "receiverTypes": [ "Azure.Search.Documents.Indexes.SearchIndexClient" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "azuresearch_index_write_method"
+    },
+    {
+      "provider": "azure_search",
+      "operation": "index_delete",
+      "methods": [ "DeleteIndexAsync" ],
+      "receiverTypes": [ "Azure.Search.Documents.Indexes.SearchIndexClient" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "azuresearch_index_delete_method"
+    },
+    {
+      "provider": "elasticsearch",
+      "operation": "query",
+      "methods": [ "SearchAsync" ],
+      "receiverTypes": [ "Elastic.Clients.Elasticsearch.ElasticsearchClient" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "elasticsearch_search_method"
+    },
+    {
+      "provider": "elasticsearch",
+      "operation": "write",
+      "methods": [ "BulkAsync" ],
+      "receiverTypes": [ "Elastic.Clients.Elasticsearch.ElasticsearchClient" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "elasticsearch_bulk_write_method"
+    },
+    {
+      "provider": "elasticsearch",
+      "operation": "delete",
+      "methods": [ "DeleteByQueryAsync" ],
+      "receiverTypes": [ "Elastic.Clients.Elasticsearch.ElasticsearchClient" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "elasticsearch_delete_query_method"
+    },
+    {
+      "provider": "elasticsearch",
+      "operation": "index_write",
+      "methods": [ "CreateAsync" ],
+      "receiverTypes": [ "Elastic.Clients.Elasticsearch.IndexManagement.IndicesNamespace" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "elasticsearch_index_create"
+    },
+    {
+      "provider": "elasticsearch",
+      "operation": "index_delete",
+      "methods": [ "DeleteAsync" ],
+      "receiverTypes": [ "Elastic.Clients.Elasticsearch.IndexManagement.IndicesNamespace" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "elasticsearch_index_delete"
+    },
+    {
+      "provider": "elasticsearch",
+      "operation": "index_read",
+      "methods": [ "GetAsync", "ExistsAsync" ],
+      "receiverTypes": [ "Elastic.Clients.Elasticsearch.IndexManagement.IndicesNamespace" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "elasticsearch_index_read"
+    },
+    {
+      "provider": "yessql",
+      "operation": "query",
+      "methods": [ "Query", "QueryIndex" ],
+      "receiverTypes": [ "YesSql.ISession" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "yessql_query"
+    },
+    {
+      "provider": "yessql",
+      "operation": "write",
+      "methods": [ "SaveAsync" ],
+      "receiverTypes": [ "YesSql.ISession" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "yessql_save"
+    },
+    {
+      "provider": "yessql",
+      "operation": "delete",
+      "methods": [ "Delete" ],
+      "receiverTypes": [ "YesSql.ISession" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "yessql_delete"
+    },
+    {
+      "provider": "yessql",
+      "operation": "flush",
+      "methods": [ "FlushAsync", "SaveChangesAsync" ],
+      "receiverTypes": [ "YesSql.ISession" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "yessql_flush"
     }
   ],
   "diRegistrations": [
