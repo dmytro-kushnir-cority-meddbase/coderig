@@ -127,14 +127,15 @@ public static class CliApplication
 
     private static async Task<int> RunEntryPointsAsync(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var result = await LoadLatestOrErrorAsync(error, workingDirectory);
-        if (result is null)
+        await using var context = OpenContext(workingDirectory);
+        var entryPoints = await Reads.LoadEntryPointsAsync(context);
+        if (entryPoints is null)
         {
-            return 2;
+            return NoRunError(error);
         }
 
         output.WriteLine("EntryPoints");
-        foreach (var entryPoint in result.EntryPoints.OrderBy(entryPoint => entryPoint.DisplayName, StringComparer.Ordinal))
+        foreach (var entryPoint in entryPoints.OrderBy(ep => ep.DisplayName, StringComparer.Ordinal))
         {
             output.WriteLine($"  {entryPoint.DisplayName}");
             output.WriteLine($"    loc={Path.GetFileName(entryPoint.FilePath)}:{entryPoint.Line}");
@@ -145,17 +146,18 @@ public static class CliApplication
 
     private static async Task<int> RunEffectsAsync(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var result = await LoadLatestOrErrorAsync(error, workingDirectory);
-        if (result is null)
+        await using var context = OpenContext(workingDirectory);
+        var effects = await Reads.LoadEffectsAsync(context);
+        if (effects is null)
         {
-            return 2;
+            return NoRunError(error);
         }
 
         output.WriteLine("Effects");
-        foreach (var effect in result.Effects
-            .OrderBy(effect => effect.Provider, StringComparer.Ordinal)
-            .ThenBy(effect => effect.Resource, StringComparer.Ordinal)
-            .ThenBy(effect => effect.Operation, StringComparer.Ordinal))
+        foreach (var effect in effects
+            .OrderBy(e => e.Provider, StringComparer.Ordinal)
+            .ThenBy(e => e.Resource, StringComparer.Ordinal)
+            .ThenBy(e => e.Operation, StringComparer.Ordinal))
         {
             output.WriteLine($"  {effect.Provider} {effect.Operation} {effect.Resource}");
             output.WriteLine($"    method={effect.Method} conf={effect.Confidence} basis={effect.Basis} reason={effect.Reason}");
@@ -171,14 +173,15 @@ public static class CliApplication
 
     private static async Task<int> RunDiAsync(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var result = await LoadLatestOrErrorAsync(error, workingDirectory);
-        if (result is null)
+        await using var context = OpenContext(workingDirectory);
+        var registrations = await Reads.LoadDiRegistrationsAsync(context);
+        if (registrations is null)
         {
-            return 2;
+            return NoRunError(error);
         }
 
         output.WriteLine("DI Registrations");
-        foreach (var reg in result.DiRegistrations
+        foreach (var reg in registrations
             .OrderBy(r => r.ServiceType, StringComparer.Ordinal)
             .ThenBy(r => r.Lifetime, StringComparer.Ordinal))
         {
@@ -224,16 +227,15 @@ public static class CliApplication
             return 2;
         }
 
-        var result = await LoadLatestOrErrorAsync(error, workingDirectory);
-        if (result is null)
+        await using var context = OpenContext(workingDirectory);
+        var sourceFiles = await Reads.LoadSkippedSourceFilesAsync(context);
+        if (sourceFiles is null)
         {
-            return 2;
+            return NoRunError(error);
         }
 
         output.WriteLine("Skipped Files");
-        foreach (var sourceFile in result.SourceFiles
-            .Where(sourceFile => sourceFile.Status == "skipped")
-            .OrderBy(sourceFile => sourceFile.FilePath, StringComparer.OrdinalIgnoreCase))
+        foreach (var sourceFile in sourceFiles)
         {
             output.WriteLine($"  {Path.GetFileName(sourceFile.FilePath)}");
             output.WriteLine($"    project={sourceFile.ProjectName} conf={sourceFile.Confidence} basis={sourceFile.Basis} reason={sourceFile.Reason}");
@@ -256,15 +258,15 @@ public static class CliApplication
             return 2;
         }
 
-        var result = await LoadLatestOrErrorAsync(error, workingDirectory);
-        if (result is null)
+        await using var context = OpenContext(workingDirectory);
+        var runId = await Reads.GetLatestRunIdAsync(context);
+        if (runId is null)
         {
-            return 2;
+            return NoRunError(error);
         }
 
         var entryPoint = string.Join(' ', args.Skip(1));
-        var callGraph = result.CallGraphs.FirstOrDefault(graph =>
-            string.Equals(graph.EntryPoint, entryPoint, StringComparison.Ordinal));
+        var callGraph = await Reads.LoadCallGraphAsync(context, runId, entryPoint);
 
         if (callGraph is null)
         {
@@ -305,19 +307,16 @@ public static class CliApplication
         return 0;
     }
 
-    private static async Task<AnalysisResult?> LoadLatestOrErrorAsync(TextWriter error, string workingDirectory)
+    private static RigDbContext OpenContext(string workingDirectory)
     {
         var storeDirectory = Path.Combine(workingDirectory, ".rig");
-        await using var context = new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
-        // todo: we are loading everything just to discard on step higher....
-        var result = await Reads.LoadLatestAsync(context);
-        
-        if (result is null)
-        {
-            error.WriteLine("No indexed run found. Run `rig index <solution>` first.");
-        }
+        return new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
+    }
 
-        return result;
+    private static int NoRunError(TextWriter error)
+    {
+        error.WriteLine("No indexed run found. Run `rig index <solution>` first.");
+        return 2;
     }
 
     private static int UnknownCommand(string command, TextWriter error)
