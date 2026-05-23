@@ -11,7 +11,8 @@ internal sealed record AnalysisRuleSet(
     IReadOnlyList<DiRegistrationRule> DiRegistrations,
     IReadOnlyList<FileRule> FileInclude,
     IReadOnlyList<FileRule> FileExclude,
-    IReadOnlyList<string> TestProjectPatterns)
+    IReadOnlyList<string> TestProjectPatterns,
+    IReadOnlyList<string> ProjectExcludePatterns)
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -83,6 +84,10 @@ internal sealed record AnalysisRuleSet(
             TestProjectPatterns = TestProjectPatterns
                 .Concat(document.Files?.TestProjectPatterns ?? [])
                 .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            ProjectExcludePatterns = ProjectExcludePatterns
+                .Concat(document.Projects?.Exclude ?? [])
+                .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray()
         };
     }
@@ -100,6 +105,11 @@ internal sealed record AnalysisRuleSet(
     public bool IsTestProject(string projectName)
     {
         return TestProjectPatterns.Any(pattern => GlobMatcher.IsMatch(projectName, pattern));
+    }
+
+    public bool IsExcludedProject(string projectName)
+    {
+        return ProjectExcludePatterns.Any(pattern => GlobMatcher.IsMatch(projectName, pattern));
     }
 
     private static AnalysisRuleSet LoadBuiltIn()
@@ -125,7 +135,8 @@ internal sealed record AnalysisRuleSet(
             document.DiRegistrations ?? [],
             document.Files?.Include?.Select(rule => rule.ToFileRule("include")).ToArray() ?? [],
             document.Files?.Exclude?.Select(rule => rule.ToFileRule("exclude")).ToArray() ?? [],
-            document.Files?.TestProjectPatterns ?? []);
+            document.Files?.TestProjectPatterns ?? [],
+            document.Projects?.Exclude ?? []);
     }
 }
 
@@ -194,6 +205,13 @@ internal sealed class AnalysisRulesDocument
     public List<DiRegistrationRule>? DiRegistrations { get; set; }
 
     public FileRulesSection? Files { get; set; }
+
+    public ProjectsSection? Projects { get; set; }
+}
+
+internal sealed class ProjectsSection
+{
+    public List<string>? Exclude { get; set; }
 }
 
 internal sealed class EntryPointRulesDocument

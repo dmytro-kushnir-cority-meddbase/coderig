@@ -75,16 +75,41 @@ public static class Reads
             .ToArrayAsync(cancellationToken);
     }
 
-    // runId must come from GetLatestRunIdAsync; returns null when the entry point is not found.
-    public static async Task<CallGraphInfo?> LoadCallGraphAsync(RigDbContext context, string runId, string entryPoint, CancellationToken cancellationToken = default)
+    public static async Task<IReadOnlyList<EffectInfo>?> LoadEffectsForEntryPointAsync(RigDbContext context, int entryPointIndex, CancellationToken cancellationToken = default)
     {
-        var graphEntity = await context.CallGraphs
-            .Where(x => x.RunId == runId && x.EntryPoint == entryPoint)
+        var runId = await GetLatestRunIdAsync(context, cancellationToken);
+        if (runId is null) return null;
+
+        var effectIndices = await context.CallGraphNodeEffects
+            .Where(x => x.RunId == runId && x.GraphIndex == entryPointIndex)
+            .Select(x => x.EffectIndex)
+            .Distinct()
+            .ToArrayAsync(cancellationToken);
+
+        var effectEntities = await context.Effects
+            .Where(x => x.RunId == runId && effectIndices.Contains(x.EffectIndex))
+            .OrderBy(x => x.EffectIndex)
+            .ToArrayAsync(cancellationToken);
+
+        var observationEntities = await context.EffectObservations
+            .Where(x => x.RunId == runId && effectIndices.Contains(x.EffectIndex))
+            .OrderBy(x => x.EffectIndex).ThenBy(x => x.ObservationIndex)
+            .ToArrayAsync(cancellationToken);
+
+        return BuildEffects(effectEntities, observationEntities);
+    }
+
+    // runId must come from GetLatestRunIdAsync; returns null when the entry point is not found.
+    public static async Task<CallGraphInfo?> LoadCallGraphAsync(RigDbContext context, string runId, int entryPointIndex, CancellationToken cancellationToken = default)
+    {
+        var entryPointName = await context.CallGraphs
+            .Where(x => x.RunId == runId && x.GraphIndex == entryPointIndex)
+            .Select(x => x.EntryPoint)
             .FirstOrDefaultAsync(cancellationToken);
 
-        if (graphEntity is null) return null;
+        if (entryPointName is null) return null;
 
-        var graphIndex = graphEntity.GraphIndex;
+        var graphIndex = entryPointIndex;
 
         var nodeEntities = await context.CallGraphNodes
             .Where(x => x.RunId == runId && x.GraphIndex == graphIndex)
@@ -146,7 +171,7 @@ public static class Reads
                 nodeEffectsByNode.GetValueOrDefault(n.NodeIndex, [])))
             .ToArray();
 
-        return new CallGraphInfo(graphEntity.EntryPoint, nodes);
+        return new CallGraphInfo(entryPointName, nodes);
     }
 
     public static async Task<AnalysisResult?> LoadLatestAsync(RigDbContext context, CancellationToken cancellationToken = default)

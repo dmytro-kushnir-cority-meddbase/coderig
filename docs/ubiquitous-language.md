@@ -274,6 +274,29 @@ dispatchers, mediator patterns, or similar mechanisms.
 Milestone 0 resolves simple cases with direct symbols, MS DI, single
 implementation heuristics, visible lambdas, and visible method groups.
 
+### Single-Implementation Dispatch
+
+A Dynamic Dispatch resolution strategy that resolves an interface call to a
+concrete method when exactly one implementation of the interface is registered
+in the MS DI container.
+
+Resolution succeeds only when:
+1. The declared receiver type is an interface.
+2. Exactly one DI registration maps that interface to a concrete type.
+3. The concrete type's matching method is in application code (not a boundary).
+
+When resolution succeeds the call edge carries:
+
+```text
+confidence=medium basis=msdi reason=single_impl
+```
+
+When the interface has zero or multiple registrations the call edge remains
+`BOUNDARY external`. Ambiguous dispatch is never silently collapsed.
+
+This is a heuristic. If the concrete implementation is in a NuGet package
+(not indexed source) the call still becomes `BOUNDARY external`.
+
 ## Effects
 
 ### Effect

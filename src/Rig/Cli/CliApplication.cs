@@ -30,7 +30,7 @@ public static class CliApplication
             "index" => await RunIndexAsync(args, output, error, workingDirectory),
             "runs" => await RunRunsAsync(output, workingDirectory),
             "entrypoints" => await RunEntryPointsAsync(output, error, workingDirectory),
-            "effects" => await RunEffectsAsync(output, error, workingDirectory),
+            "effects" => await RunEffectsAsync(args, output, error, workingDirectory),
             "callgraph" => await RunCallGraphAsync(args, output, error, workingDirectory),
             "di" => await RunDiAsync(output, error, workingDirectory),
             "files" => await RunFilesAsync(args, output, error, workingDirectory),
@@ -57,8 +57,8 @@ public static class CliApplication
         output.WriteLine("  rig index <solution>");
         output.WriteLine("  rig runs");
         output.WriteLine("  rig entrypoints");
-        output.WriteLine("  rig callgraph <entrypoint-id>");
-        output.WriteLine("  rig effects --entrypoint <entrypoint-id>");
+        output.WriteLine("  rig callgraph <index>");
+        output.WriteLine("  rig effects [--entrypoint <index>]");
         output.WriteLine("  rig di");
         output.WriteLine("  rig files --skipped");
         output.WriteLine("  rig profile validate");
@@ -135,37 +135,63 @@ public static class CliApplication
         }
 
         output.WriteLine("EntryPoints");
-        foreach (var entryPoint in entryPoints.OrderBy(ep => ep.DisplayName, StringComparer.Ordinal))
+        for (var i = 0; i < entryPoints.Count; i++)
         {
-            output.WriteLine($"  {entryPoint.DisplayName}");
-            output.WriteLine($"    loc={Path.GetFileName(entryPoint.FilePath)}:{entryPoint.Line}");
+            var ep = entryPoints[i];
+            output.WriteLine($"  [{i,3}] {ep.DisplayName}  {Path.GetFileName(ep.FilePath)}:{ep.Line}");
         }
 
         return 0;
     }
 
-    private static async Task<int> RunEffectsAsync(TextWriter output, TextWriter error, string workingDirectory)
+    private static async Task<int> RunEffectsAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
     {
+        int? entryPointIndex = null;
+        if (args.Length >= 3 && args[1] == "--entrypoint")
+        {
+            if (!int.TryParse(args[2], out var idx))
+            {
+                error.WriteLine("Invalid entrypoint index.");
+                error.WriteLine("Usage: rig effects --entrypoint <index>");
+                return 2;
+            }
+            entryPointIndex = idx;
+        }
+
         await using var context = OpenContext(workingDirectory);
-        var effects = await Reads.LoadEffectsAsync(context);
+
+        IReadOnlyList<EffectInfo>? effects;
+        if (entryPointIndex.HasValue)
+        {
+            effects = await Reads.LoadEffectsForEntryPointAsync(context, entryPointIndex.Value);
+        }
+        else
+        {
+            effects = await Reads.LoadEffectsAsync(context);
+        }
+
         if (effects is null)
         {
             return NoRunError(error);
         }
 
-        output.WriteLine("Effects");
+        if (entryPointIndex.HasValue)
+        {
+            output.WriteLine($"Effects [{entryPointIndex}]");
+        }
+        else
+        {
+            output.WriteLine("Effects");
+        }
+
         foreach (var effect in effects
             .OrderBy(e => e.Provider, StringComparer.Ordinal)
             .ThenBy(e => e.Resource, StringComparer.Ordinal)
             .ThenBy(e => e.Operation, StringComparer.Ordinal))
         {
-            output.WriteLine($"  {effect.Provider} {effect.Operation} {effect.Resource}");
-            output.WriteLine($"    method={effect.Method} conf={effect.Confidence} basis={effect.Basis} reason={effect.Reason}");
-            output.WriteLine($"    loc={Path.GetFileName(effect.FilePath)}:{effect.Line}");
-            foreach (var observation in effect.Observations)
-            {
-                output.WriteLine($"    OBS {observation.Type} ctx={observation.Context} conf={observation.Confidence} basis={observation.Basis} reason={observation.Reason}");
-            }
+            var obs = string.Join(" ", effect.Observations.Select(o => $"[{o.Type}:{o.Context}]"));
+            var obsStr = obs.Length > 0 ? $"  {obs}" : "";
+            output.WriteLine($"  {effect.Provider} {effect.Operation}  {effect.Method}  {effect.Resource}  {Path.GetFileName(effect.FilePath)}:{effect.Line}{obsStr}");
         }
 
         return 0;
@@ -251,10 +277,10 @@ public static class CliApplication
         TextWriter error,
         string workingDirectory)
     {
-        if (args.Length < 2)
+        if (args.Length < 2 || !int.TryParse(args[1], out var entryPointIndex))
         {
-            error.WriteLine("Missing entrypoint id.");
-            error.WriteLine("Usage: rig callgraph <entrypoint-id>");
+            error.WriteLine("Missing or invalid entrypoint index.");
+            error.WriteLine("Usage: rig callgraph <index>");
             return 2;
         }
 
@@ -265,23 +291,20 @@ public static class CliApplication
             return NoRunError(error);
         }
 
-        var entryPoint = string.Join(' ', args.Skip(1));
-        var callGraph = await Reads.LoadCallGraphAsync(context, runId, entryPoint);
+        var callGraph = await Reads.LoadCallGraphAsync(context, runId, entryPointIndex);
 
         if (callGraph is null)
         {
-            error.WriteLine($"Callgraph not found: {entryPoint}");
+            error.WriteLine($"Callgraph not found: [{entryPointIndex}]");
             return 2;
         }
 
-        output.WriteLine($"Callgraph: {callGraph.EntryPoint}");
+        output.WriteLine($"Callgraph: [{entryPointIndex}] {callGraph.EntryPoint}");
         output.WriteLine($"Nodes: {callGraph.Nodes.Count}");
 
         foreach (var node in callGraph.Nodes)
         {
-            output.WriteLine($"  {node.Symbol}");
-            output.WriteLine($"    conf={node.Confidence} basis={node.Basis} reason={node.Reason}");
-            output.WriteLine($"    loc={Path.GetFileName(node.FilePath)}:{node.Line}");
+            output.WriteLine($"  {Path.GetFileName(node.FilePath)}:{node.Line}  {node.Symbol}");
 
             foreach (var call in node.Calls)
             {
@@ -291,16 +314,13 @@ public static class CliApplication
             foreach (var boundaryCall in node.BoundaryCalls)
             {
                 output.WriteLine($"    BOUNDARY {boundaryCall.Kind} {boundaryCall.Method}");
-                output.WriteLine($"      conf={boundaryCall.Confidence} basis={boundaryCall.Basis} reason={boundaryCall.Reason}");
             }
 
             foreach (var effect in node.Effects)
             {
-                output.WriteLine($"    EFFECT {effect.Provider} {effect.Operation} {effect.Resource}");
-                foreach (var observation in effect.Observations)
-                {
-                    output.WriteLine($"      OBS {observation.Type} ctx={observation.Context} conf={observation.Confidence} basis={observation.Basis} reason={observation.Reason}");
-                }
+                var obs = string.Join(" ", effect.Observations.Select(o => $"[{o.Type}:{o.Context}]"));
+                var obsStr = obs.Length > 0 ? $"  {obs}" : "";
+                output.WriteLine($"    EFFECT {effect.Provider} {effect.Operation}  {effect.Method}  {effect.Resource}{obsStr}");
             }
         }
 

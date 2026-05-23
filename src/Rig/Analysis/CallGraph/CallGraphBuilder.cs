@@ -8,13 +8,15 @@ internal static class CallGraphBuilder
     private sealed record CallGraphContext(
         IReadOnlyDictionary<string, MethodModel> Methods,
         IReadOnlyList<EffectRule> DispatchRules,
-        IReadOnlyDictionary<string, IReadOnlyList<string>> DispatchIndex);
+        IReadOnlyDictionary<string, IReadOnlyList<string>> DispatchIndex,
+        IReadOnlyDictionary<string, string> SingleImplIndex);
 
     public static IReadOnlyList<CallGraphInfo> Build(
         IReadOnlyList<EntryPointInfo> entryPoints,
         IReadOnlyList<SourceModel> sources,
         IReadOnlyList<EffectInfo> effects,
-        IReadOnlyList<EffectRule> dispatchRules)
+        IReadOnlyList<EffectRule> dispatchRules,
+        IReadOnlyList<DiRegistrationInfo> diRegistrations)
     {
         var methods = sources
             .SelectMany(source => FindApplicationMethods(source, effects))
@@ -22,7 +24,8 @@ internal static class CallGraphBuilder
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
 
         var dispatchIndex = BuildDispatchIndex(sources);
-        var context = new CallGraphContext(methods, dispatchRules, dispatchIndex);
+        var singleImplIndex = BuildSingleImplIndex(diRegistrations);
+        var context = new CallGraphContext(methods, dispatchRules, dispatchIndex, singleImplIndex);
 
         return entryPoints
             .Select(entryPoint => BuildCallGraph(entryPoint, sources, context))
@@ -81,6 +84,19 @@ internal static class CallGraphBuilder
             kvp => kvp.Key,
             kvp => (IReadOnlyList<string>)kvp.Value.AsReadOnly(),
             StringComparer.Ordinal);
+    }
+
+    private static IReadOnlyDictionary<string, string> BuildSingleImplIndex(
+        IReadOnlyList<DiRegistrationInfo> registrations)
+    {
+        return registrations
+            .Where(r => r.ImplementationType is not null)
+            .GroupBy(r => r.ServiceType, StringComparer.Ordinal)
+            .Where(g => g.Select(r => r.ImplementationType).Distinct(StringComparer.Ordinal).Count() == 1)
+            .ToDictionary(
+                g => g.Key,
+                g => g.First().ImplementationType!,
+                StringComparer.Ordinal);
     }
 
     private static bool IsMessageHandlerInterface(INamedTypeSymbol iface)
@@ -150,7 +166,7 @@ internal static class CallGraphBuilder
         {
             var calls = ResolveCalls(method.Body, method.SemanticModel, context);
             var reason = entryPoint.Kind == "mvc" ? "mvc_action_symbol" : "handler_method_symbol";
-            return (CreateNode(entryPoint.DisplayName, entryPoint.FilePath, entryPoint.Line, calls, [], "high", "compilation", reason), calls.Application);
+            return (CreateNode(entryPoint.DisplayName, entryPoint.FilePath, entryPoint.Line, calls, method.Effects, "high", "compilation", reason), calls.Application);
         }
 
         var source = sources.First(source => string.Equals(source.FilePath, entryPoint.FilePath, StringComparison.OrdinalIgnoreCase));
@@ -255,6 +271,19 @@ internal static class CallGraphBuilder
             }
 
             var key = RoslynSymbolHelpers.GetMethodKey(methodSymbol);
+
+            // For interface methods, prefer the concrete single-impl before traversing
+            // the interface declaration itself (which has no body or effects).
+            var singleImpl = TryResolveSingleImplDispatch(methodSymbol, context);
+            if (singleImpl is not null)
+            {
+                if (!calls.Any(call => string.Equals(call.Key, singleImpl.Key, StringComparison.Ordinal)))
+                {
+                    calls.Add(singleImpl);
+                }
+                continue;
+            }
+
             if (context.Methods.TryGetValue(key, out var method))
             {
                 if (!calls.Any(call => string.Equals(call.Key, key, StringComparison.Ordinal)))
@@ -307,6 +336,29 @@ internal static class CallGraphBuilder
             .ToArray();
 
         return resolved.Length > 0 ? resolved : null;
+    }
+
+    private static ResolvedCall? TryResolveSingleImplDispatch(
+        IMethodSymbol methodSymbol,
+        CallGraphContext context)
+    {
+        if (methodSymbol.ContainingType.TypeKind != Microsoft.CodeAnalysis.TypeKind.Interface)
+        {
+            return null;
+        }
+
+        var interfaceTypeKey = RoslynSymbolHelpers.GetTypeKey(methodSymbol.ContainingType.OriginalDefinition);
+        if (!context.SingleImplIndex.TryGetValue(interfaceTypeKey, out var concreteTypeKey))
+        {
+            return null;
+        }
+
+        var interfaceMethodKey = RoslynSymbolHelpers.GetMethodKey(methodSymbol);
+        var concreteMethodKey = interfaceMethodKey.Replace(interfaceTypeKey, concreteTypeKey, StringComparison.Ordinal);
+
+        return context.Methods.TryGetValue(concreteMethodKey, out var method)
+            ? new ResolvedCall(concreteMethodKey, method.Symbol)
+            : null;
     }
 
     private static bool IsDispatchCall(IMethodSymbol methodSymbol, EffectRule rule)

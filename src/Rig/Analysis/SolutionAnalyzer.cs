@@ -38,7 +38,7 @@ public static class SolutionAnalyzer
             .ThenBy(observation => observation.Line)
             .ToArray();
 
-        var callGraphs = CallGraphBuilder.Build(entryPoints, sources, effects, rules.Effects.Where(r => r.TreatAsDispatch).ToArray());
+        var callGraphs = CallGraphBuilder.Build(entryPoints, sources, effects, rules.Effects.Where(r => r.TreatAsDispatch).ToArray(), diRegistrations);
 
         return new AnalysisResult(
             solutionPath,

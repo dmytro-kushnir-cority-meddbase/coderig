@@ -1,3 +1,4 @@
+using EntryPointEffects.Api.Data;
 using EntryPointEffects.Api.Services;
 using Microsoft.AspNetCore.Mvc;
 
@@ -8,10 +9,12 @@ namespace EntryPointEffects.Api.Controllers;
 public sealed class TeamsController : ControllerBase
 {
     private readonly TeamWorkflow _workflow;
+    private readonly ITeamRepository _repository;
 
-    public TeamsController(TeamWorkflow workflow)
+    public TeamsController(TeamWorkflow workflow, ITeamRepository repository)
     {
         _workflow = workflow;
+        _repository = repository;
     }
 
     [HttpGet("{id}")]
@@ -24,6 +27,23 @@ public sealed class TeamsController : ControllerBase
     public async Task<IActionResult> Create(CreateTeamRequest request)
     {
         await _workflow.CreateTeamAsync(request.Name);
+        return Accepted();
+    }
+
+    // Single-implementation dispatch test fixture:
+    // _repository is ITeamRepository — rig should resolve via DI to TeamRepository
+    // and link EF Core effects from TeamRepository.GetAllAsync / TeamRepository.AddAsync.
+    [HttpGet("via-interface")]
+    public async Task<IActionResult> ListViaInterface()
+    {
+        var teams = await _repository.GetAllAsync();
+        return Ok(teams);
+    }
+
+    [HttpPost("via-interface")]
+    public async Task<IActionResult> CreateViaInterface(CreateTeamRequest request)
+    {
+        await _repository.AddAsync(new Team { Name = request.Name });
         return Accepted();
     }
 }

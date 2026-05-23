@@ -30,6 +30,7 @@ internal static class SolutionSourceLoader
 
         var csharpProjects = solution.Projects
             .Where(p => p.Language == LanguageNames.CSharp)
+            .Where(p => !rules.IsExcludedProject(p.Name))
             .ToArray();
 
         var compilationErrors = new List<string>();

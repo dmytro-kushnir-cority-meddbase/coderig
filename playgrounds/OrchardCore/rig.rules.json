@@ -80,5 +80,8 @@
       { "id": "orchard.recipes", "glob": "**/Recipes/**", "reason": "recipe_data" }
     ],
     "testProjectPatterns": [ "*Tests", "*.Tests", "*Test", "*.Test", "*Functional*", "*Integration*" ]
+  },
+  "projects": {
+    "exclude": [ "Errors.*" ]
   }
 }
