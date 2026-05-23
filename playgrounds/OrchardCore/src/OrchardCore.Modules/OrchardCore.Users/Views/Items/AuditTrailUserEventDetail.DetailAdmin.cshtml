@@ -1,0 +1,16 @@
+@model AuditTrailUserEventViewModel
+
+<h2 class="h3">@T["User Info"]</h2>
+
+<table class="table table-sm table-hover">
+    <tbody>
+        <tr>
+            <th class="w-25">@T["User ID"]</th>
+            <td>@Model.UserEvent.UserId</td>
+        </tr>
+        <tr>
+            <th>@T["Username"]</th>
+            <td>@Model.UserEvent.UserName</td>
+        </tr>
+    </tbody>
+</table>

@@ -1,0 +1,2 @@
+!function(e){e.fn.activateLinks=function(t,r){for(var n=e.extend({class:"active",selector:null,traverse:0},t),a=window.location.href.replace(window.location.protocol+"//"+window.location.host,"").split("/"),o=a.length,i=n.traverse<=0?o:o>=n.traverse?o-n.traverse:o;o>=i;){var s=a.join("/"),l=e(this).find('a[href="'+s+'"]').parent();if(n.selector&&(l=l.find(n.selector)),l.length>0){l.addClass(n.class),r&&r(l);break}o-=1,a=a.slice(0,o)}return this}}(jQuery);
+//# sourceMappingURL=activate-links.map

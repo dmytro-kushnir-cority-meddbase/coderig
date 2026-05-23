@@ -1,0 +1,20 @@
+[
+  {
+    "action": "min",
+    "name": "audittrail",
+    "source": "../../../node_modules/diff/dist/diff.js",
+    "tags": ["admin", "dashboard", "js"]
+  },
+  {
+    "action": "sass",
+    "name": "audittrail",
+    "source": "Assets/scss/audittrailui.scss",
+    "tags": [ "admin", "dashboard", "css" ]
+  },
+  {
+    "action": "webpack",
+    "name": "audit-trail-diff-viewer",
+    "config": "/Assets/webpack.config.js",
+    "tags": [ "admin", "dashboard", "css" ]
+  }
+]

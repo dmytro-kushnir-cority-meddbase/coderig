@@ -1,0 +1,283 @@
+# Content Types (`OrchardCore.ContentTypes`)
+
+## View Components
+
+### `SelectContentTypes`
+
+Renders an editor to select a list of content types.  
+It can optionally filter content types of a specific stereotype.  
+The editor returns the selection as a `string[]` on the model.
+
+#### Parameters
+
+| Parameter               | Type       | Description                                                                            |
+|-------------------------|------------|----------------------------------------------------------------------------------------|
+| `selectedContentTypes`  | `string[]` | The list of content types that should be marked as selected when rendering the editor. |
+| `htmlName`              | `string`   | The name of the model property to bind the result to.                                  |
+| `stereotype` (optional) | `string`   | A stereotype name to filter the list of content types available to select.             |
+
+#### Sample
+
+```csharp
+@await Component.InvokeAsync("SelectContentTypes", new { selectedContentTypes = Model.ContainedContentTypes, htmlName = Html.NameFor(m => m.ContainedContentTypes) })
+```
+
+## Migrations
+
+Migration classes can be used to alter the content type definitions, like by adding new **types**, or configuring their **parts** and **fields**.
+
+### `IContentDefinitionManager`
+
+This service provides a way to modify the content type definitions. From a migrations class, we can inject an instance of this interface.
+
+```csharp
+public sealed class Migrations : DataMigration
+{
+    IContentDefinitionManager _contentDefinitionManager;
+
+    public Migrations(IContentDefinitionManager contentDefinitionManager)
+    {
+        _contentDefinitionManager = contentDefinitionManager;
+    }
+
+    public Task<int> CreateAsync()
+    {
+        // This code will be run when the feature is enabled
+
+        return 1;
+    }
+}
+```
+
+### Creating a new Content Type
+
+The following example creates a new Content Type named `Product`.
+
+```csharp
+await _contentDefinitionManager.AlterTypeDefinitionAsync("Product");
+```
+
+### Changing the metadata of a Content Type
+
+To change specific properties of the content type, an argument can be used to configure it:
+
+```csharp
+await _contentDefinitionManager.AlterTypeDefinitionAsync("Product", type => type
+    // content items of this type can have drafts
+    .Draftable()
+    // content items versions of this type have saved
+    .Versionable()
+    // this content type appears in the New menu section
+    .Creatable()
+    // permissions can be applied specifically to instances of this type
+    .Securable()
+);
+```
+
+### Adding Content Parts to a type
+
+The following example adds the `TitlePart` content part to the `Product` type.
+
+```csharp
+await _contentDefinitionManager.AlterTypeDefinitionAsync("Product", type => type
+    .WithPart("TitlePart")
+);
+```
+
+Each part can also be configured in the context of a type. For instance the `AutoroutePart` requires a **Liquid** template as its pattern to generate custom routes. It's defined in a custom setting for this part.
+
+```csharp
+await _contentDefinitionManager.AlterTypeDefinitionAsync("Product", type => type
+    .WithPart("AutoroutePart", part => part
+        // sets the position among other parts
+        .WithPosition("2")
+        // sets all the settings on the AutoroutePart
+        .WithSettings(new AutoroutePartSettings { Pattern = "{{ ContentItem | display_text | slugify }}" })
+    )
+);
+```
+
+For a list of all the settings each type can use, please refer to their respective documentation pages.
+
+### Adding Content Fields to a part
+
+Fields can not be attached directly to a Content Type. To add fields to a content type, create a part with the same name as the type, and add fields to this part.
+
+```csharp
+await _contentDefinitionManager.AlterTypeDefinitionAsync("Product", type => type
+    .WithPart("Product")
+);
+
+await _contentDefinitionManager.AlterPartDefinitionAsync("Product", part => part
+    .WithField("Image", field => field
+        .OfType("MediaField")
+        .WithDisplayName("Main image")
+    )
+    .WithField("Price", field => field
+        .OfType("NumericField")
+        .WithDisplayName("Price")
+    )
+);
+```
+
+When added to a part, fields can also have custom settings which for instance will define how the editor will behave, or validation rules. Also refer to their respective documentation pages for a list of possible settings.
+
+### Consuming Content Parts and Fields from CSharp
+
+It's possible to get strongly typed versions of Content Parts and Fields from the above type definitions.
+
+!!! warning
+These types may be modified in the CMS. It's important to make sure these types will not be modified outside of the development cycle when consuming them in code.
+
+First, create a part that matches the type definition:
+
+```csharp
+public class Product : ContentPart
+{
+    public MediaField Image { get; set; }
+    public NumericField Price { get; set; }
+}
+```
+
+Then, register your ContentPart with Dependency Injection:
+
+```csharp
+using OrchardCore.ContentManagement;
+
+...
+
+public sealed class Startup : StartupBase
+{
+    public override void ConfigureServices(IServiceCollection services)
+    {
+        services.AddContentPart<Product>();
+    }
+}
+```
+
+Finally, here is an example of consuming your Content Item as your Content Part in a Controller.
+
+```csharp
+public sealed class ProductController : Controller
+{
+    private readonly IOrchardHelper _orchardHelper;
+    private readonly IContentManager _contentManager;
+
+    public ProductController(IOrchardHelper orchardHelper, IContentManager contentManager)
+    {
+        _orchardHelper = orchardHelper;
+        _contentManager = contentManager;
+    }
+
+    [HttpGet("/api/product/{productId}")]
+    public async Task<ObjectResult> GetProductAsync(string productId)
+    {
+        var product = _orchardHelper.GetContentItemByIdAsync(productId);
+
+        if (product == null)
+        {
+            return NotFoundObjectResult();
+        }
+
+        var productPart = product.GetOrCreate<Product>();
+
+        // you'll get exceptions if any of these Fields are null
+        // the null-conditional operator (?) should be used for any fields which aren't required
+        return new ObjectResult(new {
+             Image = productPart.Image.Paths.FirstOrDefault(),
+             Price = productPart.Price.Value,
+        });
+    }
+
+    [HttpPost("/api/product/{productId}/price/{price}")]
+    public async Task<ContentValidateResult> UpdateProductPriceAsync(string productId, int price)
+    {
+        //this call will only fetch published content item, which makes publishing after update redundant
+        var product = _orchardHelper.GetContentItemByIdAsync(productId);
+
+        if (product == null)
+        {
+            return NotFoundObjectResult();
+        }
+
+        var productPart = product.GetOrCreate<Product>();
+        productPart.Price.Value = price;
+
+        product.Apply(productPart) //apply modified part to a content item
+
+        await _contentManager.UpdateAsync(product); //update will fire handlers which could alter the content item.
+
+        //validate the content item after update since handlers could change the object.
+        var result = await _contentManager.ValidateAsync(product);
+
+        if (!result.Succeeded)
+        {
+            // Cancel the session to discard any pending changes.
+            await _session.CancelAsync();
+        }
+
+        return result;
+    }
+}
+```
+
+## Content Type Settings for Block Pickers
+
+Content types can be configured with a category and thumbnail for use in block picker modals (such as those used by the [Flows module](../Flow/README.md#blocks-editor)).
+
+### Category
+
+Content types can be organized into categories. To set a category:
+
+1. Navigate to **Content Definition** → **Content Types**
+2. Edit the content type
+3. In the **Content Type Settings** section, set the **Category** field
+
+Or programmatically:
+
+```csharp
+_contentDefinitionManager.AlterTypeDefinition("MyWidget", type => type
+    .WithCategory("Media")
+);
+```
+
+Content types with the same category are grouped together in the picker's sidebar.
+
+### Thumbnail
+
+Content types can display a thumbnail image in block pickers. To set a thumbnail:
+
+1. Navigate to **Content Definition** → **Content Types**
+2. Edit the content type
+3. In the **Content Type Settings** section, set the **Thumbnail Path** field to an image path (e.g., `/media/thumbnails/my-widget.png`)
+
+Or programmatically:
+
+```csharp
+_contentDefinitionManager.AlterTypeDefinition("MyWidget", type => type
+    .WithThumbnailPath("/media/thumbnails/my-widget.png")
+);
+```
+
+### Default Category and Thumbnail
+
+Default values for category and thumbnail can be configured in `appsettings.json` using `ContentTypesOptions`:
+
+```json
+{
+    "OrchardCore": {
+        "OrchardCore_ContentTypes": {
+            "DefaultCategory": "Widgets",
+            "DefaultThumbnailPath": "/media/thumbnails/default.png"
+        }
+    }
+}
+```
+
+These defaults are applied to content types that do not have an explicit category or thumbnail configured.
+
+## Videos
+
+<iframe width="560" height="315" src="https://www.youtube-nocookie.com/embed/NDUjn5_KdEM" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+<iframe width="560" height="315" src="https://www.youtube-nocookie.com/embed/bayT58i7DVY" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>

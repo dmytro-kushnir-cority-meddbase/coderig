@@ -1,0 +1,22 @@
+@{
+    TagBuilder tag = Tag(Model, "li");
+
+    // Morphing the shape to keep Model untouched
+    Model.Classes.Clear();
+
+    tag.InnerHtml.AppendHtml(await DisplayAsAsync(Model, "MenuItemLink"));
+
+    if ((bool)Model.HasItems)
+    {
+        tag.InnerHtml.AppendHtml("<ul>");
+
+        foreach (var item in Model.Items)
+        {
+            tag.InnerHtml.AppendHtml(await DisplayAsync(item));
+        }
+
+        tag.InnerHtml.AppendHtml("</ul>");
+    }
+}
+
+@tag

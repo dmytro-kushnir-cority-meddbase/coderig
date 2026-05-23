@@ -1,0 +1,36 @@
+@model ShapeViewModel<ContentTypesAdminNode>
+@using OrchardCore.ContentManagement.Metadata.Models
+@using OrchardCore.Localization.Data
+
+@inject OrchardCore.ContentManagement.Metadata.IContentDefinitionManager ContentDefinitionManager
+@inject IDataLocalizer D
+
+@{
+    var contentTypes = await ContentDefinitionManager.ListTypeDefinitionsAsync();
+
+    var selectedContentTypes = contentTypes.Where(t => Model.Value.ContentTypes
+        .Any(e => string.Equals(t.Name, e.ContentTypeName, StringComparison.OrdinalIgnoreCase)));
+}
+
+<div class="@(Model.Value.Enabled ? "" : "disabled")">
+
+    @if (Model.Value.ShowAll)
+    {
+        <span class="badge text-bg-success">@T["Show all Content Types"]</span>
+    }
+    else
+    {
+        @if (selectedContentTypes.Any())
+        {
+            foreach (var contentType in selectedContentTypes)
+            {
+                <span class="badge ta-badge">@D[contentType.Name, "Content Types"]</span>
+            }
+        }
+        else
+        {
+            <span class="badge text-bg-warning">@T["Nothing here!"]</span>
+        }
+    }
+    <span class="text-muted dashed">@T["Content Types"]</span>
+</div>

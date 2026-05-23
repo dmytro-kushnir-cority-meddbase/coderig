@@ -1,0 +1,30 @@
+using OrchardCore.AuditTrail.Services;
+using OrchardCore.AuditTrail.Services.Models;
+using OrchardCore.ContentManagement;
+using OrchardCore.Contents.AuditTrail.Models;
+using OrchardCore.Entities;
+
+namespace OrchardCore.Contents.AuditTrail.Services;
+
+public class ContentAuditTrailEventHandler : AuditTrailEventHandlerBase
+{
+    public override Task CreateAsync(AuditTrailCreateContext context)
+    {
+        if (context.Category != "Content")
+        {
+            return Task.CompletedTask;
+        }
+
+        if (context is AuditTrailCreateContext<AuditTrailContentEvent> contentEvent)
+        {
+            if (!contentEvent.AuditTrailEventItem.ContentItem.TryGet<AuditTrailPart>(out var auditTrailPart))
+            {
+                return Task.CompletedTask;
+            }
+
+            contentEvent.AuditTrailEventItem.Comment = auditTrailPart.Comment;
+        }
+
+        return Task.CompletedTask;
+    }
+}

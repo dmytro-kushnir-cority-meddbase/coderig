@@ -1,0 +1,84 @@
+{
+  "effects": [
+    {
+      "provider": "memory_cache",
+      "operation": "read",
+      "methods": [ "TryGetValue", "Get" ],
+      "receiverTypes": [ "Microsoft.Extensions.Caching.Memory.IMemoryCache" ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "imemorycache_read_method"
+    },
+    {
+      "provider": "memory_cache",
+      "operation": "write",
+      "methods": [ "Set" ],
+      "receiverTypes": [ "Microsoft.Extensions.Caching.Memory.IMemoryCache" ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "imemorycache_write_method"
+    },
+    {
+      "provider": "distributed_cache",
+      "operation": "read",
+      "methods": [ "GetAsync", "GetStringAsync" ],
+      "receiverTypes": [ "Microsoft.Extensions.Caching.Distributed.IDistributedCache" ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "idistributedcache_read_method"
+    },
+    {
+      "provider": "distributed_cache",
+      "operation": "write",
+      "methods": [ "SetAsync", "SetStringAsync" ],
+      "receiverTypes": [ "Microsoft.Extensions.Caching.Distributed.IDistributedCache" ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "idistributedcache_write_method"
+    },
+    {
+      "provider": "distributed_cache",
+      "operation": "delete",
+      "methods": [ "RemoveAsync" ],
+      "receiverTypes": [ "Microsoft.Extensions.Caching.Distributed.IDistributedCache" ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "idistributedcache_delete_method"
+    },
+    {
+      "provider": "orchard_message_bus",
+      "operation": "publish",
+      "methods": [ "PublishAsync" ],
+      "receiverTypes": [ "OrchardCore.Caching.Distributed.IMessageBus" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "orchard_messagebus_publish"
+    },
+    {
+      "provider": "orchard_signal",
+      "operation": "signal",
+      "methods": [ "SignalTokenAsync" ],
+      "receiverTypes": [ "OrchardCore.Caching.ISignal" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "orchard_signal_token"
+    }
+  ],
+  "files": {
+    "exclude": [
+      { "id": "orchard.migrations", "glob": "**/Migrations/**", "reason": "db_migration" },
+      { "id": "orchard.migrations.file", "glob": "**/*Migrations.cs", "reason": "db_migration" },
+      { "id": "orchard.generated.liquid", "glob": "**/*.liquid", "reason": "template_source" },
+      { "id": "orchard.wwwroot", "glob": "**/wwwroot/**", "reason": "static_asset" },
+      { "id": "orchard.recipes", "glob": "**/Recipes/**", "reason": "recipe_data" }
+    ],
+    "testProjectPatterns": [ "*Tests", "*.Tests", "*Test", "*.Test", "*Functional*", "*Integration*" ]
+  }
+}
