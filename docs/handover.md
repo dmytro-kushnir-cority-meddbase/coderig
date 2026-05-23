@@ -1,10 +1,14 @@
 # Handover
 
-Current handover after read/write decoupling, new CLI commands, EF compiled model, and R2R performance work.
+Current handover after .sln support, multi-file profile loading, Parallel.ForEach/ForEachAsync fanout, and focused read queries.
 
 ## Current State
 
-The repo contains a CLI-first .NET 10 prototype.
+The repo contains a CLI-first .NET 10 prototype split across three projects:
+
+- **`src/Rig`** — CLI exe; Roslyn workspace loading and analysis lives here
+- **`src/Rig.Domain`** — domain model records (`AnalysisResult`, `EntryPointInfo`, `EffectInfo`, etc.)
+- **`src/Rig.Storage`** — EF Core + SQLite; `RigDbContext`, `Reads.cs`, `Writes.cs`
 
 Working commands:
 
@@ -23,53 +27,63 @@ Published R2R binary at `.rig-bin/Rig.exe` (gitignored). Build with:
 ```
 dotnet publish src/Rig -c Release -r win-x64 /p:PublishReadyToRun=true -o .rig-bin
 ```
-Timings: baseline 67ms | `rig effects` ~370ms | `rig callgraph` ~370ms (vs ~2800ms with `dotnet run`).
+Timings (R2R, win-x64): `entrypoints`/`di`/`files` ~295ms | `effects` ~315ms | `callgraph` ~350ms.
 
 ## Architecture
 
-**Read/write decoupling**: `RunStore.SaveAsync` writes to ~12 normalized tables.
-`LoadLatestAsync` reads from those tables and reconstructs `AnalysisResult` in memory —
-the `runs.AnalysisResultJson` blob is still written but never read.
+**Three-project structure**:
+- `Rig.Domain` has no dependencies — pure C# records.
+- `Rig.Storage` references `Rig.Domain`; contains `RigDbContext` and all EF entity classes.
+  `Reads.cs` exposes focused per-command queries (no JSON blob load).
+  `Writes.cs` writes to ~12 normalized tables.
+- `Rig` references both; holds Roslyn analysis, rules, CLI routing.
 
-**`callgraph_node_effects` join table**: links per-node effects (`CallGraphNodeInfo.Effects`)
-to the global `effects` table via `(RunId, GraphIndex, NodeIndex, LinkIndex) → EffectIndex`.
+**Focused read queries** (`Rig.Storage/Queries/Reads.cs`): each CLI command hits only the tables it needs.
+`GetLatestRunIdAsync` is the shared primitive. `LoadLatestAsync` (full load) is preserved for future use.
+
+**Multi-file profile loading** (`AnalysisRuleSet.LoadForSolution`): cascades
+built-in → global (`~/.rig/rig.rules.json`) → solution-level (`rig.rules.json`) → per-project `rig.rules.json`.
+`SolutionSourceSet.ProjectDirectories` enables the per-project merge after workspace load.
+
+**.sln support**: `SolutionSourceLoader` filters `solution.Projects` to `LanguageNames.CSharp` only.
+Non-C# projects (e.g. F#, VB) in a `.sln` are silently skipped.
 
 **EF compiled model**: auto-generated at build time by `Microsoft.EntityFrameworkCore.Tasks`.
-`EFScaffoldModelStage=build` triggers regeneration whenever the model changes.
-Generated files land in `Storage/Compiled/*.g.cs` (gitignored). No manual `dotnet ef` needed.
-EF query precompilation is disabled (`EFPrecompileQueriesStage=never`) — conflicts with
-MSBuild.Framework version pulled in by Roslyn; TODO in `Rig.csproj` tracks the fix.
+`EFScaffoldModelStage=build` triggers regeneration on model change.
+Generated files in `Storage/Compiled/*.g.cs` (gitignored).
+Query precompilation disabled (`EFPrecompileQueriesStage=never`) — conflicts with MSBuild.Framework
+version pulled in by Roslyn; TODO in `Rig.Storage.csproj`.
 
-**MCP opportunity**: 370ms per CLI call is fine for humans but too slow for agentic loops.
-An MCP server would load DB once and serve tool calls in <5ms. `ModelContextProtocol`
-NuGet package (Microsoft) is the SDK. Index (`rig index`) stays a separate CLI step.
+**MCP opportunity**: ~350ms per CLI call is fine for humans but too slow for agentic loops.
+An MCP server would open `RigDbContext` once and serve `Reads.cs` queries in <5ms.
+`ModelContextProtocol` NuGet package (Microsoft) is the SDK.
 
 ## Playgrounds
 
 - `playgrounds/EntryPointEffects/EntryPointEffects.slnx` — primary indexed target.
-  5 entrypoints, 17 effects (after MediatR dispatch resolution).
-- `playgrounds/CleanArchitecture/` — vendored public CleanArchitecture solution.
-  5 FastEndpoints entrypoints, 24 effects including EF/repository/SMTP/MediatR.
+  5 entrypoints, 19 effects (17 + 2 Parallel.ForEach/ForEachAsync redis reads).
+- `playgrounds/CleanArchitecture/` — vendored public CleanArchitecture solution (.sln).
+  5 FastEndpoints entrypoints; exercises .sln C#-filter path.
 
 ## Verification
 
 ```text
 dotnet test                    # 5 tests, all green
-.\.rig-bin\Rig.exe effects     # ~370ms with R2R binary
+.\.rig-bin\Rig.exe effects     # ~315ms with R2R binary
 ```
 
 ## Important Caveats
 
 - Callgraph traversal does not yet use DI facts to resolve interface/service calls.
 - Constructor injection resolution, cycles, and richer dynamic dispatch are not fully implemented.
-- EF query precompilation conflict: fix requires splitting Roslyn analysis into `Rig.Analysis.csproj`.
-- Profiles not implemented. Detection is rule-driven; `rig.rules.json` beside the solution extends rules.
+- EF query precompilation conflict: fix requires that `Rig.Storage` never imports Roslyn (already true) and that the MSBuild.Framework conflict is resolved.
+- `runs.AnalysisResultJson` column still exists in the schema (written as empty string, never read); can be dropped in a future migration.
 
 ## Recommended Next Slice
 
-**MCP server** — wrap `LoadLatestAsync` + `AnalysisResult` behind MCP tools.
+**MCP server** — wrap `Reads.cs` queries behind MCP tools.
 Tools: `rig_effects`, `rig_entrypoints`, `rig_callgraph`, `rig_di`, `rig_files`.
-Server starts once, holds DB state in memory, drops per-call cost to <5ms.
+Server starts once, opens `RigDbContext`, drops per-call cost to <5ms.
 Unblocks agent-driven analysis (Copilot, Claude) without subprocess overhead.
 
 After that: **cycle detection** — annotate back-edges in callgraph traversal and expose in CLI.
@@ -82,14 +96,15 @@ After that: **cycle detection** — annotate back-edges in callgraph traversal a
 - `docs/sqlite-persistence-notes.md`
 - `src/Rig/Rules/builtin-rules.json`
 - `src/Rig/Analysis/SolutionAnalyzer.cs`
-- `src/Rig/Analysis/AnalysisResult.cs`
+- `src/Rig.Domain/AnalysisResult.cs`
 - `src/Rig/Analysis/CallGraph/CallGraphBuilder.cs`
 - `src/Rig/Analysis/Extraction/`
 - `src/Rig/Analysis/Inventory/SolutionSourceLoader.cs`
 - `src/Rig/Analysis/Rules/AnalysisRuleSet.cs`
 - `src/Rig/Cli/CliApplication.cs`
-- `src/Rig/Cli/RunStore.cs`
-- `src/Rig/Storage/RigDbContext.cs`
+- `src/Rig.Storage/RigDbContext.cs`
+- `src/Rig.Storage/Queries/Reads.cs`
+- `src/Rig.Storage/Queries/Writes.cs`
 - `playgrounds/EntryPointEffects/EntryPointEffects.slnx`
 - `playgrounds/EntryPointEffects/rig.rules.json`
 - `playgrounds/CleanArchitecture/Clean.Architecture.slnx`

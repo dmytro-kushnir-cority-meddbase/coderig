@@ -30,11 +30,11 @@ Status: `committed`
 Status: `in_progress`
 
 - [x] .NET CLI project
-- [ ] `.sln` input handling
+- [x] `.sln` input handling
 - [x] `.slnx` input handling
 - [x] immutable run creation
 - [x] SQLite/EF Core storage
-- [ ] profile loading and strict validation
+- [x] profile loading and strict validation
 - [ ] appsettings parser
 - [x] source inventory and skip decisions
 - [x] first playground solution
@@ -81,8 +81,8 @@ Status: `in_progress`
 - [x] loop/foreach/while contexts
 - [ ] LINQ effectful lambda contexts
 - [x] `Task.WhenAll`
-- [ ] `Parallel.ForEach`
-- [ ] `Parallel.ForEachAsync`
+- [x] `Parallel.ForEach`
+- [x] `Parallel.ForEachAsync`
 - [x] `looped_effect`
 - [x] `parallel_fanout`
 - [ ] `unresolved_resource`
@@ -109,6 +109,23 @@ Status: `todo`
 - [ ] compact callgraph projections
 
 ## Completed Slices (recent)
+
+### .sln support, multi-file profile loading, Parallel.ForEach/ForEachAsync fanout
+Status: `committed` (9dcd8c7)
+- `SolutionSourceLoader` filters to `LanguageNames.CSharp` projects only; enables .sln files with non-C# projects.
+- `AnalysisRuleSet.LoadForSolution`: cascade merge — built-in → global (`~/.rig/rig.rules.json`) → solution-level → per-project.
+- `SolutionSourceSet` exposes `ProjectDirectories`; `SolutionAnalyzer` calls `MergeWithProjectDirectories` post-load.
+- `Parallel.ForEach` and `Parallel.ForEachAsync` fanout detection exercised by `TeamWorkflow.ProcessBatchAsync`.
+- `PlaygroundAnalysisTests` and `CliApplicationTests` updated (19 effects, two new `parallel_fanout` observations).
+
+### Focused read queries per CLI command
+Status: `committed` (93acf8e)
+- Each CLI command queries only the tables it needs; `LoadLatestOrErrorAsync` removed from `CliApplication`.
+- `GetLatestRunIdAsync`: shared primitive; returns `null` if DB is empty or missing.
+- `LoadSkippedSourceFilesAsync`: WHERE pushed to SQL (`status='skipped'`).
+- `LoadCallGraphAsync(runId, entryPoint)`: single graph + its nodes/calls/boundary-calls/effects.
+- `BuildEffects`: private helper shared across full and focused load paths.
+- Timings (R2R, win-x64): `entrypoints` ~300ms | `effects` ~315ms | `callgraph` ~350ms.
 
 ### MediatR dispatch resolution
 Status: `committed` (2a49a20)
@@ -140,18 +157,18 @@ Phase: 7+
 Status: `todo`
 
 Contract:
-  - wrap existing `RunStore.LoadLatestAsync` + `AnalysisResult` behind an MCP tool server.
-  - server starts once, loads DB into memory, serves tool calls in <10ms (no per-call EF startup).
+  - wrap CLI read queries (`Reads.cs`) behind an MCP tool server.
+  - server starts once, opens `RigDbContext`, serves tool calls in <10ms (no per-call EF startup).
   - tools: `rig_effects`, `rig_entrypoints`, `rig_callgraph`, `rig_di`, `rig_files`.
   - index (`rig index`) remains a separate CLI invocation that writes to DB; server picks up changes on next start or via a reload tool.
   - this unblocks agent-driven analysis workflows (Copilot, Claude, etc.) without subprocess overhead.
 
 Notes:
-  - 370ms per call is acceptable for human CLI use but too slow for agentic loops (10–50 calls/session).
+  - ~300-350ms per CLI call is acceptable for human use but too slow for agentic loops (10–50 calls/session).
   - in-memory state after first load would drop per-call cost to <5ms.
   - `ModelContextProtocol` NuGet package (Microsoft) provides the server SDK.
-  - EFPrecompileQueriesStage conflict (see TODO in Rig.csproj) is a candidate for resolution
-    once Roslyn analysis is split into a separate `Rig.Analysis.csproj`.
+  - `EFPrecompileQueriesStage=never` conflict (see TODO in Rig.Storage.csproj) is a candidate for resolution
+    once Roslyn analysis is fully isolated to `src/Rig` (Rig.Storage now has no Roslyn dependency).
 
 ## Next Suggested Slice
 
