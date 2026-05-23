@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
+using Rig.Analysis;
 
 namespace Rig.Storage;
 
@@ -141,3 +142,4 @@ public sealed class RigDbContext(string databasePath) : DbContext
         });
     }
 }
+

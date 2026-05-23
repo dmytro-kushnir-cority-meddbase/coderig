@@ -1,13 +1,17 @@
 namespace Rig.Analysis;
 
-//
-// EntryPointCount = result.EntryPoints.Count,
-// EffectCount = result.Effects.Count,
-// DiRegistrationCount = result.DiRegistrations.Count,
-// MethodObservationCount = result.MethodObservations.Count,
-// InvocationObservationCount = result.InvocationObservations.Count,
+public record RunSummary(
+    string Id,
+    DateTimeOffset CreatedAtUtc,
+    string SolutionPath,
+    int EntryPointCount,
+    int EffectCount,
+    int DiRegistrationCount,
+    int MethodObservationCount,
+    int InvocationObservationCount);
 
 public sealed record AnalysisResult(
+    string SolutionPath,
     IReadOnlyList<SourceFileInfo> SourceFiles,
     IReadOnlyList<EntryPointInfo> EntryPoints,
     IReadOnlyList<EffectInfo> Effects,

@@ -1,4 +1,6 @@
 using Rig.Analysis;
+using Rig.Storage;
+using Rig.Storage.Queries;
 
 namespace Rig.Cli;
 
@@ -89,10 +91,15 @@ public static class CliApplication
             error.WriteLine($"  dotnet build {args[1]}");
             return 2;
         }
+        
+        var storeDirectory = Path.Combine(workingDirectory, ".rig");
+        Directory.CreateDirectory(storeDirectory);
+        await using var context = new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
+        await context.Database.EnsureCreatedAsync();
+        
+        var runId = await Writes.SaveAsync(context, result);
 
-        var runId = await new RunStore(workingDirectory).SaveAsync(args[1], result);
-
-        output.WriteLine($"Indexed: {Path.GetFullPath(args[1])}");
+        output.WriteLine($"Indexed: {Path.GetFullPath(result.SolutionPath)}");
         output.WriteLine($"Run: {runId}");
         output.WriteLine($"EntryPoints: {result.EntryPoints.Count}");
         output.WriteLine($"Effects: {result.Effects.Count}");
@@ -102,7 +109,9 @@ public static class CliApplication
 
     private static async Task<int> RunRunsAsync(TextWriter output, string workingDirectory)
     {
-        var runs = await new RunStore(workingDirectory).ListRunsAsync();
+        var storeDirectory = Path.Combine(workingDirectory, ".rig");
+        await using var context = new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
+        var runs = await Reads.ListRunsAsync(context);
 
         output.WriteLine("Runs");
         foreach (var run in runs)
@@ -298,7 +307,11 @@ public static class CliApplication
 
     private static async Task<AnalysisResult?> LoadLatestOrErrorAsync(TextWriter error, string workingDirectory)
     {
-        var result = await new RunStore(workingDirectory).LoadLatestAsync();
+        var storeDirectory = Path.Combine(workingDirectory, ".rig");
+        await using var context = new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
+        // todo: we are loading everything just to discard on step higher....
+        var result = await Reads.LoadLatestAsync(context);
+        
         if (result is null)
         {
             error.WriteLine("No indexed run found. Run `rig index <solution>` first.");

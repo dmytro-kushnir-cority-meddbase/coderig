@@ -5,32 +5,25 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <EFOptimizeContext>true</EFOptimizeContext>
-    <EFScaffoldModelStage>build</EFScaffoldModelStage>
-    <!-- TODO: EFPrecompileQueriesStage is disabled because Microsoft.Build.* (pulled in by Roslyn workspace loading)
-         conflicts with the MSBuild version EF Tasks tries to load for query precompilation.
-         Fix: move Roslyn analysis into a separate Rig.Analysis.csproj that doesn't reference MSBuild packages,
-         keep only EF + CLI in this project, then re-enable EFPrecompileQueriesStage=publish. -->
-    <EFPrecompileQueriesStage>never</EFPrecompileQueriesStage>
-    <EFOutputDir>Storage/Compiled</EFOutputDir>
-    <EFTargetNamespace>Rig.Storage</EFTargetNamespace>
+
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="Storage/Compiled/**" />
     <PackageReference Include="Microsoft.Build.Framework" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Build.Locator" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" />
     <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.MSBuild" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Tasks" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+
     <PackageReference Include="System.CommandLine" />
     <PackageReference Include="Microsoft.NET.StringTools" PrivateAssets="all" ExcludeAssets="runtime"/>
   </ItemGroup>
 
   <ItemGroup>
     <Content Include="Rules\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Rig.Storage\Rig.Storage.csproj" />
   </ItemGroup>
 
 </Project>
