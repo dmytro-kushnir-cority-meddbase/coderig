@@ -312,6 +312,50 @@
       "confidence": "medium",
       "basis": "compilation+profile",
       "reason": "idisplaymanager_write"
+    },
+    {
+      "provider": "yessql",
+      "operation": "query",
+      "methods": [
+        "FirstOrDefaultAsync",
+        "ListAsync"
+      ],
+      "receiverTypes": [
+        "YesSql.IQuery",
+        "YesSql.IQueryIndex"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "yessql_iquery_terminator"
+    },
+    {
+      "provider": "yessql",
+      "operation": "query",
+      "methods": [
+        "ExecuteQuery"
+      ],
+      "receiverTypes": [
+        "YesSql.ISession"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "yessql_compiled_query"
+    },
+    {
+      "provider": "yessql",
+      "operation": "query",
+      "methods": [
+        "GetAsync"
+      ],
+      "declaringTypes": [
+        "YesSql.SessionExtensions"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "yessql_get_by_id"
     }
   ],
   "files": {
