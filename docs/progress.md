@@ -61,6 +61,7 @@ Status: `in_progress`
 - [x] external boundary nodes
 - [x] unresolved call nodes
 - [x] edge confidence/basis/reason
+- [x] minAPI method-ref handler body resolution (fluent chain start-line fix)
 - [ ] cycle detection
 
 ### Phase 4: HTTP, EF Core, and Redis Effects
@@ -96,6 +97,10 @@ Status: `in_progress`
 - [x] Minimal API playground
 - [x] MVC playground
 - [x] deterministic regression tests
+- [x] OrchardCore playground indexed (296 EPs, 1007+ effects)
+- [x] YesSql IQuery/ExecuteQuery/SessionExtensions rules for OrchardCore
+- [x] tree callgraph rendering with box-drawing characters
+- [x] `--focus` mode (backward BFS, effect-reachable nodes only)
 
 ### Phase 7: Diff and Agent Projections
 

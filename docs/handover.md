@@ -1,6 +1,6 @@
 # Handover
 
-Current handover after .sln support, multi-file profile loading, Parallel.ForEach/ForEachAsync fanout, and focused read queries.
+Current handover after tree callgraph rendering, OrchardCore YesSql rules, and minAPI method-ref handler fix.
 
 ## Current State
 
@@ -10,23 +10,25 @@ The repo contains a CLI-first .NET 10 prototype split across three projects:
 - **`src/Rig.Domain`** — domain model records (`AnalysisResult`, `EntryPointInfo`, `EffectInfo`, etc.)
 - **`src/Rig.Storage`** — EF Core + SQLite; `RigDbContext`, `Reads.cs`, `Writes.cs`
 
-Working commands:
-
-```text
-dotnet run --project src/Rig -- index playgrounds/EntryPointEffects/EntryPointEffects.slnx
-dotnet run --project src/Rig -- runs
-dotnet run --project src/Rig -- entrypoints
-dotnet run --project src/Rig -- effects
-dotnet run --project src/Rig -- di
-dotnet run --project src/Rig -- files --skipped
-dotnet run --project src/Rig -- callgraph "minapi GET /minapi/teams/{id}"
-dotnet run --project src/Rig -- profile validate
-```
-
 Published R2R binary at `.rig-bin/Rig.exe` (gitignored). Build with:
 
+```powershell
+dotnet publish src/Rig/Rig.csproj -c Release -r win-x64 --self-contained -o .rig-bin `
+  -p:PublishReadyToRun=true -p:DebugSymbols=false -p:DebugType=none `
+  /p:TreatWarningsAsErrors=false
 ```
-dotnet publish src/Rig -c Release -r win-x64 /p:PublishReadyToRun=true -o .rig-bin
+
+Working commands:
+
+```powershell
+.\.rig-bin\Rig.exe index playgrounds/EntryPointEffects/EntryPointEffects.slnx
+.\.rig-bin\Rig.exe runs
+.\.rig-bin\Rig.exe entrypoints
+.\.rig-bin\Rig.exe effects [--entrypoint <index>]
+.\.rig-bin\Rig.exe callgraph <index> [--focus]
+.\.rig-bin\Rig.exe di
+.\.rig-bin\Rig.exe files --skipped
+.\.rig-bin\Rig.exe profile validate
 ```
 
 Timings (R2R, win-x64): `entrypoints`/`di`/`files` ~295ms | `effects` ~315ms | `callgraph` ~350ms.
@@ -63,8 +65,15 @@ An MCP server would open `RigDbContext` once and serve `Reads.cs` queries in <5m
 
 ## Playgrounds
 
-- `playgrounds/EntryPointEffects/EntryPointEffects.slnx` — primary indexed target.
-  5 entrypoints, 19 effects (17 + 2 Parallel.ForEach/ForEachAsync redis reads).
+- `playgrounds/EntryPointEffects/EntryPointEffects.slnx` — primary fast-iteration target.
+  8 entry points, 23 effects. Index in ~10s. Exercises MVC, MinAPI, FastEndpoints,
+  EF Core, Redis, HTTP client, single-impl DI dispatch, method-group delegates.
+- `playgrounds/OrchardCore/OrchardCore.slnx` — large real-world CMS.
+  296 entry points, 1007+ effects across 190/296 EPs. Index in ~5 minutes.
+  Has `rig.rules.json` with rules for: IMemoryCache, IDistributedCache, IMessageBus,
+  ISignal, IFileStore/IMediaFileStore, OpenIddict managers, IDocumentManager,
+  IShellSettingsManager, IDeploymentTargetHandler, IDisplayManager,
+  YesSql IQuery terminators (FirstOrDefaultAsync/ListAsync), ExecuteQuery, SessionExtensions.GetAsync.
 - `playgrounds/CleanArchitecture/` — vendored public CleanArchitecture solution (.sln).
   5 FastEndpoints entrypoints; exercises .sln C#-filter path.
 
@@ -75,12 +84,23 @@ dotnet test                    # 5 tests, all green
 .\.rig-bin\Rig.exe effects     # ~315ms with R2R binary
 ```
 
+## Callgraph Rendering
+
+`rig callgraph <index>` renders a tree using box-drawing characters (├─ / └─ / │).
+Already-visited nodes (cycles) print with `[^]` and are not expanded again.
+
+`--focus` mode: backward BFS from effect nodes, keeps only effect-reachable ancestors.
+Drops all BOUNDARY lines; CALL edges trimmed to reachable targets only.
+Header shows `(focused)` and `Nodes: X / Y on effect paths`.
+
 ## Important Caveats
 
-- Callgraph traversal does not yet use DI facts to resolve interface/service calls.
+- Callgraph traversal uses single-impl DI dispatch (1 concrete registration → resolves to it).
+  Multi-impl interfaces leave an empty interface node — add a rule for the interface to capture effects.
 - Constructor injection resolution, cycles, and richer dynamic dispatch are not fully implemented.
-- EF query precompilation conflict: fix requires that `Rig.Storage` never imports Roslyn (already true) and that the MSBuild.Framework conflict is resolved.
+- EF query precompilation conflict: `EFPrecompileQueriesStage=never` in `Rig.Storage.csproj`.
 - `runs.AnalysisResultJson` column still exists in the schema (written as empty string, never read); can be dropped in a future migration.
+- `string_argument` resource returns null for non-literal first arguments — use `receiver_type` instead.
 
 ## Recommended Next Slice
 
@@ -89,7 +109,10 @@ Tools: `rig_effects`, `rig_entrypoints`, `rig_callgraph`, `rig_di`, `rig_files`.
 Server starts once, opens `RigDbContext`, drops per-call cost to <5ms.
 Unblocks agent-driven analysis (Copilot, Claude) without subprocess overhead.
 
-After that: **cycle detection** — annotate back-edges in callgraph traversal and expose in CLI.
+Other candidates:
+- **Cycle detection** — annotate back-edges in callgraph traversal and expose in CLI.
+- **More OrchardCore rules** — query top boundary calls in the DB, add coverage for uncaught effects.
+- **`unresolved_resource` observation** — flag effects where the resource string couldn't be resolved.
 
 ## Useful Files
 
@@ -115,9 +138,8 @@ After that: **cycle detection** — annotate back-edges in callgraph traversal a
 - `tests/Rig.Tests/Analysis/CleanArchitecturePlaygroundTests.cs`
 - `tests/Rig.Tests/Cli/CliApplicationTests.cs`
 
-## Current State
-
-The repo contains a CLI-first .NET 10 prototype.
+- `playgrounds/OrchardCore/OrchardCore.slnx`
+- `playgrounds/OrchardCore/rig.rules.json`
 
 Working commands:
 
