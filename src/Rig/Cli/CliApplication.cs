@@ -320,34 +320,87 @@ public static class CliApplication
         output.WriteLine($"Callgraph: [{entryPointIndex}] {callGraph.EntryPoint}{focusSuffix}");
         output.WriteLine($"Nodes: {nodes.Count}{nodeCountSuffix}");
 
+        RenderTree(nodes, effectReachable, focusMode, output);
+
+        return 0;
+    }
+
+    private static void RenderTree(
+        IReadOnlyList<CallGraphNodeInfo> nodes,
+        HashSet<string>? effectReachable,
+        bool focusMode,
+        TextWriter output)
+    {
+        if (nodes.Count == 0) return;
+
+        var symbolToNode = new Dictionary<string, CallGraphNodeInfo>();
         foreach (var node in nodes)
+            symbolToNode.TryAdd(node.Symbol, node);
+
+        var visited = new HashSet<string>();
+        RenderTreeNode(nodes[0], "  ", "  ", symbolToNode, effectReachable, focusMode, visited, output);
+    }
+
+    private static void RenderTreeNode(
+        CallGraphNodeInfo node,
+        string linePrefix,
+        string childrenPrefix,
+        Dictionary<string, CallGraphNodeInfo> symbolToNode,
+        HashSet<string>? effectReachable,
+        bool focusMode,
+        HashSet<string> visited,
+        TextWriter output)
+    {
+        output.WriteLine($"{linePrefix}{Path.GetFileName(node.FilePath)}:{node.Line}  {node.Symbol}");
+
+        if (!visited.Add(node.Symbol)) return;
+
+        var calls = node.Calls
+            .Where(c => !focusMode || effectReachable is null || effectReachable.Contains(c))
+            .ToList();
+        IReadOnlyList<BoundaryCallInfo> boundaries = focusMode ? [] : node.BoundaryCalls;
+        var effects = node.Effects;
+
+        int total = calls.Count + boundaries.Count + effects.Count;
+        int idx = 0;
+
+        foreach (var call in calls)
         {
-            output.WriteLine($"  {Path.GetFileName(node.FilePath)}:{node.Line}  {node.Symbol}");
+            idx++;
+            bool isLast = idx == total;
+            var branch = childrenPrefix + (isLast ? "└─ " : "├─ ");
+            var nextChildren = childrenPrefix + (isLast ? "   " : "│  ");
 
-            foreach (var call in node.Calls)
+            if (symbolToNode.TryGetValue(call, out var childNode))
             {
-                if (focusMode && effectReachable is not null && !effectReachable.Contains(call))
-                    continue;
-                output.WriteLine($"    CALL {call}");
+                if (visited.Contains(call))
+                    output.WriteLine($"{branch}{Path.GetFileName(childNode.FilePath)}:{childNode.Line}  {childNode.Symbol}  [^]");
+                else
+                    RenderTreeNode(childNode, branch, nextChildren, symbolToNode, effectReachable, focusMode, visited, output);
             }
-
-            if (!focusMode)
+            else
             {
-                foreach (var boundaryCall in node.BoundaryCalls)
-                {
-                    output.WriteLine($"    BOUNDARY {boundaryCall.Kind} {boundaryCall.Method}");
-                }
-            }
-
-            foreach (var effect in node.Effects)
-            {
-                var obs = string.Join(" ", effect.Observations.Select(o => $"[{o.Type}:{o.Context}]"));
-                var obsStr = obs.Length > 0 ? $"  {obs}" : "";
-                output.WriteLine($"    EFFECT {effect.Provider} {effect.Operation}  {effect.Method}  {effect.Resource}{obsStr}");
+                output.WriteLine($"{branch}CALL {call}");
             }
         }
 
-        return 0;
+        foreach (var boundary in boundaries)
+        {
+            idx++;
+            bool isLast = idx == total;
+            var branch = childrenPrefix + (isLast ? "└─ " : "├─ ");
+            output.WriteLine($"{branch}BOUNDARY {boundary.Kind} {boundary.Method}");
+        }
+
+        foreach (var effect in effects)
+        {
+            idx++;
+            bool isLast = idx == total;
+            var branch = childrenPrefix + (isLast ? "└─ " : "├─ ");
+            var obs = string.Join(" ", effect.Observations.Select(o => $"[{o.Type}:{o.Context}]"));
+            var obsStr = obs.Length > 0 ? $"  {obs}" : "";
+            output.WriteLine($"{branch}EFFECT {effect.Provider} {effect.Operation}  {effect.Method}  {effect.Resource}{obsStr}");
+        }
     }
 
     private static HashSet<string> ComputeEffectReachable(
