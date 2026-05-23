@@ -3,8 +3,13 @@
     {
       "provider": "memory_cache",
       "operation": "read",
-      "methods": [ "TryGetValue", "Get" ],
-      "receiverTypes": [ "Microsoft.Extensions.Caching.Memory.IMemoryCache" ],
+      "methods": [
+        "TryGetValue",
+        "Get"
+      ],
+      "receiverTypes": [
+        "Microsoft.Extensions.Caching.Memory.IMemoryCache"
+      ],
       "resource": "receiver_type",
       "confidence": "medium",
       "basis": "compilation+profile",
@@ -13,8 +18,12 @@
     {
       "provider": "memory_cache",
       "operation": "write",
-      "methods": [ "Set" ],
-      "receiverTypes": [ "Microsoft.Extensions.Caching.Memory.IMemoryCache" ],
+      "methods": [
+        "Set"
+      ],
+      "receiverTypes": [
+        "Microsoft.Extensions.Caching.Memory.IMemoryCache"
+      ],
       "resource": "receiver_type",
       "confidence": "medium",
       "basis": "compilation+profile",
@@ -23,8 +32,13 @@
     {
       "provider": "distributed_cache",
       "operation": "read",
-      "methods": [ "GetAsync", "GetStringAsync" ],
-      "receiverTypes": [ "Microsoft.Extensions.Caching.Distributed.IDistributedCache" ],
+      "methods": [
+        "GetAsync",
+        "GetStringAsync"
+      ],
+      "receiverTypes": [
+        "Microsoft.Extensions.Caching.Distributed.IDistributedCache"
+      ],
       "resource": "receiver_type",
       "confidence": "medium",
       "basis": "compilation+profile",
@@ -33,8 +47,13 @@
     {
       "provider": "distributed_cache",
       "operation": "write",
-      "methods": [ "SetAsync", "SetStringAsync" ],
-      "receiverTypes": [ "Microsoft.Extensions.Caching.Distributed.IDistributedCache" ],
+      "methods": [
+        "SetAsync",
+        "SetStringAsync"
+      ],
+      "receiverTypes": [
+        "Microsoft.Extensions.Caching.Distributed.IDistributedCache"
+      ],
       "resource": "receiver_type",
       "confidence": "medium",
       "basis": "compilation+profile",
@@ -43,8 +62,12 @@
     {
       "provider": "distributed_cache",
       "operation": "delete",
-      "methods": [ "RemoveAsync" ],
-      "receiverTypes": [ "Microsoft.Extensions.Caching.Distributed.IDistributedCache" ],
+      "methods": [
+        "RemoveAsync"
+      ],
+      "receiverTypes": [
+        "Microsoft.Extensions.Caching.Distributed.IDistributedCache"
+      ],
       "resource": "receiver_type",
       "confidence": "medium",
       "basis": "compilation+profile",
@@ -53,8 +76,12 @@
     {
       "provider": "orchard_message_bus",
       "operation": "publish",
-      "methods": [ "PublishAsync" ],
-      "receiverTypes": [ "OrchardCore.Caching.Distributed.IMessageBus" ],
+      "methods": [
+        "PublishAsync"
+      ],
+      "receiverTypes": [
+        "OrchardCore.Caching.Distributed.IMessageBus"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -63,8 +90,12 @@
     {
       "provider": "orchard_signal",
       "operation": "signal",
-      "methods": [ "SignalTokenAsync" ],
-      "receiverTypes": [ "OrchardCore.Caching.ISignal" ],
+      "methods": [
+        "SignalTokenAsync"
+      ],
+      "receiverTypes": [
+        "OrchardCore.Caching.ISignal"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -73,8 +104,15 @@
     {
       "provider": "filestore",
       "operation": "read",
-      "methods": [ "GetFileInfoAsync", "GetDirectoryInfoAsync", "GetDirectoryContentAsync" ],
-      "receiverTypes": [ "OrchardCore.FileStorage.IFileStore", "OrchardCore.Media.IMediaFileStore" ],
+      "methods": [
+        "GetFileInfoAsync",
+        "GetDirectoryInfoAsync",
+        "GetDirectoryContentAsync"
+      ],
+      "receiverTypes": [
+        "OrchardCore.FileStorage.IFileStore",
+        "OrchardCore.Media.IMediaFileStore"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -83,8 +121,16 @@
     {
       "provider": "filestore",
       "operation": "write",
-      "methods": [ "CreateFileFromStreamAsync", "TryCreateDirectoryAsync", "TryCopyFileAsync", "TryMoveFileAsync" ],
-      "receiverTypes": [ "OrchardCore.FileStorage.IFileStore", "OrchardCore.Media.IMediaFileStore" ],
+      "methods": [
+        "CreateFileFromStreamAsync",
+        "TryCreateDirectoryAsync",
+        "TryCopyFileAsync",
+        "TryMoveFileAsync"
+      ],
+      "receiverTypes": [
+        "OrchardCore.FileStorage.IFileStore",
+        "OrchardCore.Media.IMediaFileStore"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -93,8 +139,14 @@
     {
       "provider": "filestore",
       "operation": "delete",
-      "methods": [ "TryDeleteFileAsync", "TryDeleteDirectoryAsync" ],
-      "receiverTypes": [ "OrchardCore.FileStorage.IFileStore", "OrchardCore.Media.IMediaFileStore" ],
+      "methods": [
+        "TryDeleteFileAsync",
+        "TryDeleteDirectoryAsync"
+      ],
+      "receiverTypes": [
+        "OrchardCore.FileStorage.IFileStore",
+        "OrchardCore.Media.IMediaFileStore"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -103,8 +155,20 @@
     {
       "provider": "openiddict",
       "operation": "read",
-      "methods": [ "FindByIdAsync", "FindByClientIdAsync", "FindByNameAsync", "FindByPhysicalIdAsync", "CountAsync", "ListAsync" ],
-      "receiverTypes": [ "OpenIddict.Abstractions.IOpenIddictApplicationManager", "OpenIddict.Abstractions.IOpenIddictScopeManager", "OpenIddict.Abstractions.IOpenIddictTokenManager", "OpenIddict.Abstractions.IOpenIddictAuthorizationManager" ],
+      "methods": [
+        "FindByIdAsync",
+        "FindByClientIdAsync",
+        "FindByNameAsync",
+        "FindByPhysicalIdAsync",
+        "CountAsync",
+        "ListAsync"
+      ],
+      "receiverTypes": [
+        "OpenIddict.Abstractions.IOpenIddictApplicationManager",
+        "OpenIddict.Abstractions.IOpenIddictScopeManager",
+        "OpenIddict.Abstractions.IOpenIddictTokenManager",
+        "OpenIddict.Abstractions.IOpenIddictAuthorizationManager"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -113,8 +177,17 @@
     {
       "provider": "openiddict",
       "operation": "write",
-      "methods": [ "CreateAsync", "UpdateAsync", "PopulateAsync" ],
-      "receiverTypes": [ "OpenIddict.Abstractions.IOpenIddictApplicationManager", "OpenIddict.Abstractions.IOpenIddictScopeManager", "OpenIddict.Abstractions.IOpenIddictTokenManager", "OpenIddict.Abstractions.IOpenIddictAuthorizationManager" ],
+      "methods": [
+        "CreateAsync",
+        "UpdateAsync",
+        "PopulateAsync"
+      ],
+      "receiverTypes": [
+        "OpenIddict.Abstractions.IOpenIddictApplicationManager",
+        "OpenIddict.Abstractions.IOpenIddictScopeManager",
+        "OpenIddict.Abstractions.IOpenIddictTokenManager",
+        "OpenIddict.Abstractions.IOpenIddictAuthorizationManager"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -123,8 +196,18 @@
     {
       "provider": "openiddict",
       "operation": "delete",
-      "methods": [ "DeleteAsync", "PruneAsync", "RevokeAsync", "RevokeBySubjectAsync" ],
-      "receiverTypes": [ "OpenIddict.Abstractions.IOpenIddictApplicationManager", "OpenIddict.Abstractions.IOpenIddictScopeManager", "OpenIddict.Abstractions.IOpenIddictTokenManager", "OpenIddict.Abstractions.IOpenIddictAuthorizationManager" ],
+      "methods": [
+        "DeleteAsync",
+        "PruneAsync",
+        "RevokeAsync",
+        "RevokeBySubjectAsync"
+      ],
+      "receiverTypes": [
+        "OpenIddict.Abstractions.IOpenIddictApplicationManager",
+        "OpenIddict.Abstractions.IOpenIddictScopeManager",
+        "OpenIddict.Abstractions.IOpenIddictTokenManager",
+        "OpenIddict.Abstractions.IOpenIddictAuthorizationManager"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -133,8 +216,13 @@
     {
       "provider": "document_manager",
       "operation": "read",
-      "methods": [ "GetOrCreateImmutableAsync", "GetOrCreateMutableAsync" ],
-      "receiverTypes": [ "OrchardCore.Documents.IDocumentManager" ],
+      "methods": [
+        "GetOrCreateImmutableAsync",
+        "GetOrCreateMutableAsync"
+      ],
+      "receiverTypes": [
+        "OrchardCore.Documents.IDocumentManager"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -143,8 +231,12 @@
     {
       "provider": "document_manager",
       "operation": "write",
-      "methods": [ "UpdateAsync" ],
-      "receiverTypes": [ "OrchardCore.Documents.IDocumentManager" ],
+      "methods": [
+        "UpdateAsync"
+      ],
+      "receiverTypes": [
+        "OrchardCore.Documents.IDocumentManager"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -153,8 +245,12 @@
     {
       "provider": "shell_settings",
       "operation": "read",
-      "methods": [ "LoadSettingsAsync" ],
-      "receiverTypes": [ "OrchardCore.Environment.Shell.Configuration.IShellSettingsManager" ],
+      "methods": [
+        "LoadSettingsAsync"
+      ],
+      "receiverTypes": [
+        "OrchardCore.Environment.Shell.Configuration.IShellSettingsManager"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -163,8 +259,12 @@
     {
       "provider": "shell_settings",
       "operation": "write",
-      "methods": [ "SaveSettingsAsync" ],
-      "receiverTypes": [ "OrchardCore.Environment.Shell.Configuration.IShellSettingsManager" ],
+      "methods": [
+        "SaveSettingsAsync"
+      ],
+      "receiverTypes": [
+        "OrchardCore.Environment.Shell.Configuration.IShellSettingsManager"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -173,8 +273,12 @@
     {
       "provider": "deployment",
       "operation": "write",
-      "methods": [ "ImportFromFileAsync" ],
-      "receiverTypes": [ "OrchardCore.Deployment.IDeploymentTargetHandler" ],
+      "methods": [
+        "ImportFromFileAsync"
+      ],
+      "receiverTypes": [
+        "OrchardCore.Deployment.IDeploymentTargetHandler"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -183,8 +287,13 @@
     {
       "provider": "display_manager",
       "operation": "read",
-      "methods": [ "BuildEditorAsync", "BuildDisplayAsync" ],
-      "receiverTypes": [ "OrchardCore.DisplayManagement.IDisplayManager" ],
+      "methods": [
+        "BuildEditorAsync",
+        "BuildDisplayAsync"
+      ],
+      "receiverTypes": [
+        "OrchardCore.DisplayManagement.IDisplayManager"
+      ],
       "resource": "receiver_type",
       "confidence": "medium",
       "basis": "compilation+profile",
@@ -193,8 +302,12 @@
     {
       "provider": "display_manager",
       "operation": "write",
-      "methods": [ "UpdateEditorAsync" ],
-      "receiverTypes": [ "OrchardCore.DisplayManagement.IDisplayManager" ],
+      "methods": [
+        "UpdateEditorAsync"
+      ],
+      "receiverTypes": [
+        "OrchardCore.DisplayManagement.IDisplayManager"
+      ],
       "resource": "receiver_type",
       "confidence": "medium",
       "basis": "compilation+profile",
@@ -203,15 +316,44 @@
   ],
   "files": {
     "exclude": [
-      { "id": "orchard.migrations", "glob": "**/Migrations/**", "reason": "db_migration" },
-      { "id": "orchard.migrations.file", "glob": "**/*Migrations.cs", "reason": "db_migration" },
-      { "id": "orchard.generated.liquid", "glob": "**/*.liquid", "reason": "template_source" },
-      { "id": "orchard.wwwroot", "glob": "**/wwwroot/**", "reason": "static_asset" },
-      { "id": "orchard.recipes", "glob": "**/Recipes/**", "reason": "recipe_data" }
+      {
+        "id": "orchard.migrations",
+        "glob": "**/Migrations/**",
+        "reason": "db_migration"
+      },
+      {
+        "id": "orchard.migrations.file",
+        "glob": "**/*Migrations.cs",
+        "reason": "db_migration"
+      },
+      {
+        "id": "orchard.generated.liquid",
+        "glob": "**/*.liquid",
+        "reason": "template_source"
+      },
+      {
+        "id": "orchard.wwwroot",
+        "glob": "**/wwwroot/**",
+        "reason": "static_asset"
+      },
+      {
+        "id": "orchard.recipes",
+        "glob": "**/Recipes/**",
+        "reason": "recipe_data"
+      }
     ],
-    "testProjectPatterns": [ "*Tests", "*.Tests", "*Test", "*.Test", "*Functional*", "*Integration*" ]
+    "testProjectPatterns": [
+      "*Tests",
+      "*.Tests",
+      "*Test",
+      "*.Test",
+      "*Functional*",
+      "*Integration*"
+    ]
   },
   "projects": {
-    "exclude": [ "Errors.*" ]
+    "exclude": [
+      "Errors.*"
+    ]
   }
 }

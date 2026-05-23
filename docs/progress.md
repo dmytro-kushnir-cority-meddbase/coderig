@@ -111,7 +111,9 @@ Status: `todo`
 ## Completed Slices (recent)
 
 ### .sln support, multi-file profile loading, Parallel.ForEach/ForEachAsync fanout
+
 Status: `committed` (9dcd8c7)
+
 - `SolutionSourceLoader` filters to `LanguageNames.CSharp` projects only; enables .sln files with non-C# projects.
 - `AnalysisRuleSet.LoadForSolution`: cascade merge — built-in → global (`~/.rig/rig.rules.json`) → solution-level → per-project.
 - `SolutionSourceSet` exposes `ProjectDirectories`; `SolutionAnalyzer` calls `MergeWithProjectDirectories` post-load.
@@ -119,7 +121,9 @@ Status: `committed` (9dcd8c7)
 - `PlaygroundAnalysisTests` and `CliApplicationTests` updated (19 effects, two new `parallel_fanout` observations).
 
 ### Focused read queries per CLI command
+
 Status: `committed` (93acf8e)
+
 - Each CLI command queries only the tables it needs; `LoadLatestOrErrorAsync` removed from `CliApplication`.
 - `GetLatestRunIdAsync`: shared primitive; returns `null` if DB is empty or missing.
 - `LoadSkippedSourceFilesAsync`: WHERE pushed to SQL (`status='skipped'`).
@@ -128,20 +132,26 @@ Status: `committed` (93acf8e)
 - Timings (R2R, win-x64): `entrypoints` ~300ms | `effects` ~315ms | `callgraph` ~350ms.
 
 ### MediatR dispatch resolution
+
 Status: `committed` (2a49a20)
+
 - `treatAsDispatch` rule flag routes `mediator.Send`/`Publish` to handler implementations.
 - CallGraphBuilder builds a dispatch index from DI facts and resolves handler types.
 - EntryPointEffects playground: 17 effects (previously 19 before deduplication).
 
 ### Read/write decoupling + new CLI commands
+
 Status: `committed` (6fba295)
+
 - `LoadLatestAsync` replaced: reads from ~10 normalized tables instead of JSON blob.
 - New `callgraph_node_effects` join table links per-node effects to global effects table.
 - `rig di` command — lists DI registrations from DB.
 - `rig profile validate` — validates solution-local rules file.
 
 ### Performance: R2R binary + EF compiled model
+
 Status: `committed` (d35847d / 3e3fa13)
+
 - R2R published binary at `.rig-bin/Rig.exe` (gitignored).
 - EF compiled model auto-generated via `Microsoft.EntityFrameworkCore.Tasks` MSBuild package.
   `EFScaffoldModelStage=build` regenerates `Storage/Compiled/*.g.cs` on every build; directory gitignored.
@@ -157,18 +167,20 @@ Phase: 7+
 Status: `todo`
 
 Contract:
-  - wrap CLI read queries (`Reads.cs`) behind an MCP tool server.
-  - server starts once, opens `RigDbContext`, serves tool calls in <10ms (no per-call EF startup).
-  - tools: `rig_effects`, `rig_entrypoints`, `rig_callgraph`, `rig_di`, `rig_files`.
-  - index (`rig index`) remains a separate CLI invocation that writes to DB; server picks up changes on next start or via a reload tool.
-  - this unblocks agent-driven analysis workflows (Copilot, Claude, etc.) without subprocess overhead.
+
+- wrap CLI read queries (`Reads.cs`) behind an MCP tool server.
+- server starts once, opens `RigDbContext`, serves tool calls in <10ms (no per-call EF startup).
+- tools: `rig_effects`, `rig_entrypoints`, `rig_callgraph`, `rig_di`, `rig_files`.
+- index (`rig index`) remains a separate CLI invocation that writes to DB; server picks up changes on next start or via a reload tool.
+- this unblocks agent-driven analysis workflows (Copilot, Claude, etc.) without subprocess overhead.
 
 Notes:
-  - ~300-350ms per CLI call is acceptable for human use but too slow for agentic loops (10–50 calls/session).
-  - in-memory state after first load would drop per-call cost to <5ms.
-  - `ModelContextProtocol` NuGet package (Microsoft) provides the server SDK.
-  - `EFPrecompileQueriesStage=never` conflict (see TODO in Rig.Storage.csproj) is a candidate for resolution
-    once Roslyn analysis is fully isolated to `src/Rig` (Rig.Storage now has no Roslyn dependency).
+
+- ~300-350ms per CLI call is acceptable for human use but too slow for agentic loops (10–50 calls/session).
+- in-memory state after first load would drop per-call cost to <5ms.
+- `ModelContextProtocol` NuGet package (Microsoft) provides the server SDK.
+- `EFPrecompileQueriesStage=never` conflict (see TODO in Rig.Storage.csproj) is a candidate for resolution
+  once Roslyn analysis is fully isolated to `src/Rig` (Rig.Storage now has no Roslyn dependency).
 
 ## Next Suggested Slice
 
@@ -177,13 +189,15 @@ Phase: 3
 Status: `todo`
 
 Contract:
-  - detect back-edges during callgraph traversal and annotate affected nodes.
-  - expose cycles in CLI output (`rig callgraph` shows cycle markers).
-  - add a test asserting cycle detection on a synthetic playground fixture.
+
+- detect back-edges during callgraph traversal and annotate affected nodes.
+- expose cycles in CLI output (`rig callgraph` shows cycle markers).
+- add a test asserting cycle detection on a synthetic playground fixture.
 
 Notes:
-  - `VisitMethod` already uses a `visited` HashSet to prevent infinite loops but does not report cycles.
-  - use `/p:UseSharedCompilation=false` while compiler-server timeouts remain possible.
+
+- `VisitMethod` already uses a `visited` HashSet to prevent infinite loops but does not report cycles.
+- use `/p:UseSharedCompilation=false` while compiler-server timeouts remain possible.
 
 Use this template when starting one:
 

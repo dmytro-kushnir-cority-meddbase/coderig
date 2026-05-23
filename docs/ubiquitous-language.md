@@ -281,6 +281,7 @@ concrete method when exactly one implementation of the interface is registered
 in the MS DI container.
 
 Resolution succeeds only when:
+
 1. The declared receiver type is an interface.
 2. Exactly one DI registration maps that interface to a concrete type.
 3. The concrete type's matching method is in application code (not a boundary).

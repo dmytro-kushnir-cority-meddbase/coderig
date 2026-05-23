@@ -24,14 +24,17 @@ dotnet run --project src/Rig -- profile validate
 ```
 
 Published R2R binary at `.rig-bin/Rig.exe` (gitignored). Build with:
+
 ```
 dotnet publish src/Rig -c Release -r win-x64 /p:PublishReadyToRun=true -o .rig-bin
 ```
+
 Timings (R2R, win-x64): `entrypoints`/`di`/`files` ~295ms | `effects` ~315ms | `callgraph` ~350ms.
 
 ## Architecture
 
 **Three-project structure**:
+
 - `Rig.Domain` has no dependencies — pure C# records.
 - `Rig.Storage` references `Rig.Domain`; contains `RigDbContext` and all EF entity classes.
   `Reads.cs` exposes focused per-command queries (no JSON blob load).
@@ -111,7 +114,6 @@ After that: **cycle detection** — annotate back-edges in callgraph traversal a
 - `tests/Rig.Tests/Analysis/PlaygroundAnalysisTests.cs`
 - `tests/Rig.Tests/Analysis/CleanArchitecturePlaygroundTests.cs`
 - `tests/Rig.Tests/Cli/CliApplicationTests.cs`
-
 
 ## Current State
 

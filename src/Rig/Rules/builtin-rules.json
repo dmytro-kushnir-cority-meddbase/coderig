@@ -1,38 +1,105 @@
 {
   "entrypoints": {
     "minimalApi": [
-      { "method": "MapGet", "httpMethod": "GET" },
-      { "method": "MapPost", "httpMethod": "POST" },
-      { "method": "MapPut", "httpMethod": "PUT" },
-      { "method": "MapDelete", "httpMethod": "DELETE" },
-      { "method": "MapPatch", "httpMethod": "PATCH" }
+      {
+        "method": "MapGet",
+        "httpMethod": "GET"
+      },
+      {
+        "method": "MapPost",
+        "httpMethod": "POST"
+      },
+      {
+        "method": "MapPut",
+        "httpMethod": "PUT"
+      },
+      {
+        "method": "MapDelete",
+        "httpMethod": "DELETE"
+      },
+      {
+        "method": "MapPatch",
+        "httpMethod": "PATCH"
+      }
     ],
     "mvcHttpAttributes": [
-      { "attribute": "HttpGet", "httpMethod": "GET" },
-      { "attribute": "HttpGetAttribute", "httpMethod": "GET" },
-      { "attribute": "HttpPost", "httpMethod": "POST" },
-      { "attribute": "HttpPostAttribute", "httpMethod": "POST" },
-      { "attribute": "HttpPut", "httpMethod": "PUT" },
-      { "attribute": "HttpPutAttribute", "httpMethod": "PUT" },
-      { "attribute": "HttpDelete", "httpMethod": "DELETE" },
-      { "attribute": "HttpDeleteAttribute", "httpMethod": "DELETE" },
-      { "attribute": "HttpPatch", "httpMethod": "PATCH" },
-      { "attribute": "HttpPatchAttribute", "httpMethod": "PATCH" }
+      {
+        "attribute": "HttpGet",
+        "httpMethod": "GET"
+      },
+      {
+        "attribute": "HttpGetAttribute",
+        "httpMethod": "GET"
+      },
+      {
+        "attribute": "HttpPost",
+        "httpMethod": "POST"
+      },
+      {
+        "attribute": "HttpPostAttribute",
+        "httpMethod": "POST"
+      },
+      {
+        "attribute": "HttpPut",
+        "httpMethod": "PUT"
+      },
+      {
+        "attribute": "HttpPutAttribute",
+        "httpMethod": "PUT"
+      },
+      {
+        "attribute": "HttpDelete",
+        "httpMethod": "DELETE"
+      },
+      {
+        "attribute": "HttpDeleteAttribute",
+        "httpMethod": "DELETE"
+      },
+      {
+        "attribute": "HttpPatch",
+        "httpMethod": "PATCH"
+      },
+      {
+        "attribute": "HttpPatchAttribute",
+        "httpMethod": "PATCH"
+      }
     ],
     "classInheritance": [
       {
         "id": "dotnet.fastendpoints.execute",
         "kind": "fastendpoint",
-        "baseTypes": [ "FastEndpoints.Endpoint" ],
-        "routeProviderMethods": [ "Configure" ],
-        "routeMethods": [
-          { "method": "Get", "httpMethod": "GET" },
-          { "method": "Post", "httpMethod": "POST" },
-          { "method": "Put", "httpMethod": "PUT" },
-          { "method": "Delete", "httpMethod": "DELETE" },
-          { "method": "Patch", "httpMethod": "PATCH" }
+        "baseTypes": [
+          "FastEndpoints.Endpoint"
         ],
-        "handlerMethods": [ "ExecuteAsync", "HandleAsync" ],
+        "routeProviderMethods": [
+          "Configure"
+        ],
+        "routeMethods": [
+          {
+            "method": "Get",
+            "httpMethod": "GET"
+          },
+          {
+            "method": "Post",
+            "httpMethod": "POST"
+          },
+          {
+            "method": "Put",
+            "httpMethod": "PUT"
+          },
+          {
+            "method": "Delete",
+            "httpMethod": "DELETE"
+          },
+          {
+            "method": "Patch",
+            "httpMethod": "PATCH"
+          }
+        ],
+        "handlerMethods": [
+          "ExecuteAsync",
+          "HandleAsync"
+        ],
         "requireOverride": true
       }
     ]
@@ -41,8 +108,14 @@
     {
       "provider": "http",
       "operation": "GET",
-      "methods": [ "GetAsync", "GetStringAsync", "GetFromJsonAsync" ],
-      "declaringTypes": [ "System.Net.Http.HttpClient" ],
+      "methods": [
+        "GetAsync",
+        "GetStringAsync",
+        "GetFromJsonAsync"
+      ],
+      "declaringTypes": [
+        "System.Net.Http.HttpClient"
+      ],
       "resource": "http_argument",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -51,8 +124,13 @@
     {
       "provider": "http",
       "operation": "POST",
-      "methods": [ "PostAsync", "PostAsJsonAsync" ],
-      "declaringTypes": [ "System.Net.Http.HttpClient" ],
+      "methods": [
+        "PostAsync",
+        "PostAsJsonAsync"
+      ],
+      "declaringTypes": [
+        "System.Net.Http.HttpClient"
+      ],
       "resource": "http_argument",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -61,8 +139,13 @@
     {
       "provider": "http",
       "operation": "PUT",
-      "methods": [ "PutAsync", "PutAsJsonAsync" ],
-      "declaringTypes": [ "System.Net.Http.HttpClient" ],
+      "methods": [
+        "PutAsync",
+        "PutAsJsonAsync"
+      ],
+      "declaringTypes": [
+        "System.Net.Http.HttpClient"
+      ],
       "resource": "http_argument",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -71,8 +154,12 @@
     {
       "provider": "http",
       "operation": "DELETE",
-      "methods": [ "DeleteAsync" ],
-      "declaringTypes": [ "System.Net.Http.HttpClient" ],
+      "methods": [
+        "DeleteAsync"
+      ],
+      "declaringTypes": [
+        "System.Net.Http.HttpClient"
+      ],
       "resource": "http_argument",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -81,8 +168,20 @@
     {
       "provider": "efcore",
       "operation": "read",
-      "methods": [ "ToListAsync", "FirstAsync", "FirstOrDefaultAsync", "SingleAsync", "SingleOrDefaultAsync", "AnyAsync", "CountAsync", "FindAsync" ],
-      "declaringTypes": [ "Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions", "Microsoft.EntityFrameworkCore.DbSet" ],
+      "methods": [
+        "ToListAsync",
+        "FirstAsync",
+        "FirstOrDefaultAsync",
+        "SingleAsync",
+        "SingleOrDefaultAsync",
+        "AnyAsync",
+        "CountAsync",
+        "FindAsync"
+      ],
+      "declaringTypes": [
+        "Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions",
+        "Microsoft.EntityFrameworkCore.DbSet"
+      ],
       "resource": "ef_query_root",
       "confidence": "medium",
       "basis": "compilation+heuristic",
@@ -91,8 +190,13 @@
     {
       "provider": "efcore",
       "operation": "commit",
-      "methods": [ "SaveChanges", "SaveChangesAsync" ],
-      "declaringTypes": [ "Microsoft.EntityFrameworkCore.DbContext" ],
+      "methods": [
+        "SaveChanges",
+        "SaveChangesAsync"
+      ],
+      "declaringTypes": [
+        "Microsoft.EntityFrameworkCore.DbContext"
+      ],
       "resource": "ef_context_receiver",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -101,8 +205,15 @@
     {
       "provider": "efcore",
       "operation": "pending_write",
-      "methods": [ "Add", "AddAsync", "Update", "Remove" ],
-      "declaringTypes": [ "Microsoft.EntityFrameworkCore.DbSet" ],
+      "methods": [
+        "Add",
+        "AddAsync",
+        "Update",
+        "Remove"
+      ],
+      "declaringTypes": [
+        "Microsoft.EntityFrameworkCore.DbSet"
+      ],
       "resource": "ef_dbset_receiver",
       "confidence": "medium",
       "basis": "compilation+heuristic",
@@ -111,8 +222,15 @@
     {
       "provider": "efcore",
       "operation": "schema",
-      "methods": [ "EnsureCreated", "EnsureCreatedAsync", "Migrate", "MigrateAsync" ],
-      "receiverTypes": [ "Microsoft.EntityFrameworkCore.Infrastructure.DatabaseFacade" ],
+      "methods": [
+        "EnsureCreated",
+        "EnsureCreatedAsync",
+        "Migrate",
+        "MigrateAsync"
+      ],
+      "receiverTypes": [
+        "Microsoft.EntityFrameworkCore.Infrastructure.DatabaseFacade"
+      ],
       "resource": "ef_database_facade",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -121,8 +239,15 @@
     {
       "provider": "efcore",
       "operation": "raw_sql",
-      "methods": [ "ExecuteSqlRaw", "ExecuteSqlRawAsync", "ExecuteSqlInterpolated", "ExecuteSqlInterpolatedAsync" ],
-      "receiverTypes": [ "Microsoft.EntityFrameworkCore.Infrastructure.DatabaseFacade" ],
+      "methods": [
+        "ExecuteSqlRaw",
+        "ExecuteSqlRawAsync",
+        "ExecuteSqlInterpolated",
+        "ExecuteSqlInterpolatedAsync"
+      ],
+      "receiverTypes": [
+        "Microsoft.EntityFrameworkCore.Infrastructure.DatabaseFacade"
+      ],
       "resource": "ef_database_facade",
       "confidence": "medium",
       "basis": "compilation+profile",
@@ -131,8 +256,13 @@
     {
       "provider": "efcore",
       "operation": "raw_sql",
-      "methods": [ "FromSqlRaw", "FromSqlInterpolated" ],
-      "receiverTypes": [ "Microsoft.EntityFrameworkCore.DbSet" ],
+      "methods": [
+        "FromSqlRaw",
+        "FromSqlInterpolated"
+      ],
+      "receiverTypes": [
+        "Microsoft.EntityFrameworkCore.DbSet"
+      ],
       "resource": "ef_query_root",
       "confidence": "medium",
       "basis": "compilation+profile",
@@ -141,8 +271,21 @@
     {
       "provider": "repository",
       "operation": "read",
-      "methods": [ "GetByIdAsync", "FirstOrDefaultAsync", "ListAsync", "CountAsync", "AnyAsync" ],
-      "receiverTypes": [ "IReadRepository", "IRepository", "Ardalis.SharedKernel.IReadRepository", "Ardalis.SharedKernel.IRepository", "Ardalis.Specification.IReadRepositoryBase", "Ardalis.Specification.IRepositoryBase" ],
+      "methods": [
+        "GetByIdAsync",
+        "FirstOrDefaultAsync",
+        "ListAsync",
+        "CountAsync",
+        "AnyAsync"
+      ],
+      "receiverTypes": [
+        "IReadRepository",
+        "IRepository",
+        "Ardalis.SharedKernel.IReadRepository",
+        "Ardalis.SharedKernel.IRepository",
+        "Ardalis.Specification.IReadRepositoryBase",
+        "Ardalis.Specification.IRepositoryBase"
+      ],
       "resource": "receiver_type",
       "confidence": "medium",
       "basis": "compilation+profile",
@@ -151,8 +294,19 @@
     {
       "provider": "repository",
       "operation": "write",
-      "methods": [ "AddAsync", "UpdateAsync", "DeleteAsync", "Add", "Update", "Delete" ],
-      "receiverTypes": [ "IRepository", "Ardalis.SharedKernel.IRepository", "Ardalis.Specification.IRepositoryBase" ],
+      "methods": [
+        "AddAsync",
+        "UpdateAsync",
+        "DeleteAsync",
+        "Add",
+        "Update",
+        "Delete"
+      ],
+      "receiverTypes": [
+        "IRepository",
+        "Ardalis.SharedKernel.IRepository",
+        "Ardalis.Specification.IRepositoryBase"
+      ],
       "resource": "receiver_type",
       "confidence": "medium",
       "basis": "compilation+profile",
@@ -161,8 +315,14 @@
     {
       "provider": "smtp",
       "operation": "connect",
-      "methods": [ "Connect", "ConnectAsync" ],
-      "receiverTypes": [ "MailKit.Net.Smtp.SmtpClient", "System.Net.Mail.SmtpClient" ],
+      "methods": [
+        "Connect",
+        "ConnectAsync"
+      ],
+      "receiverTypes": [
+        "MailKit.Net.Smtp.SmtpClient",
+        "System.Net.Mail.SmtpClient"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -171,8 +331,15 @@
     {
       "provider": "smtp",
       "operation": "send",
-      "methods": [ "Send", "SendAsync", "SendMailAsync" ],
-      "receiverTypes": [ "MailKit.Net.Smtp.SmtpClient", "System.Net.Mail.SmtpClient" ],
+      "methods": [
+        "Send",
+        "SendAsync",
+        "SendMailAsync"
+      ],
+      "receiverTypes": [
+        "MailKit.Net.Smtp.SmtpClient",
+        "System.Net.Mail.SmtpClient"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -181,8 +348,13 @@
     {
       "provider": "smtp",
       "operation": "disconnect",
-      "methods": [ "Disconnect", "DisconnectAsync" ],
-      "receiverTypes": [ "MailKit.Net.Smtp.SmtpClient" ],
+      "methods": [
+        "Disconnect",
+        "DisconnectAsync"
+      ],
+      "receiverTypes": [
+        "MailKit.Net.Smtp.SmtpClient"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -191,8 +363,15 @@
     {
       "provider": "mediatr",
       "operation": "send",
-      "methods": [ "Send" ],
-      "declaringTypes": [ "MediatR.ISender", "MediatR.IMediator", "Mediator.ISender", "Mediator.IMediator" ],
+      "methods": [
+        "Send"
+      ],
+      "declaringTypes": [
+        "MediatR.ISender",
+        "MediatR.IMediator",
+        "Mediator.ISender",
+        "Mediator.IMediator"
+      ],
       "resource": "argument_type",
       "confidence": "medium",
       "basis": "compilation+profile",
@@ -202,8 +381,15 @@
     {
       "provider": "mediatr",
       "operation": "publish",
-      "methods": [ "Publish" ],
-      "declaringTypes": [ "MediatR.IPublisher", "MediatR.IMediator", "Mediator.IPublisher", "Mediator.IMediator" ],
+      "methods": [
+        "Publish"
+      ],
+      "declaringTypes": [
+        "MediatR.IPublisher",
+        "MediatR.IMediator",
+        "Mediator.IPublisher",
+        "Mediator.IMediator"
+      ],
       "resource": "argument_type",
       "confidence": "medium",
       "basis": "compilation+profile",
@@ -213,8 +399,16 @@
     {
       "provider": "redis",
       "operation": "read",
-      "methods": [ "StringGet", "StringGetAsync", "HashGet", "HashGetAsync" ],
-      "declaringTypes": [ "StackExchange.Redis.IDatabase", "StackExchange.Redis.IDatabaseAsync" ],
+      "methods": [
+        "StringGet",
+        "StringGetAsync",
+        "HashGet",
+        "HashGetAsync"
+      ],
+      "declaringTypes": [
+        "StackExchange.Redis.IDatabase",
+        "StackExchange.Redis.IDatabaseAsync"
+      ],
       "resource": "string_argument",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -223,8 +417,16 @@
     {
       "provider": "redis",
       "operation": "write",
-      "methods": [ "StringSet", "StringSetAsync", "HashSet", "HashSetAsync" ],
-      "declaringTypes": [ "StackExchange.Redis.IDatabase", "StackExchange.Redis.IDatabaseAsync" ],
+      "methods": [
+        "StringSet",
+        "StringSetAsync",
+        "HashSet",
+        "HashSetAsync"
+      ],
+      "declaringTypes": [
+        "StackExchange.Redis.IDatabase",
+        "StackExchange.Redis.IDatabaseAsync"
+      ],
       "resource": "string_argument",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -233,8 +435,14 @@
     {
       "provider": "redis",
       "operation": "delete",
-      "methods": [ "KeyDelete", "KeyDeleteAsync" ],
-      "declaringTypes": [ "StackExchange.Redis.IDatabase", "StackExchange.Redis.IDatabaseAsync" ],
+      "methods": [
+        "KeyDelete",
+        "KeyDeleteAsync"
+      ],
+      "declaringTypes": [
+        "StackExchange.Redis.IDatabase",
+        "StackExchange.Redis.IDatabaseAsync"
+      ],
       "resource": "string_argument",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -243,8 +451,13 @@
     {
       "provider": "aws_s3",
       "operation": "write",
-      "methods": [ "PutObjectAsync", "CopyObjectAsync" ],
-      "receiverTypes": [ "Amazon.S3.IAmazonS3" ],
+      "methods": [
+        "PutObjectAsync",
+        "CopyObjectAsync"
+      ],
+      "receiverTypes": [
+        "Amazon.S3.IAmazonS3"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -253,8 +466,14 @@
     {
       "provider": "aws_s3",
       "operation": "read",
-      "methods": [ "GetObjectAsync", "GetObjectMetadataAsync", "ListObjectsV2Async" ],
-      "receiverTypes": [ "Amazon.S3.IAmazonS3" ],
+      "methods": [
+        "GetObjectAsync",
+        "GetObjectMetadataAsync",
+        "ListObjectsV2Async"
+      ],
+      "receiverTypes": [
+        "Amazon.S3.IAmazonS3"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -263,8 +482,13 @@
     {
       "provider": "aws_s3",
       "operation": "delete",
-      "methods": [ "DeleteObjectAsync", "DeleteObjectsAsync" ],
-      "receiverTypes": [ "Amazon.S3.IAmazonS3" ],
+      "methods": [
+        "DeleteObjectAsync",
+        "DeleteObjectsAsync"
+      ],
+      "receiverTypes": [
+        "Amazon.S3.IAmazonS3"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -273,8 +497,14 @@
     {
       "provider": "azure_blob",
       "operation": "write",
-      "methods": [ "UploadAsync" ],
-      "receiverTypes": [ "Azure.Storage.Blobs.BlobClient", "Azure.Storage.Blobs.BlockBlobClient", "Azure.Storage.Blobs.AppendBlobClient" ],
+      "methods": [
+        "UploadAsync"
+      ],
+      "receiverTypes": [
+        "Azure.Storage.Blobs.BlobClient",
+        "Azure.Storage.Blobs.BlockBlobClient",
+        "Azure.Storage.Blobs.AppendBlobClient"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -283,8 +513,16 @@
     {
       "provider": "azure_blob",
       "operation": "read",
-      "methods": [ "DownloadAsync", "DownloadContentAsync", "ExistsAsync", "GetPropertiesAsync" ],
-      "receiverTypes": [ "Azure.Storage.Blobs.BlobClient", "Azure.Storage.Blobs.BlockBlobClient" ],
+      "methods": [
+        "DownloadAsync",
+        "DownloadContentAsync",
+        "ExistsAsync",
+        "GetPropertiesAsync"
+      ],
+      "receiverTypes": [
+        "Azure.Storage.Blobs.BlobClient",
+        "Azure.Storage.Blobs.BlockBlobClient"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -293,8 +531,15 @@
     {
       "provider": "azure_blob",
       "operation": "delete",
-      "methods": [ "DeleteAsync", "DeleteIfExistsAsync" ],
-      "receiverTypes": [ "Azure.Storage.Blobs.BlobClient", "Azure.Storage.Blobs.BlobContainerClient", "Azure.Storage.Blobs.BlockBlobClient" ],
+      "methods": [
+        "DeleteAsync",
+        "DeleteIfExistsAsync"
+      ],
+      "receiverTypes": [
+        "Azure.Storage.Blobs.BlobClient",
+        "Azure.Storage.Blobs.BlobContainerClient",
+        "Azure.Storage.Blobs.BlockBlobClient"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -303,8 +548,13 @@
     {
       "provider": "azure_blob",
       "operation": "query",
-      "methods": [ "GetBlobsAsync", "GetBlobsByHierarchyAsync" ],
-      "receiverTypes": [ "Azure.Storage.Blobs.BlobContainerClient" ],
+      "methods": [
+        "GetBlobsAsync",
+        "GetBlobsByHierarchyAsync"
+      ],
+      "receiverTypes": [
+        "Azure.Storage.Blobs.BlobContainerClient"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -313,8 +563,12 @@
     {
       "provider": "azure_search",
       "operation": "query",
-      "methods": [ "SearchAsync" ],
-      "receiverTypes": [ "Azure.Search.Documents.SearchClient" ],
+      "methods": [
+        "SearchAsync"
+      ],
+      "receiverTypes": [
+        "Azure.Search.Documents.SearchClient"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -323,8 +577,14 @@
     {
       "provider": "azure_search",
       "operation": "write",
-      "methods": [ "UploadDocumentsAsync", "MergeOrUploadDocumentsAsync", "MergeDocumentsAsync" ],
-      "receiverTypes": [ "Azure.Search.Documents.SearchClient" ],
+      "methods": [
+        "UploadDocumentsAsync",
+        "MergeOrUploadDocumentsAsync",
+        "MergeDocumentsAsync"
+      ],
+      "receiverTypes": [
+        "Azure.Search.Documents.SearchClient"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -333,8 +593,12 @@
     {
       "provider": "azure_search",
       "operation": "delete",
-      "methods": [ "DeleteDocumentsAsync" ],
-      "receiverTypes": [ "Azure.Search.Documents.SearchClient" ],
+      "methods": [
+        "DeleteDocumentsAsync"
+      ],
+      "receiverTypes": [
+        "Azure.Search.Documents.SearchClient"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -343,8 +607,13 @@
     {
       "provider": "azure_search",
       "operation": "index_write",
-      "methods": [ "CreateIndexAsync", "CreateOrUpdateIndexAsync" ],
-      "receiverTypes": [ "Azure.Search.Documents.Indexes.SearchIndexClient" ],
+      "methods": [
+        "CreateIndexAsync",
+        "CreateOrUpdateIndexAsync"
+      ],
+      "receiverTypes": [
+        "Azure.Search.Documents.Indexes.SearchIndexClient"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -353,8 +622,12 @@
     {
       "provider": "azure_search",
       "operation": "index_delete",
-      "methods": [ "DeleteIndexAsync" ],
-      "receiverTypes": [ "Azure.Search.Documents.Indexes.SearchIndexClient" ],
+      "methods": [
+        "DeleteIndexAsync"
+      ],
+      "receiverTypes": [
+        "Azure.Search.Documents.Indexes.SearchIndexClient"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -363,8 +636,12 @@
     {
       "provider": "elasticsearch",
       "operation": "query",
-      "methods": [ "SearchAsync" ],
-      "receiverTypes": [ "Elastic.Clients.Elasticsearch.ElasticsearchClient" ],
+      "methods": [
+        "SearchAsync"
+      ],
+      "receiverTypes": [
+        "Elastic.Clients.Elasticsearch.ElasticsearchClient"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -373,8 +650,12 @@
     {
       "provider": "elasticsearch",
       "operation": "write",
-      "methods": [ "BulkAsync" ],
-      "receiverTypes": [ "Elastic.Clients.Elasticsearch.ElasticsearchClient" ],
+      "methods": [
+        "BulkAsync"
+      ],
+      "receiverTypes": [
+        "Elastic.Clients.Elasticsearch.ElasticsearchClient"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -383,8 +664,12 @@
     {
       "provider": "elasticsearch",
       "operation": "delete",
-      "methods": [ "DeleteByQueryAsync" ],
-      "receiverTypes": [ "Elastic.Clients.Elasticsearch.ElasticsearchClient" ],
+      "methods": [
+        "DeleteByQueryAsync"
+      ],
+      "receiverTypes": [
+        "Elastic.Clients.Elasticsearch.ElasticsearchClient"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -393,8 +678,12 @@
     {
       "provider": "elasticsearch",
       "operation": "index_write",
-      "methods": [ "CreateAsync" ],
-      "receiverTypes": [ "Elastic.Clients.Elasticsearch.IndexManagement.IndicesNamespace" ],
+      "methods": [
+        "CreateAsync"
+      ],
+      "receiverTypes": [
+        "Elastic.Clients.Elasticsearch.IndexManagement.IndicesNamespace"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -403,8 +692,12 @@
     {
       "provider": "elasticsearch",
       "operation": "index_delete",
-      "methods": [ "DeleteAsync" ],
-      "receiverTypes": [ "Elastic.Clients.Elasticsearch.IndexManagement.IndicesNamespace" ],
+      "methods": [
+        "DeleteAsync"
+      ],
+      "receiverTypes": [
+        "Elastic.Clients.Elasticsearch.IndexManagement.IndicesNamespace"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -413,8 +706,13 @@
     {
       "provider": "elasticsearch",
       "operation": "index_read",
-      "methods": [ "GetAsync", "ExistsAsync" ],
-      "receiverTypes": [ "Elastic.Clients.Elasticsearch.IndexManagement.IndicesNamespace" ],
+      "methods": [
+        "GetAsync",
+        "ExistsAsync"
+      ],
+      "receiverTypes": [
+        "Elastic.Clients.Elasticsearch.IndexManagement.IndicesNamespace"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -423,8 +721,13 @@
     {
       "provider": "yessql",
       "operation": "query",
-      "methods": [ "Query", "QueryIndex" ],
-      "receiverTypes": [ "YesSql.ISession" ],
+      "methods": [
+        "Query",
+        "QueryIndex"
+      ],
+      "receiverTypes": [
+        "YesSql.ISession"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -433,8 +736,12 @@
     {
       "provider": "yessql",
       "operation": "write",
-      "methods": [ "SaveAsync" ],
-      "receiverTypes": [ "YesSql.ISession" ],
+      "methods": [
+        "SaveAsync"
+      ],
+      "receiverTypes": [
+        "YesSql.ISession"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -443,8 +750,12 @@
     {
       "provider": "yessql",
       "operation": "delete",
-      "methods": [ "Delete" ],
-      "receiverTypes": [ "YesSql.ISession" ],
+      "methods": [
+        "Delete"
+      ],
+      "receiverTypes": [
+        "YesSql.ISession"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -453,8 +764,13 @@
     {
       "provider": "yessql",
       "operation": "flush",
-      "methods": [ "FlushAsync", "SaveChangesAsync" ],
-      "receiverTypes": [ "YesSql.ISession" ],
+      "methods": [
+        "FlushAsync",
+        "SaveChangesAsync"
+      ],
+      "receiverTypes": [
+        "YesSql.ISession"
+      ],
       "resource": "receiver_type",
       "confidence": "high",
       "basis": "compilation+profile",
@@ -462,24 +778,110 @@
     }
   ],
   "diRegistrations": [
-    { "methods": [ "AddScoped" ], "lifetime": "scoped", "registrationKind": "service_registration", "reason": "msdi_addscoped" },
-    { "methods": [ "AddTransient" ], "lifetime": "transient", "registrationKind": "service_registration", "reason": "msdi_addtransient" },
-    { "methods": [ "AddSingleton" ], "lifetime": "singleton", "registrationKind": "service_registration", "reason": "msdi_addsingleton" },
-    { "methods": [ "TryAddScoped" ], "lifetime": "scoped", "registrationKind": "tryadd_service_registration", "reason": "msdi_tryaddscoped" },
-    { "methods": [ "TryAddTransient" ], "lifetime": "transient", "registrationKind": "tryadd_service_registration", "reason": "msdi_tryaddtransient" },
-    { "methods": [ "TryAddSingleton" ], "lifetime": "singleton", "registrationKind": "tryadd_service_registration", "reason": "msdi_tryaddsingleton" },
-    { "methods": [ "AddHostedService" ], "lifetime": "singleton", "registrationKind": "hosted_service", "reason": "msdi_hosted_service" },
-    { "methods": [ "AddHttpClient" ], "lifetime": "transient", "registrationKind": "http_client", "reason": "msdi_http_client" },
-    { "methods": [ "AddDbContext" ], "lifetime": "scoped", "registrationKind": "dbcontext", "reason": "efcore_adddbcontext" }
+    {
+      "methods": [
+        "AddScoped"
+      ],
+      "lifetime": "scoped",
+      "registrationKind": "service_registration",
+      "reason": "msdi_addscoped"
+    },
+    {
+      "methods": [
+        "AddTransient"
+      ],
+      "lifetime": "transient",
+      "registrationKind": "service_registration",
+      "reason": "msdi_addtransient"
+    },
+    {
+      "methods": [
+        "AddSingleton"
+      ],
+      "lifetime": "singleton",
+      "registrationKind": "service_registration",
+      "reason": "msdi_addsingleton"
+    },
+    {
+      "methods": [
+        "TryAddScoped"
+      ],
+      "lifetime": "scoped",
+      "registrationKind": "tryadd_service_registration",
+      "reason": "msdi_tryaddscoped"
+    },
+    {
+      "methods": [
+        "TryAddTransient"
+      ],
+      "lifetime": "transient",
+      "registrationKind": "tryadd_service_registration",
+      "reason": "msdi_tryaddtransient"
+    },
+    {
+      "methods": [
+        "TryAddSingleton"
+      ],
+      "lifetime": "singleton",
+      "registrationKind": "tryadd_service_registration",
+      "reason": "msdi_tryaddsingleton"
+    },
+    {
+      "methods": [
+        "AddHostedService"
+      ],
+      "lifetime": "singleton",
+      "registrationKind": "hosted_service",
+      "reason": "msdi_hosted_service"
+    },
+    {
+      "methods": [
+        "AddHttpClient"
+      ],
+      "lifetime": "transient",
+      "registrationKind": "http_client",
+      "reason": "msdi_http_client"
+    },
+    {
+      "methods": [
+        "AddDbContext"
+      ],
+      "lifetime": "scoped",
+      "registrationKind": "dbcontext",
+      "reason": "efcore_adddbcontext"
+    }
   ],
   "files": {
     "exclude": [
-      { "id": "dotnet.generated.g", "glob": "**/*.g.cs", "reason": "generated_source" },
-      { "id": "dotnet.generated.generated", "glob": "**/*.generated.cs", "reason": "generated_source" },
-      { "id": "dotnet.generated.designer", "glob": "**/*.designer.cs", "reason": "generated_source" },
-      { "id": "dotnet.generated.folder", "glob": "**/Generated/**", "reason": "generated_source" },
-      { "id": "dotnet.test.folder", "glob": "**/tests/**", "reason": "test_source" }
+      {
+        "id": "dotnet.generated.g",
+        "glob": "**/*.g.cs",
+        "reason": "generated_source"
+      },
+      {
+        "id": "dotnet.generated.generated",
+        "glob": "**/*.generated.cs",
+        "reason": "generated_source"
+      },
+      {
+        "id": "dotnet.generated.designer",
+        "glob": "**/*.designer.cs",
+        "reason": "generated_source"
+      },
+      {
+        "id": "dotnet.generated.folder",
+        "glob": "**/Generated/**",
+        "reason": "generated_source"
+      },
+      {
+        "id": "dotnet.test.folder",
+        "glob": "**/tests/**",
+        "reason": "test_source"
+      }
     ],
-    "testProjectPatterns": [ "*Tests", "*.Tests" ]
+    "testProjectPatterns": [
+      "*Tests",
+      "*.Tests"
+    ]
   }
 }

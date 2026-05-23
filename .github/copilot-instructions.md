@@ -36,6 +36,7 @@ Binary lands at `.rig-bin/Rig.exe` (gitignored). R2R win-x64, ~295–350 ms per 
 ## CLI Commands
 
 ### `rig index <solution>`
+
 Index a solution into a new immutable run stored in `.rig/rig.db`.
 
 ```powershell
@@ -48,9 +49,11 @@ Output: `Indexed: <path>`, `Run: <runId>`, `EntryPoints: N`, `Effects: N`
 Accepts both `.slnx` (VS 2022 new format) and `.sln`.
 
 ### `rig runs`
+
 List all indexed runs in chronological order.
 
 ### `rig entrypoints`
+
 List all entry points in the latest run.
 
 ```
@@ -62,6 +65,7 @@ List all entry points in the latest run.
 Entry point kinds: `mvc`, `minapi`, `fastendpoint`
 
 ### `rig effects [--entrypoint <index>]`
+
 List all detected effects, optionally filtered to a single entry point.
 
 ```
@@ -75,6 +79,7 @@ Append `[looped_effect:foreach]` or `[looped_effect:parallel]` when the effect s
 sits inside a loop or Parallel.ForEach.
 
 ### `rig callgraph <index> [--focus]`
+
 Print the call graph for entry point `<index>`.
 
 **Default** (verbose): all nodes, all CALL/BOUNDARY/EFFECT lines.
@@ -87,6 +92,7 @@ CALL edges trimmed to effect-reachable targets only.
 ```
 
 Output format:
+
 ```
 Callgraph: [4] mvc GET api/teams/via-method-group (focused)
 Nodes: 2 / 8 on effect paths
@@ -97,17 +103,21 @@ Nodes: 2 / 8 on effect paths
 ```
 
 Line format per node:
+
 - `CALL <Symbol>` — resolved application-internal call (will appear as its own node)
 - `BOUNDARY external <Method>` — call to an external/framework symbol (not traversed)
 - `EFFECT <provider> <operation>  <method>  <resource>  [observations]`
 
 ### `rig di`
+
 List all MS DI registrations found in the solution.
 
 ### `rig files --skipped`
+
 List files excluded from analysis and the rule that excluded them.
 
 ### `rig profile validate`
+
 Validate the `rig.rules.json` profile for the current directory.
 
 ---
@@ -143,15 +153,15 @@ Cascades: built-in → `~/.rig/rig.rules.json` → solution → per-project.
 
 **`resource` values**:
 
-| Value | Resolved as |
-|---|---|
-| `ef_dbset_receiver` | `DbContext.DbSetName` |
-| `ef_context_receiver` | The DbContext type name |
-| `ef_query_root` | Root entity type of the query |
-| `http_argument` | First argument (URL string) |
-| `string_argument` | First argument — **only works for string literals**, returns null for variables |
-| `argument_type` | Type of the first argument |
-| `receiver_type` | Fully-qualified type of the receiver |
+| Value                 | Resolved as                                                                     |
+| --------------------- | ------------------------------------------------------------------------------- |
+| `ef_dbset_receiver`   | `DbContext.DbSetName`                                                           |
+| `ef_context_receiver` | The DbContext type name                                                         |
+| `ef_query_root`       | Root entity type of the query                                                   |
+| `http_argument`       | First argument (URL string)                                                     |
+| `string_argument`     | First argument — **only works for string literals**, returns null for variables |
+| `argument_type`       | Type of the first argument                                                      |
+| `receiver_type`       | Fully-qualified type of the receiver                                            |
 
 Use `receiver_type` when arguments are objects or variables (most OrchardCore-style interfaces).
 Use `string_argument` only when the first argument is always a literal (e.g. HTTP client base URLs).
@@ -162,7 +172,11 @@ Use `string_argument` only when the first argument is always a literal (e.g. HTT
 {
   "files": {
     "exclude": [
-      { "id": "my.migrations", "glob": "**/Migrations/**", "reason": "db_migration" }
+      {
+        "id": "my.migrations",
+        "glob": "**/Migrations/**",
+        "reason": "db_migration"
+      }
     ]
   },
   "projects": {
@@ -177,10 +191,10 @@ Use `string_argument` only when the first argument is always a literal (e.g. HTT
 
 ### Entry-point kinds
 
-| Kind | Detection |
-|---|---|
-| `mvc` | Controller methods with `[HttpGet]` / `[HttpPost]` / etc. |
-| `minapi` | `app.MapGet(...)`, `app.MapPost(...)`, etc. |
+| Kind           | Detection                                                     |
+| -------------- | ------------------------------------------------------------- |
+| `mvc`          | Controller methods with `[HttpGet]` / `[HttpPost]` / etc.     |
+| `minapi`       | `app.MapGet(...)`, `app.MapPost(...)`, etc.                   |
 | `fastendpoint` | Classes extending `Endpoint<TReq>` / `EndpointWithoutRequest` |
 
 ### Call graph traversal
