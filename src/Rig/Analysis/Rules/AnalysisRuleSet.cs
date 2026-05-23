@@ -20,42 +20,68 @@ internal sealed record AnalysisRuleSet(
 
     public static AnalysisRuleSet LoadForSolution(string solutionPath)
     {
-        var builtIn = LoadBuiltIn();
+        var rules = LoadBuiltIn();
+
+        var globalRulesPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".rig", "rig.rules.json");
+        rules = rules.MergeWithFile(globalRulesPath);
+
         var solutionDirectory = Path.GetDirectoryName(solutionPath) ?? Directory.GetCurrentDirectory();
-        var rulesPath = Path.Combine(solutionDirectory, "rig.rules.json");
+        rules = rules.MergeWithFile(Path.Combine(solutionDirectory, "rig.rules.json"));
+
+        return rules;
+    }
+
+    public AnalysisRuleSet MergeWithProjectDirectories(IReadOnlyList<string> projectDirectories)
+    {
+        var rules = this;
+        foreach (var dir in projectDirectories)
+        {
+            rules = rules.MergeWithFile(Path.Combine(dir, "rig.rules.json"));
+        }
+        return rules;
+    }
+
+    private AnalysisRuleSet MergeWithFile(string rulesPath)
+    {
         if (!File.Exists(rulesPath))
         {
-            return builtIn;
+            return this;
         }
 
         using var stream = File.OpenRead(rulesPath);
         var document = JsonSerializer.Deserialize<AnalysisRulesDocument>(stream, JsonOptions);
+        return document is null ? this : MergeDocument(document);
+    }
 
-        return builtIn with
+    private AnalysisRuleSet MergeDocument(AnalysisRulesDocument document)
+    {
+        return this with
         {
-            MinimalApiEntryPoints = builtIn.MinimalApiEntryPoints
-                .Concat(document?.EntryPoints?.MinimalApi ?? [])
+            MinimalApiEntryPoints = MinimalApiEntryPoints
+                .Concat(document.EntryPoints?.MinimalApi ?? [])
                 .ToArray(),
-            MvcHttpAttributes = builtIn.MvcHttpAttributes
-                .Concat(document?.EntryPoints?.MvcHttpAttributes ?? [])
+            MvcHttpAttributes = MvcHttpAttributes
+                .Concat(document.EntryPoints?.MvcHttpAttributes ?? [])
                 .ToArray(),
-            ClassInheritanceEntryPoints = builtIn.ClassInheritanceEntryPoints
-                .Concat(document?.EntryPoints?.ClassInheritance ?? [])
+            ClassInheritanceEntryPoints = ClassInheritanceEntryPoints
+                .Concat(document.EntryPoints?.ClassInheritance ?? [])
                 .ToArray(),
-            Effects = builtIn.Effects
-                .Concat(document?.Effects ?? [])
+            Effects = Effects
+                .Concat(document.Effects ?? [])
                 .ToArray(),
-            DiRegistrations = builtIn.DiRegistrations
-                .Concat(document?.DiRegistrations ?? [])
+            DiRegistrations = DiRegistrations
+                .Concat(document.DiRegistrations ?? [])
                 .ToArray(),
-            FileInclude = builtIn.FileInclude
-                .Concat(document?.Files?.Include?.Select(rule => rule.ToFileRule("include")) ?? [])
+            FileInclude = FileInclude
+                .Concat(document.Files?.Include?.Select(rule => rule.ToFileRule("include")) ?? [])
                 .ToArray(),
-            FileExclude = builtIn.FileExclude
-                .Concat(document?.Files?.Exclude?.Select(rule => rule.ToFileRule("exclude")) ?? [])
+            FileExclude = FileExclude
+                .Concat(document.Files?.Exclude?.Select(rule => rule.ToFileRule("exclude")) ?? [])
                 .ToArray(),
-            TestProjectPatterns = builtIn.TestProjectPatterns
-                .Concat(document?.Files?.TestProjectPatterns ?? [])
+            TestProjectPatterns = TestProjectPatterns
+                .Concat(document.Files?.TestProjectPatterns ?? [])
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray()
         };

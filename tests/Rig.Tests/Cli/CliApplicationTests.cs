@@ -53,7 +53,7 @@ public sealed class CliApplicationTests
         error.ToString().ShouldBeEmpty();
         output.ToString().ShouldContain("Run:");
         output.ToString().ShouldContain("EntryPoints: 5");
-        output.ToString().ShouldContain("Effects: 17");
+        output.ToString().ShouldContain("Effects: 19");
         File.Exists(Path.Combine(workingDirectory, ".rig", "rig.db")).ShouldBeTrue();
 
         output.GetStringBuilder().Clear();
@@ -62,7 +62,7 @@ public sealed class CliApplicationTests
         runsExitCode.ShouldBe(0);
         output.ToString().ShouldContain("Runs");
         output.ToString().ShouldContain(solutionPath);
-        output.ToString().ShouldContain("entrypoints=5 effects=17");
+        output.ToString().ShouldContain("entrypoints=5 effects=19");
         output.ToString().ShouldContain("di=");
 
         output.GetStringBuilder().Clear();
@@ -88,6 +88,8 @@ public sealed class CliApplicationTests
         output.ToString().ShouldContain("repository write Ardalis.SharedKernel.IRepository<T>");
         output.ToString().ShouldContain("OBS looped_effect ctx=foreach");
         output.ToString().ShouldContain("OBS parallel_fanout ctx=Task.WhenAll");
+        output.ToString().ShouldContain("OBS parallel_fanout ctx=Parallel.ForEach");
+        output.ToString().ShouldContain("OBS parallel_fanout ctx=Parallel.ForEachAsync");
 
         output.GetStringBuilder().Clear();
         var filesExitCode = await CliApplication.RunAsync(["files", "--skipped"], output, error, workingDirectory);

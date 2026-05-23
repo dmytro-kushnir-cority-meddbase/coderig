@@ -47,6 +47,21 @@ public sealed class TeamWorkflow
         await _redis.StringSetAsync($"team:{name}", name);
     }
 
+    public async Task ProcessBatchAsync(IReadOnlyList<int> teamIds)
+    {
+        // Parallel.ForEach: sync redis read per team (parallel_fanout)
+        Parallel.ForEach(teamIds, teamId =>
+        {
+            _redis.StringGet($"team:{teamId}");
+        });
+
+        // Parallel.ForEachAsync: async redis read per team (parallel_fanout)
+        await Parallel.ForEachAsync(teamIds, async (teamId, ct) =>
+        {
+            await _redis.StringGetAsync($"team:{teamId}");
+        });
+    }
+
     private static void ObserveDynamicBoundary(dynamic value)
     {
         value.UnresolvedRuntimeCall();

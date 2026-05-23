@@ -97,6 +97,20 @@ public sealed class PlaygroundAnalysisTests
                 observation.Type == "parallel_fanout" &&
                 observation.Context == "Task.WhenAll"));
 
+        result.Effects.ShouldContain(effect =>
+            effect.Provider == "redis" &&
+            effect.Operation == "read" &&
+            effect.Observations.Any(observation =>
+                observation.Type == "parallel_fanout" &&
+                observation.Context == "Parallel.ForEach"));
+
+        result.Effects.ShouldContain(effect =>
+            effect.Provider == "redis" &&
+            effect.Operation == "read" &&
+            effect.Observations.Any(observation =>
+                observation.Type == "parallel_fanout" &&
+                observation.Context == "Parallel.ForEachAsync"));
+
         result.MethodObservations.ShouldContain(observation =>
             observation.DisplayName == "TeamWorkflow.LoadTeamSummaryAsync" &&
             observation.Symbol.Contains("EntryPointEffects.Api.Services.TeamWorkflow.LoadTeamSummaryAsync", StringComparison.Ordinal));

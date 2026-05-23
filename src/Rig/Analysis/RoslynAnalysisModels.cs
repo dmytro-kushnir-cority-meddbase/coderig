@@ -12,7 +12,8 @@ internal sealed record SourceFileClassification(
 
 internal sealed record SolutionSourceSet(
     IReadOnlyList<SourceFileInfo> SourceFiles,
-    IReadOnlyList<SourceModel> IndexedSources);
+    IReadOnlyList<SourceModel> IndexedSources,
+    IReadOnlyList<string> ProjectDirectories);
 
 internal sealed record SourceExtractionResult(
     IReadOnlyList<EntryPointInfo> EntryPoints,

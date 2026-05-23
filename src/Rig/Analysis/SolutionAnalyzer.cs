@@ -9,6 +9,7 @@ public static class SolutionAnalyzer
         var solutionFullPath = Path.GetFullPath(solutionPath);
         var rules = AnalysisRuleSet.LoadForSolution(solutionFullPath);
         var sourceSet = await SolutionSourceLoader.LoadAsync(solutionFullPath, rules, cancellationToken);
+        rules = rules.MergeWithProjectDirectories(sourceSet.ProjectDirectories);
         var sources = sourceSet.IndexedSources;
 
         var extractionResults = sources

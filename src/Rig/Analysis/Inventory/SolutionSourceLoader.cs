@@ -28,8 +28,12 @@ internal static class SolutionSourceLoader
                 string.Join(Environment.NewLine, workspaceFailures));
         }
 
+        var csharpProjects = solution.Projects
+            .Where(p => p.Language == LanguageNames.CSharp)
+            .ToArray();
+
         var compilationErrors = new List<string>();
-        foreach (var project in solution.Projects)
+        foreach (var project in csharpProjects)
         {
             var compilation = await project.GetCompilationAsync(cancellationToken);
             if (compilation is null)
@@ -51,7 +55,7 @@ internal static class SolutionSourceLoader
 
         var sources = new List<SourceModel>();
         var sourceFiles = new List<SourceFileInfo>();
-        foreach (var project in solution.Projects)
+        foreach (var project in csharpProjects)
         {
             foreach (var document in project.Documents
                 .Where(document => document.FilePath?.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) == true)
@@ -90,13 +94,21 @@ internal static class SolutionSourceLoader
             }
         }
 
+        var projectDirectories = csharpProjects
+            .Select(p => p.FilePath)
+            .Where(path => path is not null)
+            .Select(path => Path.GetDirectoryName(path!)!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
         return new SolutionSourceSet(
             sourceFiles
                 .OrderBy(sourceFile => sourceFile.FilePath, StringComparer.OrdinalIgnoreCase)
                 .ToArray(),
             sources
                 .OrderBy(source => source.FilePath, StringComparer.OrdinalIgnoreCase)
-                .ToArray());
+                .ToArray(),
+            projectDirectories);
     }
 
     private static SourceFileClassification ClassifySourceFile(
