@@ -50,7 +50,6 @@ public sealed class RigDbContext(string databasePath) : DbContext
             entity.HasKey(run => run.Id);
             entity.Property(run => run.Id).ValueGeneratedNever();
             entity.Property(run => run.SolutionPath).IsRequired();
-            entity.Property(run => run.AnalysisResultJson).IsRequired();
             entity.HasIndex(run => run.CreatedAtUtcText);
         });
 

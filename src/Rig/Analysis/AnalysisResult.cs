@@ -1,5 +1,12 @@
 namespace Rig.Analysis;
 
+//
+// EntryPointCount = result.EntryPoints.Count,
+// EffectCount = result.Effects.Count,
+// DiRegistrationCount = result.DiRegistrations.Count,
+// MethodObservationCount = result.MethodObservations.Count,
+// InvocationObservationCount = result.InvocationObservations.Count,
+
 public sealed record AnalysisResult(
     IReadOnlyList<SourceFileInfo> SourceFiles,
     IReadOnlyList<EntryPointInfo> EntryPoints,

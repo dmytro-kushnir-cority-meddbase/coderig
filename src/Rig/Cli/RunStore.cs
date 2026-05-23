@@ -7,11 +7,6 @@ namespace Rig.Cli;
 
 internal sealed class RunStore(string workingDirectory)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true
-    };
-
     private readonly string storeDirectory = Path.Combine(workingDirectory, ".rig");
 
     public async Task<string> SaveAsync(
@@ -24,19 +19,18 @@ internal sealed class RunStore(string workingDirectory)
         var runId = Guid.NewGuid().ToString("n");
         await using var context = CreateContext();
         await context.Database.EnsureCreatedAsync(cancellationToken);
-        await EnsurePrototypeSchemaAsync(context, cancellationToken);
 
         var run = new RunEntity
         {
             Id = runId,
             CreatedAtUtcText = DateTimeOffset.UtcNow.ToString("O"),
             SolutionPath = Path.GetFullPath(solutionPath),
+           
             EntryPointCount = result.EntryPoints.Count,
             EffectCount = result.Effects.Count,
             DiRegistrationCount = result.DiRegistrations.Count,
             MethodObservationCount = result.MethodObservations.Count,
             InvocationObservationCount = result.InvocationObservations.Count,
-            AnalysisResultJson = JsonSerializer.Serialize(result, JsonOptions)
         };
 
         context.Runs.Add(run);
@@ -202,180 +196,6 @@ internal sealed class RunStore(string workingDirectory)
     private RigDbContext CreateContext()
     {
         return new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
-    }
-
-    private static async Task EnsurePrototypeSchemaAsync(
-        RigDbContext context,
-        CancellationToken cancellationToken)
-    {
-        await context.Database.ExecuteSqlRawAsync(
-            """
-            CREATE TABLE IF NOT EXISTS source_files (
-                RunId TEXT NOT NULL,
-                FileIndex INTEGER NOT NULL,
-                ProjectName TEXT NOT NULL,
-                FilePath TEXT NOT NULL,
-                Status TEXT NOT NULL,
-                Confidence TEXT NOT NULL DEFAULT '',
-                Basis TEXT NOT NULL DEFAULT '',
-                Reason TEXT NOT NULL DEFAULT '',
-                Evidence TEXT NOT NULL DEFAULT '',
-                CONSTRAINT PK_source_files PRIMARY KEY (RunId, FileIndex)
-            );
-            """,
-            cancellationToken);
-
-        await EnsureSourceFilesColumnAsync(context, "Confidence", cancellationToken);
-        await EnsureSourceFilesColumnAsync(context, "Basis", cancellationToken);
-        await EnsureSourceFilesColumnAsync(context, "Evidence", cancellationToken);
-        await EnsureRunsColumnAsync(context, "DiRegistrationCount", cancellationToken);
-
-        await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_source_files_RunId_FilePath ON source_files (RunId, FilePath);",
-            cancellationToken);
-
-        await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_source_files_RunId_Status ON source_files (RunId, Status);",
-            cancellationToken);
-
-        await context.Database.ExecuteSqlRawAsync(
-            """
-            CREATE TABLE IF NOT EXISTS di_registrations (
-                RunId TEXT NOT NULL,
-                RegistrationIndex INTEGER NOT NULL,
-                ServiceType TEXT NOT NULL,
-                ImplementationType TEXT NULL,
-                Lifetime TEXT NOT NULL,
-                RegistrationKind TEXT NOT NULL,
-                FilePath TEXT NOT NULL,
-                Line INTEGER NOT NULL,
-                Confidence TEXT NOT NULL,
-                Basis TEXT NOT NULL,
-                Reason TEXT NOT NULL,
-                Evidence TEXT NOT NULL,
-                CONSTRAINT PK_di_registrations PRIMARY KEY (RunId, RegistrationIndex)
-            );
-            """,
-            cancellationToken);
-
-        await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_di_registrations_RunId_ServiceType ON di_registrations (RunId, ServiceType);",
-            cancellationToken);
-
-        await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_di_registrations_RunId_ImplementationType ON di_registrations (RunId, ImplementationType);",
-            cancellationToken);
-
-        await context.Database.ExecuteSqlRawAsync(
-            """
-            CREATE TABLE IF NOT EXISTS callgraph_boundary_calls (
-                RunId TEXT NOT NULL,
-                GraphIndex INTEGER NOT NULL,
-                NodeIndex INTEGER NOT NULL,
-                BoundaryCallIndex INTEGER NOT NULL,
-                Kind TEXT NOT NULL,
-                Target TEXT NOT NULL,
-                Method TEXT NOT NULL,
-                FilePath TEXT NOT NULL,
-                Line INTEGER NOT NULL,
-                Confidence TEXT NOT NULL,
-                Basis TEXT NOT NULL,
-                Reason TEXT NOT NULL,
-                CONSTRAINT PK_callgraph_boundary_calls PRIMARY KEY (RunId, GraphIndex, NodeIndex, BoundaryCallIndex)
-            );
-            """,
-            cancellationToken);
-
-        await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_callgraph_boundary_calls_RunId_Kind ON callgraph_boundary_calls (RunId, Kind);",
-            cancellationToken);
-
-        await context.Database.ExecuteSqlRawAsync(
-            """
-            CREATE TABLE IF NOT EXISTS callgraph_node_effects (
-                RunId TEXT NOT NULL,
-                GraphIndex INTEGER NOT NULL,
-                NodeIndex INTEGER NOT NULL,
-                LinkIndex INTEGER NOT NULL,
-                EffectIndex INTEGER NOT NULL,
-                CONSTRAINT PK_callgraph_node_effects PRIMARY KEY (RunId, GraphIndex, NodeIndex, LinkIndex)
-            );
-            """,
-            cancellationToken);
-
-        await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_callgraph_node_effects_RunId_GraphIndex_NodeIndex ON callgraph_node_effects (RunId, GraphIndex, NodeIndex);",
-            cancellationToken);
-    }
-
-    private static async Task EnsureSourceFilesColumnAsync(
-        RigDbContext context,
-        string columnName,
-        CancellationToken cancellationToken)
-    {
-        var connection = context.Database.GetDbConnection();
-        await connection.OpenAsync(cancellationToken);
-        try
-        {
-            await using var command = connection.CreateCommand();
-            command.CommandText = "PRAGMA table_info(source_files);";
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
-                {
-                    return;
-                }
-            }
-        }
-        finally
-        {
-            await connection.CloseAsync();
-        }
-
-        var sql = columnName switch
-        {
-            "Confidence" => "ALTER TABLE source_files ADD COLUMN Confidence TEXT NOT NULL DEFAULT '';",
-            "Basis" => "ALTER TABLE source_files ADD COLUMN Basis TEXT NOT NULL DEFAULT '';",
-            "Evidence" => "ALTER TABLE source_files ADD COLUMN Evidence TEXT NOT NULL DEFAULT '';",
-            _ => throw new InvalidOperationException($"Unsupported source_files column: {columnName}")
-        };
-
-        await context.Database.ExecuteSqlRawAsync(sql, cancellationToken);
-    }
-
-    private static async Task EnsureRunsColumnAsync(
-        RigDbContext context,
-        string columnName,
-        CancellationToken cancellationToken)
-    {
-        var connection = context.Database.GetDbConnection();
-        await connection.OpenAsync(cancellationToken);
-        try
-        {
-            await using var command = connection.CreateCommand();
-            command.CommandText = "PRAGMA table_info(runs);";
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
-                {
-                    return;
-                }
-            }
-        }
-        finally
-        {
-            await connection.CloseAsync();
-        }
-
-        var sql = columnName switch
-        {
-            "DiRegistrationCount" => "ALTER TABLE runs ADD COLUMN DiRegistrationCount INTEGER NOT NULL DEFAULT 0;",
-            _ => throw new InvalidOperationException($"Unsupported runs column: {columnName}")
-        };
-
-        await context.Database.ExecuteSqlRawAsync(sql, cancellationToken);
     }
 
     private static void AddEntryPoints(RigDbContext context, string runId, AnalysisResult result)

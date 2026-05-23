@@ -18,5 +18,4 @@ public sealed class RunEntity
 
     public int InvocationObservationCount { get; set; }
 
-    public string AnalysisResultJson { get; set; } = "";
 }
