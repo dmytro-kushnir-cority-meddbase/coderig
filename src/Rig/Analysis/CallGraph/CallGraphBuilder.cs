@@ -170,9 +170,16 @@ internal static class CallGraphBuilder
         }
 
         var source = sources.First(source => string.Equals(source.FilePath, entryPoint.FilePath, StringComparison.OrdinalIgnoreCase));
+        // Find the Map* invocation specifically by matching both line and the route literal as the
+        // first argument. A plain line-number search with FirstOrDefault picks up the outermost
+        // fluent-chain call (.AllowAnonymous(), .DisableAntiforgery(), …) instead of MapGet/MapPost,
+        // because all nodes in a method chain share the same start line in Roslyn's span model.
         var invocation = source.Root.DescendantNodes()
             .OfType<InvocationExpressionSyntax>()
-            .FirstOrDefault(invocation => RoslynSymbolHelpers.GetLine(source.Tree, invocation) == entryPoint.Line);
+            .FirstOrDefault(inv =>
+                RoslynSymbolHelpers.GetLine(source.Tree, inv) == entryPoint.Line &&
+                inv.ArgumentList.Arguments.Count >= 2 &&
+                inv.ArgumentList.Arguments[0].Expression.GetLiteralString() == entryPoint.Route);
 
         if (invocation is not null)
         {
