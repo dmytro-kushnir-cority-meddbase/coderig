@@ -34,6 +34,9 @@ public sealed class PlaygroundAnalysisTests
                 "minapi POST /minapi/teams",
                 "mvc GET api/teams/{id}",
                 "mvc POST api/teams",
+                "mvc GET api/teams/via-interface",
+                "mvc POST api/teams/via-interface",
+                "mvc GET api/teams/via-method-group",
                 "fastendpoint POST /fastendpoints/teams"
             },
             ignoreOrder: true);
@@ -123,7 +126,13 @@ public sealed class PlaygroundAnalysisTests
         result.DiRegistrations.ShouldContain(registration =>
             registration.ServiceType.Contains("EntryPointEffects.Api.Services.TeamWorkflow", StringComparison.Ordinal) &&
             registration.Lifetime == "scoped" &&
-            registration.Reason == "msdi_addscoped");
+            registration.Reason == "msdi_addscoped" &&
+            registration.Evidence.Contains("project=EntryPointEffects.Api", StringComparison.Ordinal));
+
+        result.DiRegistrations.ShouldContain(registration =>
+            registration.ServiceType.Contains("EntryPointEffects.Api.Services.ITeamRepository", StringComparison.Ordinal) &&
+            registration.ImplementationType != null &&
+            registration.ImplementationType.Contains("EntryPointEffects.Api.Services.TeamRepository", StringComparison.Ordinal));
 
         result.DiRegistrations.ShouldContain(registration =>
             registration.RegistrationKind == "http_client" &&

@@ -356,6 +356,65 @@
       "confidence": "high",
       "basis": "compilation+profile",
       "reason": "yessql_get_by_id"
+    },
+    {
+      "provider": "orchard_content_handler",
+      "operation": "dispatch",
+      "methods": [
+        "InvokeAsync"
+      ],
+      "receiverTypes": [
+        "System.Collections.Generic.IEnumerable"
+      ],
+      "containingTypes": [
+        "OrchardCore.ContentManagement.DefaultContentManager"
+      ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "orchard_contenthandler_invoke"
+    },
+    {
+      "provider": "orchard_content_handler",
+      "operation": "lifecycle",
+      "methods": [
+        "ActivatingAsync",
+        "ActivatedAsync",
+        "InitializingAsync",
+        "InitializedAsync",
+        "CreatingAsync",
+        "CreatedAsync",
+        "LoadingAsync",
+        "LoadedAsync",
+        "ImportingAsync",
+        "ImportedAsync",
+        "UpdatingAsync",
+        "UpdatedAsync",
+        "ValidatingAsync",
+        "ValidatedAsync",
+        "RestoringAsync",
+        "RestoredAsync",
+        "VersioningAsync",
+        "VersionedAsync",
+        "DraftSavingAsync",
+        "DraftSavedAsync",
+        "PublishingAsync",
+        "PublishedAsync",
+        "UnpublishingAsync",
+        "UnpublishedAsync",
+        "RemovingAsync",
+        "RemovedAsync",
+        "GetContentItemAspectAsync",
+        "CloningAsync",
+        "ClonedAsync"
+      ],
+      "receiverTypes": [
+        "OrchardCore.ContentManagement.Handlers.IContentHandler"
+      ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "orchard_contenthandler_lifecycle"
     }
   ],
   "files": {
