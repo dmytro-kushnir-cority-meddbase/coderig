@@ -51,6 +51,14 @@ public sealed class CliApplicationTests
 
         indexExitCode.ShouldBe(0);
         error.ToString().ShouldBeEmpty();
+        output.ToString().ShouldContain($"Indexing: {Path.GetFullPath(solutionPath)}");
+        output.ToString().ShouldContain("Progress: Loading rules");
+        output.ToString().ShouldContain("Progress: Loading solution");
+        output.ToString().ShouldContain("Progress: MSBuild");
+        output.ToString().ShouldContain("Progress: Loaded");
+        output.ToString().ShouldContain("Progress: Extracting observations");
+        output.ToString().ShouldContain("Progress: Building callgraphs");
+        output.ToString().ShouldContain("Progress: Saving run");
         output.ToString().ShouldContain("Run:");
         output.ToString().ShouldContain("EntryPoints: 8");
         output.ToString().ShouldContain("Effects: 23");

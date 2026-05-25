@@ -80,7 +80,10 @@ public static class CliApplication
         AnalysisResult result;
         try
         {
-            result = await SolutionAnalyzer.AnalyzeAsync(args[1]);
+            output.WriteLine($"Indexing: {Path.GetFullPath(args[1])}");
+            result = await SolutionAnalyzer.AnalyzeAsync(
+                args[1],
+                progress: message => output.WriteLine($"Progress: {message}"));
         }
         catch (InvalidOperationException exception)
         {
@@ -97,6 +100,7 @@ public static class CliApplication
         await using var context = new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
         await context.Database.EnsureCreatedAsync();
         
+        output.WriteLine("Progress: Saving run");
         var runId = await Writes.SaveAsync(context, result);
 
         output.WriteLine($"Indexed: {Path.GetFullPath(result.SolutionPath)}");
