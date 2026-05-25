@@ -32,6 +32,7 @@ public static class CliApplication
             "entrypoints" => await RunEntryPointsAsync(output, error, workingDirectory),
             "effects" => await RunEffectsAsync(args, output, error, workingDirectory),
             "callgraph" => await RunCallGraphAsync(args, output, error, workingDirectory),
+            "callgraphs" => await RunCallGraphsAsync(args, output, error, workingDirectory),
             "di" => await RunDiAsync(output, error, workingDirectory),
             "files" => await RunFilesAsync(args, output, error, workingDirectory),
             "profile" => await RunProfileAsync(args, output, error, workingDirectory),
@@ -57,7 +58,8 @@ public static class CliApplication
         output.WriteLine("  rig index <solution>");
         output.WriteLine("  rig runs");
         output.WriteLine("  rig entrypoints");
-        output.WriteLine("  rig callgraph <index> [--focus]");
+        output.WriteLine("  rig callgraph <index> [--focus] [--summary]");
+        output.WriteLine("  rig callgraphs [--focus] [--summary]");
         output.WriteLine("  rig effects [--entrypoint <index>]");
         output.WriteLine("  rig di");
         output.WriteLine("  rig files --skipped");
@@ -301,6 +303,7 @@ public static class CliApplication
         }
 
         var focusMode = args.Contains("--focus");
+        var summaryMode = args.Contains("--summary");
 
         await using var context = OpenContext(workingDirectory);
         var runId = await Reads.GetLatestRunIdAsync(context);
@@ -331,6 +334,12 @@ public static class CliApplication
             nodes = allNodes;
         }
 
+        if (summaryMode)
+        {
+            RenderSummary(callGraph, allNodes, entryPointIndex, output);
+            return 0;
+        }
+
         var focusSuffix = focusMode ? " (focused)" : "";
         var nodeCountSuffix = focusMode ? $" / {allNodes.Count} on effect paths" : "";
         output.WriteLine($"Callgraph: [{entryPointIndex}] {callGraph.EntryPoint}{focusSuffix}");
@@ -339,6 +348,93 @@ public static class CliApplication
         RenderTree(nodes, effectReachable, focusMode, output);
 
         return 0;
+    }
+
+    private static async Task<int> RunCallGraphsAsync(
+        string[] args,
+        TextWriter output,
+        TextWriter error,
+        string workingDirectory)
+    {
+        var focusMode = args.Contains("--focus");
+        var summaryMode = args.Contains("--summary");
+
+        await using var context = OpenContext(workingDirectory);
+        var runId = await Reads.GetLatestRunIdAsync(context);
+        if (runId is null)
+        {
+            return NoRunError(error);
+        }
+
+        var entryPoints = await Reads.LoadEntryPointsAsync(context);
+        if (entryPoints is null)
+        {
+            return NoRunError(error);
+        }
+
+        for (var i = 0; i < entryPoints.Count; i++)
+        {
+            var callGraph = await Reads.LoadCallGraphAsync(context, runId, i);
+            if (callGraph is null)
+            {
+                continue;
+            }
+
+            var allNodes = callGraph.Nodes;
+            IReadOnlyList<CallGraphNodeInfo> nodes;
+            HashSet<string>? effectReachable = null;
+
+            if (focusMode)
+            {
+                effectReachable = ComputeEffectReachable(allNodes);
+                nodes = allNodes.Where(n => effectReachable.Contains(n.Symbol)).ToArray();
+            }
+            else
+            {
+                nodes = allNodes;
+            }
+
+            if (summaryMode)
+            {
+                RenderSummary(callGraph, allNodes, i, output);
+            }
+            else
+            {
+                var focusSuffix = focusMode ? " (focused)" : "";
+                var nodeCountSuffix = focusMode ? $" / {allNodes.Count} on effect paths" : "";
+                output.WriteLine($"Callgraph: [{i}] {callGraph.EntryPoint}{focusSuffix}");
+                output.WriteLine($"Nodes: {nodes.Count}{nodeCountSuffix}");
+                RenderTree(nodes, effectReachable, focusMode, output);
+            }
+
+            output.WriteLine();
+        }
+
+        return 0;
+    }
+
+    private static void RenderSummary(
+        CallGraphInfo callGraph,
+        IReadOnlyList<CallGraphNodeInfo> allNodes,
+        int entryPointIndex,
+        TextWriter output)
+    {
+        var allEffects = allNodes.SelectMany(n => n.Effects).ToList();
+        var grouped = allEffects
+            .GroupBy(e => (e.Provider, e.Operation, e.Resource))
+            .Select(g => (Effect: g.First(), Count: g.Count()))
+            .ToList();
+
+        output.WriteLine($"Summary: [{entryPointIndex}] {callGraph.EntryPoint}");
+        output.WriteLine($"Nodes: {allNodes.Count}  Effects: {allEffects.Count}");
+
+        foreach (var (effect, count) in grouped)
+        {
+            var countSuffix = count > 1 ? $"  [x{count}]" : "";
+            var observations = string.Join("", effect.Observations
+                .Select(o => $"  [{o.Type}:{o.Context}]"));
+            output.WriteLine($"  {effect.Provider,-16} {effect.Operation,-14}  {effect.Resource}{countSuffix}{observations}");
+        }
     }
 
     private static void RenderTree(

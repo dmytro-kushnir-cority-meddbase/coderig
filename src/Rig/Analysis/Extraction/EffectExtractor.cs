@@ -30,7 +30,7 @@ internal static class EffectExtractor
                 var effect = TryCreateEffect(rule, methodName, invocation, memberAccess, source.FilePath, line, source.SemanticModel);
                 if (effect is not null)
                 {
-                    yield return AttachObservations(invocation, effect);
+                    yield return AttachObservations(invocation, effect, source.SemanticModel);
                 }
             }
         }
@@ -176,7 +176,7 @@ internal static class EffectExtractor
         return invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression.GetStringTemplate();
     }
 
-    private static EffectInfo AttachObservations(InvocationExpressionSyntax invocation, EffectInfo effect)
+    private static EffectInfo AttachObservations(InvocationExpressionSyntax invocation, EffectInfo effect, SemanticModel semanticModel)
     {
         var observations = new List<EffectObservationInfo>();
 
@@ -204,6 +204,18 @@ internal static class EffectExtractor
                 "effect_inside_parallel_fanout"));
         }
 
+        var resilience = FindResilienceRetryContext(invocation, semanticModel);
+        if (resilience is not null)
+        {
+            observations.Add(new EffectObservationInfo(
+                "resilience_retry",
+                resilience.Value.Context,
+                resilience.Value.Detail,
+                "high",
+                "compilation",
+                "effect_inside_resilience_retry"));
+        }
+
         return effect with { Observations = observations };
     }
 
@@ -220,6 +232,37 @@ internal static class EffectExtractor
                 case WhileStatementSyntax:
                     return ("while", "while");
             }
+        }
+
+        return null;
+    }
+
+    private static (string Context, string Detail)? FindResilienceRetryContext(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel)
+    {
+        foreach (var ancestor in invocation.Ancestors().OfType<InvocationExpressionSyntax>())
+        {
+            if (ancestor.Expression is not MemberAccessExpressionSyntax memberAccess)
+                continue;
+
+            var methodName = memberAccess.Name.Identifier.ValueText;
+            if (!string.Equals(methodName, "Execute", StringComparison.Ordinal) &&
+                !string.Equals(methodName, "ExecuteAsync", StringComparison.Ordinal))
+                continue;
+
+            var receiverType = semanticModel.GetTypeInfo(memberAccess.Expression).Type;
+            if (receiverType is null)
+                continue;
+
+            var receiverTypeName = receiverType.OriginalDefinition.ToDisplayString();
+
+            if (receiverTypeName.Contains("ResiliencePipeline", StringComparison.Ordinal))
+                return ("ResiliencePipeline", receiverTypeName);
+
+            if (receiverTypeName.Contains("ExecutionStrategy", StringComparison.Ordinal) ||
+                receiverTypeName.Contains("IExecutionStrategy", StringComparison.Ordinal))
+                return ("ExecutionStrategy", receiverTypeName);
         }
 
         return null;

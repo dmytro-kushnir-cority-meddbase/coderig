@@ -27,6 +27,7 @@ internal static class SolutionSourceLoader
 
         var workspaceFailures = workspace.Diagnostics
             .Where(diagnostic => diagnostic.Kind == WorkspaceDiagnosticKind.Failure)
+            .Where(diagnostic => !IsExcludedProjectDiagnostic(diagnostic.Message, rules))
             .Select(diagnostic => diagnostic.Message)
             .ToArray();
         if (workspaceFailures.Length > 0)
@@ -259,6 +260,19 @@ internal static class SolutionSourceLoader
     {
         var solutionDirectory = Path.GetDirectoryName(solutionPath) ?? Directory.GetCurrentDirectory();
         return Path.GetRelativePath(solutionDirectory, filePath).Replace('\\', '/');
+    }
+
+    private static bool IsExcludedProjectDiagnostic(string diagnosticMessage, AnalysisRuleSet rules)
+    {
+        // Diagnostic messages contain the .csproj path; extract the project name and check exclusion rules.
+        // Example: "Msbuild failed when processing the file 'C:\...\Foo.AppHost.csproj' with message: ..."
+        var match = System.Text.RegularExpressions.Regex.Match(
+            diagnosticMessage, @"'([^']+\.csproj)'");
+        if (!match.Success)
+            return false;
+
+        var projectName = Path.GetFileNameWithoutExtension(match.Groups[1].Value);
+        return rules.IsExcludedProject(projectName);
     }
 
     private static void RegisterMSBuild()

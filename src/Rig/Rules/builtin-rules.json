@@ -775,6 +775,51 @@
       "confidence": "high",
       "basis": "compilation+profile",
       "reason": "yessql_flush"
+    },
+    {
+      "provider": "db_transaction",
+      "operation": "begin",
+      "methods": [
+        "BeginTransaction",
+        "BeginTransactionAsync"
+      ],
+      "receiverTypes": [
+        "Microsoft.EntityFrameworkCore.Infrastructure.DatabaseFacade"
+      ],
+      "resource": "ef_database_facade",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "efcore_begin_transaction"
+    },
+    {
+      "provider": "db_transaction",
+      "operation": "commit",
+      "methods": [
+        "Commit",
+        "CommitAsync"
+      ],
+      "receiverTypes": [
+        "Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "efcore_commit_transaction"
+    },
+    {
+      "provider": "db_transaction",
+      "operation": "rollback",
+      "methods": [
+        "Rollback",
+        "RollbackAsync"
+      ],
+      "receiverTypes": [
+        "Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "efcore_rollback_transaction"
     }
   ],
   "diRegistrations": [
