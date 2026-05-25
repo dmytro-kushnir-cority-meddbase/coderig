@@ -38,7 +38,7 @@ internal sealed record MethodModel(
     SemanticModel SemanticModel,
     IReadOnlyList<EffectInfo> Effects);
 
-internal sealed record ResolvedCall(string Key, string DisplayName);
+internal sealed record ResolvedCall(string Key, string DisplayName, int Line = 0);
 
 internal sealed record ResolvedCallSet(
     IReadOnlyList<ResolvedCall> Application,

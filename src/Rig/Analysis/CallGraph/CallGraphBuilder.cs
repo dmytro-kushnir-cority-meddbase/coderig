@@ -9,7 +9,8 @@ internal static class CallGraphBuilder
         IReadOnlyDictionary<string, MethodModel> Methods,
         IReadOnlyList<EffectRule> DispatchRules,
         IReadOnlyDictionary<string, IReadOnlyList<string>> DispatchIndex,
-        IReadOnlyDictionary<string, string> SingleImplIndex);
+        IReadOnlyDictionary<string, string> SingleImplIndex,
+        IReadOnlyList<EffectInfo> AllEffects);
 
     public static IReadOnlyList<CallGraphInfo> Build(
         IReadOnlyList<EntryPointInfo> entryPoints,
@@ -25,7 +26,7 @@ internal static class CallGraphBuilder
 
         var dispatchIndex = BuildDispatchIndex(sources);
         var singleImplIndex = BuildSingleImplIndex(diRegistrations);
-        var context = new CallGraphContext(methods, dispatchRules, dispatchIndex, singleImplIndex);
+        var context = new CallGraphContext(methods, dispatchRules, dispatchIndex, singleImplIndex, effects);
 
         return entryPoints
             .Select(entryPoint => BuildCallGraph(entryPoint, sources, context))
@@ -183,8 +184,18 @@ internal static class CallGraphBuilder
 
         if (invocation is not null)
         {
+            var handlerArg = invocation.ArgumentList.Arguments.Skip(1).FirstOrDefault()?.Expression;
+            var lambdaEffects = Array.Empty<EffectInfo>();
+            if (handlerArg is ParenthesizedLambdaExpressionSyntax or SimpleLambdaExpressionSyntax or AnonymousMethodExpressionSyntax)
+            {
+                lambdaEffects = context.AllEffects
+                    .Where(e => string.Equals(e.FilePath, source.FilePath, StringComparison.OrdinalIgnoreCase))
+                    .Where(e => RoslynSymbolHelpers.IsLineInside(source.Tree, handlerArg, e.Line))
+                    .ToArray();
+            }
+
             var calls = ResolveMinimalApiHandlerCalls(invocation, source.SemanticModel, context);
-            return (CreateNode(entryPoint.DisplayName, entryPoint.FilePath, entryPoint.Line, calls, [], "high", "compilation", "minimal_api_handler_symbol"), calls.Application);
+            return (CreateNode(entryPoint.DisplayName, entryPoint.FilePath, entryPoint.Line, calls, lambdaEffects, "high", "compilation", "minimal_api_handler_symbol"), calls.Application);
         }
 
         return (CreateNode(entryPoint.DisplayName, entryPoint.FilePath, entryPoint.Line, new ResolvedCallSet([], []), [], "low", "compilation", "entrypoint_handler_unresolved"), []);
@@ -213,8 +224,9 @@ internal static class CallGraphBuilder
         }
 
         var key = RoslynSymbolHelpers.GetMethodKey(methodSymbol);
+        var handlerLine = RoslynSymbolHelpers.GetCallNameLine(semanticModel.SyntaxTree, handler);
         return context.Methods.TryGetValue(key, out var method)
-            ? new ResolvedCallSet([new ResolvedCall(key, method.Symbol)], [])
+            ? new ResolvedCallSet([new ResolvedCall(key, method.Symbol, handlerLine)], [])
             : new ResolvedCallSet([], [CreateExternalBoundaryCall(handler, semanticModel, methodSymbol)]);
     }
 
@@ -255,9 +267,9 @@ internal static class CallGraphBuilder
             confidence,
             basis,
             reason,
-            calls.Application.Select(call => call.DisplayName).Distinct(StringComparer.Ordinal).ToArray(),
-            calls.Boundary.DistinctBy(call => $"{call.Kind}|{call.Target}|{call.Line}").ToArray(),
-            effects);
+            calls.Application.OrderBy(call => call.Line).Select(call => call.DisplayName).Distinct(StringComparer.Ordinal).ToArray(),
+            calls.Boundary.DistinctBy(call => $"{call.Kind}|{call.Target}|{call.Line}").OrderBy(call => call.Line).ToArray(),
+            effects.OrderBy(e => e.Line).ToList());
     }
 
     private static ResolvedCallSet ResolveCalls(
@@ -284,6 +296,7 @@ internal static class CallGraphBuilder
             }
 
             var key = RoslynSymbolHelpers.GetMethodKey(methodSymbol);
+            var line = RoslynSymbolHelpers.GetCallNameLine(semanticModel.SyntaxTree, invocation);
 
             // For interface methods, prefer the concrete single-impl before traversing
             // the interface declaration itself (which has no body or effects).
@@ -292,7 +305,7 @@ internal static class CallGraphBuilder
             {
                 if (!calls.Any(call => string.Equals(call.Key, singleImpl.Key, StringComparison.Ordinal)))
                 {
-                    calls.Add(singleImpl);
+                    calls.Add(singleImpl with { Line = line });
                 }
                 continue;
             }
@@ -301,7 +314,7 @@ internal static class CallGraphBuilder
             {
                 if (!calls.Any(call => string.Equals(call.Key, key, StringComparison.Ordinal)))
                 {
-                    calls.Add(new ResolvedCall(key, method.Symbol));
+                    calls.Add(new ResolvedCall(key, method.Symbol, line));
                 }
                 continue;
             }
@@ -313,7 +326,7 @@ internal static class CallGraphBuilder
                 {
                     if (!calls.Any(call => string.Equals(call.Key, dispatch.Key, StringComparison.Ordinal)))
                     {
-                        calls.Add(dispatch);
+                        calls.Add(dispatch with { Line = line });
                     }
                 }
                 continue;
@@ -357,12 +370,14 @@ internal static class CallGraphBuilder
 
             var groupKey = RoslynSymbolHelpers.GetMethodKey(groupSymbol);
 
+            var groupLine = RoslynSymbolHelpers.GetCallNameLine(semanticModel.SyntaxTree, node);
+
             var singleImplGroup = TryResolveSingleImplDispatch(groupSymbol, context);
             if (singleImplGroup is not null)
             {
                 if (!calls.Any(c => string.Equals(c.Key, singleImplGroup.Key, StringComparison.Ordinal)))
                 {
-                    calls.Add(singleImplGroup);
+                    calls.Add(singleImplGroup with { Line = groupLine });
                 }
                 continue;
             }
@@ -371,7 +386,7 @@ internal static class CallGraphBuilder
             {
                 if (!calls.Any(c => string.Equals(c.Key, groupKey, StringComparison.Ordinal)))
                 {
-                    calls.Add(new ResolvedCall(groupKey, groupMethod.Symbol));
+                    calls.Add(new ResolvedCall(groupKey, groupMethod.Symbol, groupLine));
                 }
             }
 
@@ -469,7 +484,7 @@ internal static class CallGraphBuilder
             RoslynSymbolHelpers.GetMethodKey(methodSymbol),
             RoslynSymbolHelpers.GetMethodDisplayName(methodSymbol),
             semanticModel.SyntaxTree.FilePath,
-            RoslynSymbolHelpers.GetLine(semanticModel.SyntaxTree, node),
+            RoslynSymbolHelpers.GetCallNameLine(semanticModel.SyntaxTree, node),
             "high",
             "compilation",
             "external_symbol");
@@ -484,7 +499,7 @@ internal static class CallGraphBuilder
             node.ToString(),
             TryGetUnresolvedMethodName(node) ?? "?",
             semanticModel.SyntaxTree.FilePath,
-            RoslynSymbolHelpers.GetLine(semanticModel.SyntaxTree, node),
+            RoslynSymbolHelpers.GetCallNameLine(semanticModel.SyntaxTree, node),
             "low",
             "compilation",
             "unresolved_call_target");

@@ -1,7 +1,296 @@
+﻿================================================================
+MODE: default (focused)
 ================================================================
-MODE: default (full tree)
+Callgraph: [0] minapi GET /items (focused)
+Nodes: 3 / 3 on effect paths
+  CatalogApi.cs:21  minapi GET /items
+  └─ CatalogApi.cs:115  CatalogApi.GetAllItemsV1
+     └─ CatalogApi.cs:123  CatalogApi.GetAllItems
+        ├─ EFFECT efcore read  LongCountAsync  CatalogContext.CatalogItems
+        └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+Callgraph: [1] minapi GET /items (focused)
+Nodes: 2 / 2 on effect paths
+  CatalogApi.cs:26  minapi GET /items
+  └─ CatalogApi.cs:123  CatalogApi.GetAllItems
+     ├─ EFFECT efcore read  LongCountAsync  CatalogContext.CatalogItems
+     └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+Callgraph: [2] minapi GET /items/by (focused)
+Nodes: 2 / 2 on effect paths
+  CatalogApi.cs:31  minapi GET /items/by
+  └─ CatalogApi.cs:161  CatalogApi.GetItemsByIds
+     └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+Callgraph: [3] minapi GET /items/{id:int} (focused)
+Nodes: 2 / 2 on effect paths
+  CatalogApi.cs:36  minapi GET /items/{id:int}
+  └─ CatalogApi.cs:170  CatalogApi.GetItemById
+     └─ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
+Callgraph: [4] minapi GET /items/by/{name:minlength(1)} (focused)
+Nodes: 3 / 3 on effect paths
+  CatalogApi.cs:41  minapi GET /items/by/{name:minlength(1)}
+  └─ CatalogApi.cs:193  CatalogApi.GetItemsByName
+     └─ CatalogApi.cs:123  CatalogApi.GetAllItems
+        ├─ EFFECT efcore read  LongCountAsync  CatalogContext.CatalogItems
+        └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+Callgraph: [5] minapi GET /items/{id:int}/pic (focused)
+Nodes: 2 / 4 on effect paths
+  CatalogApi.cs:46  minapi GET /items/{id:int}/pic
+  └─ CatalogApi.cs:202  CatalogApi.GetItemPictureById
+     ├─ EFFECT efcore read  FindAsync  CatalogContext.CatalogItems
+     └─ EFFECT efcore read  FindAsync  CatalogContext.CatalogItems
+Callgraph: [6] minapi GET /items/withsemanticrelevance/{text:minlength(1)} (focused)
+Nodes: 6 / 6 on effect paths
+  CatalogApi.cs:53  minapi GET /items/withsemanticrelevance/{text:minlength(1)}
+  └─ CatalogApi.cs:226  CatalogApi.GetItemsBySemanticRelevanceV1
+     └─ CatalogApi.cs:236  CatalogApi.GetItemsBySemanticRelevance
+        ├─ CatalogApi.cs:193  CatalogApi.GetItemsByName
+        │  └─ CatalogApi.cs:123  CatalogApi.GetAllItems
+        │     ├─ EFFECT efcore read  LongCountAsync  CatalogContext.CatalogItems
+        │     └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+        ├─ CatalogAI.cs:55  CatalogAI.GetEmbeddingAsync
+        │  └─ EFFECT ai_embeddings read  GenerateVectorAsync  Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
+        ├─ EFFECT efcore read  LongCountAsync  CatalogContext.CatalogItems
+        ├─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+        └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+Callgraph: [7] minapi GET /items/withsemanticrelevance (focused)
+Nodes: 5 / 5 on effect paths
+  CatalogApi.cs:60  minapi GET /items/withsemanticrelevance
+  └─ CatalogApi.cs:236  CatalogApi.GetItemsBySemanticRelevance
+     ├─ CatalogApi.cs:193  CatalogApi.GetItemsByName
+     │  └─ CatalogApi.cs:123  CatalogApi.GetAllItems
+     │     ├─ EFFECT efcore read  LongCountAsync  CatalogContext.CatalogItems
+     │     └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+     ├─ CatalogAI.cs:55  CatalogAI.GetEmbeddingAsync
+     │  └─ EFFECT ai_embeddings read  GenerateVectorAsync  Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
+     ├─ EFFECT efcore read  LongCountAsync  CatalogContext.CatalogItems
+     ├─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+     └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+Callgraph: [8] minapi GET /items/type/{typeId}/brand/{brandId?} (focused)
+Nodes: 3 / 3 on effect paths
+  CatalogApi.cs:67  minapi GET /items/type/{typeId}/brand/{brandId?}
+  └─ CatalogApi.cs:291  CatalogApi.GetItemsByBrandAndTypeId
+     └─ CatalogApi.cs:123  CatalogApi.GetAllItems
+        ├─ EFFECT efcore read  LongCountAsync  CatalogContext.CatalogItems
+        └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+Callgraph: [9] minapi GET /items/type/all/brand/{brandId:int?} (focused)
+Nodes: 3 / 3 on effect paths
+  CatalogApi.cs:72  minapi GET /items/type/all/brand/{brandId:int?}
+  └─ CatalogApi.cs:301  CatalogApi.GetItemsByBrandId
+     └─ CatalogApi.cs:123  CatalogApi.GetAllItems
+        ├─ EFFECT efcore read  LongCountAsync  CatalogContext.CatalogItems
+        └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+Callgraph: [10] minapi GET /catalogtypes (focused)
+Nodes: 1 / 1 on effect paths
+  CatalogApi.cs:77  minapi GET /catalogtypes
+  └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogTypes
+Callgraph: [11] minapi GET /catalogbrands (focused)
+Nodes: 1 / 1 on effect paths
+  CatalogApi.cs:84  minapi GET /catalogbrands
+  └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogBrands
+Callgraph: [12] minapi PUT /items (focused)
+Nodes: 8 / 18 on effect paths
+  CatalogApi.cs:93  minapi PUT /items
+  └─ CatalogApi.cs:310  CatalogApi.UpdateItemV1
+     └─ CatalogApi.cs:324  CatalogApi.UpdateItem
+        ├─ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
+        │  └─ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync  [^]
+        ├─ CatalogIntegrationEventService.cs:28  CatalogIntegrationEventService.SaveEventAndCatalogContextChangesAsync
+        │  ├─ ResilientTransaction.cs:11  ResilientTransaction.ExecuteAsync
+        │  │  ├─ EFFECT db_transaction begin  BeginTransactionAsync  DbContext.Database  [resilience_retry:ExecutionStrategy]
+        │  │  └─ EFFECT db_transaction commit  CommitAsync  Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction  [resilience_retry:ExecutionStrategy]
+        │  └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+        ├─ CatalogIntegrationEventService.cs:11  CatalogIntegrationEventService.PublishThroughEventBusAsync
+        │  └─ EFFECT eventbus publish  PublishAsync  eShop.EventBus.Events.IntegrationEvent
+        ├─ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
+        └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+Callgraph: [13] minapi PUT /items/{id:int} (focused)
+Nodes: 7 / 17 on effect paths
+  CatalogApi.cs:98  minapi PUT /items/{id:int}
+  └─ CatalogApi.cs:324  CatalogApi.UpdateItem
+     ├─ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
+     │  └─ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync  [^]
+     ├─ CatalogIntegrationEventService.cs:28  CatalogIntegrationEventService.SaveEventAndCatalogContextChangesAsync
+     │  ├─ ResilientTransaction.cs:11  ResilientTransaction.ExecuteAsync
+     │  │  ├─ EFFECT db_transaction begin  BeginTransactionAsync  DbContext.Database  [resilience_retry:ExecutionStrategy]
+     │  │  └─ EFFECT db_transaction commit  CommitAsync  Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction  [resilience_retry:ExecutionStrategy]
+     │  └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+     ├─ CatalogIntegrationEventService.cs:11  CatalogIntegrationEventService.PublishThroughEventBusAsync
+     │  └─ EFFECT eventbus publish  PublishAsync  eShop.EventBus.Events.IntegrationEvent
+     ├─ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
+     └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+Callgraph: [14] minapi POST /items (focused)
+Nodes: 4 / 5 on effect paths
+  CatalogApi.cs:103  minapi POST /items
+  └─ CatalogApi.cs:365  CatalogApi.CreateItem
+     ├─ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
+     │  └─ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync  [^]
+     ├─ EFFECT efcore pending_write  Add  CatalogContext.CatalogItems
+     └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+Callgraph: [15] minapi DELETE /items/{id:int} (focused)
+Nodes: 2 / 2 on effect paths
+  CatalogApi.cs:107  minapi DELETE /items/{id:int}
+  └─ CatalogApi.cs:390  CatalogApi.DeleteItemById
+     ├─ EFFECT efcore pending_write  Remove  CatalogContext.CatalogItems
+     └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+Callgraph: [16] mvc GET account (focused)
+Nodes: 2 / 2 on effect paths
+  AccountController.cs:39  mvc GET account
+  └─ AccountController.cs:206  AccountController.BuildLoginViewModelAsync
+     ├─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+     └─ EFFECT identity_store read  FindEnabledClientByIdAsync  Duende.IdentityServer.Stores.IClientStore
+Callgraph: [17] mvc POST account (focused)
+Nodes: 3 / 5 on effect paths
+  AccountController.cs:59  mvc POST account
+  ├─ AccountController.cs:264  AccountController.BuildLoginViewModelAsync
+  │  └─ AccountController.cs:264  AccountController.BuildLoginViewModelAsync  [^]
+  ├─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+  ├─ EFFECT identity_consent deny  DenyAuthorizationAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+  ├─ EFFECT auth_session sign_in  PasswordSignInAsync  Microsoft.AspNetCore.Identity.SignInManager<TUser>
+  ├─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+  └─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+Callgraph: [18] mvc GET account (focused)
+Nodes: 4 / 4 on effect paths
+  AccountController.cs:146  mvc GET account
+  ├─ AccountController.cs:272  AccountController.BuildLogoutViewModelAsync
+  │  └─ EFFECT identity_store read  GetLogoutContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+  └─ AccountController.cs:165  AccountController.Logout
+     ├─ AccountController.cs:296  AccountController.BuildLoggedOutViewModelAsync
+     │  └─ EFFECT identity_store read  GetLogoutContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+     ├─ EFFECT auth_session sign_out  SignOutAsync  Microsoft.AspNetCore.Identity.SignInManager<TUser>
+     └─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+Callgraph: [19] mvc POST account (focused)
+Nodes: 2 / 2 on effect paths
+  AccountController.cs:165  mvc POST account
+  ├─ AccountController.cs:296  AccountController.BuildLoggedOutViewModelAsync
+  │  └─ EFFECT identity_store read  GetLogoutContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+  ├─ EFFECT auth_session sign_out  SignOutAsync  Microsoft.AspNetCore.Identity.SignInManager<TUser>
+  └─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+Callgraph: [20] mvc GET account (focused)
+Nodes: 0 / 1 on effect paths
+Callgraph: [21] mvc GET external (focused)
+Nodes: 0 / 1 on effect paths
+Callgraph: [22] mvc GET external (focused)
+Nodes: 2 / 6 on effect paths
+  ExternalController.cs:63  mvc GET external
+  ├─ ExternalController.cs:160  ExternalController.AutoProvisionUserAsync
+  │  ├─ EFFECT identity_store user_create  CreateAsync  Microsoft.AspNetCore.Identity.UserManager<TUser>
+  │  ├─ EFFECT identity_store claims_add  AddClaimsAsync  Microsoft.AspNetCore.Identity.UserManager<TUser>
+  │  └─ EFFECT identity_store login_add  AddLoginAsync  Microsoft.AspNetCore.Identity.UserManager<TUser>
+  ├─ EFFECT auth_session external_sign_in  SignInAsync  Microsoft.AspNetCore.Http.HttpContext
+  ├─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+  └─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+Callgraph: [23] mvc GET consent (focused)
+Nodes: 2 / 6 on effect paths
+  ConsentController.cs:32  mvc GET consent
+  └─ ConsentController.cs:150  ConsentController.BuildViewModelAsync
+     └─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+Callgraph: [24] mvc POST consent (focused)
+Nodes: 3 / 9 on effect paths
+  ConsentController.cs:47  mvc POST consent
+  ├─ ConsentController.cs:82  ConsentController.ProcessConsent
+  │  ├─ ConsentController.cs:150  ConsentController.BuildViewModelAsync
+  │  │  └─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+  │  ├─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+  │  ├─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+  │  ├─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+  │  └─ EFFECT identity_consent grant  GrantConsentAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+  └─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+Callgraph: [25] mvc GET device (focused)
+Nodes: 2 / 6 on effect paths
+  DeviceController.cs:27  mvc GET device
+  └─ DeviceController.cs:130  DeviceController.BuildViewModelAsync
+     └─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IDeviceFlowInteractionService
+Callgraph: [26] mvc POST device (focused)
+Nodes: 2 / 6 on effect paths
+  DeviceController.cs:41  mvc POST device
+  └─ DeviceController.cs:130  DeviceController.BuildViewModelAsync
+     └─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IDeviceFlowInteractionService
+Callgraph: [27] mvc POST device (focused)
+Nodes: 3 / 7 on effect paths
+  DeviceController.cs:51  mvc POST device
+  └─ DeviceController.cs:63  DeviceController.ProcessConsent
+     ├─ DeviceController.cs:130  DeviceController.BuildViewModelAsync
+     │  └─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IDeviceFlowInteractionService
+     ├─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IDeviceFlowInteractionService
+     ├─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+     ├─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+     └─ EFFECT identity_device authorize  HandleRequestAsync  Duende.IdentityServer.Services.IDeviceFlowInteractionService
+Callgraph: [28] mvc GET grants (focused)
+Nodes: 2 / 2 on effect paths
+  GrantsController.cs:32  mvc GET grants
+  └─ GrantsController.cs:51  GrantsController.BuildViewModelAsync
+     ├─ EFFECT identity_store read  GetAllUserGrantsAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+     ├─ EFFECT identity_store read  FindClientByIdAsync  Duende.IdentityServer.Stores.IClientStore  [looped_effect:foreach]
+     └─ EFFECT identity_store read  FindResourcesByScopeAsync  Duende.IdentityServer.Stores.IResourceStore  [looped_effect:foreach]
+Callgraph: [29] mvc POST grants (focused)
+Nodes: 1 / 1 on effect paths
+  GrantsController.cs:41  mvc POST grants
+  ├─ EFFECT identity_consent revoke  RevokeUserConsentAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+  └─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+Callgraph: [30] minapi PUT /cancel (focused)
+Nodes: 4 / 8 on effect paths
+  OrdersApi.cs:11  minapi PUT /cancel
+  └─ OrdersApi.cs:22  OrdersApi.CancelOrderAsync
+     └─ IdentifiedCommandHandler.cs:39  IdentifiedCommandHandler.Handle
+        └─ RequestManager.cs:21  RequestManager.CreateRequestForCommandAsync
+           └─ EFFECT efcore commit  SaveChangesAsync  OrderingContext
+Callgraph: [31] minapi PUT /ship (focused)
+Nodes: 4 / 8 on effect paths
+  OrdersApi.cs:12  minapi PUT /ship
+  └─ OrdersApi.cs:51  OrdersApi.ShipOrderAsync
+     └─ IdentifiedCommandHandler.cs:39  IdentifiedCommandHandler.Handle
+        └─ RequestManager.cs:21  RequestManager.CreateRequestForCommandAsync
+           └─ EFFECT efcore commit  SaveChangesAsync  OrderingContext
+Callgraph: [32] minapi GET {orderId:int} (focused)
+Nodes: 3 / 4 on effect paths
+  OrdersApi.cs:13  minapi GET {orderId:int}
+  └─ OrdersApi.cs:80  OrdersApi.GetOrderAsync
+     └─ OrderQueries.cs:6  OrderQueries.GetOrderAsync
+        └─ EFFECT efcore read  FirstOrDefaultAsync  OrderingContext.Orders
+Callgraph: [33] minapi GET / (focused)
+Nodes: 3 / 4 on effect paths
+  OrdersApi.cs:14  minapi GET /
+  └─ OrdersApi.cs:93  OrdersApi.GetOrdersByUserAsync
+     └─ OrderQueries.cs:37  OrderQueries.GetOrdersFromUserAsync
+        └─ EFFECT efcore read  ToListAsync  OrderingContext.Orders
+Callgraph: [34] minapi GET /cardtypes (focused)
+Nodes: 3 / 3 on effect paths
+  OrdersApi.cs:15  minapi GET /cardtypes
+  └─ OrdersApi.cs:100  OrdersApi.GetCardTypesAsync
+     └─ OrderQueries.cs:51  OrderQueries.GetCardTypesAsync
+        └─ EFFECT efcore read  ToListAsync  OrderingContext.CardTypes
+Callgraph: [35] minapi POST /draft (focused)
+Nodes: 0 / 12 on effect paths
+Callgraph: [36] minapi POST / (focused)
+Nodes: 4 / 8 on effect paths
+  OrdersApi.cs:17  minapi POST /
+  └─ OrdersApi.cs:118  OrdersApi.CreateOrderAsync
+     └─ IdentifiedCommandHandler.cs:39  IdentifiedCommandHandler.Handle
+        └─ RequestManager.cs:21  RequestManager.CreateRequestForCommandAsync
+           └─ EFFECT efcore commit  SaveChangesAsync  OrderingContext
+Callgraph: [37] minapi GET / (focused)
+Nodes: 1 / 1 on effect paths
+  WebHooksApi.cs:13  minapi GET /
+  └─ EFFECT efcore read  ToListAsync  WebhooksContext.Subscriptions
+Callgraph: [38] minapi GET /{id:int} (focused)
+Nodes: 1 / 1 on effect paths
+  WebHooksApi.cs:20  minapi GET /{id:int}
+  └─ EFFECT efcore read  SingleOrDefaultAsync  WebhooksContext.Subscriptions
+Callgraph: [39] minapi POST / (focused)
+Nodes: 2 / 3 on effect paths
+  WebHooksApi.cs:35  minapi POST /
+  ├─ GrantUrlTesterService.cs:5  GrantUrlTesterService.TestGrantUrl
+  │  └─ EFFECT http send  SendAsync  System.Net.Http.HttpRequestMessage
+  └─ EFFECT efcore commit  SaveChangesAsync  WebhooksContext
+Callgraph: [40] minapi DELETE /{id:int} (focused)
+Nodes: 1 / 1 on effect paths
+  WebHooksApi.cs:66  minapi DELETE /{id:int}
+  ├─ EFFECT efcore read  SingleOrDefaultAsync  WebhooksContext.Subscriptions
+  └─ EFFECT efcore commit  SaveChangesAsync  WebhooksContext
+
 ================================================================
-Callgraph: [0] minapi GET /items
+MODE: --full (complete tree)
+================================================================
+Callgraph: [0] minapi GET /items (full)
 Nodes: 3
   CatalogApi.cs:21  minapi GET /items
   └─ CatalogApi.cs:115  CatalogApi.GetAllItemsV1
@@ -11,13 +300,14 @@ Nodes: 3
         ├─ BOUNDARY external Queryable.Where
         ├─ BOUNDARY external Queryable.Where
         ├─ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
-        ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-        ├─ BOUNDARY external Queryable.Take
-        ├─ BOUNDARY external Queryable.Skip
         ├─ BOUNDARY external Queryable.OrderBy
-        └─ BOUNDARY external TypedResults.Ok
-
-Callgraph: [1] minapi GET /items
+        ├─ BOUNDARY external Queryable.Skip
+        ├─ BOUNDARY external Queryable.Take
+        ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+        ├─ BOUNDARY external TypedResults.Ok
+        ├─ EFFECT efcore read  LongCountAsync  CatalogContext.CatalogItems
+        └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+Callgraph: [1] minapi GET /items (full)
 Nodes: 2
   CatalogApi.cs:26  minapi GET /items
   └─ CatalogApi.cs:123  CatalogApi.GetAllItems
@@ -26,13 +316,14 @@ Nodes: 2
      ├─ BOUNDARY external Queryable.Where
      ├─ BOUNDARY external Queryable.Where
      ├─ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
-     ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-     ├─ BOUNDARY external Queryable.Take
-     ├─ BOUNDARY external Queryable.Skip
      ├─ BOUNDARY external Queryable.OrderBy
-     └─ BOUNDARY external TypedResults.Ok
-
-Callgraph: [2] minapi GET /items/by
+     ├─ BOUNDARY external Queryable.Skip
+     ├─ BOUNDARY external Queryable.Take
+     ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+     ├─ BOUNDARY external TypedResults.Ok
+     ├─ EFFECT efcore read  LongCountAsync  CatalogContext.CatalogItems
+     └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+Callgraph: [2] minapi GET /items/by (full)
 Nodes: 2
   CatalogApi.cs:31  minapi GET /items/by
   └─ CatalogApi.cs:161  CatalogApi.GetItemsByIds
@@ -41,8 +332,7 @@ Nodes: 2
      ├─ BOUNDARY external MemoryExtensions.Contains
      ├─ BOUNDARY external TypedResults.Ok
      └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
-
-Callgraph: [3] minapi GET /items/{id:int}
+Callgraph: [3] minapi GET /items/{id:int} (full)
 Nodes: 2
   CatalogApi.cs:36  minapi GET /items/{id:int}
   └─ CatalogApi.cs:170  CatalogApi.GetItemById
@@ -52,8 +342,7 @@ Nodes: 2
      ├─ BOUNDARY external TypedResults.NotFound
      ├─ BOUNDARY external TypedResults.Ok
      └─ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
-
-Callgraph: [4] minapi GET /items/by/{name:minlength(1)}
+Callgraph: [4] minapi GET /items/by/{name:minlength(1)} (full)
 Nodes: 3
   CatalogApi.cs:41  minapi GET /items/by/{name:minlength(1)}
   └─ CatalogApi.cs:193  CatalogApi.GetItemsByName
@@ -63,13 +352,14 @@ Nodes: 3
         ├─ BOUNDARY external Queryable.Where
         ├─ BOUNDARY external Queryable.Where
         ├─ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
-        ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-        ├─ BOUNDARY external Queryable.Take
-        ├─ BOUNDARY external Queryable.Skip
         ├─ BOUNDARY external Queryable.OrderBy
-        └─ BOUNDARY external TypedResults.Ok
-
-Callgraph: [5] minapi GET /items/{id:int}/pic
+        ├─ BOUNDARY external Queryable.Skip
+        ├─ BOUNDARY external Queryable.Take
+        ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+        ├─ BOUNDARY external TypedResults.Ok
+        ├─ EFFECT efcore read  LongCountAsync  CatalogContext.CatalogItems
+        └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+Callgraph: [5] minapi GET /items/{id:int}/pic (full)
 Nodes: 4
   CatalogApi.cs:46  minapi GET /items/{id:int}/pic
   └─ CatalogApi.cs:202  CatalogApi.GetItemPictureById
@@ -83,8 +373,7 @@ Nodes: 4
      ├─ BOUNDARY external TypedResults.PhysicalFile
      ├─ EFFECT efcore read  FindAsync  CatalogContext.CatalogItems
      └─ EFFECT efcore read  FindAsync  CatalogContext.CatalogItems
-
-Callgraph: [6] minapi GET /items/withsemanticrelevance/{text:minlength(1)}
+Callgraph: [6] minapi GET /items/withsemanticrelevance/{text:minlength(1)} (full)
 Nodes: 6
   CatalogApi.cs:53  minapi GET /items/withsemanticrelevance/{text:minlength(1)}
   └─ CatalogApi.cs:226  CatalogApi.GetItemsBySemanticRelevanceV1
@@ -96,11 +385,13 @@ Nodes: 6
         │     ├─ BOUNDARY external Queryable.Where
         │     ├─ BOUNDARY external Queryable.Where
         │     ├─ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
-        │     ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-        │     ├─ BOUNDARY external Queryable.Take
-        │     ├─ BOUNDARY external Queryable.Skip
         │     ├─ BOUNDARY external Queryable.OrderBy
-        │     └─ BOUNDARY external TypedResults.Ok
+        │     ├─ BOUNDARY external Queryable.Skip
+        │     ├─ BOUNDARY external Queryable.Take
+        │     ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+        │     ├─ BOUNDARY external TypedResults.Ok
+        │     ├─ EFFECT efcore read  LongCountAsync  CatalogContext.CatalogItems
+        │     └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
         ├─ CatalogAI.cs:55  CatalogAI.GetEmbeddingAsync
         │  ├─ BOUNDARY external Stopwatch.GetTimestamp
         │  ├─ BOUNDARY external EmbeddingGeneratorExtensions.GenerateVectorAsync
@@ -110,29 +401,29 @@ Nodes: 6
         │  └─ EFFECT ai_embeddings read  GenerateVectorAsync  Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
         ├─ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
         ├─ BOUNDARY external ILogger.IsEnabled
-        ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-        ├─ BOUNDARY external Queryable.Take
-        ├─ BOUNDARY external Queryable.Skip
-        ├─ BOUNDARY external Queryable.OrderBy
-        ├─ BOUNDARY external Queryable.Select
         ├─ BOUNDARY external Queryable.Where
+        ├─ BOUNDARY external Queryable.Select
         ├─ BOUNDARY external VectorDbFunctionsExtensions.CosineDistance
+        ├─ BOUNDARY external Queryable.OrderBy
+        ├─ BOUNDARY external Queryable.Skip
+        ├─ BOUNDARY external Queryable.Take
+        ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
         ├─ BOUNDARY external LoggerExtensions.LogDebug
         ├─ BOUNDARY external String.Join
         ├─ BOUNDARY external Enumerable.Select
         ├─ BOUNDARY external Enumerable.ToList
         ├─ BOUNDARY external Enumerable.Select
-        ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-        ├─ BOUNDARY external Queryable.Take
-        ├─ BOUNDARY external Queryable.Skip
-        ├─ BOUNDARY external Queryable.OrderBy
         ├─ BOUNDARY external Queryable.Where
+        ├─ BOUNDARY external Queryable.OrderBy
         ├─ BOUNDARY external VectorDbFunctionsExtensions.CosineDistance
+        ├─ BOUNDARY external Queryable.Skip
+        ├─ BOUNDARY external Queryable.Take
+        ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
         ├─ BOUNDARY external TypedResults.Ok
+        ├─ EFFECT efcore read  LongCountAsync  CatalogContext.CatalogItems
         ├─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
         └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
-
-Callgraph: [7] minapi GET /items/withsemanticrelevance
+Callgraph: [7] minapi GET /items/withsemanticrelevance (full)
 Nodes: 5
   CatalogApi.cs:60  minapi GET /items/withsemanticrelevance
   └─ CatalogApi.cs:236  CatalogApi.GetItemsBySemanticRelevance
@@ -143,11 +434,13 @@ Nodes: 5
      │     ├─ BOUNDARY external Queryable.Where
      │     ├─ BOUNDARY external Queryable.Where
      │     ├─ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
-     │     ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-     │     ├─ BOUNDARY external Queryable.Take
-     │     ├─ BOUNDARY external Queryable.Skip
      │     ├─ BOUNDARY external Queryable.OrderBy
-     │     └─ BOUNDARY external TypedResults.Ok
+     │     ├─ BOUNDARY external Queryable.Skip
+     │     ├─ BOUNDARY external Queryable.Take
+     │     ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+     │     ├─ BOUNDARY external TypedResults.Ok
+     │     ├─ EFFECT efcore read  LongCountAsync  CatalogContext.CatalogItems
+     │     └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
      ├─ CatalogAI.cs:55  CatalogAI.GetEmbeddingAsync
      │  ├─ BOUNDARY external Stopwatch.GetTimestamp
      │  ├─ BOUNDARY external EmbeddingGeneratorExtensions.GenerateVectorAsync
@@ -157,29 +450,29 @@ Nodes: 5
      │  └─ EFFECT ai_embeddings read  GenerateVectorAsync  Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
      ├─ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
      ├─ BOUNDARY external ILogger.IsEnabled
-     ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-     ├─ BOUNDARY external Queryable.Take
-     ├─ BOUNDARY external Queryable.Skip
-     ├─ BOUNDARY external Queryable.OrderBy
-     ├─ BOUNDARY external Queryable.Select
      ├─ BOUNDARY external Queryable.Where
+     ├─ BOUNDARY external Queryable.Select
      ├─ BOUNDARY external VectorDbFunctionsExtensions.CosineDistance
+     ├─ BOUNDARY external Queryable.OrderBy
+     ├─ BOUNDARY external Queryable.Skip
+     ├─ BOUNDARY external Queryable.Take
+     ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
      ├─ BOUNDARY external LoggerExtensions.LogDebug
      ├─ BOUNDARY external String.Join
      ├─ BOUNDARY external Enumerable.Select
      ├─ BOUNDARY external Enumerable.ToList
      ├─ BOUNDARY external Enumerable.Select
-     ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-     ├─ BOUNDARY external Queryable.Take
-     ├─ BOUNDARY external Queryable.Skip
-     ├─ BOUNDARY external Queryable.OrderBy
      ├─ BOUNDARY external Queryable.Where
+     ├─ BOUNDARY external Queryable.OrderBy
      ├─ BOUNDARY external VectorDbFunctionsExtensions.CosineDistance
+     ├─ BOUNDARY external Queryable.Skip
+     ├─ BOUNDARY external Queryable.Take
+     ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
      ├─ BOUNDARY external TypedResults.Ok
+     ├─ EFFECT efcore read  LongCountAsync  CatalogContext.CatalogItems
      ├─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
      └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
-
-Callgraph: [8] minapi GET /items/type/{typeId}/brand/{brandId?}
+Callgraph: [8] minapi GET /items/type/{typeId}/brand/{brandId?} (full)
 Nodes: 3
   CatalogApi.cs:67  minapi GET /items/type/{typeId}/brand/{brandId?}
   └─ CatalogApi.cs:291  CatalogApi.GetItemsByBrandAndTypeId
@@ -189,13 +482,14 @@ Nodes: 3
         ├─ BOUNDARY external Queryable.Where
         ├─ BOUNDARY external Queryable.Where
         ├─ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
-        ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-        ├─ BOUNDARY external Queryable.Take
-        ├─ BOUNDARY external Queryable.Skip
         ├─ BOUNDARY external Queryable.OrderBy
-        └─ BOUNDARY external TypedResults.Ok
-
-Callgraph: [9] minapi GET /items/type/all/brand/{brandId:int?}
+        ├─ BOUNDARY external Queryable.Skip
+        ├─ BOUNDARY external Queryable.Take
+        ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+        ├─ BOUNDARY external TypedResults.Ok
+        ├─ EFFECT efcore read  LongCountAsync  CatalogContext.CatalogItems
+        └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+Callgraph: [9] minapi GET /items/type/all/brand/{brandId:int?} (full)
 Nodes: 3
   CatalogApi.cs:72  minapi GET /items/type/all/brand/{brandId:int?}
   └─ CatalogApi.cs:301  CatalogApi.GetItemsByBrandId
@@ -205,25 +499,26 @@ Nodes: 3
         ├─ BOUNDARY external Queryable.Where
         ├─ BOUNDARY external Queryable.Where
         ├─ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
-        ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-        ├─ BOUNDARY external Queryable.Take
-        ├─ BOUNDARY external Queryable.Skip
         ├─ BOUNDARY external Queryable.OrderBy
-        └─ BOUNDARY external TypedResults.Ok
-
-Callgraph: [10] minapi GET /catalogtypes
+        ├─ BOUNDARY external Queryable.Skip
+        ├─ BOUNDARY external Queryable.Take
+        ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+        ├─ BOUNDARY external TypedResults.Ok
+        ├─ EFFECT efcore read  LongCountAsync  CatalogContext.CatalogItems
+        └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+Callgraph: [10] minapi GET /catalogtypes (full)
 Nodes: 1
   CatalogApi.cs:77  minapi GET /catalogtypes
   ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-  └─ BOUNDARY external Queryable.OrderBy
-
-Callgraph: [11] minapi GET /catalogbrands
+  ├─ BOUNDARY external Queryable.OrderBy
+  └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogTypes
+Callgraph: [11] minapi GET /catalogbrands (full)
 Nodes: 1
   CatalogApi.cs:84  minapi GET /catalogbrands
   ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-  └─ BOUNDARY external Queryable.OrderBy
-
-Callgraph: [12] minapi PUT /items
+  ├─ BOUNDARY external Queryable.OrderBy
+  └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogBrands
+Callgraph: [12] minapi PUT /items (full)
 Nodes: 18
   CatalogApi.cs:93  minapi PUT /items
   └─ CatalogApi.cs:310  CatalogApi.UpdateItemV1
@@ -293,8 +588,7 @@ Nodes: 18
      │  ├─ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
      │  └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
      └─ BOUNDARY external TypedResults.BadRequest
-
-Callgraph: [13] minapi PUT /items/{id:int}
+Callgraph: [13] minapi PUT /items/{id:int} (full)
 Nodes: 17
   CatalogApi.cs:98  minapi PUT /items/{id:int}
   └─ CatalogApi.cs:324  CatalogApi.UpdateItem
@@ -362,8 +656,7 @@ Nodes: 17
      ├─ BOUNDARY external TypedResults.Created
      ├─ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
      └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
-
-Callgraph: [14] minapi POST /items
+Callgraph: [14] minapi POST /items (full)
 Nodes: 5
   CatalogApi.cs:103  minapi POST /items
   └─ CatalogApi.cs:365  CatalogApi.CreateItem
@@ -376,8 +669,7 @@ Nodes: 5
      ├─ BOUNDARY external TypedResults.Created
      ├─ EFFECT efcore pending_write  Add  CatalogContext.CatalogItems
      └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
-
-Callgraph: [15] minapi DELETE /items/{id:int}
+Callgraph: [15] minapi DELETE /items/{id:int} (full)
 Nodes: 2
   CatalogApi.cs:107  minapi DELETE /items/{id:int}
   └─ CatalogApi.cs:390  CatalogApi.DeleteItemById
@@ -388,27 +680,27 @@ Nodes: 2
      ├─ BOUNDARY external TypedResults.NoContent
      ├─ EFFECT efcore pending_write  Remove  CatalogContext.CatalogItems
      └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
-
-Callgraph: [16] mvc GET account
+Callgraph: [16] mvc GET account (full)
 Nodes: 2
   AccountController.cs:39  mvc GET account
   ├─ AccountController.cs:206  AccountController.BuildLoginViewModelAsync
   │  ├─ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
   │  ├─ BOUNDARY external IAuthenticationSchemeProvider.GetSchemeAsync
   │  ├─ BOUNDARY external IAuthenticationSchemeProvider.GetAllSchemesAsync
-  │  ├─ BOUNDARY external Enumerable.ToList
-  │  ├─ BOUNDARY external Enumerable.Select
   │  ├─ BOUNDARY external Enumerable.Where
+  │  ├─ BOUNDARY external Enumerable.Select
+  │  ├─ BOUNDARY external Enumerable.ToList
   │  ├─ BOUNDARY external IClientStoreExtensions.FindEnabledClientByIdAsync
   │  ├─ BOUNDARY external Enumerable.Any
   │  ├─ BOUNDARY external Enumerable.ToList
   │  ├─ BOUNDARY external Enumerable.Where
   │  ├─ BOUNDARY external ICollection.Contains
-  │  └─ BOUNDARY external List.ToArray
+  │  ├─ BOUNDARY external List.ToArray
+  │  ├─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+  │  └─ EFFECT identity_store read  FindEnabledClientByIdAsync  Duende.IdentityServer.Stores.IClientStore
   ├─ BOUNDARY external ControllerBase.RedirectToAction
   └─ BOUNDARY external Controller.View
-
-Callgraph: [17] mvc POST account
+Callgraph: [17] mvc POST account (full)
 Nodes: 5
   AccountController.cs:59  mvc POST account
   ├─ Extensions.cs:9  Extensions.IsNativeClient
@@ -432,30 +724,37 @@ Nodes: 5
   ├─ BOUNDARY external ControllerBase.Redirect
   ├─ BOUNDARY external IEventService.RaiseAsync
   ├─ BOUNDARY external ModelStateDictionary.AddModelError
-  └─ BOUNDARY external Controller.View
-
-Callgraph: [18] mvc GET account
+  ├─ BOUNDARY external Controller.View
+  ├─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+  ├─ EFFECT identity_consent deny  DenyAuthorizationAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+  ├─ EFFECT auth_session sign_in  PasswordSignInAsync  Microsoft.AspNetCore.Identity.SignInManager<TUser>
+  ├─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+  └─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+Callgraph: [18] mvc GET account (full)
 Nodes: 4
   AccountController.cs:146  mvc GET account
   ├─ AccountController.cs:272  AccountController.BuildLogoutViewModelAsync
-  │  └─ BOUNDARY external IIdentityServerInteractionService.GetLogoutContextAsync
+  │  ├─ BOUNDARY external IIdentityServerInteractionService.GetLogoutContextAsync
+  │  └─ EFFECT identity_store read  GetLogoutContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
   ├─ AccountController.cs:165  AccountController.Logout
   │  ├─ AccountController.cs:296  AccountController.BuildLoggedOutViewModelAsync
   │  │  ├─ BOUNDARY external IIdentityServerInteractionService.GetLogoutContextAsync
   │  │  ├─ BOUNDARY external String.IsNullOrEmpty
   │  │  ├─ BOUNDARY external ClaimsPrincipal.FindFirst
   │  │  ├─ BOUNDARY external IAuthenticationHandlerProvider.GetHandlerAsync
-  │  │  └─ BOUNDARY external IIdentityServerInteractionService.CreateLogoutContextAsync
+  │  │  ├─ BOUNDARY external IIdentityServerInteractionService.CreateLogoutContextAsync
+  │  │  └─ EFFECT identity_store read  GetLogoutContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
   │  ├─ BOUNDARY external SignInManager.SignOutAsync
   │  ├─ BOUNDARY external IEventService.RaiseAsync
   │  ├─ BOUNDARY external PrincipalExtensions.GetSubjectId
   │  ├─ BOUNDARY external PrincipalExtensions.GetDisplayName
   │  ├─ BOUNDARY external UrlHelperExtensions.Action
   │  ├─ BOUNDARY external ControllerBase.SignOut
-  │  └─ BOUNDARY external Controller.View
+  │  ├─ BOUNDARY external Controller.View
+  │  ├─ EFFECT auth_session sign_out  SignOutAsync  Microsoft.AspNetCore.Identity.SignInManager<TUser>
+  │  └─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
   └─ BOUNDARY external Controller.View
-
-Callgraph: [19] mvc POST account
+Callgraph: [19] mvc POST account (full)
 Nodes: 2
   AccountController.cs:165  mvc POST account
   ├─ AccountController.cs:296  AccountController.BuildLoggedOutViewModelAsync
@@ -463,21 +762,22 @@ Nodes: 2
   │  ├─ BOUNDARY external String.IsNullOrEmpty
   │  ├─ BOUNDARY external ClaimsPrincipal.FindFirst
   │  ├─ BOUNDARY external IAuthenticationHandlerProvider.GetHandlerAsync
-  │  └─ BOUNDARY external IIdentityServerInteractionService.CreateLogoutContextAsync
+  │  ├─ BOUNDARY external IIdentityServerInteractionService.CreateLogoutContextAsync
+  │  └─ EFFECT identity_store read  GetLogoutContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
   ├─ BOUNDARY external SignInManager.SignOutAsync
   ├─ BOUNDARY external IEventService.RaiseAsync
   ├─ BOUNDARY external PrincipalExtensions.GetSubjectId
   ├─ BOUNDARY external PrincipalExtensions.GetDisplayName
   ├─ BOUNDARY external UrlHelperExtensions.Action
   ├─ BOUNDARY external ControllerBase.SignOut
-  └─ BOUNDARY external Controller.View
-
-Callgraph: [20] mvc GET account
+  ├─ BOUNDARY external Controller.View
+  ├─ EFFECT auth_session sign_out  SignOutAsync  Microsoft.AspNetCore.Identity.SignInManager<TUser>
+  └─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+Callgraph: [20] mvc GET account (full)
 Nodes: 1
   AccountController.cs:196  mvc GET account
   └─ BOUNDARY external Controller.View
-
-Callgraph: [21] mvc GET external
+Callgraph: [21] mvc GET external (full)
 Nodes: 1
   ExternalController.cs:33  mvc GET external
   ├─ BOUNDARY external String.IsNullOrEmpty
@@ -485,8 +785,7 @@ Nodes: 1
   ├─ BOUNDARY external IIdentityServerInteractionService.IsValidReturnUrl
   ├─ BOUNDARY external UrlHelperExtensions.Action
   └─ BOUNDARY external ControllerBase.Challenge
-
-Callgraph: [22] mvc GET external
+Callgraph: [22] mvc GET external (full)
 Nodes: 6
   ExternalController.cs:63  mvc GET external
   ├─ ExternalController.cs:135  ExternalController.FindUserFromExternalProviderAsync
@@ -517,7 +816,10 @@ Nodes: 6
   │  ├─ BOUNDARY external UserManager.AddClaimsAsync
   │  ├─ BOUNDARY external Enumerable.First
   │  ├─ BOUNDARY external UserManager.AddLoginAsync
-  │  └─ BOUNDARY external Enumerable.First
+  │  ├─ BOUNDARY external Enumerable.First
+  │  ├─ EFFECT identity_store user_create  CreateAsync  Microsoft.AspNetCore.Identity.UserManager<TUser>
+  │  ├─ EFFECT identity_store claims_add  AddClaimsAsync  Microsoft.AspNetCore.Identity.UserManager<TUser>
+  │  └─ EFFECT identity_store login_add  AddLoginAsync  Microsoft.AspNetCore.Identity.UserManager<TUser>
   ├─ ExternalController.cs:221  ExternalController.ProcessLoginCallback
   │  ├─ BOUNDARY external Enumerable.FirstOrDefault
   │  ├─ BOUNDARY external List.Add
@@ -539,9 +841,11 @@ Nodes: 6
   ├─ BOUNDARY external AuthenticationHttpContextExtensions.SignOutAsync
   ├─ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
   ├─ BOUNDARY external IEventService.RaiseAsync
-  └─ BOUNDARY external ControllerBase.Redirect
-
-Callgraph: [23] mvc GET consent
+  ├─ BOUNDARY external ControllerBase.Redirect
+  ├─ EFFECT auth_session external_sign_in  SignInAsync  Microsoft.AspNetCore.Http.HttpContext
+  ├─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+  └─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+Callgraph: [23] mvc GET consent (full)
 Nodes: 6
   ConsentController.cs:32  mvc GET consent
   ├─ ConsentController.cs:150  ConsentController.BuildViewModelAsync
@@ -558,11 +862,11 @@ Nodes: 6
   │  │  ├─ BOUNDARY external List.Add
   │  │  └─ BOUNDARY external Enumerable.Contains
   │  ├─ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
-  │  └─ BOUNDARY external LoggerExtensions.LogError
+  │  ├─ BOUNDARY external LoggerExtensions.LogError
+  │  └─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
   ├─ BOUNDARY external Controller.View
   └─ BOUNDARY external Controller.View
-
-Callgraph: [24] mvc POST consent
+Callgraph: [24] mvc POST consent (full)
 Nodes: 9
   ConsentController.cs:47  mvc POST consent
   ├─ ConsentController.cs:82  ConsentController.ProcessConsent
@@ -580,7 +884,8 @@ Nodes: 9
   │  │  │  ├─ BOUNDARY external List.Add
   │  │  │  └─ BOUNDARY external Enumerable.Contains
   │  │  ├─ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
-  │  │  └─ BOUNDARY external LoggerExtensions.LogError
+  │  │  ├─ BOUNDARY external LoggerExtensions.LogError
+  │  │  └─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
   │  ├─ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
   │  ├─ BOUNDARY external IEventService.RaiseAsync
   │  ├─ BOUNDARY external PrincipalExtensions.GetSubjectId
@@ -589,7 +894,11 @@ Nodes: 9
   │  ├─ BOUNDARY external Enumerable.ToArray
   │  ├─ BOUNDARY external IEventService.RaiseAsync
   │  ├─ BOUNDARY external PrincipalExtensions.GetSubjectId
-  │  └─ BOUNDARY external IIdentityServerInteractionService.GrantConsentAsync
+  │  ├─ BOUNDARY external IIdentityServerInteractionService.GrantConsentAsync
+  │  ├─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+  │  ├─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+  │  ├─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+  │  └─ EFFECT identity_consent grant  GrantConsentAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
   ├─ Extensions.cs:9  Extensions.IsNativeClient
   │  ├─ BOUNDARY external String.StartsWith
   │  └─ BOUNDARY external String.StartsWith
@@ -599,9 +908,9 @@ Nodes: 9
   ├─ BOUNDARY external ControllerBase.Redirect
   ├─ BOUNDARY external ModelStateDictionary.AddModelError
   ├─ BOUNDARY external Controller.View
-  └─ BOUNDARY external Controller.View
-
-Callgraph: [25] mvc GET device
+  ├─ BOUNDARY external Controller.View
+  └─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+Callgraph: [25] mvc GET device (full)
 Nodes: 6
   DeviceController.cs:27  mvc GET device
   ├─ DeviceController.cs:130  DeviceController.BuildViewModelAsync
@@ -617,13 +926,13 @@ Nodes: 6
   │  │  ├─ BOUNDARY external List.Add
   │  │  ├─ BOUNDARY external List.Add
   │  │  └─ BOUNDARY external Enumerable.Contains
-  │  └─ BOUNDARY external IDeviceFlowInteractionService.GetAuthorizationContextAsync
+  │  ├─ BOUNDARY external IDeviceFlowInteractionService.GetAuthorizationContextAsync
+  │  └─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IDeviceFlowInteractionService
   ├─ BOUNDARY external String.IsNullOrWhiteSpace
   ├─ BOUNDARY external Controller.View
   ├─ BOUNDARY external Controller.View
   └─ BOUNDARY external Controller.View
-
-Callgraph: [26] mvc POST device
+Callgraph: [26] mvc POST device (full)
 Nodes: 6
   DeviceController.cs:41  mvc POST device
   ├─ DeviceController.cs:130  DeviceController.BuildViewModelAsync
@@ -639,11 +948,11 @@ Nodes: 6
   │  │  ├─ BOUNDARY external List.Add
   │  │  ├─ BOUNDARY external List.Add
   │  │  └─ BOUNDARY external Enumerable.Contains
-  │  └─ BOUNDARY external IDeviceFlowInteractionService.GetAuthorizationContextAsync
+  │  ├─ BOUNDARY external IDeviceFlowInteractionService.GetAuthorizationContextAsync
+  │  └─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IDeviceFlowInteractionService
   ├─ BOUNDARY external Controller.View
   └─ BOUNDARY external Controller.View
-
-Callgraph: [27] mvc POST device
+Callgraph: [27] mvc POST device (full)
 Nodes: 7
   DeviceController.cs:51  mvc POST device
   ├─ DeviceController.cs:63  DeviceController.ProcessConsent
@@ -660,7 +969,8 @@ Nodes: 7
   │  │  │  ├─ BOUNDARY external List.Add
   │  │  │  ├─ BOUNDARY external List.Add
   │  │  │  └─ BOUNDARY external Enumerable.Contains
-  │  │  └─ BOUNDARY external IDeviceFlowInteractionService.GetAuthorizationContextAsync
+  │  │  ├─ BOUNDARY external IDeviceFlowInteractionService.GetAuthorizationContextAsync
+  │  │  └─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IDeviceFlowInteractionService
   │  ├─ BOUNDARY external IDeviceFlowInteractionService.GetAuthorizationContextAsync
   │  ├─ BOUNDARY external IEventService.RaiseAsync
   │  ├─ BOUNDARY external PrincipalExtensions.GetSubjectId
@@ -669,11 +979,14 @@ Nodes: 7
   │  ├─ BOUNDARY external Enumerable.ToArray
   │  ├─ BOUNDARY external IEventService.RaiseAsync
   │  ├─ BOUNDARY external PrincipalExtensions.GetSubjectId
-  │  └─ BOUNDARY external IDeviceFlowInteractionService.HandleRequestAsync
+  │  ├─ BOUNDARY external IDeviceFlowInteractionService.HandleRequestAsync
+  │  ├─ EFFECT identity_store read  GetAuthorizationContextAsync  Duende.IdentityServer.Services.IDeviceFlowInteractionService
+  │  ├─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+  │  ├─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+  │  └─ EFFECT identity_device authorize  HandleRequestAsync  Duende.IdentityServer.Services.IDeviceFlowInteractionService
   ├─ BOUNDARY external Controller.View
   └─ BOUNDARY external Controller.View
-
-Callgraph: [28] mvc GET grants
+Callgraph: [28] mvc GET grants (full)
 Nodes: 2
   GrantsController.cs:32  mvc GET grants
   ├─ GrantsController.cs:51  GrantsController.BuildViewModelAsync
@@ -684,18 +997,21 @@ Nodes: 2
   │  ├─ BOUNDARY external Enumerable.Select
   │  ├─ BOUNDARY external Enumerable.ToArray
   │  ├─ BOUNDARY external Enumerable.Select
-  │  └─ BOUNDARY external List.Add
+  │  ├─ BOUNDARY external List.Add
+  │  ├─ EFFECT identity_store read  GetAllUserGrantsAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+  │  ├─ EFFECT identity_store read  FindClientByIdAsync  Duende.IdentityServer.Stores.IClientStore  [looped_effect:foreach]
+  │  └─ EFFECT identity_store read  FindResourcesByScopeAsync  Duende.IdentityServer.Stores.IResourceStore  [looped_effect:foreach]
   └─ BOUNDARY external Controller.View
-
-Callgraph: [29] mvc POST grants
+Callgraph: [29] mvc POST grants (full)
 Nodes: 1
   GrantsController.cs:41  mvc POST grants
   ├─ BOUNDARY external IIdentityServerInteractionService.RevokeUserConsentAsync
   ├─ BOUNDARY external IEventService.RaiseAsync
   ├─ BOUNDARY external PrincipalExtensions.GetSubjectId
-  └─ BOUNDARY external ControllerBase.RedirectToAction
-
-Callgraph: [30] minapi PUT /cancel
+  ├─ BOUNDARY external ControllerBase.RedirectToAction
+  ├─ EFFECT identity_consent revoke  RevokeUserConsentAsync  Duende.IdentityServer.Services.IIdentityServerInteractionService
+  └─ EFFECT identity_event raise  RaiseAsync  Duende.IdentityServer.Services.IEventService
+Callgraph: [30] minapi PUT /cancel (full)
 Nodes: 8
   OrdersApi.cs:11  minapi PUT /cancel
   └─ OrdersApi.cs:22  OrdersApi.CancelOrderAsync
@@ -719,8 +1035,7 @@ Nodes: 8
      ├─ BOUNDARY external LoggerExtensions.LogInformation
      ├─ BOUNDARY external TypedResults.Problem
      └─ BOUNDARY external TypedResults.Ok
-
-Callgraph: [31] minapi PUT /ship
+Callgraph: [31] minapi PUT /ship (full)
 Nodes: 8
   OrdersApi.cs:12  minapi PUT /ship
   └─ OrdersApi.cs:51  OrdersApi.ShipOrderAsync
@@ -744,39 +1059,36 @@ Nodes: 8
      ├─ BOUNDARY external LoggerExtensions.LogInformation
      ├─ BOUNDARY external TypedResults.Problem
      └─ BOUNDARY external TypedResults.Ok
-
-Callgraph: [32] minapi GET {orderId:int}
+Callgraph: [32] minapi GET {orderId:int} (full)
 Nodes: 4
   OrdersApi.cs:13  minapi GET {orderId:int}
   └─ OrdersApi.cs:80  OrdersApi.GetOrderAsync
      ├─ OrderQueries.cs:6  OrderQueries.GetOrderAsync
      │  ├─ Order.cs:185  Order.GetTotal
      │  │  └─ BOUNDARY external Enumerable.Sum
-     │  ├─ BOUNDARY external EntityFrameworkQueryableExtensions.FirstOrDefaultAsync
      │  ├─ BOUNDARY external EntityFrameworkQueryableExtensions.Include
+     │  ├─ BOUNDARY external EntityFrameworkQueryableExtensions.FirstOrDefaultAsync
      │  ├─ BOUNDARY external Enum.ToString
-     │  ├─ BOUNDARY external Enumerable.ToList
      │  ├─ BOUNDARY external Enumerable.Select
+     │  ├─ BOUNDARY external Enumerable.ToList
      │  └─ EFFECT efcore read  FirstOrDefaultAsync  OrderingContext.Orders
      ├─ BOUNDARY external TypedResults.Ok
      └─ BOUNDARY external TypedResults.NotFound
-
-Callgraph: [33] minapi GET /
+Callgraph: [33] minapi GET / (full)
 Nodes: 4
   OrdersApi.cs:14  minapi GET /
   └─ OrdersApi.cs:93  OrdersApi.GetOrdersByUserAsync
      ├─ IdentityService.cs:5  IdentityService.GetUserIdentity
      │  └─ BOUNDARY external ClaimsPrincipal.FindFirst
      ├─ OrderQueries.cs:37  OrderQueries.GetOrdersFromUserAsync
-     │  ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-     │  ├─ BOUNDARY external Queryable.Select
      │  ├─ BOUNDARY external Queryable.Where
+     │  ├─ BOUNDARY external Queryable.Select
      │  ├─ BOUNDARY external Enum.ToString
      │  ├─ BOUNDARY external Enumerable.Sum
+     │  ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
      │  └─ EFFECT efcore read  ToListAsync  OrderingContext.Orders
      └─ BOUNDARY external TypedResults.Ok
-
-Callgraph: [34] minapi GET /cardtypes
+Callgraph: [34] minapi GET /cardtypes (full)
 Nodes: 3
   OrdersApi.cs:15  minapi GET /cardtypes
   └─ OrdersApi.cs:100  OrdersApi.GetCardTypesAsync
@@ -785,8 +1097,7 @@ Nodes: 3
      │  ├─ BOUNDARY external Queryable.Select
      │  └─ EFFECT efcore read  ToListAsync  OrderingContext.CardTypes
      └─ BOUNDARY external TypedResults.Ok
-
-Callgraph: [35] minapi POST /draft
+Callgraph: [35] minapi POST /draft (full)
 Nodes: 12
   OrdersApi.cs:16  minapi POST /draft
   └─ OrdersApi.cs:106  OrdersApi.CreateOrderDraftAsync
@@ -808,8 +1119,7 @@ Nodes: 12
      │  ├─ BOUNDARY external Enumerable.Select
      │  └─ BOUNDARY external Task.FromResult
      └─ BOUNDARY external LoggerExtensions.LogInformation
-
-Callgraph: [36] minapi POST /
+Callgraph: [36] minapi POST / (full)
 Nodes: 8
   OrdersApi.cs:17  minapi POST /
   └─ OrdersApi.cs:118  OrdersApi.CreateOrderAsync
@@ -839,24 +1149,23 @@ Nodes: 8
      ├─ BOUNDARY external LoggerExtensions.LogInformation
      ├─ BOUNDARY external LoggerExtensions.LogWarning
      └─ BOUNDARY external TypedResults.Ok
-
-Callgraph: [37] minapi GET /
+Callgraph: [37] minapi GET / (full)
 Nodes: 1
   WebHooksApi.cs:13  minapi GET /
   ├─ BOUNDARY external ClaimsPrincipalExtensions.GetUserId
   ├─ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
   ├─ BOUNDARY external Queryable.Where
-  └─ BOUNDARY external TypedResults.Ok
-
-Callgraph: [38] minapi GET /{id:int}
+  ├─ BOUNDARY external TypedResults.Ok
+  └─ EFFECT efcore read  ToListAsync  WebhooksContext.Subscriptions
+Callgraph: [38] minapi GET /{id:int} (full)
 Nodes: 1
   WebHooksApi.cs:20  minapi GET /{id:int}
   ├─ BOUNDARY external ClaimsPrincipalExtensions.GetUserId
   ├─ BOUNDARY external EntityFrameworkQueryableExtensions.SingleOrDefaultAsync
   ├─ BOUNDARY external TypedResults.Ok
-  └─ BOUNDARY external TypedResults.NotFound
-
-Callgraph: [39] minapi POST /
+  ├─ BOUNDARY external TypedResults.NotFound
+  └─ EFFECT efcore read  SingleOrDefaultAsync  WebhooksContext.Subscriptions
+Callgraph: [39] minapi POST / (full)
 Nodes: 3
   WebHooksApi.cs:35  minapi POST /
   ├─ GrantUrlTesterService.cs:5  GrantUrlTesterService.TestGrantUrl
@@ -871,15 +1180,16 @@ Nodes: 3
   │  ├─ BOUNDARY external String.IsNullOrWhiteSpace
   │  ├─ BOUNDARY external LoggerExtensions.LogInformation
   │  ├─ BOUNDARY external LoggerExtensions.LogWarning
-  │  └─ BOUNDARY external Exception.GetType
+  │  ├─ BOUNDARY external Exception.GetType
+  │  └─ EFFECT http send  SendAsync  System.Net.Http.HttpRequestMessage
   ├─ BOUNDARY external Enum.Parse
   ├─ BOUNDARY external ClaimsPrincipalExtensions.GetUserId
   ├─ BOUNDARY external DbContext.Add
   ├─ BOUNDARY external DbContext.SaveChangesAsync
   ├─ BOUNDARY external TypedResults.Created
-  └─ BOUNDARY external TypedResults.BadRequest
-
-Callgraph: [40] minapi DELETE /{id:int}
+  ├─ BOUNDARY external TypedResults.BadRequest
+  └─ EFFECT efcore commit  SaveChangesAsync  WebhooksContext
+Callgraph: [40] minapi DELETE /{id:int} (full)
 Nodes: 1
   WebHooksApi.cs:66  minapi DELETE /{id:int}
   ├─ BOUNDARY external ClaimsPrincipalExtensions.GetUserId
@@ -887,269 +1197,51 @@ Nodes: 1
   ├─ BOUNDARY external DbContext.Remove
   ├─ BOUNDARY external DbContext.SaveChangesAsync
   ├─ BOUNDARY external TypedResults.Accepted
-  └─ BOUNDARY external TypedResults.NotFound
-
-
-================================================================
-MODE: --focus (effect paths only)
-================================================================
-Callgraph: [0] minapi GET /items (focused)
-Nodes: 0 / 3 on effect paths
-
-Callgraph: [1] minapi GET /items (focused)
-Nodes: 0 / 2 on effect paths
-
-Callgraph: [2] minapi GET /items/by (focused)
-Nodes: 2 / 2 on effect paths
-  CatalogApi.cs:31  minapi GET /items/by
-  └─ CatalogApi.cs:161  CatalogApi.GetItemsByIds
-     └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
-
-Callgraph: [3] minapi GET /items/{id:int} (focused)
-Nodes: 2 / 2 on effect paths
-  CatalogApi.cs:36  minapi GET /items/{id:int}
-  └─ CatalogApi.cs:170  CatalogApi.GetItemById
-     └─ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
-
-Callgraph: [4] minapi GET /items/by/{name:minlength(1)} (focused)
-Nodes: 0 / 3 on effect paths
-
-Callgraph: [5] minapi GET /items/{id:int}/pic (focused)
-Nodes: 2 / 4 on effect paths
-  CatalogApi.cs:46  minapi GET /items/{id:int}/pic
-  └─ CatalogApi.cs:202  CatalogApi.GetItemPictureById
-     ├─ EFFECT efcore read  FindAsync  CatalogContext.CatalogItems
-     └─ EFFECT efcore read  FindAsync  CatalogContext.CatalogItems
-
-Callgraph: [6] minapi GET /items/withsemanticrelevance/{text:minlength(1)} (focused)
-Nodes: 4 / 6 on effect paths
-  CatalogApi.cs:53  minapi GET /items/withsemanticrelevance/{text:minlength(1)}
-  └─ CatalogApi.cs:226  CatalogApi.GetItemsBySemanticRelevanceV1
-     └─ CatalogApi.cs:236  CatalogApi.GetItemsBySemanticRelevance
-        ├─ CatalogAI.cs:55  CatalogAI.GetEmbeddingAsync
-        │  └─ EFFECT ai_embeddings read  GenerateVectorAsync  Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
-        ├─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
-        └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
-
-Callgraph: [7] minapi GET /items/withsemanticrelevance (focused)
-Nodes: 3 / 5 on effect paths
-  CatalogApi.cs:60  minapi GET /items/withsemanticrelevance
-  └─ CatalogApi.cs:236  CatalogApi.GetItemsBySemanticRelevance
-     ├─ CatalogAI.cs:55  CatalogAI.GetEmbeddingAsync
-     │  └─ EFFECT ai_embeddings read  GenerateVectorAsync  Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
-     ├─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
-     └─ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
-
-Callgraph: [8] minapi GET /items/type/{typeId}/brand/{brandId?} (focused)
-Nodes: 0 / 3 on effect paths
-
-Callgraph: [9] minapi GET /items/type/all/brand/{brandId:int?} (focused)
-Nodes: 0 / 3 on effect paths
-
-Callgraph: [10] minapi GET /catalogtypes (focused)
-Nodes: 0 / 1 on effect paths
-
-Callgraph: [11] minapi GET /catalogbrands (focused)
-Nodes: 0 / 1 on effect paths
-
-Callgraph: [12] minapi PUT /items (focused)
-Nodes: 8 / 18 on effect paths
-  CatalogApi.cs:93  minapi PUT /items
-  └─ CatalogApi.cs:310  CatalogApi.UpdateItemV1
-     └─ CatalogApi.cs:324  CatalogApi.UpdateItem
-        ├─ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
-        │  └─ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync  [^]
-        ├─ CatalogIntegrationEventService.cs:28  CatalogIntegrationEventService.SaveEventAndCatalogContextChangesAsync
-        │  ├─ ResilientTransaction.cs:11  ResilientTransaction.ExecuteAsync
-        │  │  ├─ EFFECT db_transaction begin  BeginTransactionAsync  DbContext.Database  [resilience_retry:ExecutionStrategy]
-        │  │  └─ EFFECT db_transaction commit  CommitAsync  Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction  [resilience_retry:ExecutionStrategy]
-        │  └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
-        ├─ CatalogIntegrationEventService.cs:11  CatalogIntegrationEventService.PublishThroughEventBusAsync
-        │  └─ EFFECT eventbus publish  PublishAsync  eShop.EventBus.Events.IntegrationEvent
-        ├─ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
-        └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
-
-Callgraph: [13] minapi PUT /items/{id:int} (focused)
-Nodes: 7 / 17 on effect paths
-  CatalogApi.cs:98  minapi PUT /items/{id:int}
-  └─ CatalogApi.cs:324  CatalogApi.UpdateItem
-     ├─ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
-     │  └─ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync  [^]
-     ├─ CatalogIntegrationEventService.cs:28  CatalogIntegrationEventService.SaveEventAndCatalogContextChangesAsync
-     │  ├─ ResilientTransaction.cs:11  ResilientTransaction.ExecuteAsync
-     │  │  ├─ EFFECT db_transaction begin  BeginTransactionAsync  DbContext.Database  [resilience_retry:ExecutionStrategy]
-     │  │  └─ EFFECT db_transaction commit  CommitAsync  Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction  [resilience_retry:ExecutionStrategy]
-     │  └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
-     ├─ CatalogIntegrationEventService.cs:11  CatalogIntegrationEventService.PublishThroughEventBusAsync
-     │  └─ EFFECT eventbus publish  PublishAsync  eShop.EventBus.Events.IntegrationEvent
-     ├─ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
-     └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
-
-Callgraph: [14] minapi POST /items (focused)
-Nodes: 4 / 5 on effect paths
-  CatalogApi.cs:103  minapi POST /items
-  └─ CatalogApi.cs:365  CatalogApi.CreateItem
-     ├─ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
-     │  └─ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync  [^]
-     ├─ EFFECT efcore pending_write  Add  CatalogContext.CatalogItems
-     └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
-
-Callgraph: [15] minapi DELETE /items/{id:int} (focused)
-Nodes: 2 / 2 on effect paths
-  CatalogApi.cs:107  minapi DELETE /items/{id:int}
-  └─ CatalogApi.cs:390  CatalogApi.DeleteItemById
-     ├─ EFFECT efcore pending_write  Remove  CatalogContext.CatalogItems
-     └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
-
-Callgraph: [16] mvc GET account (focused)
-Nodes: 0 / 2 on effect paths
-
-Callgraph: [17] mvc POST account (focused)
-Nodes: 0 / 5 on effect paths
-
-Callgraph: [18] mvc GET account (focused)
-Nodes: 0 / 4 on effect paths
-
-Callgraph: [19] mvc POST account (focused)
-Nodes: 0 / 2 on effect paths
-
-Callgraph: [20] mvc GET account (focused)
-Nodes: 0 / 1 on effect paths
-
-Callgraph: [21] mvc GET external (focused)
-Nodes: 0 / 1 on effect paths
-
-Callgraph: [22] mvc GET external (focused)
-Nodes: 0 / 6 on effect paths
-
-Callgraph: [23] mvc GET consent (focused)
-Nodes: 0 / 6 on effect paths
-
-Callgraph: [24] mvc POST consent (focused)
-Nodes: 0 / 9 on effect paths
-
-Callgraph: [25] mvc GET device (focused)
-Nodes: 0 / 6 on effect paths
-
-Callgraph: [26] mvc POST device (focused)
-Nodes: 0 / 6 on effect paths
-
-Callgraph: [27] mvc POST device (focused)
-Nodes: 0 / 7 on effect paths
-
-Callgraph: [28] mvc GET grants (focused)
-Nodes: 0 / 2 on effect paths
-
-Callgraph: [29] mvc POST grants (focused)
-Nodes: 0 / 1 on effect paths
-
-Callgraph: [30] minapi PUT /cancel (focused)
-Nodes: 4 / 8 on effect paths
-  OrdersApi.cs:11  minapi PUT /cancel
-  └─ OrdersApi.cs:22  OrdersApi.CancelOrderAsync
-     └─ IdentifiedCommandHandler.cs:39  IdentifiedCommandHandler.Handle
-        └─ RequestManager.cs:21  RequestManager.CreateRequestForCommandAsync
-           └─ EFFECT efcore commit  SaveChangesAsync  OrderingContext
-
-Callgraph: [31] minapi PUT /ship (focused)
-Nodes: 4 / 8 on effect paths
-  OrdersApi.cs:12  minapi PUT /ship
-  └─ OrdersApi.cs:51  OrdersApi.ShipOrderAsync
-     └─ IdentifiedCommandHandler.cs:39  IdentifiedCommandHandler.Handle
-        └─ RequestManager.cs:21  RequestManager.CreateRequestForCommandAsync
-           └─ EFFECT efcore commit  SaveChangesAsync  OrderingContext
-
-Callgraph: [32] minapi GET {orderId:int} (focused)
-Nodes: 3 / 4 on effect paths
-  OrdersApi.cs:13  minapi GET {orderId:int}
-  └─ OrdersApi.cs:80  OrdersApi.GetOrderAsync
-     └─ OrderQueries.cs:6  OrderQueries.GetOrderAsync
-        └─ EFFECT efcore read  FirstOrDefaultAsync  OrderingContext.Orders
-
-Callgraph: [33] minapi GET / (focused)
-Nodes: 3 / 4 on effect paths
-  OrdersApi.cs:14  minapi GET /
-  └─ OrdersApi.cs:93  OrdersApi.GetOrdersByUserAsync
-     └─ OrderQueries.cs:37  OrderQueries.GetOrdersFromUserAsync
-        └─ EFFECT efcore read  ToListAsync  OrderingContext.Orders
-
-Callgraph: [34] minapi GET /cardtypes (focused)
-Nodes: 3 / 3 on effect paths
-  OrdersApi.cs:15  minapi GET /cardtypes
-  └─ OrdersApi.cs:100  OrdersApi.GetCardTypesAsync
-     └─ OrderQueries.cs:51  OrderQueries.GetCardTypesAsync
-        └─ EFFECT efcore read  ToListAsync  OrderingContext.CardTypes
-
-Callgraph: [35] minapi POST /draft (focused)
-Nodes: 0 / 12 on effect paths
-
-Callgraph: [36] minapi POST / (focused)
-Nodes: 4 / 8 on effect paths
-  OrdersApi.cs:17  minapi POST /
-  └─ OrdersApi.cs:118  OrdersApi.CreateOrderAsync
-     └─ IdentifiedCommandHandler.cs:39  IdentifiedCommandHandler.Handle
-        └─ RequestManager.cs:21  RequestManager.CreateRequestForCommandAsync
-           └─ EFFECT efcore commit  SaveChangesAsync  OrderingContext
-
-Callgraph: [37] minapi GET / (focused)
-Nodes: 0 / 1 on effect paths
-
-Callgraph: [38] minapi GET /{id:int} (focused)
-Nodes: 0 / 1 on effect paths
-
-Callgraph: [39] minapi POST / (focused)
-Nodes: 0 / 3 on effect paths
-
-Callgraph: [40] minapi DELETE /{id:int} (focused)
-Nodes: 0 / 1 on effect paths
-
+  ├─ BOUNDARY external TypedResults.NotFound
+  ├─ EFFECT efcore read  SingleOrDefaultAsync  WebhooksContext.Subscriptions
+  └─ EFFECT efcore commit  SaveChangesAsync  WebhooksContext
 
 ================================================================
-MODE: --summary (flat effect list)
+MODE: --summary (flat effect inventory, traversal order)
 ================================================================
 Summary: [0] minapi GET /items
-Nodes: 3  Effects: 0
-
+Nodes: 3  Effects: 2
+  efcore           read            CatalogContext.CatalogItems  [x2]
 Summary: [1] minapi GET /items
-Nodes: 2  Effects: 0
-
+Nodes: 2  Effects: 2
+  efcore           read            CatalogContext.CatalogItems  [x2]
 Summary: [2] minapi GET /items/by
 Nodes: 2  Effects: 1
   efcore           read            CatalogContext.CatalogItems
-
 Summary: [3] minapi GET /items/{id:int}
 Nodes: 2  Effects: 1
   efcore           read            CatalogContext.CatalogItems
-
 Summary: [4] minapi GET /items/by/{name:minlength(1)}
-Nodes: 3  Effects: 0
-
+Nodes: 3  Effects: 2
+  efcore           read            CatalogContext.CatalogItems  [x2]
 Summary: [5] minapi GET /items/{id:int}/pic
 Nodes: 4  Effects: 2
   efcore           read            CatalogContext.CatalogItems  [x2]
-
 Summary: [6] minapi GET /items/withsemanticrelevance/{text:minlength(1)}
-Nodes: 6  Effects: 3
-  efcore           read            CatalogContext.CatalogItems  [x2]
+Nodes: 6  Effects: 6
+  efcore           read            CatalogContext.CatalogItems  [x5]
   ai_embeddings    read            Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
-
 Summary: [7] minapi GET /items/withsemanticrelevance
-Nodes: 5  Effects: 3
-  efcore           read            CatalogContext.CatalogItems  [x2]
+Nodes: 5  Effects: 6
+  efcore           read            CatalogContext.CatalogItems  [x5]
   ai_embeddings    read            Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
-
 Summary: [8] minapi GET /items/type/{typeId}/brand/{brandId?}
-Nodes: 3  Effects: 0
-
+Nodes: 3  Effects: 2
+  efcore           read            CatalogContext.CatalogItems  [x2]
 Summary: [9] minapi GET /items/type/all/brand/{brandId:int?}
-Nodes: 3  Effects: 0
-
+Nodes: 3  Effects: 2
+  efcore           read            CatalogContext.CatalogItems  [x2]
 Summary: [10] minapi GET /catalogtypes
-Nodes: 1  Effects: 0
-
+Nodes: 1  Effects: 1
+  efcore           read            CatalogContext.CatalogTypes
 Summary: [11] minapi GET /catalogbrands
-Nodes: 1  Effects: 0
-
+Nodes: 1  Effects: 1
+  efcore           read            CatalogContext.CatalogBrands
 Summary: [12] minapi PUT /items
 Nodes: 18  Effects: 7
   efcore           read            CatalogContext.CatalogItems
@@ -1158,7 +1250,6 @@ Nodes: 18  Effects: 7
   db_transaction   begin           DbContext.Database  [resilience_retry:ExecutionStrategy]
   db_transaction   commit          Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction  [resilience_retry:ExecutionStrategy]
   eventbus         publish         eShop.EventBus.Events.IntegrationEvent
-
 Summary: [13] minapi PUT /items/{id:int}
 Nodes: 17  Effects: 7
   efcore           read            CatalogContext.CatalogItems
@@ -1167,96 +1258,107 @@ Nodes: 17  Effects: 7
   db_transaction   begin           DbContext.Database  [resilience_retry:ExecutionStrategy]
   db_transaction   commit          Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction  [resilience_retry:ExecutionStrategy]
   eventbus         publish         eShop.EventBus.Events.IntegrationEvent
-
 Summary: [14] minapi POST /items
 Nodes: 5  Effects: 3
   efcore           pending_write   CatalogContext.CatalogItems
   efcore           commit          CatalogContext
   ai_embeddings    read            Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
-
 Summary: [15] minapi DELETE /items/{id:int}
 Nodes: 2  Effects: 2
   efcore           pending_write   CatalogContext.CatalogItems
   efcore           commit          CatalogContext
-
 Summary: [16] mvc GET account
-Nodes: 2  Effects: 0
-
+Nodes: 2  Effects: 2
+  identity_store   read            Duende.IdentityServer.Services.IIdentityServerInteractionService
+  identity_store   read            Duende.IdentityServer.Stores.IClientStore
 Summary: [17] mvc POST account
-Nodes: 5  Effects: 0
-
+Nodes: 5  Effects: 7
+  identity_store   read            Duende.IdentityServer.Services.IIdentityServerInteractionService  [x2]
+  identity_consent deny            Duende.IdentityServer.Services.IIdentityServerInteractionService
+  auth_session     sign_in         Microsoft.AspNetCore.Identity.SignInManager<TUser>
+  identity_event   raise           Duende.IdentityServer.Services.IEventService  [x2]
+  identity_store   read            Duende.IdentityServer.Stores.IClientStore
 Summary: [18] mvc GET account
-Nodes: 4  Effects: 0
-
+Nodes: 4  Effects: 4
+  identity_store   read            Duende.IdentityServer.Services.IIdentityServerInteractionService  [x2]
+  auth_session     sign_out        Microsoft.AspNetCore.Identity.SignInManager<TUser>
+  identity_event   raise           Duende.IdentityServer.Services.IEventService
 Summary: [19] mvc POST account
-Nodes: 2  Effects: 0
-
+Nodes: 2  Effects: 3
+  auth_session     sign_out        Microsoft.AspNetCore.Identity.SignInManager<TUser>
+  identity_event   raise           Duende.IdentityServer.Services.IEventService
+  identity_store   read            Duende.IdentityServer.Services.IIdentityServerInteractionService
 Summary: [20] mvc GET account
 Nodes: 1  Effects: 0
-
 Summary: [21] mvc GET external
 Nodes: 1  Effects: 0
-
 Summary: [22] mvc GET external
-Nodes: 6  Effects: 0
-
+Nodes: 6  Effects: 6
+  auth_session     external_sign_in  Microsoft.AspNetCore.Http.HttpContext
+  identity_store   read            Duende.IdentityServer.Services.IIdentityServerInteractionService
+  identity_event   raise           Duende.IdentityServer.Services.IEventService
+  identity_store   user_create     Microsoft.AspNetCore.Identity.UserManager<TUser>
+  identity_store   claims_add      Microsoft.AspNetCore.Identity.UserManager<TUser>
+  identity_store   login_add       Microsoft.AspNetCore.Identity.UserManager<TUser>
 Summary: [23] mvc GET consent
-Nodes: 6  Effects: 0
-
+Nodes: 6  Effects: 1
+  identity_store   read            Duende.IdentityServer.Services.IIdentityServerInteractionService
 Summary: [24] mvc POST consent
-Nodes: 9  Effects: 0
-
+Nodes: 9  Effects: 6
+  identity_store   read            Duende.IdentityServer.Services.IIdentityServerInteractionService  [x3]
+  identity_event   raise           Duende.IdentityServer.Services.IEventService  [x2]
+  identity_consent grant           Duende.IdentityServer.Services.IIdentityServerInteractionService
 Summary: [25] mvc GET device
-Nodes: 6  Effects: 0
-
+Nodes: 6  Effects: 1
+  identity_store   read            Duende.IdentityServer.Services.IDeviceFlowInteractionService
 Summary: [26] mvc POST device
-Nodes: 6  Effects: 0
-
+Nodes: 6  Effects: 1
+  identity_store   read            Duende.IdentityServer.Services.IDeviceFlowInteractionService
 Summary: [27] mvc POST device
-Nodes: 7  Effects: 0
-
+Nodes: 7  Effects: 5
+  identity_store   read            Duende.IdentityServer.Services.IDeviceFlowInteractionService  [x2]
+  identity_event   raise           Duende.IdentityServer.Services.IEventService  [x2]
+  identity_device  authorize       Duende.IdentityServer.Services.IDeviceFlowInteractionService
 Summary: [28] mvc GET grants
-Nodes: 2  Effects: 0
-
+Nodes: 2  Effects: 3
+  identity_store   read            Duende.IdentityServer.Services.IIdentityServerInteractionService
+  identity_store   read            Duende.IdentityServer.Stores.IClientStore  [looped_effect:foreach]
+  identity_store   read            Duende.IdentityServer.Stores.IResourceStore  [looped_effect:foreach]
 Summary: [29] mvc POST grants
-Nodes: 1  Effects: 0
-
+Nodes: 1  Effects: 2
+  identity_consent revoke          Duende.IdentityServer.Services.IIdentityServerInteractionService
+  identity_event   raise           Duende.IdentityServer.Services.IEventService
 Summary: [30] minapi PUT /cancel
 Nodes: 8  Effects: 1
   efcore           commit          OrderingContext
-
 Summary: [31] minapi PUT /ship
 Nodes: 8  Effects: 1
   efcore           commit          OrderingContext
-
 Summary: [32] minapi GET {orderId:int}
 Nodes: 4  Effects: 1
   efcore           read            OrderingContext.Orders
-
 Summary: [33] minapi GET /
 Nodes: 4  Effects: 1
   efcore           read            OrderingContext.Orders
-
 Summary: [34] minapi GET /cardtypes
 Nodes: 3  Effects: 1
   efcore           read            OrderingContext.CardTypes
-
 Summary: [35] minapi POST /draft
 Nodes: 12  Effects: 0
-
 Summary: [36] minapi POST /
 Nodes: 8  Effects: 1
   efcore           commit          OrderingContext
-
 Summary: [37] minapi GET /
-Nodes: 1  Effects: 0
-
+Nodes: 1  Effects: 1
+  efcore           read            WebhooksContext.Subscriptions
 Summary: [38] minapi GET /{id:int}
-Nodes: 1  Effects: 0
-
+Nodes: 1  Effects: 1
+  efcore           read            WebhooksContext.Subscriptions
 Summary: [39] minapi POST /
-Nodes: 3  Effects: 0
-
+Nodes: 3  Effects: 2
+  efcore           commit          WebhooksContext
+  http             send            System.Net.Http.HttpRequestMessage
 Summary: [40] minapi DELETE /{id:int}
-Nodes: 1  Effects: 0
-
+Nodes: 1  Effects: 2
+  efcore           read            WebhooksContext.Subscriptions
+  efcore           commit          WebhooksContext

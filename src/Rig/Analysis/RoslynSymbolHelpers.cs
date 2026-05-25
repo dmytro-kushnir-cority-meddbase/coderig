@@ -48,6 +48,19 @@ internal static class RoslynSymbolHelpers
         return tree.GetLineSpan(node.Span).StartLinePosition.Line + 1;
     }
 
+    // Returns the line of the method name token rather than the start of the entire
+    // invocation expression, so that LINQ fluent chains sort in source reading order.
+    public static int GetCallNameLine(SyntaxTree tree, SyntaxNode node) => node switch
+    {
+        InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax m } =>
+            tree.GetLineSpan(m.Name.Span).StartLinePosition.Line + 1,
+        MemberAccessExpressionSyntax m =>
+            tree.GetLineSpan(m.Name.Span).StartLinePosition.Line + 1,
+        IdentifierNameSyntax id =>
+            tree.GetLineSpan(id.Span).StartLinePosition.Line + 1,
+        _ => GetLine(tree, node)
+    };
+
     public static bool IsLineInside(SyntaxTree tree, SyntaxNode node, int line)
     {
         var span = tree.GetLineSpan(node.Span);
