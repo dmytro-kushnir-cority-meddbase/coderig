@@ -82,13 +82,14 @@ An MCP server would open `RigDbContext` once and serve `Reads.cs` queries in <5m
   Note: Basket.API has no HTTP entry points (gRPC only); WebApp/HybridApp/WebAppComponents excluded
   (Blazor SSR and MAUI — MSBuildWorkspace can't compile Razor/XAML codegen).
   MediatR dispatch in Ordering.API is not traversed (dynamic dispatch).
-- `playgrounds/CleanArchitecture/` — vendored public CleanArchitecture solution (.sln).
-  5 FastEndpoints entrypoints; exercises .sln C#-filter path.
+CleanArchitecture is no longer vendored in this repo or used as a unit/integration
+test fixture. Roslyn-backed tests should use owned playgrounds copied to a fresh
+temp directory per test run.
 
 ## Verification
 
 ```text
-dotnet test                    # 5 tests, all green
+dotnet test                    # 4 tests, all green
 .\.rig-bin\Rig.exe effects     # ~315ms with R2R binary
 ```
 
@@ -144,9 +145,7 @@ Other candidates:
 - `src/Rig.Storage/Queries/Writes.cs`
 - `playgrounds/EntryPointEffects/EntryPointEffects.slnx`
 - `playgrounds/EntryPointEffects/rig.rules.json`
-- `playgrounds/CleanArchitecture/Clean.Architecture.slnx`
 - `tests/Rig.Tests/Analysis/PlaygroundAnalysisTests.cs`
-- `tests/Rig.Tests/Analysis/CleanArchitecturePlaygroundTests.cs`
 - `tests/Rig.Tests/Cli/CliApplicationTests.cs`
 
 - `playgrounds/OrchardCore/OrchardCore.slnx`
@@ -175,11 +174,11 @@ The playground at `playgrounds/EntryPointEffects` builds and includes:
 - `foreach` looped effect observation
 - `Task.WhenAll` parallel fanout observation
 
-The playground at `playgrounds/CleanArchitecture` vendors the public
-CleanArchitecture target used for reconciliation. `CleanArchitecturePlaygroundTests`
-restores it and asserts the currently expected 5 FastEndpoints entrypoints and
-24 effects, including EF query/raw SQL/schema operations, repository effects,
-SMTP effects, and Mediator/MediatR dispatch.
+Roslyn-backed tests copy this playground to a fresh temp directory before
+restore/analyze. Keep that pattern for integration coverage so MSBuild `obj/bin`
+outputs and `.rig` databases do not contend on shared repo paths. The playground
+has local `Directory.Packages.props` and `NuGet.config` files so it can restore
+without depending on repo-root package management or user-level NuGet sources.
 
 The analyzer currently emits:
 
@@ -241,7 +240,6 @@ dotnet build RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false -warnas
 dotnet run --project src/Rig -- index playgrounds/EntryPointEffects/EntryPointEffects.slnx
 dotnet run --project src/Rig -- runs
 dotnet run --project src/Rig -- callgraph "minapi GET /minapi/teams/{id}"
-dotnet run --project src/Rig -- index %TEMP%\coderig-targets\CleanArchitecture\Clean.Architecture.slnx
 ```
 
 Dead-code scan after the refactor found no stale moved helper methods or
@@ -313,7 +311,5 @@ visible without inspecting JSON/SQLite.
 - `src/Rig/Storage/RigDbContext.cs`
 - `playgrounds/EntryPointEffects/EntryPointEffects.slnx`
 - `playgrounds/EntryPointEffects/rig.rules.json`
-- `playgrounds/CleanArchitecture/Clean.Architecture.slnx`
 - `tests/Rig.Tests/Analysis/PlaygroundAnalysisTests.cs`
-- `tests/Rig.Tests/Analysis/CleanArchitecturePlaygroundTests.cs`
 - `tests/Rig.Tests/Cli/CliApplicationTests.cs`

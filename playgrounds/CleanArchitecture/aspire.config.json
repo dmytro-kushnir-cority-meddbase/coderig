@@ -1,5 +1,0 @@
-{
-  "appHost": {
-    "path": "src/Clean.Architecture.AspireHost/Clean.Architecture.AspireHost.csproj"
-  }
-}

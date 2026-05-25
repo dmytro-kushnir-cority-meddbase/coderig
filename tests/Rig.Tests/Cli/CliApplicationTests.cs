@@ -1,8 +1,10 @@
 using Shouldly;
 using Rig.Cli;
+using Rig.Tests.Fixtures;
 
 namespace Rig.Tests.Cli;
 
+[Collection(RoslynIntegrationCollection.Name)]
 public sealed class CliApplicationTests
 {
     [Fact]
@@ -42,8 +44,9 @@ public sealed class CliApplicationTests
     [Fact]
     public async Task Index_then_entrypoints_and_effects_print_latest_playground_analysis()
     {
-        var workingDirectory = Directory.CreateTempSubdirectory("rig-tests-").FullName;
-        var solutionPath = PlaygroundSolutionPath();
+        using var playground = await TempPlayground.CreateEntryPointEffectsAsync();
+        var workingDirectory = Path.Combine(playground.RootDirectory, "workspace");
+        var solutionPath = playground.SolutionPath;
         var output = new StringWriter();
         var error = new StringWriter();
 
@@ -133,17 +136,4 @@ public sealed class CliApplicationTests
         output.ToString().ShouldContain("[parallel_fanout:Task.WhenAll]");
     }
 
-    private static string PlaygroundSolutionPath()
-    {
-        return Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory,
-            "..",
-            "..",
-            "..",
-            "..",
-            "..",
-            "playgrounds",
-            "EntryPointEffects",
-            "EntryPointEffects.slnx"));
-    }
 }

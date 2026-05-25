@@ -125,6 +125,16 @@ Status: `todo`
 
 ## Completed Slices (recent)
 
+### Roslyn integration test isolation
+
+Status: `verified`
+
+- Removed the vendored CleanArchitecture playground and its direct test fixture.
+- Roslyn-backed tests now copy the owned `EntryPointEffects` playground to a fresh temp directory and restore it before analysis.
+- `EntryPointEffects` now carries local `Directory.Packages.props` and `NuGet.config`, so temp copies do not depend on repo-root package metadata or user-level NuGet sources.
+- MSBuild/Roslyn integration tests share a non-parallel xUnit collection to avoid global MSBuild/tooling contention.
+- Package check: test packages are already current stable on NuGet (`xunit` 2.9.3, `Microsoft.NET.Test.Sdk` 18.5.1, `xunit.runner.visualstudio` 3.1.5).
+
 ### Refactoring pass: CLI rendering, effect observations, callgraph indexes
 
 Status: `verified`

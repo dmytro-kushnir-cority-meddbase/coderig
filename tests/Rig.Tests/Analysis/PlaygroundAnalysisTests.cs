@@ -1,25 +1,18 @@
 using Shouldly;
 using Rig.Analysis;
+using Rig.Tests.Fixtures;
 
 namespace Rig.Tests.Analysis;
 
+[Collection(RoslynIntegrationCollection.Name)]
 public sealed class PlaygroundAnalysisTests
 {
     [Fact]
     public async Task Entry_point_effects_playground_tracks_entrypoints_and_effects()
     {
-        var solutionPath = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory,
-            "..",
-            "..",
-            "..",
-            "..",
-            "..",
-            "playgrounds",
-            "EntryPointEffects",
-            "EntryPointEffects.slnx"));
+        using var playground = await TempPlayground.CreateEntryPointEffectsAsync();
 
-        var result = await SolutionAnalyzer.AnalyzeAsync(solutionPath);
+        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
 
         result.SourceFiles.ShouldContain(sourceFile =>
             sourceFile.Status == "skipped" &&
