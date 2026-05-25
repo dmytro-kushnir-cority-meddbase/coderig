@@ -130,6 +130,8 @@ Status: `todo`
 Status: `verified`
 
 - Added small tests for `RuleTypeMatcher`, `GlobMatcher`, `CallGraphRenderer`, and CLI validation errors.
+- Added small tests for source-file classification precedence without loading a Roslyn workspace.
+- Added small tests for profile validation and solution/extra rule merging.
 - Kept the Roslyn/MSBuild coverage as integration smoke tests.
 - Fixed glob semantics so leading `**/` matches zero or more directories, which makes generated-file profile rules work at solution root as well as nested paths.
 - Verification: `dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false` — 21 tests green.

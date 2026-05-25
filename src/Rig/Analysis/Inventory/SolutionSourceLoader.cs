@@ -140,7 +140,7 @@ internal static class SolutionSourceLoader
                 continue;
             }
 
-            var classification = ClassifySourceFile(solutionPath, project, document.FilePath, rules);
+            var classification = SourceFileClassifier.Classify(solutionPath, project, document.FilePath, rules);
             sourceFiles.Add(new SourceFileInfo(
                 project.Name,
                 document.FilePath,
@@ -208,59 +208,6 @@ internal static class SolutionSourceLoader
     private sealed record ProjectSourceLoadResult(
         IReadOnlyList<SourceFileInfo> SourceFiles,
         IReadOnlyList<SourceModel> Sources);
-
-    private static SourceFileClassification ClassifySourceFile(
-        string solutionPath,
-        Project project,
-        string filePath,
-        AnalysisRuleSet rules)
-    {
-        var relativePath = GetRelativePath(solutionPath, filePath);
-        var excludedByRule = rules.FindExcludedFile(relativePath);
-        if (excludedByRule is not null)
-        {
-            return new SourceFileClassification(
-                "skipped",
-                "high",
-                "profile",
-                excludedByRule.Reason,
-                excludedByRule.Id);
-        }
-
-        var includedByRule = rules.FindIncludedFile(relativePath);
-        if (includedByRule is not null)
-        {
-            return new SourceFileClassification(
-                "indexed",
-                "high",
-                "profile",
-                includedByRule.Reason,
-                includedByRule.Id);
-        }
-
-        if (rules.IsTestProject(project.Name))
-        {
-            return new SourceFileClassification(
-                "skipped",
-                "medium",
-                "convention",
-                "test_source",
-                project.Name);
-        }
-
-        return new SourceFileClassification(
-            "indexed",
-            "high",
-            "compilation",
-            "project_document",
-            relativePath);
-    }
-
-    private static string GetRelativePath(string solutionPath, string filePath)
-    {
-        var solutionDirectory = Path.GetDirectoryName(solutionPath) ?? Directory.GetCurrentDirectory();
-        return Path.GetRelativePath(solutionDirectory, filePath).Replace('\\', '/');
-    }
 
     private static bool IsExcludedProjectDiagnostic(string diagnosticMessage, AnalysisRuleSet rules)
     {
