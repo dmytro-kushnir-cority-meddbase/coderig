@@ -15,8 +15,11 @@ Current implementation handover notes live in
 ## Quick Start
 
 ```powershell
-# install
-dotnet tool install -g rig --add-source https://api.nuget.org/v3/index.json
+# build and pack
+dotnet pack src/Rig/Rig.csproj -c Release -o .rig-nupkg /p:TreatWarningsAsErrors=false
+
+# install globally from local package
+dotnet tool install -g rig --add-source .rig-nupkg
 
 # index a solution
 rig index playgrounds/EntryPointEffects/EntryPointEffects.slnx
@@ -24,10 +27,11 @@ rig index playgrounds/EntryPointEffects/EntryPointEffects.slnx
 # explore
 rig entrypoints
 rig effects
-rig callgraph 0 --focus
+rig callgraph 0          # focused by default
+rig callgraph 0 --full   # all nodes
 ```
 
-### Build from source
+### Self-contained binary (win-x64, fastest startup)
 
 ```powershell
 dotnet publish src/Rig/Rig.csproj -c Release -r win-x64 --self-contained -o .rig-bin `
@@ -44,7 +48,7 @@ dotnet publish src/Rig/Rig.csproj -c Release -r win-x64 --self-contained -o .rig
 | `rig runs` | List all runs in chronological order |
 | `rig entrypoints` | List all entry points in the latest run |
 | `rig effects [--entrypoint N]` | List all effects, optionally filtered to one entry point |
-| `rig callgraph <N> [--focus]` | Print the call graph; `--focus` trims to effect-reachable nodes only |
+| `rig callgraph <N> [--full\|--summary]` | Print the call graph for entry point N. Default: focused (effect-reachable nodes only). `--full` shows all nodes and boundary calls. `--summary` prints a flat effect inventory. |
 | `rig di` | List MS DI registrations found in the solution |
 | `rig files --skipped` | List files excluded from analysis and the rule that excluded them |
 | `rig profile validate` | Validate the `rig.rules.json` profile for the current directory |
@@ -81,7 +85,7 @@ The `eShop` playground is a real-world microservices reference app (41 entry poi
 ### Focused call graph — `PUT /items`
 
 ```
-$ rig callgraph 12 --focus
+$ rig callgraph 12
 
 Callgraph: [12] minapi PUT /items (focused)
 Nodes: 8 / 18 on effect paths
