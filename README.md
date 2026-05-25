@@ -1,16 +1,71 @@
-# Runtime Intelligence Graph
+# Runtime Intelligence Graph (`rig`)
 
-Working repository for a CLI-first .NET code-mining tool.
-
-The project aims to index .NET solutions into immutable SQLite runs, then expose
-entrypoint callgraphs annotated with interesting external effects such as HTTP,
-EF Core, Redis, and loop/parallel execution contexts.
+A CLI-first .NET 10 static analysis tool that indexes .NET solutions into immutable
+SQLite runs and exposes per-entry-point call graphs annotated with external effects
+(EF Core reads/writes/commits, Redis, HTTP, file I/O, message bus, etc.) and
+execution-context observations (loops, parallel fanout, resilience retries,
+concurrency hazards).
 
 The current product direction is captured in [docs/mvp-spec.md](docs/mvp-spec.md).
 Shared project vocabulary lives in
 [docs/ubiquitous-language.md](docs/ubiquitous-language.md).
 Current implementation handover notes live in
 [docs/handover.md](docs/handover.md).
+
+## Quick Start
+
+```powershell
+# build
+dotnet publish src/Rig/Rig.csproj -c Release -r win-x64 --self-contained -o .rig-bin `
+  -p:PublishReadyToRun=true -p:DebugSymbols=false -p:DebugType=none `
+  /p:TreatWarningsAsErrors=false
+
+# index a solution
+.\.rig-bin\Rig.exe index playgrounds/EntryPointEffects/EntryPointEffects.slnx
+
+# explore
+.\.rig-bin\Rig.exe entrypoints
+.\.rig-bin\Rig.exe effects
+.\.rig-bin\Rig.exe callgraph 0 --focus
+```
+
+## CLI Commands
+
+| Command | Description |
+|---|---|
+| `rig index <solution>` | Index a `.sln` / `.slnx` into a new immutable run in `.rig/rig.db` |
+| `rig runs` | List all runs in chronological order |
+| `rig entrypoints` | List all entry points in the latest run |
+| `rig effects [--entrypoint N]` | List all effects, optionally filtered to one entry point |
+| `rig callgraph <N> [--focus]` | Print the call graph; `--focus` trims to effect-reachable nodes only |
+| `rig di` | List MS DI registrations found in the solution |
+| `rig files --skipped` | List files excluded from analysis and the rule that excluded them |
+| `rig profile validate` | Validate the `rig.rules.json` profile for the current directory |
+
+Entry-point kinds detected: `mvc` (controller actions), `minapi` (`app.Map*`), `fastendpoint`.
+
+## Effect Observations
+
+Observations are appended to effect lines in brackets when a structural pattern
+is detected around the effect site:
+
+| Observation | Trigger |
+|---|---|
+| `[looped_effect:foreach]` | Effect inside a `foreach` loop |
+| `[looped_effect:parallel]` | Effect inside `Parallel.ForEach` / `Parallel.ForEachAsync` |
+| `[parallel_fanout:Task.WhenAll]` | Effect inside a `Task.WhenAll` call |
+| `[resilience_retry:ExecutionStrategy]` | Effect inside an EF Core resilience `ExecuteAsync` |
+| `[resilience_retry:ResiliencePipeline]` | Effect inside a Polly `ResiliencePipeline.ExecuteAsync` |
+| `[read_before_commit:before_commit]` | `SaveChangesAsync` preceded by an EF read in the same method — potential lost-update / TOCTOU site |
+| `[concurrency_handled:DbUpdateConcurrencyException]` | `SaveChangesAsync` inside a `catch(DbUpdateConcurrencyException)` — optimistic concurrency IS handled |
+
+## Playgrounds
+
+| Playground | Entry points | Effects | Index time |
+|---|---|---|---|
+| `EntryPointEffects` | 8 | ~23 | ~10 s |
+| `eShop` | 41 | 100 | ~30 s |
+| `OrchardCore` | 296 | 788 | ~5 min |
 
 ## Implementation Workflow
 
