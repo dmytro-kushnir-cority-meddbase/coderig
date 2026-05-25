@@ -86,6 +86,9 @@ Status: `in_progress`
 - [x] `Parallel.ForEachAsync`
 - [x] `looped_effect`
 - [x] `parallel_fanout`
+- [x] `resilience_retry`
+- [x] `read_before_commit` (EF commit preceded by EF read in same method — potential lost update)
+- [x] `concurrency_handled` (SaveChangesAsync inside catch for DbUpdateConcurrencyException)
 - [ ] `unresolved_resource`
 - [ ] `unresolved_call_target`
 
@@ -102,8 +105,12 @@ Status: `in_progress`
 - [x] tree callgraph rendering with box-drawing characters
 - [x] `--focus` mode (backward BFS, effect-reachable nodes only)
 - [x] parallel compilation + MSBuild progress reporting for `rig index`
-- [x] eShop playground indexed (41 EPs, 56 effects: EF Core, Redis, EventBus, Npgsql, AI embeddings)
+- [x] eShop playground indexed (41 EPs, 100 effects: EF Core, Redis, EventBus, Npgsql, AI embeddings)
 - [x] `GenerateVectorAsync` extension method rule for AI embeddings
+- [x] eShop TOCTOU/concurrency review: `read_before_commit` and `concurrency_handled` observations on `efcore commit` effects
+- [x] 5 IdentityServer read rules (IIdentityServerInteractionService, IDeviceFlowInteractionService, IClientStore, IClientStoreExtensions, IResourceStoreExtensions)
+- [x] Sort all effects, boundary calls, and application calls by method-name-token line (source reading order)
+- [x] Default callgraph mode is focused; `--full` flag for verbose tree; `--summary` for flat effect inventory
 
 ### Phase 7: Diff and Agent Projections
 
@@ -117,6 +124,16 @@ Status: `todo`
 - [ ] compact callgraph projections
 
 ## Completed Slices (recent)
+
+### EF versioning observations: read_before_commit, concurrency_handled
+
+Status: `committed`
+
+- `FindReadBeforeCommitContext`: when `SaveChangesAsync` fires in a method that already has an EF read (`ToListAsync`, `FindAsync`, etc.) earlier in the same body, attaches `[read_before_commit:before_commit]`. Signals a potential lost-update / TOCTOU site where no concurrency guard is visible.
+- `FindConcurrencyHandlingContext`: when `SaveChangesAsync` is inside a `try` whose `catch` clauses catch `DbUpdateConcurrencyException` or `DbUpdateException`, attaches `[concurrency_handled:DbUpdateConcurrencyException]`. Confirms that optimistic concurrency is explicitly handled.
+- Both observations are in `EffectExtractor.AttachObservations`. Medium-confidence, Roslyn-compilation basis.
+- eShop EP [12] `PUT /items` and EP [40] `DELETE /webhook` now show `[read_before_commit:before_commit]` — the two genuine TOCTOU candidates in that codebase.
+
 
 ### .sln support, multi-file profile loading, Parallel.ForEach/ForEachAsync fanout
 

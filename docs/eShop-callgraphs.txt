@@ -101,7 +101,7 @@ Nodes: 8 / 18 on effect paths
         ├─ CatalogIntegrationEventService.cs:11  CatalogIntegrationEventService.PublishThroughEventBusAsync
         │  └─ EFFECT eventbus publish  PublishAsync  eShop.EventBus.Events.IntegrationEvent
         ├─ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
-        └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+        └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext  [read_before_commit:before_commit]
 Callgraph: [13] minapi PUT /items/{id:int} (focused)
 Nodes: 7 / 17 on effect paths
   CatalogApi.cs:98  minapi PUT /items/{id:int}
@@ -116,7 +116,7 @@ Nodes: 7 / 17 on effect paths
      ├─ CatalogIntegrationEventService.cs:11  CatalogIntegrationEventService.PublishThroughEventBusAsync
      │  └─ EFFECT eventbus publish  PublishAsync  eShop.EventBus.Events.IntegrationEvent
      ├─ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
-     └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+     └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext  [read_before_commit:before_commit]
 Callgraph: [14] minapi POST /items (focused)
 Nodes: 4 / 5 on effect paths
   CatalogApi.cs:103  minapi POST /items
@@ -285,7 +285,7 @@ Callgraph: [40] minapi DELETE /{id:int} (focused)
 Nodes: 1 / 1 on effect paths
   WebHooksApi.cs:66  minapi DELETE /{id:int}
   ├─ EFFECT efcore read  SingleOrDefaultAsync  WebhooksContext.Subscriptions
-  └─ EFFECT efcore commit  SaveChangesAsync  WebhooksContext
+  └─ EFFECT efcore commit  SaveChangesAsync  WebhooksContext  [read_before_commit:before_commit]
 
 ================================================================
 MODE: --full (complete tree)
@@ -586,7 +586,7 @@ Nodes: 18
      │  ├─ BOUNDARY external DbContext.SaveChangesAsync
      │  ├─ BOUNDARY external TypedResults.Created
      │  ├─ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
-     │  └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+     │  └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext  [read_before_commit:before_commit]
      └─ BOUNDARY external TypedResults.BadRequest
 Callgraph: [13] minapi PUT /items/{id:int} (full)
 Nodes: 17
@@ -655,7 +655,7 @@ Nodes: 17
      ├─ BOUNDARY external DbContext.SaveChangesAsync
      ├─ BOUNDARY external TypedResults.Created
      ├─ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
-     └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+     └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext  [read_before_commit:before_commit]
 Callgraph: [14] minapi POST /items (full)
 Nodes: 5
   CatalogApi.cs:103  minapi POST /items
@@ -1199,7 +1199,7 @@ Nodes: 1
   ├─ BOUNDARY external TypedResults.Accepted
   ├─ BOUNDARY external TypedResults.NotFound
   ├─ EFFECT efcore read  SingleOrDefaultAsync  WebhooksContext.Subscriptions
-  └─ EFFECT efcore commit  SaveChangesAsync  WebhooksContext
+  └─ EFFECT efcore commit  SaveChangesAsync  WebhooksContext  [read_before_commit:before_commit]
 
 ================================================================
 MODE: --summary (flat effect inventory, traversal order)
@@ -1245,7 +1245,7 @@ Nodes: 1  Effects: 1
 Summary: [12] minapi PUT /items
 Nodes: 18  Effects: 7
   efcore           read            CatalogContext.CatalogItems
-  efcore           commit          CatalogContext  [x2]
+  efcore           commit          CatalogContext  [x2]  [read_before_commit:before_commit]
   ai_embeddings    read            Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
   db_transaction   begin           DbContext.Database  [resilience_retry:ExecutionStrategy]
   db_transaction   commit          Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction  [resilience_retry:ExecutionStrategy]
@@ -1253,7 +1253,7 @@ Nodes: 18  Effects: 7
 Summary: [13] minapi PUT /items/{id:int}
 Nodes: 17  Effects: 7
   efcore           read            CatalogContext.CatalogItems
-  efcore           commit          CatalogContext  [x2]
+  efcore           commit          CatalogContext  [x2]  [read_before_commit:before_commit]
   ai_embeddings    read            Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
   db_transaction   begin           DbContext.Database  [resilience_retry:ExecutionStrategy]
   db_transaction   commit          Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction  [resilience_retry:ExecutionStrategy]
@@ -1361,4 +1361,4 @@ Nodes: 3  Effects: 2
 Summary: [40] minapi DELETE /{id:int}
 Nodes: 1  Effects: 2
   efcore           read            WebhooksContext.Subscriptions
-  efcore           commit          WebhooksContext
+  efcore           commit          WebhooksContext  [read_before_commit:before_commit]

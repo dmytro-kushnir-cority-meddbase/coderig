@@ -216,7 +216,115 @@ internal static class EffectExtractor
                 "effect_inside_resilience_retry"));
         }
 
+        var readBeforeCommit = FindReadBeforeCommitContext(invocation, semanticModel);
+        if (readBeforeCommit is not null)
+        {
+            observations.Add(new EffectObservationInfo(
+                "read_before_commit",
+                readBeforeCommit.Value.Context,
+                readBeforeCommit.Value.Detail,
+                "medium",
+                "compilation",
+                "potential_lost_update"));
+        }
+
+        var concurrencyHandled = FindConcurrencyHandlingContext(invocation, semanticModel);
+        if (concurrencyHandled is not null)
+        {
+            observations.Add(new EffectObservationInfo(
+                "concurrency_handled",
+                concurrencyHandled.Value.Context,
+                concurrencyHandled.Value.Detail,
+                "high",
+                "compilation",
+                "efcore_optimistic_concurrency_catch"));
+        }
+
         return effect with { Observations = observations };
+    }
+
+    private static readonly HashSet<string> EfReadMethodNames = new(StringComparer.Ordinal)
+    {
+        "ToListAsync", "FirstAsync", "FirstOrDefaultAsync", "SingleAsync", "SingleOrDefaultAsync",
+        "AnyAsync", "CountAsync", "LongCountAsync", "FindAsync"
+    };
+
+    // Detects: SaveChangesAsync inside a method that also has an EF read before it.
+    // Signals a potential optimistic-concurrency gap (read → mutate → commit, no conflict guard).
+    private static (string Context, string Detail)? FindReadBeforeCommitContext(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel)
+    {
+        if (invocation.Expression is not MemberAccessExpressionSyntax commitAccess)
+            return null;
+
+        var name = commitAccess.Name.Identifier.ValueText;
+        if (!string.Equals(name, "SaveChangesAsync", StringComparison.Ordinal) &&
+            !string.Equals(name, "SaveChanges", StringComparison.Ordinal))
+            return null;
+
+        var methodBody = invocation.Ancestors().FirstOrDefault(static a => a is
+            MethodDeclarationSyntax or LocalFunctionStatementSyntax or
+            AnonymousMethodExpressionSyntax or SimpleLambdaExpressionSyntax or
+            ParenthesizedLambdaExpressionSyntax);
+
+        if (methodBody is null)
+            return null;
+
+        var commitPos = invocation.SpanStart;
+        foreach (var candidate in methodBody.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            if (candidate.SpanStart >= commitPos)
+                continue;
+            if (candidate.Expression is not MemberAccessExpressionSyntax readAccess)
+                continue;
+            if (!EfReadMethodNames.Contains(readAccess.Name.Identifier.ValueText))
+                continue;
+
+            var receiverFqn = semanticModel.GetTypeInfo(readAccess.Expression).Type
+                ?.OriginalDefinition.ToDisplayString() ?? "";
+            if (!receiverFqn.Contains("DbSet", StringComparison.Ordinal) &&
+                !receiverFqn.Contains("IQueryable", StringComparison.Ordinal))
+                continue;
+
+            var readLine = semanticModel.SyntaxTree.GetLineSpan(candidate.Span).StartLinePosition.Line + 1;
+            return ("before_commit", $"line_{readLine}");
+        }
+
+        return null;
+    }
+
+    // Detects: SaveChangesAsync inside a try/catch that explicitly catches DbUpdateConcurrencyException
+    // or DbUpdateException — meaning the code handles optimistic concurrency conflicts.
+    private static (string Context, string Detail)? FindConcurrencyHandlingContext(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel)
+    {
+        if (invocation.Expression is not MemberAccessExpressionSyntax commitAccess)
+            return null;
+
+        var name = commitAccess.Name.Identifier.ValueText;
+        if (!string.Equals(name, "SaveChangesAsync", StringComparison.Ordinal) &&
+            !string.Equals(name, "SaveChanges", StringComparison.Ordinal))
+            return null;
+
+        foreach (var ancestor in invocation.Ancestors().OfType<TryStatementSyntax>())
+        {
+            foreach (var catchClause in ancestor.Catches)
+            {
+                if (catchClause.Declaration is null)
+                    continue;
+
+                var catchTypeName = semanticModel.GetTypeInfo(catchClause.Declaration.Type).Type
+                    ?.ToDisplayString() ?? "";
+                if (catchTypeName.Contains("DbUpdateConcurrencyException", StringComparison.Ordinal))
+                    return ("DbUpdateConcurrencyException", catchTypeName);
+                if (catchTypeName.Contains("DbUpdateException", StringComparison.Ordinal))
+                    return ("DbUpdateException", catchTypeName);
+            }
+        }
+
+        return null;
     }
 
     private static (string Context, string Detail)? FindLoopContext(InvocationExpressionSyntax invocation)
@@ -311,32 +419,92 @@ internal static class EffectExtractor
 
     private static string? TryGetDbSetResource(ExpressionSyntax expression, SemanticModel semanticModel)
     {
-        if (expression is not MemberAccessExpressionSyntax dbSetAccess)
+        if (expression is MemberAccessExpressionSyntax dbSetAccess)
         {
-            return null;
+            var symbol = semanticModel.GetSymbolInfo(dbSetAccess).Symbol;
+            return symbol switch
+            {
+                IPropertySymbol property => $"{property.ContainingType.Name}.{property.Name}",
+                IFieldSymbol field => $"{field.ContainingType.Name}.{field.Name}",
+                _ => null
+            };
         }
 
-        var symbol = semanticModel.GetSymbolInfo(dbSetAccess).Symbol;
-        return symbol switch
+        // Follow local variable back to its initializer (e.g. var q = _ctx.Items.AsQueryable())
+        if (expression is IdentifierNameSyntax identifier)
         {
-            IPropertySymbol property => $"{property.ContainingType.Name}.{property.Name}",
-            IFieldSymbol field => $"{field.ContainingType.Name}.{field.Name}",
-            _ => null
-        };
+            var symbol = semanticModel.GetSymbolInfo(identifier).Symbol;
+
+            if (symbol is ILocalSymbol localSymbol)
+            {
+                var declarator = localSymbol.DeclaringSyntaxReferences
+                    .Select(r => r.GetSyntax())
+                    .OfType<VariableDeclaratorSyntax>()
+                    .FirstOrDefault();
+
+                if (declarator?.Initializer?.Value is ExpressionSyntax init)
+                {
+                    var root = FindRootReceiver(init);
+                    if (root != expression)
+                    {
+                        return TryGetDbSetResource(root, semanticModel);
+                    }
+                }
+            }
+
+            // Method parameter typed as IQueryable<T> — extract the entity type name as resource
+            if (symbol is IParameterSymbol paramSymbol)
+            {
+                return TryGetQueryableEntityType(paramSymbol.Type);
+            }
+        }
+
+        return null;
     }
 
-    private static string? TryGetContextResource(ExpressionSyntax expression, SemanticModel semanticModel)
+    private static string? TryGetQueryableEntityType(ITypeSymbol type)
     {
+        var candidates = new[] { type }.Concat(type.AllInterfaces);
+        foreach (var t in candidates)
+        {
+            if (t is INamedTypeSymbol named &&
+                named.IsGenericType &&
+                named.TypeArguments.Length == 1 &&
+                named.OriginalDefinition.ToDisplayString().Contains("IQueryable"))
+            {
+                return named.TypeArguments[0].Name;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? TryGetContextResource(ExpressionSyntax expression, SemanticModel semanticModel)    {
         return semanticModel.GetTypeInfo(expression).Type?.Name;
     }
 
     private static ExpressionSyntax FindRootReceiver(ExpressionSyntax expression)
     {
         var current = expression;
-        while (current is InvocationExpressionSyntax invocation &&
-               invocation.Expression is MemberAccessExpressionSyntax invocationAccess)
+        while (true)
         {
-            current = invocationAccess.Expression;
+            if (current is InvocationExpressionSyntax invocation &&
+                invocation.Expression is MemberAccessExpressionSyntax invocationAccess)
+            {
+                current = invocationAccess.Expression;
+            }
+            else if (current is CastExpressionSyntax cast)
+            {
+                current = cast.Expression;
+            }
+            else if (current is ParenthesizedExpressionSyntax paren)
+            {
+                current = paren.Expression;
+            }
+            else
+            {
+                break;
+            }
         }
 
         return current;

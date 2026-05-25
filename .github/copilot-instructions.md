@@ -215,6 +215,11 @@ lines are never shown in focus mode. CALL edges to non-reachable nodes are dropp
 
 - `[looped_effect:foreach]` — effect is inside a `foreach` loop
 - `[looped_effect:parallel]` — effect is inside `Parallel.ForEach` / `Parallel.ForEachAsync`
+- `[parallel_fanout:Task.WhenAll]` — effect is inside a `Task.WhenAll` call
+- `[resilience_retry:ExecutionStrategy]` — effect is inside an EF Core resilience `ExecuteAsync`
+- `[resilience_retry:ResiliencePipeline]` — effect is inside a Polly `ResiliencePipeline.ExecuteAsync`
+- `[read_before_commit:before_commit]` — `SaveChangesAsync` is preceded by an EF read in the same method body; signals a potential lost-update / TOCTOU site when no `concurrency_handled` is also present
+- `[concurrency_handled:DbUpdateConcurrencyException]` — `SaveChangesAsync` is inside a try/catch that catches `DbUpdateConcurrencyException`; optimistic concurrency conflict IS handled
 
 ---
 
