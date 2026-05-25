@@ -15,18 +15,25 @@ Current implementation handover notes live in
 ## Quick Start
 
 ```powershell
-# build
+# install
+dotnet tool install -g rig --add-source https://api.nuget.org/v3/index.json
+
+# index a solution
+rig index playgrounds/EntryPointEffects/EntryPointEffects.slnx
+
+# explore
+rig entrypoints
+rig effects
+rig callgraph 0 --focus
+```
+
+### Build from source
+
+```powershell
 dotnet publish src/Rig/Rig.csproj -c Release -r win-x64 --self-contained -o .rig-bin `
   -p:PublishReadyToRun=true -p:DebugSymbols=false -p:DebugType=none `
   /p:TreatWarningsAsErrors=false
-
-# index a solution
-.\.rig-bin\Rig.exe index playgrounds/EntryPointEffects/EntryPointEffects.slnx
-
-# explore
-.\.rig-bin\Rig.exe entrypoints
-.\.rig-bin\Rig.exe effects
-.\.rig-bin\Rig.exe callgraph 0 --focus
+# binary at .rig-bin/Rig.exe (~295–350 ms per command, R2R win-x64)
 ```
 
 ## CLI Commands

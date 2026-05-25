@@ -3,6 +3,7 @@ obj/
 TestResults/
 .rig/
 .rig-bin/
+.rig-nupkg/
 src/Rig/Storage/Compiled/
 .idea/
 *.user

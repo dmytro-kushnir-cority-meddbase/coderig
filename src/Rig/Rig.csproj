@@ -6,6 +6,16 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 
+    <!-- dotnet tool packaging -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>rig</ToolCommandName>
+    <PackageId>rig</PackageId>
+    <Version>0.1.0</Version>
+    <Description>CLI tool that indexes .NET solutions and exposes per-entry-point call graphs annotated with external effects.</Description>
+    <Authors>dv00d00</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/dv00d00/coderig</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/dv00d00/coderig</PackageProjectUrl>
   </PropertyGroup>
 
   <ItemGroup>
