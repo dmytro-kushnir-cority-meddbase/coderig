@@ -42,6 +42,47 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task Effects_rejects_non_numeric_entrypoint_index()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["effects", "--entrypoint", "wat"], output, error);
+
+        exitCode.ShouldBe(2);
+        output.ToString().ShouldBeEmpty();
+        error.ToString().ShouldContain("Invalid entrypoint index.");
+        error.ToString().ShouldContain("Usage: rig effects --entrypoint <index>");
+    }
+
+    [Fact]
+    public async Task Callgraph_rejects_missing_or_invalid_entrypoint_index()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["callgraph", "wat"], output, error);
+
+        exitCode.ShouldBe(2);
+        output.ToString().ShouldBeEmpty();
+        error.ToString().ShouldContain("Missing or invalid entrypoint index.");
+        error.ToString().ShouldContain("Usage: rig callgraph <index> [--full] [--summary]");
+    }
+
+    [Fact]
+    public async Task Files_requires_skipped_flag()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["files"], output, error);
+
+        exitCode.ShouldBe(2);
+        output.ToString().ShouldBeEmpty();
+        error.ToString().ShouldContain("Usage: rig files --skipped");
+    }
+
+    [Fact]
     public async Task Index_then_entrypoints_and_effects_print_latest_playground_analysis()
     {
         using var playground = await TempPlayground.CreateEntryPointEffectsAsync();

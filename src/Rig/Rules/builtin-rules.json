@@ -166,6 +166,20 @@
       "reason": "httpclient_method_match"
     },
     {
+      "provider": "http",
+      "operation": "send",
+      "methods": [
+        "SendAsync"
+      ],
+      "declaringTypes": [
+        "System.Net.Http.HttpClient"
+      ],
+      "resource": "argument_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "httpclient_send_method"
+    },
+    {
       "provider": "efcore",
       "operation": "read",
       "methods": [
@@ -176,6 +190,7 @@
         "SingleOrDefaultAsync",
         "AnyAsync",
         "CountAsync",
+        "LongCountAsync",
         "FindAsync"
       ],
       "declaringTypes": [

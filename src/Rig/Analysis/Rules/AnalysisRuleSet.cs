@@ -282,6 +282,7 @@ internal static class GlobMatcher
     {
         var normalized = glob.Replace('\\', '/');
         var regex = Regex.Escape(normalized)
+            .Replace("\\*\\*/", "(?:.*/)?", StringComparison.Ordinal)
             .Replace("\\*\\*", ".*", StringComparison.Ordinal)
             .Replace("\\*", "[^/]*", StringComparison.Ordinal)
             .Replace("\\?", ".", StringComparison.Ordinal);
