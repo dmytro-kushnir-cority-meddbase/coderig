@@ -1,6 +1,6 @@
 # Handover
 
-Current handover after tree callgraph rendering, OrchardCore YesSql rules, and minAPI method-ref handler fix.
+Current handover after eShop playground, parallel index progress reporting, and minAPI method-ref fix.
 
 ## Current State
 
@@ -74,6 +74,14 @@ An MCP server would open `RigDbContext` once and serve `Reads.cs` queries in <5m
   ISignal, IFileStore/IMediaFileStore, OpenIddict managers, IDocumentManager,
   IShellSettingsManager, IDeploymentTargetHandler, IDisplayManager,
   YesSql IQuery terminators (FirstOrDefaultAsync/ListAsync), ExecuteQuery, SessionExtensions.GetAsync.
+- `playgrounds/eShop/eShop.slnx` — dotnet/eShop multi-service e-commerce sample.
+  41 entry points (Catalog.API MinAPI, Identity.API MVC, Ordering.API MinAPI, Webhooks.API MinAPI),
+  56 effects: EF Core (CatalogContext, OrderingContext, WebhooksContext), Redis (StringGetLeaseAsync,
+  StringSetAsync, KeyDeleteAsync), EventBus (RabbitMQ PublishAsync with argument_type resolution),
+  Npgsql raw SQL, AI embeddings (GenerateAsync + GenerateVectorAsync extension method). Index in ~2 min.
+  Note: Basket.API has no HTTP entry points (gRPC only); WebApp/HybridApp/WebAppComponents excluded
+  (Blazor SSR and MAUI — MSBuildWorkspace can't compile Razor/XAML codegen).
+  MediatR dispatch in Ordering.API is not traversed (dynamic dispatch).
 - `playgrounds/CleanArchitecture/` — vendored public CleanArchitecture solution (.sln).
   5 FastEndpoints entrypoints; exercises .sln C#-filter path.
 

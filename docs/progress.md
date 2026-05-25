@@ -101,6 +101,9 @@ Status: `in_progress`
 - [x] YesSql IQuery/ExecuteQuery/SessionExtensions rules for OrchardCore
 - [x] tree callgraph rendering with box-drawing characters
 - [x] `--focus` mode (backward BFS, effect-reachable nodes only)
+- [x] parallel compilation + MSBuild progress reporting for `rig index`
+- [x] eShop playground indexed (41 EPs, 56 effects: EF Core, Redis, EventBus, Npgsql, AI embeddings)
+- [x] `GenerateVectorAsync` extension method rule for AI embeddings
 
 ### Phase 7: Diff and Agent Projections
 
