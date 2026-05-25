@@ -1,9 +1,0 @@
-@model AuditTrailContentEventViewModel
-
-@if (!string.IsNullOrEmpty(Model.Comment))
-{
-@* a pre tag respects whitespace and newlines.*@
-<pre class="audittrail-comment">
-@Model.Comment
-</pre>
-}

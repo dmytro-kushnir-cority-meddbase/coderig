@@ -1,8 +1,0 @@
-[
-  {
-    "action": "min",
-    "name": "notification-manager",
-    "source": "Assets/js/notification-manager.js",
-    "tags": ["admin", "dashboard", "js"]
-  }
-]

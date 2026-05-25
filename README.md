@@ -67,6 +67,110 @@ is detected around the effect site:
 | `eShop` | 41 | 100 | ~30 s |
 | `OrchardCore` | 296 | 788 | ~5 min |
 
+## Example: eShop
+
+The `eShop` playground is a real-world microservices reference app (41 entry points, 100 effects).
+
+### Focused call graph — `PUT /items`
+
+```
+$ rig callgraph 12 --focus
+
+Callgraph: [12] minapi PUT /items (focused)
+Nodes: 8 / 18 on effect paths
+  CatalogApi.cs:93  minapi PUT /items
+  └─ CatalogApi.cs:324  CatalogApi.UpdateItem
+     ├─ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
+     │  └─ EFFECT ai_embeddings read  GenerateVectorAsync  IEmbeddingGenerator
+     ├─ CatalogIntegrationEventService.cs:28  ...SaveEventAndCatalogContextChangesAsync
+     │  ├─ ResilientTransaction.cs:11  ResilientTransaction.ExecuteAsync
+     │  │  ├─ EFFECT db_transaction begin  BeginTransactionAsync  DbContext.Database  [resilience_retry:ExecutionStrategy]
+     │  │  └─ EFFECT db_transaction commit  CommitAsync  IDbContextTransaction  [resilience_retry:ExecutionStrategy]
+     │  └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+     ├─ CatalogIntegrationEventService.cs:11  ...PublishThroughEventBusAsync
+     │  └─ EFFECT eventbus publish  PublishAsync  eShop.EventBus.Events.IntegrationEvent
+     ├─ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
+     └─ EFFECT efcore commit  SaveChangesAsync  CatalogContext  [read_before_commit:before_commit]
+```
+
+The `[read_before_commit:before_commit]` flag on the second `SaveChangesAsync` signals that the
+item is read with `SingleOrDefaultAsync` earlier in the same method and then updated without any
+concurrency token — a potential lost-update site.
+
+### Flat effects summary — `PUT /items`
+
+```
+$ rig effects --entrypoint 12
+
+  efcore           read            CatalogContext.CatalogItems
+  efcore           commit          CatalogContext  [x2]  [read_before_commit:before_commit]
+  ai_embeddings    read            IEmbeddingGenerator<TInput, TEmbedding>
+  db_transaction   begin           DbContext.Database  [resilience_retry:ExecutionStrategy]
+  db_transaction   commit          IDbContextTransaction  [resilience_retry:ExecutionStrategy]
+  eventbus         publish         eShop.EventBus.Events.IntegrationEvent
+```
+
+### Sample `rig.rules.json`
+
+Place next to the `.slnx`/`.sln` file to teach `rig` about framework-specific effects:
+
+```json
+{
+  "effects": [
+    {
+      "provider": "redis",
+      "operation": "read",
+      "methods": ["StringGetLeaseAsync"],
+      "receiverTypes": ["StackExchange.Redis.IDatabase"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "redis_lease_read"
+    },
+    {
+      "provider": "redis",
+      "operation": "write",
+      "methods": ["StringSetAsync", "KeyDeleteAsync"],
+      "receiverTypes": ["StackExchange.Redis.IDatabase"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "redis_write"
+    },
+    {
+      "provider": "eventbus",
+      "operation": "publish",
+      "methods": ["PublishAsync"],
+      "receiverTypes": ["eShop.EventBus.Abstractions.IEventBus"],
+      "resource": "argument_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "rabbitmq_publish"
+    }
+  ],
+  "files": {
+    "exclude": [
+      { "id": "migrations", "glob": "**/Migrations/**", "reason": "db_migration" }
+    ]
+  }
+}
+```
+
+**`resource` values** control what appears in the effect's resource column:
+
+| Value | Resolved as |
+|---|---|
+| `ef_dbset_receiver` | `DbContext.DbSetName` |
+| `ef_context_receiver` | The `DbContext` type name |
+| `argument_type` | Type of the first argument |
+| `receiver_type` | Fully-qualified type of the receiver |
+| `http_argument` | First argument (URL string) |
+| `string_argument` | First argument when it is a string literal |
+
+`receiverTypes` uses substring matching and walks `AllInterfaces`, so an interface rule fires for any implementing type. `declaringTypes` matches the type that declares the method (for static/extension methods).
+
+---
+
 ## Implementation Workflow
 
 Default to contract-first TDD.

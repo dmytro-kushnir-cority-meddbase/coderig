@@ -98,6 +98,169 @@
       "confidence": "medium",
       "basis": "compilation+profile",
       "reason": "embedding_generation_extension"
+    },
+    {
+      "provider": "auth_session",
+      "operation": "sign_in",
+      "methods": ["PasswordSignInAsync"],
+      "receiverTypes": ["SignInManager"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "identity_password_signin"
+    },
+    {
+      "provider": "auth_session",
+      "operation": "sign_out",
+      "methods": ["SignOutAsync"],
+      "receiverTypes": ["SignInManager"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "identity_signout"
+    },
+    {
+      "provider": "auth_session",
+      "operation": "external_sign_in",
+      "methods": ["SignInAsync"],
+      "declaringTypes": [
+        "AuthenticationManagerExtensions",
+        "AuthenticationHttpContextExtensions"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "auth_cookie_signin"
+    },
+    {
+      "provider": "identity_store",
+      "operation": "user_create",
+      "methods": ["CreateAsync"],
+      "receiverTypes": ["UserManager"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "identity_user_create"
+    },
+    {
+      "provider": "identity_store",
+      "operation": "claims_add",
+      "methods": ["AddClaimsAsync"],
+      "receiverTypes": ["UserManager"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "identity_claims_add"
+    },
+    {
+      "provider": "identity_store",
+      "operation": "login_add",
+      "methods": ["AddLoginAsync"],
+      "receiverTypes": ["UserManager"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "identity_login_add"
+    },
+    {
+      "provider": "identity_store",
+      "operation": "read",
+      "methods": ["GetAuthorizationContextAsync", "GetLogoutContextAsync", "GetAllUserGrantsAsync"],
+      "receiverTypes": ["IIdentityServerInteractionService"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "identityserver_interaction_read"
+    },
+    {
+      "provider": "identity_store",
+      "operation": "read",
+      "methods": ["GetAuthorizationContextAsync"],
+      "receiverTypes": ["IDeviceFlowInteractionService"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "identityserver_device_read"
+    },
+    {
+      "provider": "identity_store",
+      "operation": "read",
+      "methods": ["FindClientByIdAsync"],
+      "receiverTypes": ["IClientStore"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "identityserver_client_read"
+    },
+    {
+      "provider": "identity_store",
+      "operation": "read",
+      "methods": ["FindEnabledClientByIdAsync"],
+      "declaringTypes": ["IClientStoreExtensions"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "identityserver_client_read_ext"
+    },
+    {
+      "provider": "identity_store",
+      "operation": "read",
+      "methods": ["FindResourcesByScopeAsync"],
+      "declaringTypes": ["IResourceStoreExtensions"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "identityserver_resource_read"
+    },
+    {
+      "provider": "identity_consent",
+      "operation": "grant",
+      "methods": ["GrantConsentAsync"],
+      "receiverTypes": ["IIdentityServerInteractionService"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "identityserver_consent_grant"
+    },
+    {
+      "provider": "identity_consent",
+      "operation": "revoke",
+      "methods": ["RevokeUserConsentAsync"],
+      "receiverTypes": ["IIdentityServerInteractionService"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "identityserver_consent_revoke"
+    },
+    {
+      "provider": "identity_consent",
+      "operation": "deny",
+      "methods": ["DenyAuthorizationAsync"],
+      "receiverTypes": ["IIdentityServerInteractionService"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "identityserver_authorization_deny"
+    },
+    {
+      "provider": "identity_device",
+      "operation": "authorize",
+      "methods": ["HandleRequestAsync"],
+      "receiverTypes": ["IDeviceFlowInteractionService"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "identityserver_device_authorize"
+    },
+    {
+      "provider": "identity_event",
+      "operation": "raise",
+      "methods": ["RaiseAsync"],
+      "receiverTypes": ["IEventService"],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "identityserver_event_raise"
     }
   ],
   "projects": {

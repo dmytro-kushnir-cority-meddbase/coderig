@@ -9,3 +9,9 @@ src/Rig/Storage/Compiled/
 *.suo
 *.nupkg
 *.snupkg
+
+# Large external playground repos — source not tracked; only rig.rules.json kept
+playgrounds/eShop/**
+!playgrounds/eShop/rig.rules.json
+playgrounds/OrchardCore/**
+!playgrounds/OrchardCore/rig.rules.json

@@ -1,3 +1,0 @@
-msgctxt "OrchardCore.Tests.Localization.PortableObjectStringLocalizerFactoryTests.Model"
-msgid "Hello"
-msgstr "مرحبا"

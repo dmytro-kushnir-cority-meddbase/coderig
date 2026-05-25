@@ -1,8 +1,0 @@
-[
-    {
-      "action": "min",
-      "name": "templates",
-      "source": "Assets/js/templatepreview.edit.js",
-      "tags": ["admin", "dashboard", "js"]
-    }
-]

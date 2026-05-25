@@ -1,3 +1,0 @@
-msgctxt "OrchardCore.Tests.Localization.LocalizationManagerTests"
-msgid "hello!"
-msgstr "Hello en !"
