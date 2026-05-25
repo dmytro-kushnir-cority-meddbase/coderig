@@ -55,11 +55,11 @@ public static class CliApplication
         output.WriteLine("Runtime Intelligence Graph");
         output.WriteLine();
         output.WriteLine("Usage:");
-        output.WriteLine("  rig index <solution>");
+        output.WriteLine("  rig index <solution> [--rules <path>...]");
         output.WriteLine("  rig runs");
         output.WriteLine("  rig entrypoints");
-        output.WriteLine("  rig callgraph <index> [--focus] [--summary]");
-        output.WriteLine("  rig callgraphs [--focus] [--summary]");
+        output.WriteLine("  rig callgraph <index> [--full] [--summary]");
+        output.WriteLine("  rig callgraphs [--full] [--summary]");
         output.WriteLine("  rig effects [--entrypoint <index>]");
         output.WriteLine("  rig di");
         output.WriteLine("  rig files --skipped");
@@ -75,17 +75,32 @@ public static class CliApplication
         if (args.Length < 2)
         {
             error.WriteLine("Missing solution path.");
-            error.WriteLine("Usage: rig index <solution>");
+            error.WriteLine("Usage: rig index <solution> [--rules <path>...]");
             return 2;
+        }
+
+        var extraRules = new List<string>();
+        for (var i = 2; i < args.Length - 1; i++)
+        {
+            if (args[i] == "--rules")
+            {
+                extraRules.Add(Path.GetFullPath(args[i + 1]));
+                i++;
+            }
         }
 
         AnalysisResult result;
         try
         {
             output.WriteLine($"Indexing: {Path.GetFullPath(args[1])}");
+            if (extraRules.Count > 0)
+            {
+                output.WriteLine($"Rules: {string.Join(", ", extraRules)}");
+            }
             result = await SolutionAnalyzer.AnalyzeAsync(
                 args[1],
-                progress: message => output.WriteLine($"Progress: {message}"));
+                progress: message => output.WriteLine($"Progress: {message}"),
+                extraRulesPaths: extraRules.Count > 0 ? extraRules : null);
         }
         catch (InvalidOperationException exception)
         {
@@ -298,11 +313,12 @@ public static class CliApplication
         if (args.Length < 2 || !int.TryParse(args[1], out var entryPointIndex))
         {
             error.WriteLine("Missing or invalid entrypoint index.");
-            error.WriteLine("Usage: rig callgraph <index> [--focus]");
+            error.WriteLine("Usage: rig callgraph <index> [--full] [--summary]");
             return 2;
         }
 
-        var focusMode = args.Contains("--focus");
+        var fullMode = args.Contains("--full");
+        var focusMode = !fullMode;
         var summaryMode = args.Contains("--summary");
 
         await using var context = OpenContext(workingDirectory);
@@ -340,7 +356,7 @@ public static class CliApplication
             return 0;
         }
 
-        var focusSuffix = focusMode ? " (focused)" : "";
+        var focusSuffix = focusMode && !fullMode ? " (focused)" : fullMode ? " (full)" : "";
         var nodeCountSuffix = focusMode ? $" / {allNodes.Count} on effect paths" : "";
         output.WriteLine($"Callgraph: [{entryPointIndex}] {callGraph.EntryPoint}{focusSuffix}");
         output.WriteLine($"Nodes: {nodes.Count}{nodeCountSuffix}");
@@ -356,7 +372,8 @@ public static class CliApplication
         TextWriter error,
         string workingDirectory)
     {
-        var focusMode = args.Contains("--focus");
+        var fullMode = args.Contains("--full");
+        var focusMode = !fullMode;
         var summaryMode = args.Contains("--summary");
 
         await using var context = OpenContext(workingDirectory);
@@ -400,7 +417,7 @@ public static class CliApplication
             }
             else
             {
-                var focusSuffix = focusMode ? " (focused)" : "";
+                var focusSuffix = focusMode ? " (focused)" : " (full)";
                 var nodeCountSuffix = focusMode ? $" / {allNodes.Count} on effect paths" : "";
                 output.WriteLine($"Callgraph: [{i}] {callGraph.EntryPoint}{focusSuffix}");
                 output.WriteLine($"Nodes: {nodes.Count}{nodeCountSuffix}");
@@ -420,15 +437,29 @@ public static class CliApplication
         TextWriter output)
     {
         var allEffects = allNodes.SelectMany(n => n.Effects).ToList();
-        var grouped = allEffects
-            .GroupBy(e => (e.Provider, e.Operation, e.Resource))
-            .Select(g => (Effect: g.First(), Count: g.Count()))
-            .ToList();
+
+        // Deduplicate preserving first-occurrence order so the sequence reflects traversal order.
+        var seen = new Dictionary<(string, string, string), int>();
+        var ordered = new List<(EffectInfo Effect, int Count)>();
+        foreach (var e in allEffects)
+        {
+            var key = (e.Provider, e.Operation, e.Resource);
+            if (seen.TryGetValue(key, out var idx))
+            {
+                var existing = ordered[idx];
+                ordered[idx] = (existing.Effect, existing.Count + 1);
+            }
+            else
+            {
+                seen[key] = ordered.Count;
+                ordered.Add((e, 1));
+            }
+        }
 
         output.WriteLine($"Summary: [{entryPointIndex}] {callGraph.EntryPoint}");
         output.WriteLine($"Nodes: {allNodes.Count}  Effects: {allEffects.Count}");
 
-        foreach (var (effect, count) in grouped)
+        foreach (var (effect, count) in ordered)
         {
             var countSuffix = count > 1 ? $"  [x{count}]" : "";
             var observations = string.Join("", effect.Observations

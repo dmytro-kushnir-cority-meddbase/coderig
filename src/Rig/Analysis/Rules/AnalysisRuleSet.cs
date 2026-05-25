@@ -19,7 +19,7 @@ internal sealed record AnalysisRuleSet(
         PropertyNameCaseInsensitive = true
     };
 
-    public static AnalysisRuleSet LoadForSolution(string solutionPath)
+    public static AnalysisRuleSet LoadForSolution(string solutionPath, IReadOnlyList<string>? extraRulesPaths = null)
     {
         var rules = LoadBuiltIn();
 
@@ -30,6 +30,14 @@ internal sealed record AnalysisRuleSet(
 
         var solutionDirectory = Path.GetDirectoryName(solutionPath) ?? Directory.GetCurrentDirectory();
         rules = rules.MergeWithFile(Path.Combine(solutionDirectory, "rig.rules.json"));
+
+        if (extraRulesPaths is not null)
+        {
+            foreach (var path in extraRulesPaths)
+            {
+                rules = rules.MergeWithFile(path);
+            }
+        }
 
         return rules;
     }

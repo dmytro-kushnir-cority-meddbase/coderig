@@ -5,11 +5,12 @@ public static class SolutionAnalyzer
     public static async Task<AnalysisResult> AnalyzeAsync(
         string solutionPath,
         CancellationToken cancellationToken = default,
-        Action<string>? progress = null)
+        Action<string>? progress = null,
+        IReadOnlyList<string>? extraRulesPaths = null)
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
         progress?.Invoke("Loading rules");
-        var rules = AnalysisRuleSet.LoadForSolution(solutionFullPath);
+        var rules = AnalysisRuleSet.LoadForSolution(solutionFullPath, extraRulesPaths);
         progress?.Invoke("Loading solution");
         var sourceSet = await SolutionSourceLoader.LoadAsync(solutionFullPath, rules, cancellationToken, progress);
         progress?.Invoke("Merging project rules");

@@ -40,7 +40,7 @@ dotnet publish src/Rig/Rig.csproj -c Release -r win-x64 --self-contained -o .rig
 
 | Command | Description |
 |---|---|
-| `rig index <solution>` | Index a `.sln` / `.slnx` into a new immutable run in `.rig/rig.db` |
+| `rig index <solution> [--rules <path>...]` | Index a `.sln` / `.slnx` into a new immutable run in `.rig/rig.db`; `--rules` merges extra rule files on top of the cascade (repeatable) |
 | `rig runs` | List all runs in chronological order |
 | `rig entrypoints` | List all entry points in the latest run |
 | `rig effects [--entrypoint N]` | List all effects, optionally filtered to one entry point |
@@ -119,7 +119,14 @@ $ rig effects --entrypoint 12
 
 ### Sample `rig.rules.json`
 
-Place next to the `.slnx`/`.sln` file to teach `rig` about framework-specific effects:
+Place next to the `.slnx`/`.sln` file to teach `rig` about framework-specific effects.
+
+Rules are loaded in cascade order (each layer merges on top of the previous):
+1. Built-in rules (shipped with the tool)
+2. `~/.rig/rig.rules.json` — user-global overrides
+3. `<solution-dir>/rig.rules.json` — solution-level rules
+4. `<project-dir>/rig.rules.json` — per-project rules (one per project directory)
+5. `--rules <path>` passed to `rig index` — explicit extra files, merged last (repeatable)
 
 ```json
 {
