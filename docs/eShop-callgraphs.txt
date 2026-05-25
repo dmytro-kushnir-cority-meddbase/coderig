@@ -4,890 +4,890 @@ MODE: default (full tree)
 Callgraph: [0] minapi GET /items
 Nodes: 3
   CatalogApi.cs:21  minapi GET /items
-  ÀÄ CatalogApi.cs:115  CatalogApi.GetAllItemsV1
-     ÀÄ CatalogApi.cs:123  CatalogApi.GetAllItems
-        ÃÄ BOUNDARY external Queryable.Where
-        ÃÄ BOUNDARY external String.StartsWith
-        ÃÄ BOUNDARY external Queryable.Where
-        ÃÄ BOUNDARY external Queryable.Where
-        ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
-        ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-        ÃÄ BOUNDARY external Queryable.Take
-        ÃÄ BOUNDARY external Queryable.Skip
-        ÃÄ BOUNDARY external Queryable.OrderBy
-        ÀÄ BOUNDARY external TypedResults.Ok
+  â””â”€ CatalogApi.cs:115  CatalogApi.GetAllItemsV1
+     â””â”€ CatalogApi.cs:123  CatalogApi.GetAllItems
+        â”œâ”€ BOUNDARY external Queryable.Where
+        â”œâ”€ BOUNDARY external String.StartsWith
+        â”œâ”€ BOUNDARY external Queryable.Where
+        â”œâ”€ BOUNDARY external Queryable.Where
+        â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
+        â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+        â”œâ”€ BOUNDARY external Queryable.Take
+        â”œâ”€ BOUNDARY external Queryable.Skip
+        â”œâ”€ BOUNDARY external Queryable.OrderBy
+        â””â”€ BOUNDARY external TypedResults.Ok
 
 Callgraph: [1] minapi GET /items
 Nodes: 2
   CatalogApi.cs:26  minapi GET /items
-  ÀÄ CatalogApi.cs:123  CatalogApi.GetAllItems
-     ÃÄ BOUNDARY external Queryable.Where
-     ÃÄ BOUNDARY external String.StartsWith
-     ÃÄ BOUNDARY external Queryable.Where
-     ÃÄ BOUNDARY external Queryable.Where
-     ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
-     ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-     ÃÄ BOUNDARY external Queryable.Take
-     ÃÄ BOUNDARY external Queryable.Skip
-     ÃÄ BOUNDARY external Queryable.OrderBy
-     ÀÄ BOUNDARY external TypedResults.Ok
+  â””â”€ CatalogApi.cs:123  CatalogApi.GetAllItems
+     â”œâ”€ BOUNDARY external Queryable.Where
+     â”œâ”€ BOUNDARY external String.StartsWith
+     â”œâ”€ BOUNDARY external Queryable.Where
+     â”œâ”€ BOUNDARY external Queryable.Where
+     â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
+     â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+     â”œâ”€ BOUNDARY external Queryable.Take
+     â”œâ”€ BOUNDARY external Queryable.Skip
+     â”œâ”€ BOUNDARY external Queryable.OrderBy
+     â””â”€ BOUNDARY external TypedResults.Ok
 
 Callgraph: [2] minapi GET /items/by
 Nodes: 2
   CatalogApi.cs:31  minapi GET /items/by
-  ÀÄ CatalogApi.cs:161  CatalogApi.GetItemsByIds
-     ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-     ÃÄ BOUNDARY external Queryable.Where
-     ÃÄ BOUNDARY external MemoryExtensions.Contains
-     ÃÄ BOUNDARY external TypedResults.Ok
-     ÀÄ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+  â””â”€ CatalogApi.cs:161  CatalogApi.GetItemsByIds
+     â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+     â”œâ”€ BOUNDARY external Queryable.Where
+     â”œâ”€ BOUNDARY external MemoryExtensions.Contains
+     â”œâ”€ BOUNDARY external TypedResults.Ok
+     â””â”€ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
 
 Callgraph: [3] minapi GET /items/{id:int}
 Nodes: 2
   CatalogApi.cs:36  minapi GET /items/{id:int}
-  ÀÄ CatalogApi.cs:170  CatalogApi.GetItemById
-     ÃÄ BOUNDARY external TypedResults.BadRequest
-     ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.SingleOrDefaultAsync
-     ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.Include
-     ÃÄ BOUNDARY external TypedResults.NotFound
-     ÃÄ BOUNDARY external TypedResults.Ok
-     ÀÄ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
+  â””â”€ CatalogApi.cs:170  CatalogApi.GetItemById
+     â”œâ”€ BOUNDARY external TypedResults.BadRequest
+     â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.SingleOrDefaultAsync
+     â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.Include
+     â”œâ”€ BOUNDARY external TypedResults.NotFound
+     â”œâ”€ BOUNDARY external TypedResults.Ok
+     â””â”€ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
 
 Callgraph: [4] minapi GET /items/by/{name:minlength(1)}
 Nodes: 3
   CatalogApi.cs:41  minapi GET /items/by/{name:minlength(1)}
-  ÀÄ CatalogApi.cs:193  CatalogApi.GetItemsByName
-     ÀÄ CatalogApi.cs:123  CatalogApi.GetAllItems
-        ÃÄ BOUNDARY external Queryable.Where
-        ÃÄ BOUNDARY external String.StartsWith
-        ÃÄ BOUNDARY external Queryable.Where
-        ÃÄ BOUNDARY external Queryable.Where
-        ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
-        ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-        ÃÄ BOUNDARY external Queryable.Take
-        ÃÄ BOUNDARY external Queryable.Skip
-        ÃÄ BOUNDARY external Queryable.OrderBy
-        ÀÄ BOUNDARY external TypedResults.Ok
+  â””â”€ CatalogApi.cs:193  CatalogApi.GetItemsByName
+     â””â”€ CatalogApi.cs:123  CatalogApi.GetAllItems
+        â”œâ”€ BOUNDARY external Queryable.Where
+        â”œâ”€ BOUNDARY external String.StartsWith
+        â”œâ”€ BOUNDARY external Queryable.Where
+        â”œâ”€ BOUNDARY external Queryable.Where
+        â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
+        â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+        â”œâ”€ BOUNDARY external Queryable.Take
+        â”œâ”€ BOUNDARY external Queryable.Skip
+        â”œâ”€ BOUNDARY external Queryable.OrderBy
+        â””â”€ BOUNDARY external TypedResults.Ok
 
 Callgraph: [5] minapi GET /items/{id:int}/pic
 Nodes: 4
   CatalogApi.cs:46  minapi GET /items/{id:int}/pic
-  ÀÄ CatalogApi.cs:202  CatalogApi.GetItemPictureById
-     ÃÄ CatalogApi.cs:420  CatalogApi.GetFullPath
-     ³  ÀÄ BOUNDARY external Path.Combine
-     ÃÄ CatalogApi.cs:406  CatalogApi.GetImageMimeTypeFromImageFileExtension
-     ÃÄ BOUNDARY external DbSet.FindAsync
-     ÃÄ BOUNDARY external TypedResults.NotFound
-     ÃÄ BOUNDARY external Path.GetExtension
-     ÃÄ BOUNDARY external File.GetLastWriteTimeUtc
-     ÃÄ BOUNDARY external TypedResults.PhysicalFile
-     ÃÄ EFFECT efcore read  FindAsync  CatalogContext.CatalogItems
-     ÀÄ EFFECT efcore read  FindAsync  CatalogContext.CatalogItems
+  â””â”€ CatalogApi.cs:202  CatalogApi.GetItemPictureById
+     â”œâ”€ CatalogApi.cs:420  CatalogApi.GetFullPath
+     â”‚  â””â”€ BOUNDARY external Path.Combine
+     â”œâ”€ CatalogApi.cs:406  CatalogApi.GetImageMimeTypeFromImageFileExtension
+     â”œâ”€ BOUNDARY external DbSet.FindAsync
+     â”œâ”€ BOUNDARY external TypedResults.NotFound
+     â”œâ”€ BOUNDARY external Path.GetExtension
+     â”œâ”€ BOUNDARY external File.GetLastWriteTimeUtc
+     â”œâ”€ BOUNDARY external TypedResults.PhysicalFile
+     â”œâ”€ EFFECT efcore read  FindAsync  CatalogContext.CatalogItems
+     â””â”€ EFFECT efcore read  FindAsync  CatalogContext.CatalogItems
 
 Callgraph: [6] minapi GET /items/withsemanticrelevance/{text:minlength(1)}
 Nodes: 6
   CatalogApi.cs:53  minapi GET /items/withsemanticrelevance/{text:minlength(1)}
-  ÀÄ CatalogApi.cs:226  CatalogApi.GetItemsBySemanticRelevanceV1
-     ÀÄ CatalogApi.cs:236  CatalogApi.GetItemsBySemanticRelevance
-        ÃÄ CatalogApi.cs:193  CatalogApi.GetItemsByName
-        ³  ÀÄ CatalogApi.cs:123  CatalogApi.GetAllItems
-        ³     ÃÄ BOUNDARY external Queryable.Where
-        ³     ÃÄ BOUNDARY external String.StartsWith
-        ³     ÃÄ BOUNDARY external Queryable.Where
-        ³     ÃÄ BOUNDARY external Queryable.Where
-        ³     ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
-        ³     ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-        ³     ÃÄ BOUNDARY external Queryable.Take
-        ³     ÃÄ BOUNDARY external Queryable.Skip
-        ³     ÃÄ BOUNDARY external Queryable.OrderBy
-        ³     ÀÄ BOUNDARY external TypedResults.Ok
-        ÃÄ CatalogAI.cs:55  CatalogAI.GetEmbeddingAsync
-        ³  ÃÄ BOUNDARY external Stopwatch.GetTimestamp
-        ³  ÃÄ BOUNDARY external EmbeddingGeneratorExtensions.GenerateVectorAsync
-        ³  ÃÄ BOUNDARY external ILogger.IsEnabled
-        ³  ÃÄ BOUNDARY external LoggerExtensions.LogTrace
-        ³  ÃÄ BOUNDARY external Stopwatch.GetElapsedTime
-        ³  ÀÄ EFFECT ai_embeddings read  GenerateVectorAsync  Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
-        ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
-        ÃÄ BOUNDARY external ILogger.IsEnabled
-        ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-        ÃÄ BOUNDARY external Queryable.Take
-        ÃÄ BOUNDARY external Queryable.Skip
-        ÃÄ BOUNDARY external Queryable.OrderBy
-        ÃÄ BOUNDARY external Queryable.Select
-        ÃÄ BOUNDARY external Queryable.Where
-        ÃÄ BOUNDARY external VectorDbFunctionsExtensions.CosineDistance
-        ÃÄ BOUNDARY external LoggerExtensions.LogDebug
-        ÃÄ BOUNDARY external String.Join
-        ÃÄ BOUNDARY external Enumerable.Select
-        ÃÄ BOUNDARY external Enumerable.ToList
-        ÃÄ BOUNDARY external Enumerable.Select
-        ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-        ÃÄ BOUNDARY external Queryable.Take
-        ÃÄ BOUNDARY external Queryable.Skip
-        ÃÄ BOUNDARY external Queryable.OrderBy
-        ÃÄ BOUNDARY external Queryable.Where
-        ÃÄ BOUNDARY external VectorDbFunctionsExtensions.CosineDistance
-        ÃÄ BOUNDARY external TypedResults.Ok
-        ÃÄ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
-        ÀÄ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+  â””â”€ CatalogApi.cs:226  CatalogApi.GetItemsBySemanticRelevanceV1
+     â””â”€ CatalogApi.cs:236  CatalogApi.GetItemsBySemanticRelevance
+        â”œâ”€ CatalogApi.cs:193  CatalogApi.GetItemsByName
+        â”‚  â””â”€ CatalogApi.cs:123  CatalogApi.GetAllItems
+        â”‚     â”œâ”€ BOUNDARY external Queryable.Where
+        â”‚     â”œâ”€ BOUNDARY external String.StartsWith
+        â”‚     â”œâ”€ BOUNDARY external Queryable.Where
+        â”‚     â”œâ”€ BOUNDARY external Queryable.Where
+        â”‚     â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
+        â”‚     â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+        â”‚     â”œâ”€ BOUNDARY external Queryable.Take
+        â”‚     â”œâ”€ BOUNDARY external Queryable.Skip
+        â”‚     â”œâ”€ BOUNDARY external Queryable.OrderBy
+        â”‚     â””â”€ BOUNDARY external TypedResults.Ok
+        â”œâ”€ CatalogAI.cs:55  CatalogAI.GetEmbeddingAsync
+        â”‚  â”œâ”€ BOUNDARY external Stopwatch.GetTimestamp
+        â”‚  â”œâ”€ BOUNDARY external EmbeddingGeneratorExtensions.GenerateVectorAsync
+        â”‚  â”œâ”€ BOUNDARY external ILogger.IsEnabled
+        â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogTrace
+        â”‚  â”œâ”€ BOUNDARY external Stopwatch.GetElapsedTime
+        â”‚  â””â”€ EFFECT ai_embeddings read  GenerateVectorAsync  Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
+        â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
+        â”œâ”€ BOUNDARY external ILogger.IsEnabled
+        â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+        â”œâ”€ BOUNDARY external Queryable.Take
+        â”œâ”€ BOUNDARY external Queryable.Skip
+        â”œâ”€ BOUNDARY external Queryable.OrderBy
+        â”œâ”€ BOUNDARY external Queryable.Select
+        â”œâ”€ BOUNDARY external Queryable.Where
+        â”œâ”€ BOUNDARY external VectorDbFunctionsExtensions.CosineDistance
+        â”œâ”€ BOUNDARY external LoggerExtensions.LogDebug
+        â”œâ”€ BOUNDARY external String.Join
+        â”œâ”€ BOUNDARY external Enumerable.Select
+        â”œâ”€ BOUNDARY external Enumerable.ToList
+        â”œâ”€ BOUNDARY external Enumerable.Select
+        â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+        â”œâ”€ BOUNDARY external Queryable.Take
+        â”œâ”€ BOUNDARY external Queryable.Skip
+        â”œâ”€ BOUNDARY external Queryable.OrderBy
+        â”œâ”€ BOUNDARY external Queryable.Where
+        â”œâ”€ BOUNDARY external VectorDbFunctionsExtensions.CosineDistance
+        â”œâ”€ BOUNDARY external TypedResults.Ok
+        â”œâ”€ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+        â””â”€ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
 
 Callgraph: [7] minapi GET /items/withsemanticrelevance
 Nodes: 5
   CatalogApi.cs:60  minapi GET /items/withsemanticrelevance
-  ÀÄ CatalogApi.cs:236  CatalogApi.GetItemsBySemanticRelevance
-     ÃÄ CatalogApi.cs:193  CatalogApi.GetItemsByName
-     ³  ÀÄ CatalogApi.cs:123  CatalogApi.GetAllItems
-     ³     ÃÄ BOUNDARY external Queryable.Where
-     ³     ÃÄ BOUNDARY external String.StartsWith
-     ³     ÃÄ BOUNDARY external Queryable.Where
-     ³     ÃÄ BOUNDARY external Queryable.Where
-     ³     ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
-     ³     ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-     ³     ÃÄ BOUNDARY external Queryable.Take
-     ³     ÃÄ BOUNDARY external Queryable.Skip
-     ³     ÃÄ BOUNDARY external Queryable.OrderBy
-     ³     ÀÄ BOUNDARY external TypedResults.Ok
-     ÃÄ CatalogAI.cs:55  CatalogAI.GetEmbeddingAsync
-     ³  ÃÄ BOUNDARY external Stopwatch.GetTimestamp
-     ³  ÃÄ BOUNDARY external EmbeddingGeneratorExtensions.GenerateVectorAsync
-     ³  ÃÄ BOUNDARY external ILogger.IsEnabled
-     ³  ÃÄ BOUNDARY external LoggerExtensions.LogTrace
-     ³  ÃÄ BOUNDARY external Stopwatch.GetElapsedTime
-     ³  ÀÄ EFFECT ai_embeddings read  GenerateVectorAsync  Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
-     ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
-     ÃÄ BOUNDARY external ILogger.IsEnabled
-     ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-     ÃÄ BOUNDARY external Queryable.Take
-     ÃÄ BOUNDARY external Queryable.Skip
-     ÃÄ BOUNDARY external Queryable.OrderBy
-     ÃÄ BOUNDARY external Queryable.Select
-     ÃÄ BOUNDARY external Queryable.Where
-     ÃÄ BOUNDARY external VectorDbFunctionsExtensions.CosineDistance
-     ÃÄ BOUNDARY external LoggerExtensions.LogDebug
-     ÃÄ BOUNDARY external String.Join
-     ÃÄ BOUNDARY external Enumerable.Select
-     ÃÄ BOUNDARY external Enumerable.ToList
-     ÃÄ BOUNDARY external Enumerable.Select
-     ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-     ÃÄ BOUNDARY external Queryable.Take
-     ÃÄ BOUNDARY external Queryable.Skip
-     ÃÄ BOUNDARY external Queryable.OrderBy
-     ÃÄ BOUNDARY external Queryable.Where
-     ÃÄ BOUNDARY external VectorDbFunctionsExtensions.CosineDistance
-     ÃÄ BOUNDARY external TypedResults.Ok
-     ÃÄ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
-     ÀÄ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+  â””â”€ CatalogApi.cs:236  CatalogApi.GetItemsBySemanticRelevance
+     â”œâ”€ CatalogApi.cs:193  CatalogApi.GetItemsByName
+     â”‚  â””â”€ CatalogApi.cs:123  CatalogApi.GetAllItems
+     â”‚     â”œâ”€ BOUNDARY external Queryable.Where
+     â”‚     â”œâ”€ BOUNDARY external String.StartsWith
+     â”‚     â”œâ”€ BOUNDARY external Queryable.Where
+     â”‚     â”œâ”€ BOUNDARY external Queryable.Where
+     â”‚     â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
+     â”‚     â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+     â”‚     â”œâ”€ BOUNDARY external Queryable.Take
+     â”‚     â”œâ”€ BOUNDARY external Queryable.Skip
+     â”‚     â”œâ”€ BOUNDARY external Queryable.OrderBy
+     â”‚     â””â”€ BOUNDARY external TypedResults.Ok
+     â”œâ”€ CatalogAI.cs:55  CatalogAI.GetEmbeddingAsync
+     â”‚  â”œâ”€ BOUNDARY external Stopwatch.GetTimestamp
+     â”‚  â”œâ”€ BOUNDARY external EmbeddingGeneratorExtensions.GenerateVectorAsync
+     â”‚  â”œâ”€ BOUNDARY external ILogger.IsEnabled
+     â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogTrace
+     â”‚  â”œâ”€ BOUNDARY external Stopwatch.GetElapsedTime
+     â”‚  â””â”€ EFFECT ai_embeddings read  GenerateVectorAsync  Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
+     â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
+     â”œâ”€ BOUNDARY external ILogger.IsEnabled
+     â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+     â”œâ”€ BOUNDARY external Queryable.Take
+     â”œâ”€ BOUNDARY external Queryable.Skip
+     â”œâ”€ BOUNDARY external Queryable.OrderBy
+     â”œâ”€ BOUNDARY external Queryable.Select
+     â”œâ”€ BOUNDARY external Queryable.Where
+     â”œâ”€ BOUNDARY external VectorDbFunctionsExtensions.CosineDistance
+     â”œâ”€ BOUNDARY external LoggerExtensions.LogDebug
+     â”œâ”€ BOUNDARY external String.Join
+     â”œâ”€ BOUNDARY external Enumerable.Select
+     â”œâ”€ BOUNDARY external Enumerable.ToList
+     â”œâ”€ BOUNDARY external Enumerable.Select
+     â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+     â”œâ”€ BOUNDARY external Queryable.Take
+     â”œâ”€ BOUNDARY external Queryable.Skip
+     â”œâ”€ BOUNDARY external Queryable.OrderBy
+     â”œâ”€ BOUNDARY external Queryable.Where
+     â”œâ”€ BOUNDARY external VectorDbFunctionsExtensions.CosineDistance
+     â”œâ”€ BOUNDARY external TypedResults.Ok
+     â”œâ”€ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+     â””â”€ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
 
 Callgraph: [8] minapi GET /items/type/{typeId}/brand/{brandId?}
 Nodes: 3
   CatalogApi.cs:67  minapi GET /items/type/{typeId}/brand/{brandId?}
-  ÀÄ CatalogApi.cs:291  CatalogApi.GetItemsByBrandAndTypeId
-     ÀÄ CatalogApi.cs:123  CatalogApi.GetAllItems
-        ÃÄ BOUNDARY external Queryable.Where
-        ÃÄ BOUNDARY external String.StartsWith
-        ÃÄ BOUNDARY external Queryable.Where
-        ÃÄ BOUNDARY external Queryable.Where
-        ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
-        ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-        ÃÄ BOUNDARY external Queryable.Take
-        ÃÄ BOUNDARY external Queryable.Skip
-        ÃÄ BOUNDARY external Queryable.OrderBy
-        ÀÄ BOUNDARY external TypedResults.Ok
+  â””â”€ CatalogApi.cs:291  CatalogApi.GetItemsByBrandAndTypeId
+     â””â”€ CatalogApi.cs:123  CatalogApi.GetAllItems
+        â”œâ”€ BOUNDARY external Queryable.Where
+        â”œâ”€ BOUNDARY external String.StartsWith
+        â”œâ”€ BOUNDARY external Queryable.Where
+        â”œâ”€ BOUNDARY external Queryable.Where
+        â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
+        â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+        â”œâ”€ BOUNDARY external Queryable.Take
+        â”œâ”€ BOUNDARY external Queryable.Skip
+        â”œâ”€ BOUNDARY external Queryable.OrderBy
+        â””â”€ BOUNDARY external TypedResults.Ok
 
 Callgraph: [9] minapi GET /items/type/all/brand/{brandId:int?}
 Nodes: 3
   CatalogApi.cs:72  minapi GET /items/type/all/brand/{brandId:int?}
-  ÀÄ CatalogApi.cs:301  CatalogApi.GetItemsByBrandId
-     ÀÄ CatalogApi.cs:123  CatalogApi.GetAllItems
-        ÃÄ BOUNDARY external Queryable.Where
-        ÃÄ BOUNDARY external String.StartsWith
-        ÃÄ BOUNDARY external Queryable.Where
-        ÃÄ BOUNDARY external Queryable.Where
-        ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
-        ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-        ÃÄ BOUNDARY external Queryable.Take
-        ÃÄ BOUNDARY external Queryable.Skip
-        ÃÄ BOUNDARY external Queryable.OrderBy
-        ÀÄ BOUNDARY external TypedResults.Ok
+  â””â”€ CatalogApi.cs:301  CatalogApi.GetItemsByBrandId
+     â””â”€ CatalogApi.cs:123  CatalogApi.GetAllItems
+        â”œâ”€ BOUNDARY external Queryable.Where
+        â”œâ”€ BOUNDARY external String.StartsWith
+        â”œâ”€ BOUNDARY external Queryable.Where
+        â”œâ”€ BOUNDARY external Queryable.Where
+        â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.LongCountAsync
+        â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+        â”œâ”€ BOUNDARY external Queryable.Take
+        â”œâ”€ BOUNDARY external Queryable.Skip
+        â”œâ”€ BOUNDARY external Queryable.OrderBy
+        â””â”€ BOUNDARY external TypedResults.Ok
 
 Callgraph: [10] minapi GET /catalogtypes
 Nodes: 1
   CatalogApi.cs:77  minapi GET /catalogtypes
-  ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-  ÀÄ BOUNDARY external Queryable.OrderBy
+  â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+  â””â”€ BOUNDARY external Queryable.OrderBy
 
 Callgraph: [11] minapi GET /catalogbrands
 Nodes: 1
   CatalogApi.cs:84  minapi GET /catalogbrands
-  ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-  ÀÄ BOUNDARY external Queryable.OrderBy
+  â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+  â””â”€ BOUNDARY external Queryable.OrderBy
 
 Callgraph: [12] minapi PUT /items
 Nodes: 18
   CatalogApi.cs:93  minapi PUT /items
-  ÀÄ CatalogApi.cs:310  CatalogApi.UpdateItemV1
-     ÃÄ CatalogApi.cs:324  CatalogApi.UpdateItem
-     ³  ÃÄ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
-     ³  ³  ÃÄ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync  [^]
-     ³  ³  ÃÄ CatalogAI.cs:75  CatalogAI.CatalogItemToString
-     ³  ³  ÀÄ BOUNDARY external ValueTask.FromResult
-     ³  ÃÄ CatalogIntegrationEventService.cs:28  CatalogIntegrationEventService.SaveEventAndCatalogContextChangesAsync
-     ³  ³  ÃÄ ResilientTransaction.cs:11  ResilientTransaction.ExecuteAsync
-     ³  ³  ³  ÃÄ BOUNDARY external DatabaseFacade.CreateExecutionStrategy
-     ³  ³  ³  ÃÄ BOUNDARY external ExecutionStrategyExtensions.ExecuteAsync
-     ³  ³  ³  ÃÄ BOUNDARY external DatabaseFacade.BeginTransactionAsync
-     ³  ³  ³  ÃÄ BOUNDARY external Func.Invoke
-     ³  ³  ³  ÃÄ BOUNDARY external IDbContextTransaction.CommitAsync
-     ³  ³  ³  ÃÄ EFFECT db_transaction begin  BeginTransactionAsync  DbContext.Database  [resilience_retry:ExecutionStrategy]
-     ³  ³  ³  ÀÄ EFFECT db_transaction commit  CommitAsync  Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction  [resilience_retry:ExecutionStrategy]
-     ³  ³  ÃÄ ResilientTransaction.cs:9  ResilientTransaction.New
-     ³  ³  ÃÄ IIntegrationEventLogService.cs:6  IIntegrationEventLogService.SaveEventAsync
-     ³  ³  ÃÄ BOUNDARY external LoggerExtensions.LogInformation
-     ³  ³  ÃÄ BOUNDARY external DbContext.SaveChangesAsync
-     ³  ³  ÀÄ EFFECT efcore commit  SaveChangesAsync  CatalogContext
-     ³  ÃÄ CatalogIntegrationEventService.cs:11  CatalogIntegrationEventService.PublishThroughEventBusAsync
-     ³  ³  ÃÄ IIntegrationEventLogService.cs:8  IIntegrationEventLogService.MarkEventAsInProgressAsync
-     ³  ³  ÃÄ RabbitMQEventBus.cs:31  RabbitMQEventBus.PublishAsync
-     ³  ³  ³  ÃÄ RabbitMQEventBus.cs:218  RabbitMQEventBus.SerializeMessage
-     ³  ³  ³  ³  ÃÄ BOUNDARY external JsonSerializer.SerializeToUtf8Bytes
-     ³  ³  ³  ³  ÀÄ BOUNDARY external Object.GetType
-     ³  ³  ³  ÃÄ RabbitMQEventBus.cs:113  RabbitMQEventBus.SetActivityContext
-     ³  ³  ³  ³  ÃÄ BOUNDARY external Activity.SetTag
-     ³  ³  ³  ³  ÃÄ BOUNDARY external Activity.SetTag
-     ³  ³  ³  ³  ÃÄ BOUNDARY external Activity.SetTag
-     ³  ³  ³  ³  ÃÄ BOUNDARY external Activity.SetTag
-     ³  ³  ³  ³  ÀÄ BOUNDARY external Activity.SetTag
-     ³  ³  ³  ÃÄ ActivityExtensions.cs:6  ActivityExtensions.SetExceptionTags
-     ³  ³  ³  ³  ÃÄ BOUNDARY external Activity.AddTag
-     ³  ³  ³  ³  ÃÄ BOUNDARY external Activity.AddTag
-     ³  ³  ³  ³  ÃÄ BOUNDARY external Exception.ToString
-     ³  ³  ³  ³  ÃÄ BOUNDARY external Activity.AddTag
-     ³  ³  ³  ³  ÃÄ BOUNDARY external Exception.GetType
-     ³  ³  ³  ³  ÀÄ BOUNDARY external Activity.SetStatus
-     ³  ³  ³  ÃÄ BOUNDARY external Object.GetType
-     ³  ³  ³  ÃÄ BOUNDARY external ILogger.IsEnabled
-     ³  ³  ³  ÃÄ BOUNDARY external LoggerExtensions.LogTrace
-     ³  ³  ³  ÃÄ BOUNDARY external IConnection.CreateChannelAsync
-     ³  ³  ³  ÃÄ BOUNDARY external ILogger.IsEnabled
-     ³  ³  ³  ÃÄ BOUNDARY external LoggerExtensions.LogTrace
-     ³  ³  ³  ÃÄ BOUNDARY external IChannelExtensions.ExchangeDeclareAsync
-     ³  ³  ³  ÃÄ BOUNDARY external ResiliencePipeline.Execute
-     ³  ³  ³  ÃÄ BOUNDARY external ActivitySource.StartActivity
-     ³  ³  ³  ÃÄ BOUNDARY external TextMapPropagator.Inject
-     ³  ³  ³  ÃÄ BOUNDARY external ILogger.IsEnabled
-     ³  ³  ³  ÃÄ BOUNDARY external LoggerExtensions.LogTrace
-     ³  ³  ³  ÀÄ BOUNDARY external IChannel.BasicPublishAsync
-     ³  ³  ÃÄ IIntegrationEventLogService.cs:7  IIntegrationEventLogService.MarkEventAsPublishedAsync
-     ³  ³  ÃÄ IIntegrationEventLogService.cs:9  IIntegrationEventLogService.MarkEventAsFailedAsync
-     ³  ³  ÃÄ BOUNDARY external LoggerExtensions.LogInformation
-     ³  ³  ÃÄ BOUNDARY external LoggerExtensions.LogError
-     ³  ³  ÀÄ EFFECT eventbus publish  PublishAsync  eShop.EventBus.Events.IntegrationEvent
-     ³  ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.SingleOrDefaultAsync
-     ³  ÃÄ BOUNDARY external TypedResults.NotFound
-     ³  ÃÄ BOUNDARY external DbContext.Entry
-     ³  ÃÄ BOUNDARY external PropertyValues.SetValues
-     ³  ÃÄ BOUNDARY external EntityEntry.Property
-     ³  ÃÄ BOUNDARY external DbContext.SaveChangesAsync
-     ³  ÃÄ BOUNDARY external TypedResults.Created
-     ³  ÃÄ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
-     ³  ÀÄ EFFECT efcore commit  SaveChangesAsync  CatalogContext
-     ÀÄ BOUNDARY external TypedResults.BadRequest
+  â””â”€ CatalogApi.cs:310  CatalogApi.UpdateItemV1
+     â”œâ”€ CatalogApi.cs:324  CatalogApi.UpdateItem
+     â”‚  â”œâ”€ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
+     â”‚  â”‚  â”œâ”€ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync  [^]
+     â”‚  â”‚  â”œâ”€ CatalogAI.cs:75  CatalogAI.CatalogItemToString
+     â”‚  â”‚  â””â”€ BOUNDARY external ValueTask.FromResult
+     â”‚  â”œâ”€ CatalogIntegrationEventService.cs:28  CatalogIntegrationEventService.SaveEventAndCatalogContextChangesAsync
+     â”‚  â”‚  â”œâ”€ ResilientTransaction.cs:11  ResilientTransaction.ExecuteAsync
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external DatabaseFacade.CreateExecutionStrategy
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external ExecutionStrategyExtensions.ExecuteAsync
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external DatabaseFacade.BeginTransactionAsync
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Func.Invoke
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external IDbContextTransaction.CommitAsync
+     â”‚  â”‚  â”‚  â”œâ”€ EFFECT db_transaction begin  BeginTransactionAsync  DbContext.Database  [resilience_retry:ExecutionStrategy]
+     â”‚  â”‚  â”‚  â””â”€ EFFECT db_transaction commit  CommitAsync  Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction  [resilience_retry:ExecutionStrategy]
+     â”‚  â”‚  â”œâ”€ ResilientTransaction.cs:9  ResilientTransaction.New
+     â”‚  â”‚  â”œâ”€ IIntegrationEventLogService.cs:6  IIntegrationEventLogService.SaveEventAsync
+     â”‚  â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogInformation
+     â”‚  â”‚  â”œâ”€ BOUNDARY external DbContext.SaveChangesAsync
+     â”‚  â”‚  â””â”€ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+     â”‚  â”œâ”€ CatalogIntegrationEventService.cs:11  CatalogIntegrationEventService.PublishThroughEventBusAsync
+     â”‚  â”‚  â”œâ”€ IIntegrationEventLogService.cs:8  IIntegrationEventLogService.MarkEventAsInProgressAsync
+     â”‚  â”‚  â”œâ”€ RabbitMQEventBus.cs:31  RabbitMQEventBus.PublishAsync
+     â”‚  â”‚  â”‚  â”œâ”€ RabbitMQEventBus.cs:218  RabbitMQEventBus.SerializeMessage
+     â”‚  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external JsonSerializer.SerializeToUtf8Bytes
+     â”‚  â”‚  â”‚  â”‚  â””â”€ BOUNDARY external Object.GetType
+     â”‚  â”‚  â”‚  â”œâ”€ RabbitMQEventBus.cs:113  RabbitMQEventBus.SetActivityContext
+     â”‚  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Activity.SetTag
+     â”‚  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Activity.SetTag
+     â”‚  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Activity.SetTag
+     â”‚  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Activity.SetTag
+     â”‚  â”‚  â”‚  â”‚  â””â”€ BOUNDARY external Activity.SetTag
+     â”‚  â”‚  â”‚  â”œâ”€ ActivityExtensions.cs:6  ActivityExtensions.SetExceptionTags
+     â”‚  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Activity.AddTag
+     â”‚  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Activity.AddTag
+     â”‚  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Exception.ToString
+     â”‚  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Activity.AddTag
+     â”‚  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Exception.GetType
+     â”‚  â”‚  â”‚  â”‚  â””â”€ BOUNDARY external Activity.SetStatus
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Object.GetType
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external ILogger.IsEnabled
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogTrace
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external IConnection.CreateChannelAsync
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external ILogger.IsEnabled
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogTrace
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external IChannelExtensions.ExchangeDeclareAsync
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external ResiliencePipeline.Execute
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external ActivitySource.StartActivity
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external TextMapPropagator.Inject
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external ILogger.IsEnabled
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogTrace
+     â”‚  â”‚  â”‚  â””â”€ BOUNDARY external IChannel.BasicPublishAsync
+     â”‚  â”‚  â”œâ”€ IIntegrationEventLogService.cs:7  IIntegrationEventLogService.MarkEventAsPublishedAsync
+     â”‚  â”‚  â”œâ”€ IIntegrationEventLogService.cs:9  IIntegrationEventLogService.MarkEventAsFailedAsync
+     â”‚  â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogInformation
+     â”‚  â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogError
+     â”‚  â”‚  â””â”€ EFFECT eventbus publish  PublishAsync  eShop.EventBus.Events.IntegrationEvent
+     â”‚  â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.SingleOrDefaultAsync
+     â”‚  â”œâ”€ BOUNDARY external TypedResults.NotFound
+     â”‚  â”œâ”€ BOUNDARY external DbContext.Entry
+     â”‚  â”œâ”€ BOUNDARY external PropertyValues.SetValues
+     â”‚  â”œâ”€ BOUNDARY external EntityEntry.Property
+     â”‚  â”œâ”€ BOUNDARY external DbContext.SaveChangesAsync
+     â”‚  â”œâ”€ BOUNDARY external TypedResults.Created
+     â”‚  â”œâ”€ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
+     â”‚  â””â”€ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+     â””â”€ BOUNDARY external TypedResults.BadRequest
 
 Callgraph: [13] minapi PUT /items/{id:int}
 Nodes: 17
   CatalogApi.cs:98  minapi PUT /items/{id:int}
-  ÀÄ CatalogApi.cs:324  CatalogApi.UpdateItem
-     ÃÄ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
-     ³  ÃÄ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync  [^]
-     ³  ÃÄ CatalogAI.cs:75  CatalogAI.CatalogItemToString
-     ³  ÀÄ BOUNDARY external ValueTask.FromResult
-     ÃÄ CatalogIntegrationEventService.cs:28  CatalogIntegrationEventService.SaveEventAndCatalogContextChangesAsync
-     ³  ÃÄ ResilientTransaction.cs:11  ResilientTransaction.ExecuteAsync
-     ³  ³  ÃÄ BOUNDARY external DatabaseFacade.CreateExecutionStrategy
-     ³  ³  ÃÄ BOUNDARY external ExecutionStrategyExtensions.ExecuteAsync
-     ³  ³  ÃÄ BOUNDARY external DatabaseFacade.BeginTransactionAsync
-     ³  ³  ÃÄ BOUNDARY external Func.Invoke
-     ³  ³  ÃÄ BOUNDARY external IDbContextTransaction.CommitAsync
-     ³  ³  ÃÄ EFFECT db_transaction begin  BeginTransactionAsync  DbContext.Database  [resilience_retry:ExecutionStrategy]
-     ³  ³  ÀÄ EFFECT db_transaction commit  CommitAsync  Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction  [resilience_retry:ExecutionStrategy]
-     ³  ÃÄ ResilientTransaction.cs:9  ResilientTransaction.New
-     ³  ÃÄ IIntegrationEventLogService.cs:6  IIntegrationEventLogService.SaveEventAsync
-     ³  ÃÄ BOUNDARY external LoggerExtensions.LogInformation
-     ³  ÃÄ BOUNDARY external DbContext.SaveChangesAsync
-     ³  ÀÄ EFFECT efcore commit  SaveChangesAsync  CatalogContext
-     ÃÄ CatalogIntegrationEventService.cs:11  CatalogIntegrationEventService.PublishThroughEventBusAsync
-     ³  ÃÄ IIntegrationEventLogService.cs:8  IIntegrationEventLogService.MarkEventAsInProgressAsync
-     ³  ÃÄ RabbitMQEventBus.cs:31  RabbitMQEventBus.PublishAsync
-     ³  ³  ÃÄ RabbitMQEventBus.cs:218  RabbitMQEventBus.SerializeMessage
-     ³  ³  ³  ÃÄ BOUNDARY external JsonSerializer.SerializeToUtf8Bytes
-     ³  ³  ³  ÀÄ BOUNDARY external Object.GetType
-     ³  ³  ÃÄ RabbitMQEventBus.cs:113  RabbitMQEventBus.SetActivityContext
-     ³  ³  ³  ÃÄ BOUNDARY external Activity.SetTag
-     ³  ³  ³  ÃÄ BOUNDARY external Activity.SetTag
-     ³  ³  ³  ÃÄ BOUNDARY external Activity.SetTag
-     ³  ³  ³  ÃÄ BOUNDARY external Activity.SetTag
-     ³  ³  ³  ÀÄ BOUNDARY external Activity.SetTag
-     ³  ³  ÃÄ ActivityExtensions.cs:6  ActivityExtensions.SetExceptionTags
-     ³  ³  ³  ÃÄ BOUNDARY external Activity.AddTag
-     ³  ³  ³  ÃÄ BOUNDARY external Activity.AddTag
-     ³  ³  ³  ÃÄ BOUNDARY external Exception.ToString
-     ³  ³  ³  ÃÄ BOUNDARY external Activity.AddTag
-     ³  ³  ³  ÃÄ BOUNDARY external Exception.GetType
-     ³  ³  ³  ÀÄ BOUNDARY external Activity.SetStatus
-     ³  ³  ÃÄ BOUNDARY external Object.GetType
-     ³  ³  ÃÄ BOUNDARY external ILogger.IsEnabled
-     ³  ³  ÃÄ BOUNDARY external LoggerExtensions.LogTrace
-     ³  ³  ÃÄ BOUNDARY external IConnection.CreateChannelAsync
-     ³  ³  ÃÄ BOUNDARY external ILogger.IsEnabled
-     ³  ³  ÃÄ BOUNDARY external LoggerExtensions.LogTrace
-     ³  ³  ÃÄ BOUNDARY external IChannelExtensions.ExchangeDeclareAsync
-     ³  ³  ÃÄ BOUNDARY external ResiliencePipeline.Execute
-     ³  ³  ÃÄ BOUNDARY external ActivitySource.StartActivity
-     ³  ³  ÃÄ BOUNDARY external TextMapPropagator.Inject
-     ³  ³  ÃÄ BOUNDARY external ILogger.IsEnabled
-     ³  ³  ÃÄ BOUNDARY external LoggerExtensions.LogTrace
-     ³  ³  ÀÄ BOUNDARY external IChannel.BasicPublishAsync
-     ³  ÃÄ IIntegrationEventLogService.cs:7  IIntegrationEventLogService.MarkEventAsPublishedAsync
-     ³  ÃÄ IIntegrationEventLogService.cs:9  IIntegrationEventLogService.MarkEventAsFailedAsync
-     ³  ÃÄ BOUNDARY external LoggerExtensions.LogInformation
-     ³  ÃÄ BOUNDARY external LoggerExtensions.LogError
-     ³  ÀÄ EFFECT eventbus publish  PublishAsync  eShop.EventBus.Events.IntegrationEvent
-     ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.SingleOrDefaultAsync
-     ÃÄ BOUNDARY external TypedResults.NotFound
-     ÃÄ BOUNDARY external DbContext.Entry
-     ÃÄ BOUNDARY external PropertyValues.SetValues
-     ÃÄ BOUNDARY external EntityEntry.Property
-     ÃÄ BOUNDARY external DbContext.SaveChangesAsync
-     ÃÄ BOUNDARY external TypedResults.Created
-     ÃÄ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
-     ÀÄ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+  â””â”€ CatalogApi.cs:324  CatalogApi.UpdateItem
+     â”œâ”€ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
+     â”‚  â”œâ”€ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync  [^]
+     â”‚  â”œâ”€ CatalogAI.cs:75  CatalogAI.CatalogItemToString
+     â”‚  â””â”€ BOUNDARY external ValueTask.FromResult
+     â”œâ”€ CatalogIntegrationEventService.cs:28  CatalogIntegrationEventService.SaveEventAndCatalogContextChangesAsync
+     â”‚  â”œâ”€ ResilientTransaction.cs:11  ResilientTransaction.ExecuteAsync
+     â”‚  â”‚  â”œâ”€ BOUNDARY external DatabaseFacade.CreateExecutionStrategy
+     â”‚  â”‚  â”œâ”€ BOUNDARY external ExecutionStrategyExtensions.ExecuteAsync
+     â”‚  â”‚  â”œâ”€ BOUNDARY external DatabaseFacade.BeginTransactionAsync
+     â”‚  â”‚  â”œâ”€ BOUNDARY external Func.Invoke
+     â”‚  â”‚  â”œâ”€ BOUNDARY external IDbContextTransaction.CommitAsync
+     â”‚  â”‚  â”œâ”€ EFFECT db_transaction begin  BeginTransactionAsync  DbContext.Database  [resilience_retry:ExecutionStrategy]
+     â”‚  â”‚  â””â”€ EFFECT db_transaction commit  CommitAsync  Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction  [resilience_retry:ExecutionStrategy]
+     â”‚  â”œâ”€ ResilientTransaction.cs:9  ResilientTransaction.New
+     â”‚  â”œâ”€ IIntegrationEventLogService.cs:6  IIntegrationEventLogService.SaveEventAsync
+     â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogInformation
+     â”‚  â”œâ”€ BOUNDARY external DbContext.SaveChangesAsync
+     â”‚  â””â”€ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+     â”œâ”€ CatalogIntegrationEventService.cs:11  CatalogIntegrationEventService.PublishThroughEventBusAsync
+     â”‚  â”œâ”€ IIntegrationEventLogService.cs:8  IIntegrationEventLogService.MarkEventAsInProgressAsync
+     â”‚  â”œâ”€ RabbitMQEventBus.cs:31  RabbitMQEventBus.PublishAsync
+     â”‚  â”‚  â”œâ”€ RabbitMQEventBus.cs:218  RabbitMQEventBus.SerializeMessage
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external JsonSerializer.SerializeToUtf8Bytes
+     â”‚  â”‚  â”‚  â””â”€ BOUNDARY external Object.GetType
+     â”‚  â”‚  â”œâ”€ RabbitMQEventBus.cs:113  RabbitMQEventBus.SetActivityContext
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Activity.SetTag
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Activity.SetTag
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Activity.SetTag
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Activity.SetTag
+     â”‚  â”‚  â”‚  â””â”€ BOUNDARY external Activity.SetTag
+     â”‚  â”‚  â”œâ”€ ActivityExtensions.cs:6  ActivityExtensions.SetExceptionTags
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Activity.AddTag
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Activity.AddTag
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Exception.ToString
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Activity.AddTag
+     â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Exception.GetType
+     â”‚  â”‚  â”‚  â””â”€ BOUNDARY external Activity.SetStatus
+     â”‚  â”‚  â”œâ”€ BOUNDARY external Object.GetType
+     â”‚  â”‚  â”œâ”€ BOUNDARY external ILogger.IsEnabled
+     â”‚  â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogTrace
+     â”‚  â”‚  â”œâ”€ BOUNDARY external IConnection.CreateChannelAsync
+     â”‚  â”‚  â”œâ”€ BOUNDARY external ILogger.IsEnabled
+     â”‚  â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogTrace
+     â”‚  â”‚  â”œâ”€ BOUNDARY external IChannelExtensions.ExchangeDeclareAsync
+     â”‚  â”‚  â”œâ”€ BOUNDARY external ResiliencePipeline.Execute
+     â”‚  â”‚  â”œâ”€ BOUNDARY external ActivitySource.StartActivity
+     â”‚  â”‚  â”œâ”€ BOUNDARY external TextMapPropagator.Inject
+     â”‚  â”‚  â”œâ”€ BOUNDARY external ILogger.IsEnabled
+     â”‚  â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogTrace
+     â”‚  â”‚  â””â”€ BOUNDARY external IChannel.BasicPublishAsync
+     â”‚  â”œâ”€ IIntegrationEventLogService.cs:7  IIntegrationEventLogService.MarkEventAsPublishedAsync
+     â”‚  â”œâ”€ IIntegrationEventLogService.cs:9  IIntegrationEventLogService.MarkEventAsFailedAsync
+     â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogInformation
+     â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogError
+     â”‚  â””â”€ EFFECT eventbus publish  PublishAsync  eShop.EventBus.Events.IntegrationEvent
+     â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.SingleOrDefaultAsync
+     â”œâ”€ BOUNDARY external TypedResults.NotFound
+     â”œâ”€ BOUNDARY external DbContext.Entry
+     â”œâ”€ BOUNDARY external PropertyValues.SetValues
+     â”œâ”€ BOUNDARY external EntityEntry.Property
+     â”œâ”€ BOUNDARY external DbContext.SaveChangesAsync
+     â”œâ”€ BOUNDARY external TypedResults.Created
+     â”œâ”€ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
+     â””â”€ EFFECT efcore commit  SaveChangesAsync  CatalogContext
 
 Callgraph: [14] minapi POST /items
 Nodes: 5
   CatalogApi.cs:103  minapi POST /items
-  ÀÄ CatalogApi.cs:365  CatalogApi.CreateItem
-     ÃÄ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
-     ³  ÃÄ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync  [^]
-     ³  ÃÄ CatalogAI.cs:75  CatalogAI.CatalogItemToString
-     ³  ÀÄ BOUNDARY external ValueTask.FromResult
-     ÃÄ BOUNDARY external DbSet.Add
-     ÃÄ BOUNDARY external DbContext.SaveChangesAsync
-     ÃÄ BOUNDARY external TypedResults.Created
-     ÃÄ EFFECT efcore pending_write  Add  CatalogContext.CatalogItems
-     ÀÄ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+  â””â”€ CatalogApi.cs:365  CatalogApi.CreateItem
+     â”œâ”€ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
+     â”‚  â”œâ”€ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync  [^]
+     â”‚  â”œâ”€ CatalogAI.cs:75  CatalogAI.CatalogItemToString
+     â”‚  â””â”€ BOUNDARY external ValueTask.FromResult
+     â”œâ”€ BOUNDARY external DbSet.Add
+     â”œâ”€ BOUNDARY external DbContext.SaveChangesAsync
+     â”œâ”€ BOUNDARY external TypedResults.Created
+     â”œâ”€ EFFECT efcore pending_write  Add  CatalogContext.CatalogItems
+     â””â”€ EFFECT efcore commit  SaveChangesAsync  CatalogContext
 
 Callgraph: [15] minapi DELETE /items/{id:int}
 Nodes: 2
   CatalogApi.cs:107  minapi DELETE /items/{id:int}
-  ÀÄ CatalogApi.cs:390  CatalogApi.DeleteItemById
-     ÃÄ BOUNDARY external Queryable.SingleOrDefault
-     ÃÄ BOUNDARY external TypedResults.NotFound
-     ÃÄ BOUNDARY external DbSet.Remove
-     ÃÄ BOUNDARY external DbContext.SaveChangesAsync
-     ÃÄ BOUNDARY external TypedResults.NoContent
-     ÃÄ EFFECT efcore pending_write  Remove  CatalogContext.CatalogItems
-     ÀÄ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+  â””â”€ CatalogApi.cs:390  CatalogApi.DeleteItemById
+     â”œâ”€ BOUNDARY external Queryable.SingleOrDefault
+     â”œâ”€ BOUNDARY external TypedResults.NotFound
+     â”œâ”€ BOUNDARY external DbSet.Remove
+     â”œâ”€ BOUNDARY external DbContext.SaveChangesAsync
+     â”œâ”€ BOUNDARY external TypedResults.NoContent
+     â”œâ”€ EFFECT efcore pending_write  Remove  CatalogContext.CatalogItems
+     â””â”€ EFFECT efcore commit  SaveChangesAsync  CatalogContext
 
 Callgraph: [16] mvc GET account
 Nodes: 2
   AccountController.cs:39  mvc GET account
-  ÃÄ AccountController.cs:206  AccountController.BuildLoginViewModelAsync
-  ³  ÃÄ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
-  ³  ÃÄ BOUNDARY external IAuthenticationSchemeProvider.GetSchemeAsync
-  ³  ÃÄ BOUNDARY external IAuthenticationSchemeProvider.GetAllSchemesAsync
-  ³  ÃÄ BOUNDARY external Enumerable.ToList
-  ³  ÃÄ BOUNDARY external Enumerable.Select
-  ³  ÃÄ BOUNDARY external Enumerable.Where
-  ³  ÃÄ BOUNDARY external IClientStoreExtensions.FindEnabledClientByIdAsync
-  ³  ÃÄ BOUNDARY external Enumerable.Any
-  ³  ÃÄ BOUNDARY external Enumerable.ToList
-  ³  ÃÄ BOUNDARY external Enumerable.Where
-  ³  ÃÄ BOUNDARY external ICollection.Contains
-  ³  ÀÄ BOUNDARY external List.ToArray
-  ÃÄ BOUNDARY external ControllerBase.RedirectToAction
-  ÀÄ BOUNDARY external Controller.View
+  â”œâ”€ AccountController.cs:206  AccountController.BuildLoginViewModelAsync
+  â”‚  â”œâ”€ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
+  â”‚  â”œâ”€ BOUNDARY external IAuthenticationSchemeProvider.GetSchemeAsync
+  â”‚  â”œâ”€ BOUNDARY external IAuthenticationSchemeProvider.GetAllSchemesAsync
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.ToList
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.Select
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.Where
+  â”‚  â”œâ”€ BOUNDARY external IClientStoreExtensions.FindEnabledClientByIdAsync
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.Any
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.ToList
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.Where
+  â”‚  â”œâ”€ BOUNDARY external ICollection.Contains
+  â”‚  â””â”€ BOUNDARY external List.ToArray
+  â”œâ”€ BOUNDARY external ControllerBase.RedirectToAction
+  â””â”€ BOUNDARY external Controller.View
 
 Callgraph: [17] mvc POST account
 Nodes: 5
   AccountController.cs:59  mvc POST account
-  ÃÄ Extensions.cs:9  Extensions.IsNativeClient
-  ³  ÃÄ BOUNDARY external String.StartsWith
-  ³  ÀÄ BOUNDARY external String.StartsWith
-  ÃÄ Extensions.cs:15  Extensions.LoadingPage
-  ³  ÀÄ BOUNDARY external Controller.View
-  ÃÄ AccountController.cs:264  AccountController.BuildLoginViewModelAsync
-  ³  ÀÄ AccountController.cs:264  AccountController.BuildLoginViewModelAsync  [^]
-  ÃÄ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
-  ÃÄ BOUNDARY external IIdentityServerInteractionService.DenyAuthorizationAsync
-  ÃÄ BOUNDARY external ControllerBase.Redirect
-  ÃÄ BOUNDARY external ControllerBase.Redirect
-  ÃÄ BOUNDARY external SignInManager.PasswordSignInAsync
-  ÃÄ BOUNDARY external UserManager.FindByNameAsync
-  ÃÄ BOUNDARY external IEventService.RaiseAsync
-  ÃÄ BOUNDARY external ControllerBase.Redirect
-  ÃÄ BOUNDARY external IUrlHelper.IsLocalUrl
-  ÃÄ BOUNDARY external ControllerBase.Redirect
-  ÃÄ BOUNDARY external String.IsNullOrEmpty
-  ÃÄ BOUNDARY external ControllerBase.Redirect
-  ÃÄ BOUNDARY external IEventService.RaiseAsync
-  ÃÄ BOUNDARY external ModelStateDictionary.AddModelError
-  ÀÄ BOUNDARY external Controller.View
+  â”œâ”€ Extensions.cs:9  Extensions.IsNativeClient
+  â”‚  â”œâ”€ BOUNDARY external String.StartsWith
+  â”‚  â””â”€ BOUNDARY external String.StartsWith
+  â”œâ”€ Extensions.cs:15  Extensions.LoadingPage
+  â”‚  â””â”€ BOUNDARY external Controller.View
+  â”œâ”€ AccountController.cs:264  AccountController.BuildLoginViewModelAsync
+  â”‚  â””â”€ AccountController.cs:264  AccountController.BuildLoginViewModelAsync  [^]
+  â”œâ”€ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
+  â”œâ”€ BOUNDARY external IIdentityServerInteractionService.DenyAuthorizationAsync
+  â”œâ”€ BOUNDARY external ControllerBase.Redirect
+  â”œâ”€ BOUNDARY external ControllerBase.Redirect
+  â”œâ”€ BOUNDARY external SignInManager.PasswordSignInAsync
+  â”œâ”€ BOUNDARY external UserManager.FindByNameAsync
+  â”œâ”€ BOUNDARY external IEventService.RaiseAsync
+  â”œâ”€ BOUNDARY external ControllerBase.Redirect
+  â”œâ”€ BOUNDARY external IUrlHelper.IsLocalUrl
+  â”œâ”€ BOUNDARY external ControllerBase.Redirect
+  â”œâ”€ BOUNDARY external String.IsNullOrEmpty
+  â”œâ”€ BOUNDARY external ControllerBase.Redirect
+  â”œâ”€ BOUNDARY external IEventService.RaiseAsync
+  â”œâ”€ BOUNDARY external ModelStateDictionary.AddModelError
+  â””â”€ BOUNDARY external Controller.View
 
 Callgraph: [18] mvc GET account
 Nodes: 4
   AccountController.cs:146  mvc GET account
-  ÃÄ AccountController.cs:272  AccountController.BuildLogoutViewModelAsync
-  ³  ÀÄ BOUNDARY external IIdentityServerInteractionService.GetLogoutContextAsync
-  ÃÄ AccountController.cs:165  AccountController.Logout
-  ³  ÃÄ AccountController.cs:296  AccountController.BuildLoggedOutViewModelAsync
-  ³  ³  ÃÄ BOUNDARY external IIdentityServerInteractionService.GetLogoutContextAsync
-  ³  ³  ÃÄ BOUNDARY external String.IsNullOrEmpty
-  ³  ³  ÃÄ BOUNDARY external ClaimsPrincipal.FindFirst
-  ³  ³  ÃÄ BOUNDARY external IAuthenticationHandlerProvider.GetHandlerAsync
-  ³  ³  ÀÄ BOUNDARY external IIdentityServerInteractionService.CreateLogoutContextAsync
-  ³  ÃÄ BOUNDARY external SignInManager.SignOutAsync
-  ³  ÃÄ BOUNDARY external IEventService.RaiseAsync
-  ³  ÃÄ BOUNDARY external PrincipalExtensions.GetSubjectId
-  ³  ÃÄ BOUNDARY external PrincipalExtensions.GetDisplayName
-  ³  ÃÄ BOUNDARY external UrlHelperExtensions.Action
-  ³  ÃÄ BOUNDARY external ControllerBase.SignOut
-  ³  ÀÄ BOUNDARY external Controller.View
-  ÀÄ BOUNDARY external Controller.View
+  â”œâ”€ AccountController.cs:272  AccountController.BuildLogoutViewModelAsync
+  â”‚  â””â”€ BOUNDARY external IIdentityServerInteractionService.GetLogoutContextAsync
+  â”œâ”€ AccountController.cs:165  AccountController.Logout
+  â”‚  â”œâ”€ AccountController.cs:296  AccountController.BuildLoggedOutViewModelAsync
+  â”‚  â”‚  â”œâ”€ BOUNDARY external IIdentityServerInteractionService.GetLogoutContextAsync
+  â”‚  â”‚  â”œâ”€ BOUNDARY external String.IsNullOrEmpty
+  â”‚  â”‚  â”œâ”€ BOUNDARY external ClaimsPrincipal.FindFirst
+  â”‚  â”‚  â”œâ”€ BOUNDARY external IAuthenticationHandlerProvider.GetHandlerAsync
+  â”‚  â”‚  â””â”€ BOUNDARY external IIdentityServerInteractionService.CreateLogoutContextAsync
+  â”‚  â”œâ”€ BOUNDARY external SignInManager.SignOutAsync
+  â”‚  â”œâ”€ BOUNDARY external IEventService.RaiseAsync
+  â”‚  â”œâ”€ BOUNDARY external PrincipalExtensions.GetSubjectId
+  â”‚  â”œâ”€ BOUNDARY external PrincipalExtensions.GetDisplayName
+  â”‚  â”œâ”€ BOUNDARY external UrlHelperExtensions.Action
+  â”‚  â”œâ”€ BOUNDARY external ControllerBase.SignOut
+  â”‚  â””â”€ BOUNDARY external Controller.View
+  â””â”€ BOUNDARY external Controller.View
 
 Callgraph: [19] mvc POST account
 Nodes: 2
   AccountController.cs:165  mvc POST account
-  ÃÄ AccountController.cs:296  AccountController.BuildLoggedOutViewModelAsync
-  ³  ÃÄ BOUNDARY external IIdentityServerInteractionService.GetLogoutContextAsync
-  ³  ÃÄ BOUNDARY external String.IsNullOrEmpty
-  ³  ÃÄ BOUNDARY external ClaimsPrincipal.FindFirst
-  ³  ÃÄ BOUNDARY external IAuthenticationHandlerProvider.GetHandlerAsync
-  ³  ÀÄ BOUNDARY external IIdentityServerInteractionService.CreateLogoutContextAsync
-  ÃÄ BOUNDARY external SignInManager.SignOutAsync
-  ÃÄ BOUNDARY external IEventService.RaiseAsync
-  ÃÄ BOUNDARY external PrincipalExtensions.GetSubjectId
-  ÃÄ BOUNDARY external PrincipalExtensions.GetDisplayName
-  ÃÄ BOUNDARY external UrlHelperExtensions.Action
-  ÃÄ BOUNDARY external ControllerBase.SignOut
-  ÀÄ BOUNDARY external Controller.View
+  â”œâ”€ AccountController.cs:296  AccountController.BuildLoggedOutViewModelAsync
+  â”‚  â”œâ”€ BOUNDARY external IIdentityServerInteractionService.GetLogoutContextAsync
+  â”‚  â”œâ”€ BOUNDARY external String.IsNullOrEmpty
+  â”‚  â”œâ”€ BOUNDARY external ClaimsPrincipal.FindFirst
+  â”‚  â”œâ”€ BOUNDARY external IAuthenticationHandlerProvider.GetHandlerAsync
+  â”‚  â””â”€ BOUNDARY external IIdentityServerInteractionService.CreateLogoutContextAsync
+  â”œâ”€ BOUNDARY external SignInManager.SignOutAsync
+  â”œâ”€ BOUNDARY external IEventService.RaiseAsync
+  â”œâ”€ BOUNDARY external PrincipalExtensions.GetSubjectId
+  â”œâ”€ BOUNDARY external PrincipalExtensions.GetDisplayName
+  â”œâ”€ BOUNDARY external UrlHelperExtensions.Action
+  â”œâ”€ BOUNDARY external ControllerBase.SignOut
+  â””â”€ BOUNDARY external Controller.View
 
 Callgraph: [20] mvc GET account
 Nodes: 1
   AccountController.cs:196  mvc GET account
-  ÀÄ BOUNDARY external Controller.View
+  â””â”€ BOUNDARY external Controller.View
 
 Callgraph: [21] mvc GET external
 Nodes: 1
   ExternalController.cs:33  mvc GET external
-  ÃÄ BOUNDARY external String.IsNullOrEmpty
-  ÃÄ BOUNDARY external IUrlHelper.IsLocalUrl
-  ÃÄ BOUNDARY external IIdentityServerInteractionService.IsValidReturnUrl
-  ÃÄ BOUNDARY external UrlHelperExtensions.Action
-  ÀÄ BOUNDARY external ControllerBase.Challenge
+  â”œâ”€ BOUNDARY external String.IsNullOrEmpty
+  â”œâ”€ BOUNDARY external IUrlHelper.IsLocalUrl
+  â”œâ”€ BOUNDARY external IIdentityServerInteractionService.IsValidReturnUrl
+  â”œâ”€ BOUNDARY external UrlHelperExtensions.Action
+  â””â”€ BOUNDARY external ControllerBase.Challenge
 
 Callgraph: [22] mvc GET external
 Nodes: 6
   ExternalController.cs:63  mvc GET external
-  ÃÄ ExternalController.cs:135  ExternalController.FindUserFromExternalProviderAsync
-  ³  ÃÄ BOUNDARY external ClaimsPrincipal.FindFirst
-  ³  ÃÄ BOUNDARY external ClaimsPrincipal.FindFirst
-  ³  ÃÄ BOUNDARY external Enumerable.ToList
-  ³  ÃÄ BOUNDARY external List.Remove
-  ³  ÀÄ BOUNDARY external UserManager.FindByLoginAsync
-  ÃÄ ExternalController.cs:160  ExternalController.AutoProvisionUserAsync
-  ³  ÃÄ BOUNDARY external Enumerable.FirstOrDefault
-  ³  ÃÄ BOUNDARY external Enumerable.FirstOrDefault
-  ³  ÃÄ BOUNDARY external List.Add
-  ³  ÃÄ BOUNDARY external Enumerable.FirstOrDefault
-  ³  ÃÄ BOUNDARY external Enumerable.FirstOrDefault
-  ³  ÃÄ BOUNDARY external Enumerable.FirstOrDefault
-  ³  ÃÄ BOUNDARY external Enumerable.FirstOrDefault
-  ³  ÃÄ BOUNDARY external List.Add
-  ³  ÃÄ BOUNDARY external List.Add
-  ³  ÃÄ BOUNDARY external List.Add
-  ³  ÃÄ BOUNDARY external Enumerable.FirstOrDefault
-  ³  ÃÄ BOUNDARY external Enumerable.FirstOrDefault
-  ³  ÃÄ BOUNDARY external List.Add
-  ³  ÃÄ BOUNDARY external Guid.ToString
-  ³  ÃÄ BOUNDARY external Guid.NewGuid
-  ³  ÃÄ BOUNDARY external UserManager.CreateAsync
-  ³  ÃÄ BOUNDARY external Enumerable.First
-  ³  ÃÄ BOUNDARY external Enumerable.Any
-  ³  ÃÄ BOUNDARY external UserManager.AddClaimsAsync
-  ³  ÃÄ BOUNDARY external Enumerable.First
-  ³  ÃÄ BOUNDARY external UserManager.AddLoginAsync
-  ³  ÀÄ BOUNDARY external Enumerable.First
-  ÃÄ ExternalController.cs:221  ExternalController.ProcessLoginCallback
-  ³  ÃÄ BOUNDARY external Enumerable.FirstOrDefault
-  ³  ÃÄ BOUNDARY external List.Add
-  ³  ÃÄ BOUNDARY external AuthenticationTokenExtensions.GetTokenValue
-  ³  ÀÄ BOUNDARY external AuthenticationTokenExtensions.StoreTokens
-  ÃÄ Extensions.cs:9  Extensions.IsNativeClient
-  ³  ÃÄ BOUNDARY external String.StartsWith
-  ³  ÀÄ BOUNDARY external String.StartsWith
-  ÃÄ Extensions.cs:15  Extensions.LoadingPage
-  ³  ÀÄ BOUNDARY external Controller.View
-  ÃÄ BOUNDARY external AuthenticationHttpContextExtensions.AuthenticateAsync
-  ÃÄ BOUNDARY external ILogger.IsEnabled
-  ÃÄ BOUNDARY external Enumerable.Select
-  ÃÄ BOUNDARY external LoggerExtensions.LogDebug
-  ÃÄ BOUNDARY external SignInManager.CreateUserPrincipalAsync
-  ÃÄ BOUNDARY external List.AddRange
-  ÃÄ BOUNDARY external ClaimsPrincipal.FindFirst
-  ÃÄ BOUNDARY external AuthenticationManagerExtensions.SignInAsync
-  ÃÄ BOUNDARY external AuthenticationHttpContextExtensions.SignOutAsync
-  ÃÄ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
-  ÃÄ BOUNDARY external IEventService.RaiseAsync
-  ÀÄ BOUNDARY external ControllerBase.Redirect
+  â”œâ”€ ExternalController.cs:135  ExternalController.FindUserFromExternalProviderAsync
+  â”‚  â”œâ”€ BOUNDARY external ClaimsPrincipal.FindFirst
+  â”‚  â”œâ”€ BOUNDARY external ClaimsPrincipal.FindFirst
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.ToList
+  â”‚  â”œâ”€ BOUNDARY external List.Remove
+  â”‚  â””â”€ BOUNDARY external UserManager.FindByLoginAsync
+  â”œâ”€ ExternalController.cs:160  ExternalController.AutoProvisionUserAsync
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.FirstOrDefault
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.FirstOrDefault
+  â”‚  â”œâ”€ BOUNDARY external List.Add
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.FirstOrDefault
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.FirstOrDefault
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.FirstOrDefault
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.FirstOrDefault
+  â”‚  â”œâ”€ BOUNDARY external List.Add
+  â”‚  â”œâ”€ BOUNDARY external List.Add
+  â”‚  â”œâ”€ BOUNDARY external List.Add
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.FirstOrDefault
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.FirstOrDefault
+  â”‚  â”œâ”€ BOUNDARY external List.Add
+  â”‚  â”œâ”€ BOUNDARY external Guid.ToString
+  â”‚  â”œâ”€ BOUNDARY external Guid.NewGuid
+  â”‚  â”œâ”€ BOUNDARY external UserManager.CreateAsync
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.First
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.Any
+  â”‚  â”œâ”€ BOUNDARY external UserManager.AddClaimsAsync
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.First
+  â”‚  â”œâ”€ BOUNDARY external UserManager.AddLoginAsync
+  â”‚  â””â”€ BOUNDARY external Enumerable.First
+  â”œâ”€ ExternalController.cs:221  ExternalController.ProcessLoginCallback
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.FirstOrDefault
+  â”‚  â”œâ”€ BOUNDARY external List.Add
+  â”‚  â”œâ”€ BOUNDARY external AuthenticationTokenExtensions.GetTokenValue
+  â”‚  â””â”€ BOUNDARY external AuthenticationTokenExtensions.StoreTokens
+  â”œâ”€ Extensions.cs:9  Extensions.IsNativeClient
+  â”‚  â”œâ”€ BOUNDARY external String.StartsWith
+  â”‚  â””â”€ BOUNDARY external String.StartsWith
+  â”œâ”€ Extensions.cs:15  Extensions.LoadingPage
+  â”‚  â””â”€ BOUNDARY external Controller.View
+  â”œâ”€ BOUNDARY external AuthenticationHttpContextExtensions.AuthenticateAsync
+  â”œâ”€ BOUNDARY external ILogger.IsEnabled
+  â”œâ”€ BOUNDARY external Enumerable.Select
+  â”œâ”€ BOUNDARY external LoggerExtensions.LogDebug
+  â”œâ”€ BOUNDARY external SignInManager.CreateUserPrincipalAsync
+  â”œâ”€ BOUNDARY external List.AddRange
+  â”œâ”€ BOUNDARY external ClaimsPrincipal.FindFirst
+  â”œâ”€ BOUNDARY external AuthenticationManagerExtensions.SignInAsync
+  â”œâ”€ BOUNDARY external AuthenticationHttpContextExtensions.SignOutAsync
+  â”œâ”€ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
+  â”œâ”€ BOUNDARY external IEventService.RaiseAsync
+  â””â”€ BOUNDARY external ControllerBase.Redirect
 
 Callgraph: [23] mvc GET consent
 Nodes: 6
   ConsentController.cs:32  mvc GET consent
-  ÃÄ ConsentController.cs:150  ConsentController.BuildViewModelAsync
-  ³  ÃÄ ConsentController.cs:165  ConsentController.CreateConsentViewModel
-  ³  ³  ÃÄ ConsentController.cs:204  ConsentController.CreateScopeViewModel
-  ³  ³  ÃÄ ConsentController.cs:236  ConsentController.GetOfflineAccessScope
-  ³  ³  ÃÄ BOUNDARY external Enumerable.Empty
-  ³  ³  ÃÄ BOUNDARY external Enumerable.ToArray
-  ³  ³  ÃÄ BOUNDARY external Enumerable.Select
-  ³  ³  ÃÄ BOUNDARY external Enumerable.Contains
-  ³  ³  ÃÄ BOUNDARY external ResourceExtensions.FindApiScope
-  ³  ³  ÃÄ BOUNDARY external Enumerable.Contains
-  ³  ³  ÃÄ BOUNDARY external List.Add
-  ³  ³  ÃÄ BOUNDARY external List.Add
-  ³  ³  ÀÄ BOUNDARY external Enumerable.Contains
-  ³  ÃÄ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
-  ³  ÀÄ BOUNDARY external LoggerExtensions.LogError
-  ÃÄ BOUNDARY external Controller.View
-  ÀÄ BOUNDARY external Controller.View
+  â”œâ”€ ConsentController.cs:150  ConsentController.BuildViewModelAsync
+  â”‚  â”œâ”€ ConsentController.cs:165  ConsentController.CreateConsentViewModel
+  â”‚  â”‚  â”œâ”€ ConsentController.cs:204  ConsentController.CreateScopeViewModel
+  â”‚  â”‚  â”œâ”€ ConsentController.cs:236  ConsentController.GetOfflineAccessScope
+  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Empty
+  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.ToArray
+  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Select
+  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Contains
+  â”‚  â”‚  â”œâ”€ BOUNDARY external ResourceExtensions.FindApiScope
+  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Contains
+  â”‚  â”‚  â”œâ”€ BOUNDARY external List.Add
+  â”‚  â”‚  â”œâ”€ BOUNDARY external List.Add
+  â”‚  â”‚  â””â”€ BOUNDARY external Enumerable.Contains
+  â”‚  â”œâ”€ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
+  â”‚  â””â”€ BOUNDARY external LoggerExtensions.LogError
+  â”œâ”€ BOUNDARY external Controller.View
+  â””â”€ BOUNDARY external Controller.View
 
 Callgraph: [24] mvc POST consent
 Nodes: 9
   ConsentController.cs:47  mvc POST consent
-  ÃÄ ConsentController.cs:82  ConsentController.ProcessConsent
-  ³  ÃÄ ConsentController.cs:150  ConsentController.BuildViewModelAsync
-  ³  ³  ÃÄ ConsentController.cs:165  ConsentController.CreateConsentViewModel
-  ³  ³  ³  ÃÄ ConsentController.cs:204  ConsentController.CreateScopeViewModel
-  ³  ³  ³  ÃÄ ConsentController.cs:236  ConsentController.GetOfflineAccessScope
-  ³  ³  ³  ÃÄ BOUNDARY external Enumerable.Empty
-  ³  ³  ³  ÃÄ BOUNDARY external Enumerable.ToArray
-  ³  ³  ³  ÃÄ BOUNDARY external Enumerable.Select
-  ³  ³  ³  ÃÄ BOUNDARY external Enumerable.Contains
-  ³  ³  ³  ÃÄ BOUNDARY external ResourceExtensions.FindApiScope
-  ³  ³  ³  ÃÄ BOUNDARY external Enumerable.Contains
-  ³  ³  ³  ÃÄ BOUNDARY external List.Add
-  ³  ³  ³  ÃÄ BOUNDARY external List.Add
-  ³  ³  ³  ÀÄ BOUNDARY external Enumerable.Contains
-  ³  ³  ÃÄ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
-  ³  ³  ÀÄ BOUNDARY external LoggerExtensions.LogError
-  ³  ÃÄ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
-  ³  ÃÄ BOUNDARY external IEventService.RaiseAsync
-  ³  ÃÄ BOUNDARY external PrincipalExtensions.GetSubjectId
-  ³  ÃÄ BOUNDARY external Enumerable.Any
-  ³  ÃÄ BOUNDARY external Enumerable.Where
-  ³  ÃÄ BOUNDARY external Enumerable.ToArray
-  ³  ÃÄ BOUNDARY external IEventService.RaiseAsync
-  ³  ÃÄ BOUNDARY external PrincipalExtensions.GetSubjectId
-  ³  ÀÄ BOUNDARY external IIdentityServerInteractionService.GrantConsentAsync
-  ÃÄ Extensions.cs:9  Extensions.IsNativeClient
-  ³  ÃÄ BOUNDARY external String.StartsWith
-  ³  ÀÄ BOUNDARY external String.StartsWith
-  ÃÄ Extensions.cs:15  Extensions.LoadingPage
-  ³  ÀÄ BOUNDARY external Controller.View
-  ÃÄ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
-  ÃÄ BOUNDARY external ControllerBase.Redirect
-  ÃÄ BOUNDARY external ModelStateDictionary.AddModelError
-  ÃÄ BOUNDARY external Controller.View
-  ÀÄ BOUNDARY external Controller.View
+  â”œâ”€ ConsentController.cs:82  ConsentController.ProcessConsent
+  â”‚  â”œâ”€ ConsentController.cs:150  ConsentController.BuildViewModelAsync
+  â”‚  â”‚  â”œâ”€ ConsentController.cs:165  ConsentController.CreateConsentViewModel
+  â”‚  â”‚  â”‚  â”œâ”€ ConsentController.cs:204  ConsentController.CreateScopeViewModel
+  â”‚  â”‚  â”‚  â”œâ”€ ConsentController.cs:236  ConsentController.GetOfflineAccessScope
+  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Empty
+  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.ToArray
+  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Select
+  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Contains
+  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external ResourceExtensions.FindApiScope
+  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Contains
+  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external List.Add
+  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external List.Add
+  â”‚  â”‚  â”‚  â””â”€ BOUNDARY external Enumerable.Contains
+  â”‚  â”‚  â”œâ”€ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
+  â”‚  â”‚  â””â”€ BOUNDARY external LoggerExtensions.LogError
+  â”‚  â”œâ”€ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
+  â”‚  â”œâ”€ BOUNDARY external IEventService.RaiseAsync
+  â”‚  â”œâ”€ BOUNDARY external PrincipalExtensions.GetSubjectId
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.Any
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.Where
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.ToArray
+  â”‚  â”œâ”€ BOUNDARY external IEventService.RaiseAsync
+  â”‚  â”œâ”€ BOUNDARY external PrincipalExtensions.GetSubjectId
+  â”‚  â””â”€ BOUNDARY external IIdentityServerInteractionService.GrantConsentAsync
+  â”œâ”€ Extensions.cs:9  Extensions.IsNativeClient
+  â”‚  â”œâ”€ BOUNDARY external String.StartsWith
+  â”‚  â””â”€ BOUNDARY external String.StartsWith
+  â”œâ”€ Extensions.cs:15  Extensions.LoadingPage
+  â”‚  â””â”€ BOUNDARY external Controller.View
+  â”œâ”€ BOUNDARY external IIdentityServerInteractionService.GetAuthorizationContextAsync
+  â”œâ”€ BOUNDARY external ControllerBase.Redirect
+  â”œâ”€ BOUNDARY external ModelStateDictionary.AddModelError
+  â”œâ”€ BOUNDARY external Controller.View
+  â””â”€ BOUNDARY external Controller.View
 
 Callgraph: [25] mvc GET device
 Nodes: 6
   DeviceController.cs:27  mvc GET device
-  ÃÄ DeviceController.cs:130  DeviceController.BuildViewModelAsync
-  ³  ÃÄ DeviceController.cs:141  DeviceController.CreateConsentViewModel
-  ³  ³  ÃÄ DeviceController.cs:178  DeviceController.CreateScopeViewModel
-  ³  ³  ÃÄ DeviceController.cs:203  DeviceController.GetOfflineAccessScope
-  ³  ³  ÃÄ BOUNDARY external Enumerable.Empty
-  ³  ³  ÃÄ BOUNDARY external Enumerable.ToArray
-  ³  ³  ÃÄ BOUNDARY external Enumerable.Select
-  ³  ³  ÃÄ BOUNDARY external Enumerable.Contains
-  ³  ³  ÃÄ BOUNDARY external ResourceExtensions.FindApiScope
-  ³  ³  ÃÄ BOUNDARY external Enumerable.Contains
-  ³  ³  ÃÄ BOUNDARY external List.Add
-  ³  ³  ÃÄ BOUNDARY external List.Add
-  ³  ³  ÀÄ BOUNDARY external Enumerable.Contains
-  ³  ÀÄ BOUNDARY external IDeviceFlowInteractionService.GetAuthorizationContextAsync
-  ÃÄ BOUNDARY external String.IsNullOrWhiteSpace
-  ÃÄ BOUNDARY external Controller.View
-  ÃÄ BOUNDARY external Controller.View
-  ÀÄ BOUNDARY external Controller.View
+  â”œâ”€ DeviceController.cs:130  DeviceController.BuildViewModelAsync
+  â”‚  â”œâ”€ DeviceController.cs:141  DeviceController.CreateConsentViewModel
+  â”‚  â”‚  â”œâ”€ DeviceController.cs:178  DeviceController.CreateScopeViewModel
+  â”‚  â”‚  â”œâ”€ DeviceController.cs:203  DeviceController.GetOfflineAccessScope
+  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Empty
+  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.ToArray
+  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Select
+  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Contains
+  â”‚  â”‚  â”œâ”€ BOUNDARY external ResourceExtensions.FindApiScope
+  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Contains
+  â”‚  â”‚  â”œâ”€ BOUNDARY external List.Add
+  â”‚  â”‚  â”œâ”€ BOUNDARY external List.Add
+  â”‚  â”‚  â””â”€ BOUNDARY external Enumerable.Contains
+  â”‚  â””â”€ BOUNDARY external IDeviceFlowInteractionService.GetAuthorizationContextAsync
+  â”œâ”€ BOUNDARY external String.IsNullOrWhiteSpace
+  â”œâ”€ BOUNDARY external Controller.View
+  â”œâ”€ BOUNDARY external Controller.View
+  â””â”€ BOUNDARY external Controller.View
 
 Callgraph: [26] mvc POST device
 Nodes: 6
   DeviceController.cs:41  mvc POST device
-  ÃÄ DeviceController.cs:130  DeviceController.BuildViewModelAsync
-  ³  ÃÄ DeviceController.cs:141  DeviceController.CreateConsentViewModel
-  ³  ³  ÃÄ DeviceController.cs:178  DeviceController.CreateScopeViewModel
-  ³  ³  ÃÄ DeviceController.cs:203  DeviceController.GetOfflineAccessScope
-  ³  ³  ÃÄ BOUNDARY external Enumerable.Empty
-  ³  ³  ÃÄ BOUNDARY external Enumerable.ToArray
-  ³  ³  ÃÄ BOUNDARY external Enumerable.Select
-  ³  ³  ÃÄ BOUNDARY external Enumerable.Contains
-  ³  ³  ÃÄ BOUNDARY external ResourceExtensions.FindApiScope
-  ³  ³  ÃÄ BOUNDARY external Enumerable.Contains
-  ³  ³  ÃÄ BOUNDARY external List.Add
-  ³  ³  ÃÄ BOUNDARY external List.Add
-  ³  ³  ÀÄ BOUNDARY external Enumerable.Contains
-  ³  ÀÄ BOUNDARY external IDeviceFlowInteractionService.GetAuthorizationContextAsync
-  ÃÄ BOUNDARY external Controller.View
-  ÀÄ BOUNDARY external Controller.View
+  â”œâ”€ DeviceController.cs:130  DeviceController.BuildViewModelAsync
+  â”‚  â”œâ”€ DeviceController.cs:141  DeviceController.CreateConsentViewModel
+  â”‚  â”‚  â”œâ”€ DeviceController.cs:178  DeviceController.CreateScopeViewModel
+  â”‚  â”‚  â”œâ”€ DeviceController.cs:203  DeviceController.GetOfflineAccessScope
+  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Empty
+  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.ToArray
+  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Select
+  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Contains
+  â”‚  â”‚  â”œâ”€ BOUNDARY external ResourceExtensions.FindApiScope
+  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Contains
+  â”‚  â”‚  â”œâ”€ BOUNDARY external List.Add
+  â”‚  â”‚  â”œâ”€ BOUNDARY external List.Add
+  â”‚  â”‚  â””â”€ BOUNDARY external Enumerable.Contains
+  â”‚  â””â”€ BOUNDARY external IDeviceFlowInteractionService.GetAuthorizationContextAsync
+  â”œâ”€ BOUNDARY external Controller.View
+  â””â”€ BOUNDARY external Controller.View
 
 Callgraph: [27] mvc POST device
 Nodes: 7
   DeviceController.cs:51  mvc POST device
-  ÃÄ DeviceController.cs:63  DeviceController.ProcessConsent
-  ³  ÃÄ DeviceController.cs:130  DeviceController.BuildViewModelAsync
-  ³  ³  ÃÄ DeviceController.cs:141  DeviceController.CreateConsentViewModel
-  ³  ³  ³  ÃÄ DeviceController.cs:178  DeviceController.CreateScopeViewModel
-  ³  ³  ³  ÃÄ DeviceController.cs:203  DeviceController.GetOfflineAccessScope
-  ³  ³  ³  ÃÄ BOUNDARY external Enumerable.Empty
-  ³  ³  ³  ÃÄ BOUNDARY external Enumerable.ToArray
-  ³  ³  ³  ÃÄ BOUNDARY external Enumerable.Select
-  ³  ³  ³  ÃÄ BOUNDARY external Enumerable.Contains
-  ³  ³  ³  ÃÄ BOUNDARY external ResourceExtensions.FindApiScope
-  ³  ³  ³  ÃÄ BOUNDARY external Enumerable.Contains
-  ³  ³  ³  ÃÄ BOUNDARY external List.Add
-  ³  ³  ³  ÃÄ BOUNDARY external List.Add
-  ³  ³  ³  ÀÄ BOUNDARY external Enumerable.Contains
-  ³  ³  ÀÄ BOUNDARY external IDeviceFlowInteractionService.GetAuthorizationContextAsync
-  ³  ÃÄ BOUNDARY external IDeviceFlowInteractionService.GetAuthorizationContextAsync
-  ³  ÃÄ BOUNDARY external IEventService.RaiseAsync
-  ³  ÃÄ BOUNDARY external PrincipalExtensions.GetSubjectId
-  ³  ÃÄ BOUNDARY external Enumerable.Any
-  ³  ÃÄ BOUNDARY external Enumerable.Where
-  ³  ÃÄ BOUNDARY external Enumerable.ToArray
-  ³  ÃÄ BOUNDARY external IEventService.RaiseAsync
-  ³  ÃÄ BOUNDARY external PrincipalExtensions.GetSubjectId
-  ³  ÀÄ BOUNDARY external IDeviceFlowInteractionService.HandleRequestAsync
-  ÃÄ BOUNDARY external Controller.View
-  ÀÄ BOUNDARY external Controller.View
+  â”œâ”€ DeviceController.cs:63  DeviceController.ProcessConsent
+  â”‚  â”œâ”€ DeviceController.cs:130  DeviceController.BuildViewModelAsync
+  â”‚  â”‚  â”œâ”€ DeviceController.cs:141  DeviceController.CreateConsentViewModel
+  â”‚  â”‚  â”‚  â”œâ”€ DeviceController.cs:178  DeviceController.CreateScopeViewModel
+  â”‚  â”‚  â”‚  â”œâ”€ DeviceController.cs:203  DeviceController.GetOfflineAccessScope
+  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Empty
+  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.ToArray
+  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Select
+  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Contains
+  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external ResourceExtensions.FindApiScope
+  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.Contains
+  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external List.Add
+  â”‚  â”‚  â”‚  â”œâ”€ BOUNDARY external List.Add
+  â”‚  â”‚  â”‚  â””â”€ BOUNDARY external Enumerable.Contains
+  â”‚  â”‚  â””â”€ BOUNDARY external IDeviceFlowInteractionService.GetAuthorizationContextAsync
+  â”‚  â”œâ”€ BOUNDARY external IDeviceFlowInteractionService.GetAuthorizationContextAsync
+  â”‚  â”œâ”€ BOUNDARY external IEventService.RaiseAsync
+  â”‚  â”œâ”€ BOUNDARY external PrincipalExtensions.GetSubjectId
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.Any
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.Where
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.ToArray
+  â”‚  â”œâ”€ BOUNDARY external IEventService.RaiseAsync
+  â”‚  â”œâ”€ BOUNDARY external PrincipalExtensions.GetSubjectId
+  â”‚  â””â”€ BOUNDARY external IDeviceFlowInteractionService.HandleRequestAsync
+  â”œâ”€ BOUNDARY external Controller.View
+  â””â”€ BOUNDARY external Controller.View
 
 Callgraph: [28] mvc GET grants
 Nodes: 2
   GrantsController.cs:32  mvc GET grants
-  ÃÄ GrantsController.cs:51  GrantsController.BuildViewModelAsync
-  ³  ÃÄ BOUNDARY external IIdentityServerInteractionService.GetAllUserGrantsAsync
-  ³  ÃÄ BOUNDARY external IClientStore.FindClientByIdAsync
-  ³  ÃÄ BOUNDARY external IResourceStoreExtensions.FindResourcesByScopeAsync
-  ³  ÃÄ BOUNDARY external Enumerable.ToArray
-  ³  ÃÄ BOUNDARY external Enumerable.Select
-  ³  ÃÄ BOUNDARY external Enumerable.ToArray
-  ³  ÃÄ BOUNDARY external Enumerable.Select
-  ³  ÀÄ BOUNDARY external List.Add
-  ÀÄ BOUNDARY external Controller.View
+  â”œâ”€ GrantsController.cs:51  GrantsController.BuildViewModelAsync
+  â”‚  â”œâ”€ BOUNDARY external IIdentityServerInteractionService.GetAllUserGrantsAsync
+  â”‚  â”œâ”€ BOUNDARY external IClientStore.FindClientByIdAsync
+  â”‚  â”œâ”€ BOUNDARY external IResourceStoreExtensions.FindResourcesByScopeAsync
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.ToArray
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.Select
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.ToArray
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.Select
+  â”‚  â””â”€ BOUNDARY external List.Add
+  â””â”€ BOUNDARY external Controller.View
 
 Callgraph: [29] mvc POST grants
 Nodes: 1
   GrantsController.cs:41  mvc POST grants
-  ÃÄ BOUNDARY external IIdentityServerInteractionService.RevokeUserConsentAsync
-  ÃÄ BOUNDARY external IEventService.RaiseAsync
-  ÃÄ BOUNDARY external PrincipalExtensions.GetSubjectId
-  ÀÄ BOUNDARY external ControllerBase.RedirectToAction
+  â”œâ”€ BOUNDARY external IIdentityServerInteractionService.RevokeUserConsentAsync
+  â”œâ”€ BOUNDARY external IEventService.RaiseAsync
+  â”œâ”€ BOUNDARY external PrincipalExtensions.GetSubjectId
+  â””â”€ BOUNDARY external ControllerBase.RedirectToAction
 
 Callgraph: [30] minapi PUT /cancel
 Nodes: 8
   OrdersApi.cs:11  minapi PUT /cancel
-  ÀÄ OrdersApi.cs:22  OrdersApi.CancelOrderAsync
-     ÃÄ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName
-     ³  ÃÄ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName  [^]
-     ³  ÀÄ BOUNDARY external Object.GetType
-     ÃÄ IdentifiedCommandHandler.cs:39  IdentifiedCommandHandler.Handle
-     ³  ÃÄ RequestManager.cs:13  RequestManager.ExistAsync
-     ³  ³  ÀÄ BOUNDARY external DbContext.FindAsync
-     ³  ÃÄ IdentifiedCommandHandler.cs:31  IdentifiedCommandHandler.CreateResultForDuplicateRequest
-     ³  ÃÄ RequestManager.cs:21  RequestManager.CreateRequestForCommandAsync
-     ³  ³  ÃÄ RequestManager.cs:13  RequestManager.ExistAsync  [^]
-     ³  ³  ÃÄ BOUNDARY external DbContext.Add
-     ³  ³  ÃÄ BOUNDARY external DbContext.SaveChangesAsync
-     ³  ³  ÀÄ EFFECT efcore commit  SaveChangesAsync  OrderingContext
-     ³  ÃÄ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName  [^]
-     ³  ÃÄ BOUNDARY external LoggerExtensions.LogInformation
-     ³  ÃÄ BOUNDARY external ISender.Send
-     ³  ÀÄ BOUNDARY external LoggerExtensions.LogInformation
-     ÃÄ BOUNDARY external TypedResults.BadRequest
-     ÃÄ BOUNDARY external LoggerExtensions.LogInformation
-     ÃÄ BOUNDARY external TypedResults.Problem
-     ÀÄ BOUNDARY external TypedResults.Ok
+  â””â”€ OrdersApi.cs:22  OrdersApi.CancelOrderAsync
+     â”œâ”€ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName
+     â”‚  â”œâ”€ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName  [^]
+     â”‚  â””â”€ BOUNDARY external Object.GetType
+     â”œâ”€ IdentifiedCommandHandler.cs:39  IdentifiedCommandHandler.Handle
+     â”‚  â”œâ”€ RequestManager.cs:13  RequestManager.ExistAsync
+     â”‚  â”‚  â””â”€ BOUNDARY external DbContext.FindAsync
+     â”‚  â”œâ”€ IdentifiedCommandHandler.cs:31  IdentifiedCommandHandler.CreateResultForDuplicateRequest
+     â”‚  â”œâ”€ RequestManager.cs:21  RequestManager.CreateRequestForCommandAsync
+     â”‚  â”‚  â”œâ”€ RequestManager.cs:13  RequestManager.ExistAsync  [^]
+     â”‚  â”‚  â”œâ”€ BOUNDARY external DbContext.Add
+     â”‚  â”‚  â”œâ”€ BOUNDARY external DbContext.SaveChangesAsync
+     â”‚  â”‚  â””â”€ EFFECT efcore commit  SaveChangesAsync  OrderingContext
+     â”‚  â”œâ”€ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName  [^]
+     â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogInformation
+     â”‚  â”œâ”€ BOUNDARY external ISender.Send
+     â”‚  â””â”€ BOUNDARY external LoggerExtensions.LogInformation
+     â”œâ”€ BOUNDARY external TypedResults.BadRequest
+     â”œâ”€ BOUNDARY external LoggerExtensions.LogInformation
+     â”œâ”€ BOUNDARY external TypedResults.Problem
+     â””â”€ BOUNDARY external TypedResults.Ok
 
 Callgraph: [31] minapi PUT /ship
 Nodes: 8
   OrdersApi.cs:12  minapi PUT /ship
-  ÀÄ OrdersApi.cs:51  OrdersApi.ShipOrderAsync
-     ÃÄ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName
-     ³  ÃÄ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName  [^]
-     ³  ÀÄ BOUNDARY external Object.GetType
-     ÃÄ IdentifiedCommandHandler.cs:39  IdentifiedCommandHandler.Handle
-     ³  ÃÄ RequestManager.cs:13  RequestManager.ExistAsync
-     ³  ³  ÀÄ BOUNDARY external DbContext.FindAsync
-     ³  ÃÄ IdentifiedCommandHandler.cs:31  IdentifiedCommandHandler.CreateResultForDuplicateRequest
-     ³  ÃÄ RequestManager.cs:21  RequestManager.CreateRequestForCommandAsync
-     ³  ³  ÃÄ RequestManager.cs:13  RequestManager.ExistAsync  [^]
-     ³  ³  ÃÄ BOUNDARY external DbContext.Add
-     ³  ³  ÃÄ BOUNDARY external DbContext.SaveChangesAsync
-     ³  ³  ÀÄ EFFECT efcore commit  SaveChangesAsync  OrderingContext
-     ³  ÃÄ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName  [^]
-     ³  ÃÄ BOUNDARY external LoggerExtensions.LogInformation
-     ³  ÃÄ BOUNDARY external ISender.Send
-     ³  ÀÄ BOUNDARY external LoggerExtensions.LogInformation
-     ÃÄ BOUNDARY external TypedResults.BadRequest
-     ÃÄ BOUNDARY external LoggerExtensions.LogInformation
-     ÃÄ BOUNDARY external TypedResults.Problem
-     ÀÄ BOUNDARY external TypedResults.Ok
+  â””â”€ OrdersApi.cs:51  OrdersApi.ShipOrderAsync
+     â”œâ”€ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName
+     â”‚  â”œâ”€ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName  [^]
+     â”‚  â””â”€ BOUNDARY external Object.GetType
+     â”œâ”€ IdentifiedCommandHandler.cs:39  IdentifiedCommandHandler.Handle
+     â”‚  â”œâ”€ RequestManager.cs:13  RequestManager.ExistAsync
+     â”‚  â”‚  â””â”€ BOUNDARY external DbContext.FindAsync
+     â”‚  â”œâ”€ IdentifiedCommandHandler.cs:31  IdentifiedCommandHandler.CreateResultForDuplicateRequest
+     â”‚  â”œâ”€ RequestManager.cs:21  RequestManager.CreateRequestForCommandAsync
+     â”‚  â”‚  â”œâ”€ RequestManager.cs:13  RequestManager.ExistAsync  [^]
+     â”‚  â”‚  â”œâ”€ BOUNDARY external DbContext.Add
+     â”‚  â”‚  â”œâ”€ BOUNDARY external DbContext.SaveChangesAsync
+     â”‚  â”‚  â””â”€ EFFECT efcore commit  SaveChangesAsync  OrderingContext
+     â”‚  â”œâ”€ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName  [^]
+     â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogInformation
+     â”‚  â”œâ”€ BOUNDARY external ISender.Send
+     â”‚  â””â”€ BOUNDARY external LoggerExtensions.LogInformation
+     â”œâ”€ BOUNDARY external TypedResults.BadRequest
+     â”œâ”€ BOUNDARY external LoggerExtensions.LogInformation
+     â”œâ”€ BOUNDARY external TypedResults.Problem
+     â””â”€ BOUNDARY external TypedResults.Ok
 
 Callgraph: [32] minapi GET {orderId:int}
 Nodes: 4
   OrdersApi.cs:13  minapi GET {orderId:int}
-  ÀÄ OrdersApi.cs:80  OrdersApi.GetOrderAsync
-     ÃÄ OrderQueries.cs:6  OrderQueries.GetOrderAsync
-     ³  ÃÄ Order.cs:185  Order.GetTotal
-     ³  ³  ÀÄ BOUNDARY external Enumerable.Sum
-     ³  ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.FirstOrDefaultAsync
-     ³  ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.Include
-     ³  ÃÄ BOUNDARY external Enum.ToString
-     ³  ÃÄ BOUNDARY external Enumerable.ToList
-     ³  ÃÄ BOUNDARY external Enumerable.Select
-     ³  ÀÄ EFFECT efcore read  FirstOrDefaultAsync  OrderingContext.Orders
-     ÃÄ BOUNDARY external TypedResults.Ok
-     ÀÄ BOUNDARY external TypedResults.NotFound
+  â””â”€ OrdersApi.cs:80  OrdersApi.GetOrderAsync
+     â”œâ”€ OrderQueries.cs:6  OrderQueries.GetOrderAsync
+     â”‚  â”œâ”€ Order.cs:185  Order.GetTotal
+     â”‚  â”‚  â””â”€ BOUNDARY external Enumerable.Sum
+     â”‚  â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.FirstOrDefaultAsync
+     â”‚  â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.Include
+     â”‚  â”œâ”€ BOUNDARY external Enum.ToString
+     â”‚  â”œâ”€ BOUNDARY external Enumerable.ToList
+     â”‚  â”œâ”€ BOUNDARY external Enumerable.Select
+     â”‚  â””â”€ EFFECT efcore read  FirstOrDefaultAsync  OrderingContext.Orders
+     â”œâ”€ BOUNDARY external TypedResults.Ok
+     â””â”€ BOUNDARY external TypedResults.NotFound
 
 Callgraph: [33] minapi GET /
 Nodes: 4
   OrdersApi.cs:14  minapi GET /
-  ÀÄ OrdersApi.cs:93  OrdersApi.GetOrdersByUserAsync
-     ÃÄ IdentityService.cs:5  IdentityService.GetUserIdentity
-     ³  ÀÄ BOUNDARY external ClaimsPrincipal.FindFirst
-     ÃÄ OrderQueries.cs:37  OrderQueries.GetOrdersFromUserAsync
-     ³  ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-     ³  ÃÄ BOUNDARY external Queryable.Select
-     ³  ÃÄ BOUNDARY external Queryable.Where
-     ³  ÃÄ BOUNDARY external Enum.ToString
-     ³  ÃÄ BOUNDARY external Enumerable.Sum
-     ³  ÀÄ EFFECT efcore read  ToListAsync  OrderingContext.Orders
-     ÀÄ BOUNDARY external TypedResults.Ok
+  â””â”€ OrdersApi.cs:93  OrdersApi.GetOrdersByUserAsync
+     â”œâ”€ IdentityService.cs:5  IdentityService.GetUserIdentity
+     â”‚  â””â”€ BOUNDARY external ClaimsPrincipal.FindFirst
+     â”œâ”€ OrderQueries.cs:37  OrderQueries.GetOrdersFromUserAsync
+     â”‚  â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+     â”‚  â”œâ”€ BOUNDARY external Queryable.Select
+     â”‚  â”œâ”€ BOUNDARY external Queryable.Where
+     â”‚  â”œâ”€ BOUNDARY external Enum.ToString
+     â”‚  â”œâ”€ BOUNDARY external Enumerable.Sum
+     â”‚  â””â”€ EFFECT efcore read  ToListAsync  OrderingContext.Orders
+     â””â”€ BOUNDARY external TypedResults.Ok
 
 Callgraph: [34] minapi GET /cardtypes
 Nodes: 3
   OrdersApi.cs:15  minapi GET /cardtypes
-  ÀÄ OrdersApi.cs:100  OrdersApi.GetCardTypesAsync
-     ÃÄ OrderQueries.cs:51  OrderQueries.GetCardTypesAsync
-     ³  ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-     ³  ÃÄ BOUNDARY external Queryable.Select
-     ³  ÀÄ EFFECT efcore read  ToListAsync  OrderingContext.CardTypes
-     ÀÄ BOUNDARY external TypedResults.Ok
+  â””â”€ OrdersApi.cs:100  OrdersApi.GetCardTypesAsync
+     â”œâ”€ OrderQueries.cs:51  OrderQueries.GetCardTypesAsync
+     â”‚  â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+     â”‚  â”œâ”€ BOUNDARY external Queryable.Select
+     â”‚  â””â”€ EFFECT efcore read  ToListAsync  OrderingContext.CardTypes
+     â””â”€ BOUNDARY external TypedResults.Ok
 
 Callgraph: [35] minapi POST /draft
 Nodes: 12
   OrdersApi.cs:16  minapi POST /draft
-  ÀÄ OrdersApi.cs:106  OrdersApi.CreateOrderDraftAsync
-     ÃÄ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName
-     ³  ÃÄ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName  [^]
-     ³  ÀÄ BOUNDARY external Object.GetType
-     ÃÄ CreateOrderDraftCommandHandler.cs:10  CreateOrderDraftCommandHandler.Handle
-     ³  ÃÄ Order.cs:37  Order.NewDraft
-     ³  ÃÄ BasketItemExtensions.cs:13  BasketItemExtensions.ToOrderItemDTO
-     ³  ÃÄ Order.cs:71  Order.AddOrderItem
-     ³  ³  ÃÄ OrderItem.cs:44  OrderItem.SetNewDiscount
-     ³  ³  ÃÄ OrderItem.cs:54  OrderItem.AddUnits
-     ³  ³  ÃÄ BOUNDARY external Enumerable.SingleOrDefault
-     ³  ³  ÀÄ BOUNDARY external List.Add
-     ³  ÃÄ CreateOrderDraftCommandHandler.cs:28  OrderDraftDTO.FromOrder
-     ³  ³  ÃÄ Order.cs:185  Order.GetTotal
-     ³  ³  ³  ÀÄ BOUNDARY external Enumerable.Sum
-     ³  ³  ÀÄ BOUNDARY external Enumerable.Select
-     ³  ÃÄ BOUNDARY external Enumerable.Select
-     ³  ÀÄ BOUNDARY external Task.FromResult
-     ÀÄ BOUNDARY external LoggerExtensions.LogInformation
+  â””â”€ OrdersApi.cs:106  OrdersApi.CreateOrderDraftAsync
+     â”œâ”€ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName
+     â”‚  â”œâ”€ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName  [^]
+     â”‚  â””â”€ BOUNDARY external Object.GetType
+     â”œâ”€ CreateOrderDraftCommandHandler.cs:10  CreateOrderDraftCommandHandler.Handle
+     â”‚  â”œâ”€ Order.cs:37  Order.NewDraft
+     â”‚  â”œâ”€ BasketItemExtensions.cs:13  BasketItemExtensions.ToOrderItemDTO
+     â”‚  â”œâ”€ Order.cs:71  Order.AddOrderItem
+     â”‚  â”‚  â”œâ”€ OrderItem.cs:44  OrderItem.SetNewDiscount
+     â”‚  â”‚  â”œâ”€ OrderItem.cs:54  OrderItem.AddUnits
+     â”‚  â”‚  â”œâ”€ BOUNDARY external Enumerable.SingleOrDefault
+     â”‚  â”‚  â””â”€ BOUNDARY external List.Add
+     â”‚  â”œâ”€ CreateOrderDraftCommandHandler.cs:28  OrderDraftDTO.FromOrder
+     â”‚  â”‚  â”œâ”€ Order.cs:185  Order.GetTotal
+     â”‚  â”‚  â”‚  â””â”€ BOUNDARY external Enumerable.Sum
+     â”‚  â”‚  â””â”€ BOUNDARY external Enumerable.Select
+     â”‚  â”œâ”€ BOUNDARY external Enumerable.Select
+     â”‚  â””â”€ BOUNDARY external Task.FromResult
+     â””â”€ BOUNDARY external LoggerExtensions.LogInformation
 
 Callgraph: [36] minapi POST /
 Nodes: 8
   OrdersApi.cs:17  minapi POST /
-  ÀÄ OrdersApi.cs:118  OrdersApi.CreateOrderAsync
-     ÃÄ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName
-     ³  ÃÄ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName  [^]
-     ³  ÀÄ BOUNDARY external Object.GetType
-     ÃÄ IdentifiedCommandHandler.cs:39  IdentifiedCommandHandler.Handle
-     ³  ÃÄ RequestManager.cs:13  RequestManager.ExistAsync
-     ³  ³  ÀÄ BOUNDARY external DbContext.FindAsync
-     ³  ÃÄ IdentifiedCommandHandler.cs:31  IdentifiedCommandHandler.CreateResultForDuplicateRequest
-     ³  ÃÄ RequestManager.cs:21  RequestManager.CreateRequestForCommandAsync
-     ³  ³  ÃÄ RequestManager.cs:13  RequestManager.ExistAsync  [^]
-     ³  ³  ÃÄ BOUNDARY external DbContext.Add
-     ³  ³  ÃÄ BOUNDARY external DbContext.SaveChangesAsync
-     ³  ³  ÀÄ EFFECT efcore commit  SaveChangesAsync  OrderingContext
-     ³  ÃÄ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName  [^]
-     ³  ÃÄ BOUNDARY external LoggerExtensions.LogInformation
-     ³  ÃÄ BOUNDARY external ISender.Send
-     ³  ÀÄ BOUNDARY external LoggerExtensions.LogInformation
-     ÃÄ BOUNDARY external LoggerExtensions.LogInformation
-     ÃÄ BOUNDARY external LoggerExtensions.LogWarning
-     ÃÄ BOUNDARY external TypedResults.BadRequest
-     ÃÄ BOUNDARY external ILogger.BeginScope
-     ÃÄ BOUNDARY external String.PadLeft
-     ÃÄ BOUNDARY external String.Substring
-     ÃÄ BOUNDARY external LoggerExtensions.LogInformation
-     ÃÄ BOUNDARY external LoggerExtensions.LogInformation
-     ÃÄ BOUNDARY external LoggerExtensions.LogWarning
-     ÀÄ BOUNDARY external TypedResults.Ok
+  â””â”€ OrdersApi.cs:118  OrdersApi.CreateOrderAsync
+     â”œâ”€ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName
+     â”‚  â”œâ”€ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName  [^]
+     â”‚  â””â”€ BOUNDARY external Object.GetType
+     â”œâ”€ IdentifiedCommandHandler.cs:39  IdentifiedCommandHandler.Handle
+     â”‚  â”œâ”€ RequestManager.cs:13  RequestManager.ExistAsync
+     â”‚  â”‚  â””â”€ BOUNDARY external DbContext.FindAsync
+     â”‚  â”œâ”€ IdentifiedCommandHandler.cs:31  IdentifiedCommandHandler.CreateResultForDuplicateRequest
+     â”‚  â”œâ”€ RequestManager.cs:21  RequestManager.CreateRequestForCommandAsync
+     â”‚  â”‚  â”œâ”€ RequestManager.cs:13  RequestManager.ExistAsync  [^]
+     â”‚  â”‚  â”œâ”€ BOUNDARY external DbContext.Add
+     â”‚  â”‚  â”œâ”€ BOUNDARY external DbContext.SaveChangesAsync
+     â”‚  â”‚  â””â”€ EFFECT efcore commit  SaveChangesAsync  OrderingContext
+     â”‚  â”œâ”€ GenericTypeExtensions.cs:22  GenericTypeExtensions.GetGenericTypeName  [^]
+     â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogInformation
+     â”‚  â”œâ”€ BOUNDARY external ISender.Send
+     â”‚  â””â”€ BOUNDARY external LoggerExtensions.LogInformation
+     â”œâ”€ BOUNDARY external LoggerExtensions.LogInformation
+     â”œâ”€ BOUNDARY external LoggerExtensions.LogWarning
+     â”œâ”€ BOUNDARY external TypedResults.BadRequest
+     â”œâ”€ BOUNDARY external ILogger.BeginScope
+     â”œâ”€ BOUNDARY external String.PadLeft
+     â”œâ”€ BOUNDARY external String.Substring
+     â”œâ”€ BOUNDARY external LoggerExtensions.LogInformation
+     â”œâ”€ BOUNDARY external LoggerExtensions.LogInformation
+     â”œâ”€ BOUNDARY external LoggerExtensions.LogWarning
+     â””â”€ BOUNDARY external TypedResults.Ok
 
 Callgraph: [37] minapi GET /
 Nodes: 1
   WebHooksApi.cs:13  minapi GET /
-  ÃÄ BOUNDARY external ClaimsPrincipalExtensions.GetUserId
-  ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
-  ÃÄ BOUNDARY external Queryable.Where
-  ÀÄ BOUNDARY external TypedResults.Ok
+  â”œâ”€ BOUNDARY external ClaimsPrincipalExtensions.GetUserId
+  â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.ToListAsync
+  â”œâ”€ BOUNDARY external Queryable.Where
+  â””â”€ BOUNDARY external TypedResults.Ok
 
 Callgraph: [38] minapi GET /{id:int}
 Nodes: 1
   WebHooksApi.cs:20  minapi GET /{id:int}
-  ÃÄ BOUNDARY external ClaimsPrincipalExtensions.GetUserId
-  ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.SingleOrDefaultAsync
-  ÃÄ BOUNDARY external TypedResults.Ok
-  ÀÄ BOUNDARY external TypedResults.NotFound
+  â”œâ”€ BOUNDARY external ClaimsPrincipalExtensions.GetUserId
+  â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.SingleOrDefaultAsync
+  â”œâ”€ BOUNDARY external TypedResults.Ok
+  â””â”€ BOUNDARY external TypedResults.NotFound
 
 Callgraph: [39] minapi POST /
 Nodes: 3
   WebHooksApi.cs:35  minapi POST /
-  ÃÄ GrantUrlTesterService.cs:5  GrantUrlTesterService.TestGrantUrl
-  ³  ÃÄ GrantUrlTesterService.cs:37  GrantUrlTesterService.CheckSameOrigin
-  ³  ÃÄ BOUNDARY external LoggerExtensions.LogWarning
-  ³  ÃÄ BOUNDARY external HttpClientFactoryExtensions.CreateClient
-  ³  ÃÄ BOUNDARY external HttpHeaders.Add
-  ³  ÃÄ BOUNDARY external LoggerExtensions.LogInformation
-  ³  ÃÄ BOUNDARY external HttpClient.SendAsync
-  ³  ÃÄ BOUNDARY external HttpHeaders.TryGetValues
-  ³  ÃÄ BOUNDARY external Enumerable.FirstOrDefault
-  ³  ÃÄ BOUNDARY external String.IsNullOrWhiteSpace
-  ³  ÃÄ BOUNDARY external LoggerExtensions.LogInformation
-  ³  ÃÄ BOUNDARY external LoggerExtensions.LogWarning
-  ³  ÀÄ BOUNDARY external Exception.GetType
-  ÃÄ BOUNDARY external Enum.Parse
-  ÃÄ BOUNDARY external ClaimsPrincipalExtensions.GetUserId
-  ÃÄ BOUNDARY external DbContext.Add
-  ÃÄ BOUNDARY external DbContext.SaveChangesAsync
-  ÃÄ BOUNDARY external TypedResults.Created
-  ÀÄ BOUNDARY external TypedResults.BadRequest
+  â”œâ”€ GrantUrlTesterService.cs:5  GrantUrlTesterService.TestGrantUrl
+  â”‚  â”œâ”€ GrantUrlTesterService.cs:37  GrantUrlTesterService.CheckSameOrigin
+  â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogWarning
+  â”‚  â”œâ”€ BOUNDARY external HttpClientFactoryExtensions.CreateClient
+  â”‚  â”œâ”€ BOUNDARY external HttpHeaders.Add
+  â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogInformation
+  â”‚  â”œâ”€ BOUNDARY external HttpClient.SendAsync
+  â”‚  â”œâ”€ BOUNDARY external HttpHeaders.TryGetValues
+  â”‚  â”œâ”€ BOUNDARY external Enumerable.FirstOrDefault
+  â”‚  â”œâ”€ BOUNDARY external String.IsNullOrWhiteSpace
+  â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogInformation
+  â”‚  â”œâ”€ BOUNDARY external LoggerExtensions.LogWarning
+  â”‚  â””â”€ BOUNDARY external Exception.GetType
+  â”œâ”€ BOUNDARY external Enum.Parse
+  â”œâ”€ BOUNDARY external ClaimsPrincipalExtensions.GetUserId
+  â”œâ”€ BOUNDARY external DbContext.Add
+  â”œâ”€ BOUNDARY external DbContext.SaveChangesAsync
+  â”œâ”€ BOUNDARY external TypedResults.Created
+  â””â”€ BOUNDARY external TypedResults.BadRequest
 
 Callgraph: [40] minapi DELETE /{id:int}
 Nodes: 1
   WebHooksApi.cs:66  minapi DELETE /{id:int}
-  ÃÄ BOUNDARY external ClaimsPrincipalExtensions.GetUserId
-  ÃÄ BOUNDARY external EntityFrameworkQueryableExtensions.SingleOrDefaultAsync
-  ÃÄ BOUNDARY external DbContext.Remove
-  ÃÄ BOUNDARY external DbContext.SaveChangesAsync
-  ÃÄ BOUNDARY external TypedResults.Accepted
-  ÀÄ BOUNDARY external TypedResults.NotFound
+  â”œâ”€ BOUNDARY external ClaimsPrincipalExtensions.GetUserId
+  â”œâ”€ BOUNDARY external EntityFrameworkQueryableExtensions.SingleOrDefaultAsync
+  â”œâ”€ BOUNDARY external DbContext.Remove
+  â”œâ”€ BOUNDARY external DbContext.SaveChangesAsync
+  â”œâ”€ BOUNDARY external TypedResults.Accepted
+  â””â”€ BOUNDARY external TypedResults.NotFound
 
 
 ================================================================
@@ -902,14 +902,14 @@ Nodes: 0 / 2 on effect paths
 Callgraph: [2] minapi GET /items/by (focused)
 Nodes: 2 / 2 on effect paths
   CatalogApi.cs:31  minapi GET /items/by
-  ÀÄ CatalogApi.cs:161  CatalogApi.GetItemsByIds
-     ÀÄ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+  â””â”€ CatalogApi.cs:161  CatalogApi.GetItemsByIds
+     â””â”€ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
 
 Callgraph: [3] minapi GET /items/{id:int} (focused)
 Nodes: 2 / 2 on effect paths
   CatalogApi.cs:36  minapi GET /items/{id:int}
-  ÀÄ CatalogApi.cs:170  CatalogApi.GetItemById
-     ÀÄ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
+  â””â”€ CatalogApi.cs:170  CatalogApi.GetItemById
+     â””â”€ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
 
 Callgraph: [4] minapi GET /items/by/{name:minlength(1)} (focused)
 Nodes: 0 / 3 on effect paths
@@ -917,28 +917,28 @@ Nodes: 0 / 3 on effect paths
 Callgraph: [5] minapi GET /items/{id:int}/pic (focused)
 Nodes: 2 / 4 on effect paths
   CatalogApi.cs:46  minapi GET /items/{id:int}/pic
-  ÀÄ CatalogApi.cs:202  CatalogApi.GetItemPictureById
-     ÃÄ EFFECT efcore read  FindAsync  CatalogContext.CatalogItems
-     ÀÄ EFFECT efcore read  FindAsync  CatalogContext.CatalogItems
+  â””â”€ CatalogApi.cs:202  CatalogApi.GetItemPictureById
+     â”œâ”€ EFFECT efcore read  FindAsync  CatalogContext.CatalogItems
+     â””â”€ EFFECT efcore read  FindAsync  CatalogContext.CatalogItems
 
 Callgraph: [6] minapi GET /items/withsemanticrelevance/{text:minlength(1)} (focused)
 Nodes: 4 / 6 on effect paths
   CatalogApi.cs:53  minapi GET /items/withsemanticrelevance/{text:minlength(1)}
-  ÀÄ CatalogApi.cs:226  CatalogApi.GetItemsBySemanticRelevanceV1
-     ÀÄ CatalogApi.cs:236  CatalogApi.GetItemsBySemanticRelevance
-        ÃÄ CatalogAI.cs:55  CatalogAI.GetEmbeddingAsync
-        ³  ÀÄ EFFECT ai_embeddings read  GenerateVectorAsync  Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
-        ÃÄ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
-        ÀÄ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+  â””â”€ CatalogApi.cs:226  CatalogApi.GetItemsBySemanticRelevanceV1
+     â””â”€ CatalogApi.cs:236  CatalogApi.GetItemsBySemanticRelevance
+        â”œâ”€ CatalogAI.cs:55  CatalogAI.GetEmbeddingAsync
+        â”‚  â””â”€ EFFECT ai_embeddings read  GenerateVectorAsync  Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
+        â”œâ”€ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+        â””â”€ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
 
 Callgraph: [7] minapi GET /items/withsemanticrelevance (focused)
 Nodes: 3 / 5 on effect paths
   CatalogApi.cs:60  minapi GET /items/withsemanticrelevance
-  ÀÄ CatalogApi.cs:236  CatalogApi.GetItemsBySemanticRelevance
-     ÃÄ CatalogAI.cs:55  CatalogAI.GetEmbeddingAsync
-     ³  ÀÄ EFFECT ai_embeddings read  GenerateVectorAsync  Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
-     ÃÄ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
-     ÀÄ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+  â””â”€ CatalogApi.cs:236  CatalogApi.GetItemsBySemanticRelevance
+     â”œâ”€ CatalogAI.cs:55  CatalogAI.GetEmbeddingAsync
+     â”‚  â””â”€ EFFECT ai_embeddings read  GenerateVectorAsync  Microsoft.Extensions.AI.IEmbeddingGenerator<TInput, TEmbedding>
+     â”œâ”€ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
+     â””â”€ EFFECT efcore read  ToListAsync  CatalogContext.CatalogItems
 
 Callgraph: [8] minapi GET /items/type/{typeId}/brand/{brandId?} (focused)
 Nodes: 0 / 3 on effect paths
@@ -955,51 +955,51 @@ Nodes: 0 / 1 on effect paths
 Callgraph: [12] minapi PUT /items (focused)
 Nodes: 8 / 18 on effect paths
   CatalogApi.cs:93  minapi PUT /items
-  ÀÄ CatalogApi.cs:310  CatalogApi.UpdateItemV1
-     ÀÄ CatalogApi.cs:324  CatalogApi.UpdateItem
-        ÃÄ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
-        ³  ÀÄ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync  [^]
-        ÃÄ CatalogIntegrationEventService.cs:28  CatalogIntegrationEventService.SaveEventAndCatalogContextChangesAsync
-        ³  ÃÄ ResilientTransaction.cs:11  ResilientTransaction.ExecuteAsync
-        ³  ³  ÃÄ EFFECT db_transaction begin  BeginTransactionAsync  DbContext.Database  [resilience_retry:ExecutionStrategy]
-        ³  ³  ÀÄ EFFECT db_transaction commit  CommitAsync  Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction  [resilience_retry:ExecutionStrategy]
-        ³  ÀÄ EFFECT efcore commit  SaveChangesAsync  CatalogContext
-        ÃÄ CatalogIntegrationEventService.cs:11  CatalogIntegrationEventService.PublishThroughEventBusAsync
-        ³  ÀÄ EFFECT eventbus publish  PublishAsync  eShop.EventBus.Events.IntegrationEvent
-        ÃÄ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
-        ÀÄ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+  â””â”€ CatalogApi.cs:310  CatalogApi.UpdateItemV1
+     â””â”€ CatalogApi.cs:324  CatalogApi.UpdateItem
+        â”œâ”€ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
+        â”‚  â””â”€ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync  [^]
+        â”œâ”€ CatalogIntegrationEventService.cs:28  CatalogIntegrationEventService.SaveEventAndCatalogContextChangesAsync
+        â”‚  â”œâ”€ ResilientTransaction.cs:11  ResilientTransaction.ExecuteAsync
+        â”‚  â”‚  â”œâ”€ EFFECT db_transaction begin  BeginTransactionAsync  DbContext.Database  [resilience_retry:ExecutionStrategy]
+        â”‚  â”‚  â””â”€ EFFECT db_transaction commit  CommitAsync  Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction  [resilience_retry:ExecutionStrategy]
+        â”‚  â””â”€ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+        â”œâ”€ CatalogIntegrationEventService.cs:11  CatalogIntegrationEventService.PublishThroughEventBusAsync
+        â”‚  â””â”€ EFFECT eventbus publish  PublishAsync  eShop.EventBus.Events.IntegrationEvent
+        â”œâ”€ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
+        â””â”€ EFFECT efcore commit  SaveChangesAsync  CatalogContext
 
 Callgraph: [13] minapi PUT /items/{id:int} (focused)
 Nodes: 7 / 17 on effect paths
   CatalogApi.cs:98  minapi PUT /items/{id:int}
-  ÀÄ CatalogApi.cs:324  CatalogApi.UpdateItem
-     ÃÄ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
-     ³  ÀÄ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync  [^]
-     ÃÄ CatalogIntegrationEventService.cs:28  CatalogIntegrationEventService.SaveEventAndCatalogContextChangesAsync
-     ³  ÃÄ ResilientTransaction.cs:11  ResilientTransaction.ExecuteAsync
-     ³  ³  ÃÄ EFFECT db_transaction begin  BeginTransactionAsync  DbContext.Database  [resilience_retry:ExecutionStrategy]
-     ³  ³  ÀÄ EFFECT db_transaction commit  CommitAsync  Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction  [resilience_retry:ExecutionStrategy]
-     ³  ÀÄ EFFECT efcore commit  SaveChangesAsync  CatalogContext
-     ÃÄ CatalogIntegrationEventService.cs:11  CatalogIntegrationEventService.PublishThroughEventBusAsync
-     ³  ÀÄ EFFECT eventbus publish  PublishAsync  eShop.EventBus.Events.IntegrationEvent
-     ÃÄ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
-     ÀÄ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+  â””â”€ CatalogApi.cs:324  CatalogApi.UpdateItem
+     â”œâ”€ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
+     â”‚  â””â”€ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync  [^]
+     â”œâ”€ CatalogIntegrationEventService.cs:28  CatalogIntegrationEventService.SaveEventAndCatalogContextChangesAsync
+     â”‚  â”œâ”€ ResilientTransaction.cs:11  ResilientTransaction.ExecuteAsync
+     â”‚  â”‚  â”œâ”€ EFFECT db_transaction begin  BeginTransactionAsync  DbContext.Database  [resilience_retry:ExecutionStrategy]
+     â”‚  â”‚  â””â”€ EFFECT db_transaction commit  CommitAsync  Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction  [resilience_retry:ExecutionStrategy]
+     â”‚  â””â”€ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+     â”œâ”€ CatalogIntegrationEventService.cs:11  CatalogIntegrationEventService.PublishThroughEventBusAsync
+     â”‚  â””â”€ EFFECT eventbus publish  PublishAsync  eShop.EventBus.Events.IntegrationEvent
+     â”œâ”€ EFFECT efcore read  SingleOrDefaultAsync  CatalogContext.CatalogItems
+     â””â”€ EFFECT efcore commit  SaveChangesAsync  CatalogContext
 
 Callgraph: [14] minapi POST /items (focused)
 Nodes: 4 / 5 on effect paths
   CatalogApi.cs:103  minapi POST /items
-  ÀÄ CatalogApi.cs:365  CatalogApi.CreateItem
-     ÃÄ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
-     ³  ÀÄ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync  [^]
-     ÃÄ EFFECT efcore pending_write  Add  CatalogContext.CatalogItems
-     ÀÄ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+  â””â”€ CatalogApi.cs:365  CatalogApi.CreateItem
+     â”œâ”€ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync
+     â”‚  â””â”€ CatalogAI.cs:28  CatalogAI.GetEmbeddingAsync  [^]
+     â”œâ”€ EFFECT efcore pending_write  Add  CatalogContext.CatalogItems
+     â””â”€ EFFECT efcore commit  SaveChangesAsync  CatalogContext
 
 Callgraph: [15] minapi DELETE /items/{id:int} (focused)
 Nodes: 2 / 2 on effect paths
   CatalogApi.cs:107  minapi DELETE /items/{id:int}
-  ÀÄ CatalogApi.cs:390  CatalogApi.DeleteItemById
-     ÃÄ EFFECT efcore pending_write  Remove  CatalogContext.CatalogItems
-     ÀÄ EFFECT efcore commit  SaveChangesAsync  CatalogContext
+  â””â”€ CatalogApi.cs:390  CatalogApi.DeleteItemById
+     â”œâ”€ EFFECT efcore pending_write  Remove  CatalogContext.CatalogItems
+     â””â”€ EFFECT efcore commit  SaveChangesAsync  CatalogContext
 
 Callgraph: [16] mvc GET account (focused)
 Nodes: 0 / 2 on effect paths
@@ -1046,39 +1046,39 @@ Nodes: 0 / 1 on effect paths
 Callgraph: [30] minapi PUT /cancel (focused)
 Nodes: 4 / 8 on effect paths
   OrdersApi.cs:11  minapi PUT /cancel
-  ÀÄ OrdersApi.cs:22  OrdersApi.CancelOrderAsync
-     ÀÄ IdentifiedCommandHandler.cs:39  IdentifiedCommandHandler.Handle
-        ÀÄ RequestManager.cs:21  RequestManager.CreateRequestForCommandAsync
-           ÀÄ EFFECT efcore commit  SaveChangesAsync  OrderingContext
+  â””â”€ OrdersApi.cs:22  OrdersApi.CancelOrderAsync
+     â””â”€ IdentifiedCommandHandler.cs:39  IdentifiedCommandHandler.Handle
+        â””â”€ RequestManager.cs:21  RequestManager.CreateRequestForCommandAsync
+           â””â”€ EFFECT efcore commit  SaveChangesAsync  OrderingContext
 
 Callgraph: [31] minapi PUT /ship (focused)
 Nodes: 4 / 8 on effect paths
   OrdersApi.cs:12  minapi PUT /ship
-  ÀÄ OrdersApi.cs:51  OrdersApi.ShipOrderAsync
-     ÀÄ IdentifiedCommandHandler.cs:39  IdentifiedCommandHandler.Handle
-        ÀÄ RequestManager.cs:21  RequestManager.CreateRequestForCommandAsync
-           ÀÄ EFFECT efcore commit  SaveChangesAsync  OrderingContext
+  â””â”€ OrdersApi.cs:51  OrdersApi.ShipOrderAsync
+     â””â”€ IdentifiedCommandHandler.cs:39  IdentifiedCommandHandler.Handle
+        â””â”€ RequestManager.cs:21  RequestManager.CreateRequestForCommandAsync
+           â””â”€ EFFECT efcore commit  SaveChangesAsync  OrderingContext
 
 Callgraph: [32] minapi GET {orderId:int} (focused)
 Nodes: 3 / 4 on effect paths
   OrdersApi.cs:13  minapi GET {orderId:int}
-  ÀÄ OrdersApi.cs:80  OrdersApi.GetOrderAsync
-     ÀÄ OrderQueries.cs:6  OrderQueries.GetOrderAsync
-        ÀÄ EFFECT efcore read  FirstOrDefaultAsync  OrderingContext.Orders
+  â””â”€ OrdersApi.cs:80  OrdersApi.GetOrderAsync
+     â””â”€ OrderQueries.cs:6  OrderQueries.GetOrderAsync
+        â””â”€ EFFECT efcore read  FirstOrDefaultAsync  OrderingContext.Orders
 
 Callgraph: [33] minapi GET / (focused)
 Nodes: 3 / 4 on effect paths
   OrdersApi.cs:14  minapi GET /
-  ÀÄ OrdersApi.cs:93  OrdersApi.GetOrdersByUserAsync
-     ÀÄ OrderQueries.cs:37  OrderQueries.GetOrdersFromUserAsync
-        ÀÄ EFFECT efcore read  ToListAsync  OrderingContext.Orders
+  â””â”€ OrdersApi.cs:93  OrdersApi.GetOrdersByUserAsync
+     â””â”€ OrderQueries.cs:37  OrderQueries.GetOrdersFromUserAsync
+        â””â”€ EFFECT efcore read  ToListAsync  OrderingContext.Orders
 
 Callgraph: [34] minapi GET /cardtypes (focused)
 Nodes: 3 / 3 on effect paths
   OrdersApi.cs:15  minapi GET /cardtypes
-  ÀÄ OrdersApi.cs:100  OrdersApi.GetCardTypesAsync
-     ÀÄ OrderQueries.cs:51  OrderQueries.GetCardTypesAsync
-        ÀÄ EFFECT efcore read  ToListAsync  OrderingContext.CardTypes
+  â””â”€ OrdersApi.cs:100  OrdersApi.GetCardTypesAsync
+     â””â”€ OrderQueries.cs:51  OrderQueries.GetCardTypesAsync
+        â””â”€ EFFECT efcore read  ToListAsync  OrderingContext.CardTypes
 
 Callgraph: [35] minapi POST /draft (focused)
 Nodes: 0 / 12 on effect paths
@@ -1086,10 +1086,10 @@ Nodes: 0 / 12 on effect paths
 Callgraph: [36] minapi POST / (focused)
 Nodes: 4 / 8 on effect paths
   OrdersApi.cs:17  minapi POST /
-  ÀÄ OrdersApi.cs:118  OrdersApi.CreateOrderAsync
-     ÀÄ IdentifiedCommandHandler.cs:39  IdentifiedCommandHandler.Handle
-        ÀÄ RequestManager.cs:21  RequestManager.CreateRequestForCommandAsync
-           ÀÄ EFFECT efcore commit  SaveChangesAsync  OrderingContext
+  â””â”€ OrdersApi.cs:118  OrdersApi.CreateOrderAsync
+     â””â”€ IdentifiedCommandHandler.cs:39  IdentifiedCommandHandler.Handle
+        â””â”€ RequestManager.cs:21  RequestManager.CreateRequestForCommandAsync
+           â””â”€ EFFECT efcore commit  SaveChangesAsync  OrderingContext
 
 Callgraph: [37] minapi GET / (focused)
 Nodes: 0 / 1 on effect paths
