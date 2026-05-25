@@ -132,10 +132,13 @@ Other candidates:
 - `src/Rig/Analysis/SolutionAnalyzer.cs`
 - `src/Rig.Domain/AnalysisResult.cs`
 - `src/Rig/Analysis/CallGraph/CallGraphBuilder.cs`
+- `src/Rig/Analysis/CallGraph/CallGraphIndexes.cs`
 - `src/Rig/Analysis/Extraction/`
+- `src/Rig/Analysis/Rules/RuleTypeMatcher.cs`
 - `src/Rig/Analysis/Inventory/SolutionSourceLoader.cs`
 - `src/Rig/Analysis/Rules/AnalysisRuleSet.cs`
 - `src/Rig/Cli/CliApplication.cs`
+- `src/Rig/Cli/Rendering/`
 - `src/Rig.Storage/RigDbContext.cs`
 - `src/Rig.Storage/Queries/Reads.cs`
 - `src/Rig.Storage/Queries/Writes.cs`
@@ -219,9 +222,12 @@ into focused components:
 - `Analysis/Rules/AnalysisRuleSet.cs`
 - `Analysis/Extraction/EntryPointExtractor.cs`
 - `Analysis/Extraction/EffectExtractor.cs`
+- `Analysis/Extraction/EffectObservationExtractor.cs`
 - `Analysis/Extraction/DiRegistrationExtractor.cs`
 - `Analysis/Extraction/RoslynObservationExtractor.cs`
 - `Analysis/CallGraph/CallGraphBuilder.cs`
+- `Analysis/CallGraph/CallGraphIndexes.cs`
+- `Analysis/Rules/RuleTypeMatcher.cs`
 - `Analysis/RoslynSymbolHelpers.cs`
 - `Analysis/RoslynAnalysisModels.cs`
 

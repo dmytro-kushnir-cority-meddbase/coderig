@@ -120,7 +120,7 @@ public sealed class CliApplicationTests
         output.ToString().ShouldContain("reason=generated_fixture");
 
         output.GetStringBuilder().Clear();
-        var callgraphExitCode = await CliApplication.RunAsync(["callgraph", "6"], output, error, workingDirectory);
+        var callgraphExitCode = await CliApplication.RunAsync(["callgraph", "6", "--full"], output, error, workingDirectory);
 
         callgraphExitCode.ShouldBe(0);
         output.ToString().ShouldContain("Callgraph: [6] minapi GET /minapi/teams/{id}");

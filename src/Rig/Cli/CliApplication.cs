@@ -1,4 +1,5 @@
 using Rig.Analysis;
+using Rig.Cli.Rendering;
 using Rig.Storage;
 using Rig.Storage.Queries;
 
@@ -196,24 +197,7 @@ public static class CliApplication
             return NoRunError(error);
         }
 
-        if (entryPointIndex.HasValue)
-        {
-            output.WriteLine($"Effects [{entryPointIndex}]");
-        }
-        else
-        {
-            output.WriteLine("Effects");
-        }
-
-        foreach (var effect in effects
-            .OrderBy(e => e.Provider, StringComparer.Ordinal)
-            .ThenBy(e => e.Resource, StringComparer.Ordinal)
-            .ThenBy(e => e.Operation, StringComparer.Ordinal))
-        {
-            var obs = string.Join(" ", effect.Observations.Select(o => $"[{o.Type}:{o.Context}]"));
-            var obsStr = obs.Length > 0 ? $"  {obs}" : "";
-            output.WriteLine($"  {effect.Provider} {effect.Operation}  {effect.Method}  {effect.Resource}  {Path.GetFileName(effect.FilePath)}:{effect.Line}{obsStr}");
-        }
+        EffectRenderer.Render(effects, entryPointIndex, output);
 
         return 0;
     }
@@ -227,28 +211,7 @@ public static class CliApplication
             return NoRunError(error);
         }
 
-        output.WriteLine("DI Registrations");
-        foreach (var group in registrations
-            .OrderBy(r => r.ServiceType, StringComparer.Ordinal)
-            .ThenBy(r => r.Lifetime, StringComparer.Ordinal)
-            .GroupBy(r => r.ServiceType, StringComparer.Ordinal))
-        {
-            var registrationsForService = group.ToArray();
-            var collectionMarker = registrationsForService.Length > 1
-                ? $" ({registrationsForService.Length} registrations)"
-                : "";
-            output.WriteLine($"  {group.Key}{collectionMarker}");
-
-            foreach (var reg in registrationsForService
-                .OrderBy(r => r.ImplementationType ?? "", StringComparer.Ordinal)
-                .ThenBy(r => r.FilePath, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(r => r.Line))
-            {
-                output.WriteLine($"    -> {reg.ImplementationType ?? "(self)"}  lifetime={reg.Lifetime} kind={reg.RegistrationKind}");
-                output.WriteLine($"       conf={reg.Confidence} basis={reg.Basis} reason={reg.Reason}");
-                output.WriteLine($"       loc={Path.GetFileName(reg.FilePath)}:{reg.Line} evidence={reg.Evidence}");
-            }
-        }
+        DiRenderer.Render(registrations, output);
 
         return 0;
     }
@@ -293,13 +256,7 @@ public static class CliApplication
             return NoRunError(error);
         }
 
-        output.WriteLine("Skipped Files");
-        foreach (var sourceFile in sourceFiles)
-        {
-            output.WriteLine($"  {Path.GetFileName(sourceFile.FilePath)}");
-            output.WriteLine($"    project={sourceFile.ProjectName} conf={sourceFile.Confidence} basis={sourceFile.Basis} reason={sourceFile.Reason}");
-            output.WriteLine($"    path={sourceFile.FilePath}");
-        }
+        SourceFileRenderer.RenderSkipped(sourceFiles, output);
 
         return 0;
     }
@@ -318,7 +275,6 @@ public static class CliApplication
         }
 
         var fullMode = args.Contains("--full");
-        var focusMode = !fullMode;
         var summaryMode = args.Contains("--summary");
 
         await using var context = OpenContext(workingDirectory);
@@ -336,32 +292,7 @@ public static class CliApplication
             return 2;
         }
 
-        var allNodes = callGraph.Nodes;
-        IReadOnlyList<CallGraphNodeInfo> nodes;
-        HashSet<string>? effectReachable = null;
-
-        if (focusMode)
-        {
-            effectReachable = ComputeEffectReachable(allNodes);
-            nodes = allNodes.Where(n => effectReachable.Contains(n.Symbol)).ToArray();
-        }
-        else
-        {
-            nodes = allNodes;
-        }
-
-        if (summaryMode)
-        {
-            RenderSummary(callGraph, allNodes, entryPointIndex, output);
-            return 0;
-        }
-
-        var focusSuffix = focusMode && !fullMode ? " (focused)" : fullMode ? " (full)" : "";
-        var nodeCountSuffix = focusMode ? $" / {allNodes.Count} on effect paths" : "";
-        output.WriteLine($"Callgraph: [{entryPointIndex}] {callGraph.EntryPoint}{focusSuffix}");
-        output.WriteLine($"Nodes: {nodes.Count}{nodeCountSuffix}");
-
-        RenderTree(nodes, effectReachable, focusMode, output);
+        CallGraphRenderer.Render(callGraph, entryPointIndex, fullMode, summaryMode, output);
 
         return 0;
     }
@@ -373,7 +304,6 @@ public static class CliApplication
         string workingDirectory)
     {
         var fullMode = args.Contains("--full");
-        var focusMode = !fullMode;
         var summaryMode = args.Contains("--summary");
 
         await using var context = OpenContext(workingDirectory);
@@ -397,195 +327,12 @@ public static class CliApplication
                 continue;
             }
 
-            var allNodes = callGraph.Nodes;
-            IReadOnlyList<CallGraphNodeInfo> nodes;
-            HashSet<string>? effectReachable = null;
-
-            if (focusMode)
-            {
-                effectReachable = ComputeEffectReachable(allNodes);
-                nodes = allNodes.Where(n => effectReachable.Contains(n.Symbol)).ToArray();
-            }
-            else
-            {
-                nodes = allNodes;
-            }
-
-            if (summaryMode)
-            {
-                RenderSummary(callGraph, allNodes, i, output);
-            }
-            else
-            {
-                var focusSuffix = focusMode ? " (focused)" : " (full)";
-                var nodeCountSuffix = focusMode ? $" / {allNodes.Count} on effect paths" : "";
-                output.WriteLine($"Callgraph: [{i}] {callGraph.EntryPoint}{focusSuffix}");
-                output.WriteLine($"Nodes: {nodes.Count}{nodeCountSuffix}");
-                RenderTree(nodes, effectReachable, focusMode, output);
-            }
+            CallGraphRenderer.Render(callGraph, i, fullMode, summaryMode, output);
 
             output.WriteLine();
         }
 
         return 0;
-    }
-
-    private static void RenderSummary(
-        CallGraphInfo callGraph,
-        IReadOnlyList<CallGraphNodeInfo> allNodes,
-        int entryPointIndex,
-        TextWriter output)
-    {
-        var allEffects = allNodes.SelectMany(n => n.Effects).ToList();
-
-        // Deduplicate preserving first-occurrence order so the sequence reflects traversal order.
-        var seen = new Dictionary<(string, string, string), int>();
-        var ordered = new List<(EffectInfo Effect, int Count)>();
-        foreach (var e in allEffects)
-        {
-            var key = (e.Provider, e.Operation, e.Resource);
-            if (seen.TryGetValue(key, out var idx))
-            {
-                var existing = ordered[idx];
-                ordered[idx] = (existing.Effect, existing.Count + 1);
-            }
-            else
-            {
-                seen[key] = ordered.Count;
-                ordered.Add((e, 1));
-            }
-        }
-
-        output.WriteLine($"Summary: [{entryPointIndex}] {callGraph.EntryPoint}");
-        output.WriteLine($"Nodes: {allNodes.Count}  Effects: {allEffects.Count}");
-
-        foreach (var (effect, count) in ordered)
-        {
-            var countSuffix = count > 1 ? $"  [x{count}]" : "";
-            var observations = string.Join("", effect.Observations
-                .Select(o => $"  [{o.Type}:{o.Context}]"));
-            output.WriteLine($"  {effect.Provider,-16} {effect.Operation,-14}  {effect.Resource}{countSuffix}{observations}");
-        }
-    }
-
-    private static void RenderTree(
-        IReadOnlyList<CallGraphNodeInfo> nodes,
-        HashSet<string>? effectReachable,
-        bool focusMode,
-        TextWriter output)
-    {
-        if (nodes.Count == 0) return;
-
-        var symbolToNode = new Dictionary<string, CallGraphNodeInfo>();
-        foreach (var node in nodes)
-            symbolToNode.TryAdd(node.Symbol, node);
-
-        var visited = new HashSet<string>();
-        RenderTreeNode(nodes[0], "  ", "  ", symbolToNode, effectReachable, focusMode, visited, output);
-    }
-
-    private static void RenderTreeNode(
-        CallGraphNodeInfo node,
-        string linePrefix,
-        string childrenPrefix,
-        Dictionary<string, CallGraphNodeInfo> symbolToNode,
-        HashSet<string>? effectReachable,
-        bool focusMode,
-        HashSet<string> visited,
-        TextWriter output)
-    {
-        output.WriteLine($"{linePrefix}{Path.GetFileName(node.FilePath)}:{node.Line}  {node.Symbol}");
-
-        if (!visited.Add(node.Symbol)) return;
-
-        var calls = node.Calls
-            .Where(c => !focusMode || effectReachable is null || effectReachable.Contains(c))
-            .ToList();
-        IReadOnlyList<BoundaryCallInfo> boundaries = focusMode ? [] : node.BoundaryCalls;
-        var effects = node.Effects;
-
-        int total = calls.Count + boundaries.Count + effects.Count;
-        int idx = 0;
-
-        foreach (var call in calls)
-        {
-            idx++;
-            bool isLast = idx == total;
-            var branch = childrenPrefix + (isLast ? "└─ " : "├─ ");
-            var nextChildren = childrenPrefix + (isLast ? "   " : "│  ");
-
-            if (symbolToNode.TryGetValue(call, out var childNode))
-            {
-                if (visited.Contains(call))
-                    output.WriteLine($"{branch}{Path.GetFileName(childNode.FilePath)}:{childNode.Line}  {childNode.Symbol}  [^]");
-                else
-                    RenderTreeNode(childNode, branch, nextChildren, symbolToNode, effectReachable, focusMode, visited, output);
-            }
-            else
-            {
-                output.WriteLine($"{branch}CALL {call}");
-            }
-        }
-
-        foreach (var boundary in boundaries)
-        {
-            idx++;
-            bool isLast = idx == total;
-            var branch = childrenPrefix + (isLast ? "└─ " : "├─ ");
-            output.WriteLine($"{branch}BOUNDARY {boundary.Kind} {boundary.Method}");
-        }
-
-        foreach (var effect in effects)
-        {
-            idx++;
-            bool isLast = idx == total;
-            var branch = childrenPrefix + (isLast ? "└─ " : "├─ ");
-            var obs = string.Join(" ", effect.Observations.Select(o => $"[{o.Type}:{o.Context}]"));
-            var obsStr = obs.Length > 0 ? $"  {obs}" : "";
-            output.WriteLine($"{branch}EFFECT {effect.Provider} {effect.Operation}  {effect.Method}  {effect.Resource}{obsStr}");
-        }
-    }
-
-    private static HashSet<string> ComputeEffectReachable(
-        IReadOnlyList<CallGraphNodeInfo> nodes)
-    {
-        // Build reverse edges: callee symbol → set of caller symbols
-        var callers = new Dictionary<string, HashSet<string>>();
-        foreach (var node in nodes)
-        {
-            foreach (var call in node.Calls)
-            {
-                if (!callers.TryGetValue(call, out var callerSet))
-                {
-                    callerSet = [];
-                    callers[call] = callerSet;
-                }
-                callerSet.Add(node.Symbol);
-            }
-        }
-
-        // BFS backward from effect nodes to find all ancestors
-        var reachable = new HashSet<string>();
-        var queue = new Queue<string>();
-
-        foreach (var node in nodes.Where(n => n.Effects.Count > 0))
-        {
-            if (reachable.Add(node.Symbol))
-                queue.Enqueue(node.Symbol);
-        }
-
-        while (queue.Count > 0)
-        {
-            var symbol = queue.Dequeue();
-            if (!callers.TryGetValue(symbol, out var callerSet)) continue;
-            foreach (var caller in callerSet)
-            {
-                if (reachable.Add(caller))
-                    queue.Enqueue(caller);
-            }
-        }
-
-        return reachable;
     }
 
     private static RigDbContext OpenContext(string workingDirectory)

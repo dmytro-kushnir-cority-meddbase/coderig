@@ -125,6 +125,17 @@ Status: `todo`
 
 ## Completed Slices (recent)
 
+### Refactoring pass: CLI rendering, effect observations, callgraph indexes
+
+Status: `verified`
+
+- `CliApplication` now delegates text projection to focused renderers under `src/Rig/Cli/Rendering`.
+- `EffectObservationExtractor` owns contextual effect observations; `EffectExtractor` stays focused on rule matching and resource extraction.
+- `RuleTypeMatcher` centralizes repeated rule type-name matching.
+- `CallGraphIndexes` owns dispatch and single-implementation DI index construction; `CallGraphBuilder` keeps traversal and node construction.
+- Stale CLI test assertion updated to use `rig callgraph 6 --full` for boundary rendering; default callgraph mode remains focused.
+- Verification: `dotnet build RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false`; `dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false --no-build`.
+
 ### EF versioning observations: read_before_commit, concurrency_handled
 
 Status: `committed`

@@ -159,21 +159,13 @@ internal static class EntryPointExtractor
         for (var current = typeSymbol.BaseType; current is not null; current = current.BaseType)
         {
             var name = current.OriginalDefinition.ToDisplayString();
-            if (baseTypes.Any(baseType => TypeMatches(name, baseType)))
+            if (baseTypes.Any(baseType => RuleTypeMatcher.MatchesDisplayName(name, baseType)))
             {
                 return true;
             }
         }
 
         return false;
-    }
-
-    private static bool TypeMatches(string actualType, string ruleType)
-    {
-        return string.Equals(actualType, ruleType, StringComparison.Ordinal)
-            || actualType.StartsWith($"{ruleType}<", StringComparison.Ordinal)
-            || actualType.EndsWith($".{ruleType}", StringComparison.Ordinal)
-            || actualType.Contains($".{ruleType}<", StringComparison.Ordinal);
     }
 
     private static bool IsOverride(MethodDeclarationSyntax method, SemanticModel semanticModel)
