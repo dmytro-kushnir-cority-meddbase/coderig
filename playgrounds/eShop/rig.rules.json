@@ -1,0 +1,116 @@
+{
+  "effects": [
+    {
+      "provider": "redis",
+      "operation": "read",
+      "methods": ["StringGetLeaseAsync"],
+      "receiverTypes": ["StackExchange.Redis.IDatabase"],
+      "declaringTypes": [],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "redis_lease_read"
+    },
+    {
+      "provider": "redis",
+      "operation": "write",
+      "methods": ["StringSetAsync", "KeyDeleteAsync"],
+      "receiverTypes": ["StackExchange.Redis.IDatabase"],
+      "declaringTypes": [],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "redis_write"
+    },
+    {
+      "provider": "eventbus",
+      "operation": "publish",
+      "methods": ["PublishAsync"],
+      "receiverTypes": ["eShop.EventBus.Abstractions.IEventBus"],
+      "declaringTypes": [],
+      "resource": "argument_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "rabbitmq_publish"
+    },
+    {
+      "provider": "grpc_basket",
+      "operation": "read",
+      "methods": ["GetBasketAsync"],
+      "receiverTypes": ["Basket.BasketClient"],
+      "declaringTypes": [],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "grpc_basket_read"
+    },
+    {
+      "provider": "grpc_basket",
+      "operation": "write",
+      "methods": ["UpdateBasketAsync", "DeleteBasketAsync"],
+      "receiverTypes": ["Basket.BasketClient"],
+      "declaringTypes": [],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "grpc_basket_write"
+    },
+    {
+      "provider": "npgsql",
+      "operation": "read",
+      "methods": ["ExecuteReaderAsync"],
+      "receiverTypes": ["Npgsql.NpgsqlCommand"],
+      "declaringTypes": [],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "npgsql_raw_read"
+    },
+    {
+      "provider": "efcore",
+      "operation": "read",
+      "methods": ["FindAsync"],
+      "receiverTypes": ["Microsoft.EntityFrameworkCore.DbSet"],
+      "declaringTypes": [],
+      "resource": "ef_dbset_receiver",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "efcore_find_by_key"
+    },
+    {
+      "provider": "ai_embeddings",
+      "operation": "read",
+      "methods": ["GenerateAsync"],
+      "receiverTypes": ["Microsoft.Extensions.AI.IEmbeddingGenerator"],
+      "declaringTypes": [],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "embedding_generation"
+    },
+    {
+      "provider": "ai_embeddings",
+      "operation": "read",
+      "methods": ["GenerateVectorAsync", "GenerateAndZipAsync"],
+      "receiverTypes": [],
+      "declaringTypes": ["EmbeddingGeneratorExtensions"],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "embedding_generation_extension"
+    }
+  ],
+  "projects": {
+    "exclude": [
+      "*.UnitTests",
+      "*.FunctionalTests",
+      "*.AppHost",
+      "*.ServiceDefaults",
+      "ClientApp*",
+      "HybridApp*",
+      "WebApp",
+      "WebAppComponents",
+      "WebhookClient"
+    ]
+  }
+}
