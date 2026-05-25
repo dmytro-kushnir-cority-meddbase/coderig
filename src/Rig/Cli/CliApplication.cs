@@ -2,6 +2,7 @@ using Rig.Analysis;
 using Rig.Cli.Rendering;
 using Rig.Storage;
 using Rig.Storage.Queries;
+using System.Reflection;
 
 namespace Rig.Cli;
 
@@ -22,7 +23,7 @@ public static class CliApplication
 
         if (IsVersion(args[0]))
         {
-            output.WriteLine("rig 0.0.0");
+            output.WriteLine($"rig {GetVersion()}");
             return 0;
         }
 
@@ -49,6 +50,15 @@ public static class CliApplication
     private static bool IsVersion(string arg)
     {
         return arg is "--version" or "-v" or "version";
+    }
+
+    private static string GetVersion()
+    {
+        return typeof(CliApplication).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion
+            ?? typeof(CliApplication).Assembly.GetName().Version?.ToString()
+            ?? "unknown";
     }
 
     private static void WriteCommandSummary(TextWriter output)

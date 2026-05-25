@@ -255,6 +255,7 @@ Notes:
 
 - `VisitMethod` already uses a `visited` HashSet to prevent infinite loops but does not report cycles.
 - use `/p:UseSharedCompilation=false` while compiler-server timeouts remain possible.
+- Parked metadata idea: persist the `rig` tool/package version with each run so future DB reads can explain which analyzer version produced a run.
 
 Use this template when starting one:
 
