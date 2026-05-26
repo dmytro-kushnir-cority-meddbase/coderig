@@ -9,17 +9,17 @@ internal static class EffectExtractor
     {
         foreach (var invocation in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
-            if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
+            if (!TryGetMemberInvocation(invocation, out var memberName, out var receiverExpression))
             {
                 continue;
             }
 
             var methodSymbol = RoslynSymbolHelpers.ResolveMethodSymbol(invocation, source.SemanticModel);
-            var methodName = methodSymbol?.Name ?? memberAccess.Name.Identifier.ValueText;
+            var methodName = methodSymbol?.Name ?? memberName;
             var line = RoslynSymbolHelpers.GetLine(source.Tree, invocation);
             var candidate = new InvocationEffectCandidate(
                 invocation,
-                memberAccess,
+                receiverExpression,
                 methodSymbol,
                 methodName,
                 source.SemanticModel.GetEnclosingSymbol(invocation.SpanStart) as IMethodSymbol,
@@ -27,7 +27,7 @@ internal static class EffectExtractor
 
             foreach (var rule in rules.Effects.Where(rule => !rule.TreatAsDispatch && Matches(rule, candidate)))
             {
-                var effect = TryCreateEffect(rule, methodName, invocation, memberAccess, source.FilePath, line, source.SemanticModel);
+                var effect = TryCreateEffect(rule, methodName, invocation, receiverExpression, source.FilePath, line, source.SemanticModel);
                 if (effect is not null)
                 {
                     yield return EffectObservationExtractor.AttachObservations(invocation, effect, source.SemanticModel);
@@ -58,7 +58,7 @@ internal static class EffectExtractor
             return true;
         }
 
-        var receiverType = candidate.SemanticModel.GetTypeInfo(candidate.MemberAccess.Expression).Type;
+        var receiverType = candidate.SemanticModel.GetTypeInfo(candidate.ReceiverExpression).Type;
         return MatchesOptionalTypes(rule.ReceiverTypes, receiverType);
     }
 
@@ -109,7 +109,7 @@ internal static class EffectExtractor
         EffectRule rule,
         string methodName,
         InvocationExpressionSyntax invocation,
-        MemberAccessExpressionSyntax memberAccess,
+        ExpressionSyntax receiverExpression,
         string sourceFile,
         int line,
         SemanticModel semanticModel)
@@ -118,11 +118,11 @@ internal static class EffectExtractor
         {
             "http_argument" => TryGetStringArgument(invocation) is { } url ? NormalizeHttpResource(url) : null,
             "string_argument" => TryGetStringArgument(invocation),
-            "ef_dbset_receiver" => TryGetDbSetResource(memberAccess.Expression, semanticModel),
-            "ef_query_root" => TryGetDbSetResource(FindRootReceiver(memberAccess.Expression), semanticModel),
-            "ef_context_receiver" => TryGetContextResource(memberAccess.Expression, semanticModel),
-            "ef_database_facade" => TryGetDatabaseFacadeResource(memberAccess.Expression, semanticModel),
-            "receiver_type" => TryGetReceiverTypeResource(memberAccess.Expression, semanticModel),
+            "ef_dbset_receiver" => TryGetDbSetResource(receiverExpression, semanticModel),
+            "ef_query_root" => TryGetDbSetResource(FindRootReceiver(receiverExpression), semanticModel),
+            "ef_context_receiver" => TryGetContextResource(receiverExpression, semanticModel),
+            "ef_database_facade" => TryGetDatabaseFacadeResource(receiverExpression, semanticModel),
+            "receiver_type" => TryGetReceiverTypeResource(receiverExpression, semanticModel),
             "argument_type" => TryGetArgumentTypeResource(invocation, semanticModel),
             _ => null
         };
@@ -276,9 +276,34 @@ internal static class EffectExtractor
             : semanticModel.GetTypeInfo(argument).Type?.OriginalDefinition.ToDisplayString() ?? argument.ToString();
     }
 
+    private static bool TryGetMemberInvocation(
+        InvocationExpressionSyntax invocation,
+        out string methodName,
+        out ExpressionSyntax receiverExpression)
+    {
+        if (invocation.Expression is MemberAccessExpressionSyntax memberAccess)
+        {
+            methodName = memberAccess.Name.Identifier.ValueText;
+            receiverExpression = memberAccess.Expression;
+            return true;
+        }
+
+        if (invocation.Expression is MemberBindingExpressionSyntax memberBinding &&
+            invocation.Parent is ConditionalAccessExpressionSyntax conditionalAccess)
+        {
+            methodName = memberBinding.Name.Identifier.ValueText;
+            receiverExpression = conditionalAccess.Expression;
+            return true;
+        }
+
+        methodName = "";
+        receiverExpression = invocation;
+        return false;
+    }
+
     private sealed record InvocationEffectCandidate(
         InvocationExpressionSyntax Invocation,
-        MemberAccessExpressionSyntax MemberAccess,
+        ExpressionSyntax ReceiverExpression,
         IMethodSymbol? MethodSymbol,
         string MethodName,
         IMethodSymbol? ContainingMethodSymbol,

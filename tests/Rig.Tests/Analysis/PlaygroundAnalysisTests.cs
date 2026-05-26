@@ -227,6 +227,16 @@ public sealed class PlaygroundAnalysisTests
             .Single(graph => graph.EntryPoint.Contains("GracePeriodManagerService.ExecuteAsync", StringComparison.Ordinal));
         gracePeriodGraph.Nodes.ShouldContain(node =>
             node.Effects.Any(effect => effect.Provider == "eventbus" && effect.Operation == "publish"));
+        gracePeriodGraph.Nodes.ShouldContain(node =>
+            node.Effects.Any(effect => effect.Provider == "rabbitmq" && effect.Operation == "channel_open"));
+        gracePeriodGraph.Nodes.ShouldContain(node =>
+            node.Effects.Any(effect => effect.Provider == "rabbitmq" && effect.Operation == "declare_exchange"));
+        gracePeriodGraph.Nodes.ShouldContain(node =>
+            node.Effects.Any(effect => effect.Provider == "db_connection" && effect.Operation == "open"));
+        gracePeriodGraph.Nodes.ShouldContain(node =>
+            node.Effects.Any(effect => effect.Provider == "db_reader" && effect.Operation == "row_read"));
+        gracePeriodGraph.Nodes.ShouldContain(node =>
+            node.Effects.Any(effect => effect.Provider == "resilience" && effect.Operation == "execute"));
 
         var paymentHandlerGraphs = result.CallGraphs
             .Where(graph => graph.EntryPoint.Contains("OrderStatusChangedToStockConfirmedIntegrationEventHandler.Handle", StringComparison.Ordinal))

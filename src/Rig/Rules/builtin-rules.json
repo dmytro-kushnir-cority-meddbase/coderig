@@ -523,6 +523,79 @@
       "reason": "rabbitmq_basic_publish"
     },
     {
+      "provider": "rabbitmq",
+      "operation": "declare_exchange",
+      "methods": [
+        "ExchangeDeclareAsync"
+      ],
+      "receiverTypes": [
+        "RabbitMQ.Client.IChannel"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "rabbitmq_exchange_declare"
+    },
+    {
+      "provider": "rabbitmq",
+      "operation": "channel_open",
+      "methods": [
+        "CreateChannelAsync"
+      ],
+      "receiverTypes": [
+        "RabbitMQ.Client.IConnection"
+      ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "rabbitmq_channel_open"
+    },
+    {
+      "provider": "db_connection",
+      "operation": "open",
+      "methods": [
+        "Open",
+        "OpenAsync"
+      ],
+      "receiverTypes": [
+        "System.Data.Common.DbConnection"
+      ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "db_connection_open"
+    },
+    {
+      "provider": "db_reader",
+      "operation": "row_read",
+      "methods": [
+        "Read",
+        "ReadAsync"
+      ],
+      "receiverTypes": [
+        "System.Data.Common.DbDataReader"
+      ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "db_reader_row_read"
+    },
+    {
+      "provider": "resilience",
+      "operation": "execute",
+      "methods": [
+        "Execute",
+        "ExecuteAsync"
+      ],
+      "receiverTypes": [
+        "Polly.ResiliencePipeline"
+      ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "resilience_pipeline_execute"
+    },
+    {
       "provider": "aws_s3",
       "operation": "write",
       "methods": [

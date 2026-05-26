@@ -81,10 +81,10 @@ is more important than shaving subprocess cost until measured workflows demand i
   YesSql IQuery terminators (FirstOrDefaultAsync/ListAsync), ExecuteQuery, SessionExtensions.GetAsync.
 - `playgrounds/eShop/eShop.slnx` — dotnet/eShop multi-service e-commerce sample.
   61 entry points (Basket.API gRPC, background/event handlers, Catalog.API MinAPI, Identity.API MVC, Ordering.API MinAPI, Webhooks.API MinAPI),
-  101 effects: EF Core (CatalogContext, OrderingContext, WebhooksContext), Redis (StringGetLeaseAsync,
+  109 effects: EF Core (CatalogContext, OrderingContext, WebhooksContext), Redis (StringGetLeaseAsync,
   StringSetAsync, KeyDeleteAsync), EventBus (RabbitMQ PublishAsync with argument_type resolution),
-  RabbitMQ concrete publish (`IChannel.BasicPublishAsync`), Npgsql raw SQL, AI embeddings
-  (GenerateAsync + GenerateVectorAsync extension method). Index in ~20s locally after restore.
+  RabbitMQ concrete publish/channel/exchange effects, DB connection/reader effects, resilience pipeline execution,
+  Npgsql raw SQL, AI embeddings (GenerateAsync + GenerateVectorAsync extension method). Index in ~20s locally after restore.
   Note: Basket.API gRPC entrypoints expose Redis read/write/delete paths; background/event-handler entrypoints expose OrderProcessor and PaymentProcessor RabbitMQ publish paths. WebApp/HybridApp/WebAppComponents excluded
   (Blazor SSR and MAUI — MSBuildWorkspace can't compile Razor/XAML codegen).
   MediatR dispatch in Ordering.API is not traversed (dynamic dispatch).

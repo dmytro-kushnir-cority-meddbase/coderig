@@ -105,7 +105,7 @@ Status: `in_progress`
 - [x] tree callgraph rendering with box-drawing characters
 - [x] `--focus` mode (backward BFS, effect-reachable nodes only)
 - [x] parallel compilation + MSBuild progress reporting for `rig index`
-- [x] eShop playground indexed (61 EPs, 101 effects: EF Core, Redis, EventBus, RabbitMQ, Npgsql, AI embeddings)
+- [x] eShop playground indexed (61 EPs, 109 effects: EF Core, Redis, EventBus, RabbitMQ, DB lifecycle/reader, Npgsql, resilience, AI embeddings)
 - [x] `GenerateVectorAsync` extension method rule for AI embeddings
 - [x] eShop TOCTOU/concurrency review: `read_before_commit` and `concurrency_handled` observations on `efcore commit` effects
 - [x] 5 IdentityServer read rules (IIdentityServerInteractionService, IDeviceFlowInteractionService, IClientStore, IClientStoreExtensions, IResourceStoreExtensions)
@@ -130,8 +130,9 @@ Status: `todo`
 Status: `verified`
 
 - Added built-in RabbitMQ publish classification for `RabbitMQ.Client.IChannel.BasicPublishAsync`.
+- Added high/medium boundary classifiers for RabbitMQ channel open, RabbitMQ exchange declare, DB connection open, DB reader row read, and resilience pipeline execution.
 - Trace/callgraph renderers now replace matching `BOUNDARY` lines with the detected `EFFECT` at the same invocation position, preserving source-order reading for effectful external calls.
-- Rebuilt local eShop index: 61 entrypoints, 101 effects.
+- Rebuilt local eShop index: 61 entrypoints, 109 effects.
 - Verification: `dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false`; `dotnet run --project src/Rig -- trace --contains GracePeriodManagerService.ExecuteAsync --paths`.
 
 ### Mini CI and local tool install
