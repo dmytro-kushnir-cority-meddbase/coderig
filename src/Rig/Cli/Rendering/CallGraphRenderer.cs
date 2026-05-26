@@ -98,7 +98,7 @@ internal static class CallGraphRenderer
         HashSet<string> visited,
         TextWriter output)
     {
-        output.WriteLine($"{linePrefix}{Path.GetFileName(node.FilePath)}:{node.Line}  {node.Symbol}");
+        output.WriteLine($"{linePrefix}{Path.GetFileName(node.FilePath)}:{node.Line}  {SymbolNameFormatter.Shorten(node.Symbol)}");
 
         if (!visited.Add(node.Symbol)) return;
 
@@ -106,7 +106,9 @@ internal static class CallGraphRenderer
             .Where(c => !focusMode || effectReachable is null || effectReachable.Contains(c))
             .ToList();
         IReadOnlyList<BoundaryCallInfo> boundaries = focusMode ? [] : node.BoundaryCalls;
-        var effects = node.Effects;
+        var effects = focusMode
+            ? node.Effects
+            : EffectRenderFormatter.GetUnmatchedEffects(boundaries, node.Effects);
 
         int total = calls.Count + boundaries.Count + effects.Count;
         int idx = 0;
@@ -121,13 +123,13 @@ internal static class CallGraphRenderer
             if (symbolToNode.TryGetValue(call, out var childNode))
             {
                 if (visited.Contains(call))
-                    output.WriteLine($"{branch}{Path.GetFileName(childNode.FilePath)}:{childNode.Line}  {childNode.Symbol}  [^]");
+                    output.WriteLine($"{branch}{Path.GetFileName(childNode.FilePath)}:{childNode.Line}  {SymbolNameFormatter.Shorten(childNode.Symbol)}  [^]");
                 else
                     RenderTreeNode(childNode, branch, nextChildren, symbolToNode, effectReachable, focusMode, visited, output);
             }
             else
             {
-                output.WriteLine($"{branch}CALL {call}");
+                output.WriteLine($"{branch}CALL {SymbolNameFormatter.Shorten(call)}");
             }
         }
 
@@ -136,7 +138,10 @@ internal static class CallGraphRenderer
             idx++;
             bool isLast = idx == total;
             var branch = childrenPrefix + (isLast ? "└─ " : "├─ ");
-            output.WriteLine($"{branch}BOUNDARY {boundary.Kind} {boundary.Method}");
+            var effect = EffectRenderFormatter.FindEffectForBoundary(boundary, node.Effects);
+            output.WriteLine(effect is null
+                ? $"{branch}BOUNDARY {boundary.Kind} {boundary.Method}"
+                : $"{branch}{EffectRenderFormatter.FormatEffect(effect)}");
         }
 
         foreach (var effect in effects)
@@ -144,9 +149,7 @@ internal static class CallGraphRenderer
             idx++;
             bool isLast = idx == total;
             var branch = childrenPrefix + (isLast ? "└─ " : "├─ ");
-            var obs = string.Join(" ", effect.Observations.Select(o => $"[{o.Type}:{o.Context}]"));
-            var obsStr = obs.Length > 0 ? $"  {obs}" : "";
-            output.WriteLine($"{branch}EFFECT {effect.Provider} {effect.Operation}  {effect.Method}  {effect.Resource}{obsStr}");
+            output.WriteLine($"{branch}{EffectRenderFormatter.FormatEffect(effect)}");
         }
     }
 

@@ -96,17 +96,21 @@ internal static class EntryPointExtractor
                 foreach (var method in typeDeclaration.Members.OfType<MethodDeclarationSyntax>())
                 {
                     var methodName = method.Identifier.ValueText;
-                    if (!rule.HandlerMethods.Contains(methodName, StringComparer.Ordinal) ||
+                    if (!MatchesHandlerMethod(rule, methodName) ||
+                        !MatchesHandlerParameterTypes(rule, method, source.SemanticModel) ||
                         (rule.RequireOverride && !IsOverride(method, source.SemanticModel)))
                     {
                         continue;
                     }
 
+                    var httpMethod = route?.HttpMethod ?? rule.DefaultMethod ?? "UNKNOWN";
+                    var routeText = route?.Route ?? $"{typeSymbol.ToDisplayString()}.{methodName}";
+
                     yield return new EntryPointInfo(
                         rule.Kind,
-                        route?.HttpMethod ?? "UNKNOWN",
-                        route?.Route ?? typeSymbol.ToDisplayString(),
-                        $"{rule.Kind} {route?.HttpMethod ?? "UNKNOWN"} {route?.Route ?? typeSymbol.ToDisplayString()}",
+                        httpMethod,
+                        routeText,
+                        $"{rule.Kind} {httpMethod} {routeText}",
                         source.FilePath,
                         RoslynSymbolHelpers.GetLine(source.Tree, method));
                 }
@@ -156,6 +160,20 @@ internal static class EntryPointExtractor
 
     private static bool HasBaseType(INamedTypeSymbol typeSymbol, IReadOnlyList<string> baseTypes)
     {
+        if (baseTypes.Contains("*", StringComparer.Ordinal))
+        {
+            return true;
+        }
+
+        foreach (var iface in typeSymbol.AllInterfaces)
+        {
+            var name = iface.OriginalDefinition.ToDisplayString();
+            if (baseTypes.Any(baseType => RuleTypeMatcher.MatchesDisplayName(name, baseType)))
+            {
+                return true;
+            }
+        }
+
         for (var current = typeSymbol.BaseType; current is not null; current = current.BaseType)
         {
             var name = current.OriginalDefinition.ToDisplayString();
@@ -176,6 +194,32 @@ internal static class EntryPointExtractor
         }
 
         return semanticModel.GetDeclaredSymbol(method)?.IsOverride == true;
+    }
+
+    private static bool MatchesHandlerMethod(ClassInheritanceEntryPointRule rule, string methodName)
+    {
+        return rule.HandlerMethods.Contains("*", StringComparer.Ordinal) ||
+            rule.HandlerMethods.Contains(methodName, StringComparer.Ordinal);
+    }
+
+    private static bool MatchesHandlerParameterTypes(
+        ClassInheritanceEntryPointRule rule,
+        MethodDeclarationSyntax method,
+        SemanticModel semanticModel)
+    {
+        if (rule.HandlerParameterTypes is null || rule.HandlerParameterTypes.Count == 0)
+        {
+            return true;
+        }
+
+        if (semanticModel.GetDeclaredSymbol(method) is not IMethodSymbol methodSymbol)
+        {
+            return false;
+        }
+
+        return rule.HandlerParameterTypes.All(expected =>
+            methodSymbol.Parameters.Any(parameter =>
+                RuleTypeMatcher.MatchesDisplayName(parameter.Type.OriginalDefinition.ToDisplayString(), expected)));
     }
 
     private static (string HttpMethod, string Route)? FindRoute(

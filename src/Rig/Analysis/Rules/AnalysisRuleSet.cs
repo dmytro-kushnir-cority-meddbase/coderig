@@ -167,7 +167,9 @@ internal sealed record ClassInheritanceEntryPointRule(
     IReadOnlyList<string> RouteProviderMethods,
     IReadOnlyList<RouteMethodRule> RouteMethods,
     IReadOnlyList<string> HandlerMethods,
-    bool RequireOverride);
+    bool RequireOverride,
+    string? DefaultMethod = null,
+    IReadOnlyList<string>? HandlerParameterTypes = null);
 
 internal sealed record RouteMethodRule(string Method, string HttpMethod);
 

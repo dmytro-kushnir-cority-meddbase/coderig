@@ -73,6 +73,15 @@ public sealed record CallGraphInfo(
     string EntryPoint,
     IReadOnlyList<CallGraphNodeInfo> Nodes);
 
+public sealed record TraceInfo(
+    string Symbol,
+    RunSummary Run,
+    IReadOnlyList<TraceCallGraphInfo> CallGraphs);
+
+public sealed record TraceCallGraphInfo(
+    int EntryPointIndex,
+    CallGraphInfo CallGraph);
+
 public sealed record CallGraphNodeInfo(
     string Symbol,
     string FilePath,

@@ -33,6 +33,72 @@ public static class Reads
             .ToArrayAsync(cancellationToken);
     }
 
+    public static async Task<RunSummary?> GetLatestRunSummaryAsync(RigDbContext context, CancellationToken cancellationToken = default)
+    {
+        if (!await context.Database.CanConnectAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        return await context.Runs
+            .OrderByDescending(run => run.CreatedAtUtcText)
+            .ThenByDescending(run => run.Id)
+            .Select(run => new RunSummary(
+                run.Id,
+                DateTimeOffset.Parse(run.CreatedAtUtcText),
+                run.SolutionPath,
+                run.EntryPointCount,
+                run.EffectCount,
+                run.DiRegistrationCount,
+                run.MethodObservationCount,
+                run.InvocationObservationCount))
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public static async Task<IReadOnlyList<string>?> FindCallGraphSymbolsAsync(
+        RigDbContext context,
+        string contains,
+        CancellationToken cancellationToken = default)
+    {
+        var runId = await GetLatestRunIdAsync(context, cancellationToken);
+        if (runId is null) return null;
+
+        return await context.CallGraphNodes
+            .Where(node => node.RunId == runId && node.Symbol.Contains(contains))
+            .Select(node => node.Symbol)
+            .Distinct()
+            .OrderBy(symbol => symbol)
+            .ToArrayAsync(cancellationToken);
+    }
+
+    public static async Task<TraceInfo?> LoadTraceAsync(
+        RigDbContext context,
+        string symbol,
+        CancellationToken cancellationToken = default)
+    {
+        var run = await GetLatestRunSummaryAsync(context, cancellationToken);
+        if (run is null) return null;
+
+        var graphIndexes = await context.CallGraphNodes
+            .Where(node => node.RunId == run.Id && node.Symbol == symbol)
+            .Select(node => node.GraphIndex)
+            .Distinct()
+            .OrderBy(graphIndex => graphIndex)
+            .ToArrayAsync(cancellationToken);
+
+        var graphs = new List<TraceCallGraphInfo>(graphIndexes.Length);
+        foreach (var graphIndex in graphIndexes)
+        {
+            var graph = await LoadCallGraphAsync(context, run.Id, graphIndex, cancellationToken);
+            if (graph is not null)
+            {
+                graphs.Add(new TraceCallGraphInfo(graphIndex, graph));
+            }
+        }
+
+        return new TraceInfo(symbol, run, graphs);
+    }
+
     public static async Task<IReadOnlyList<EffectInfo>?> LoadEffectsAsync(RigDbContext context, CancellationToken cancellationToken = default)
     {
         var runId = await GetLatestRunIdAsync(context, cancellationToken);

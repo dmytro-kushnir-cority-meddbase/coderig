@@ -27,7 +27,8 @@ public sealed class CallGraphRendererTests
 
         output.ShouldContain("Callgraph: [3] minapi GET /teams (full)");
         output.ShouldContain("Nodes: 3");
-        output.ShouldContain("BOUNDARY external HttpClient.GetStringAsync");
+        output.ShouldContain("EFFECT http GET  GetStringAsync  billing.example/invoices/{teamId}");
+        output.ShouldNotContain("BOUNDARY external HttpClient.GetStringAsync");
         output.ShouldContain("Telemetry.Track");
     }
 
@@ -37,7 +38,7 @@ public sealed class CallGraphRendererTests
         var output = Render(fullMode: false, summaryMode: true);
 
         output.ShouldContain("Summary: [3] minapi GET /teams");
-        output.ShouldContain("Nodes: 3  Effects: 2");
+        output.ShouldContain("Nodes: 3  Effects: 3");
         output.ShouldContain("efcore");
         output.ShouldContain("[x2]");
     }
@@ -62,6 +63,17 @@ public sealed class CallGraphRendererTests
             "compilation+profile",
             "ef_read",
             []);
+        var boundaryEffect = new EffectInfo(
+            "http",
+            "GET",
+            "billing.example/invoices/{teamId}",
+            "GetStringAsync",
+            @"C:\repo\Controller.cs",
+            11,
+            "high",
+            "compilation+profile",
+            "httpclient_method_match",
+            []);
 
         return new CallGraphInfo(
             "minapi GET /teams",
@@ -75,7 +87,7 @@ public sealed class CallGraphRendererTests
                     "entry",
                     ["Repository.Load", "Telemetry.Track"],
                     [new BoundaryCallInfo("external", "System.Net.Http.HttpClient.GetStringAsync", "HttpClient.GetStringAsync", @"C:\repo\Controller.cs", 11, "high", "compilation", "external_symbol")],
-                    []),
+                    [boundaryEffect]),
                 new CallGraphNodeInfo(
                     "Repository.Load",
                     @"C:\repo\Repository.cs",

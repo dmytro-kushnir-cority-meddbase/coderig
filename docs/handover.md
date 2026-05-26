@@ -1,6 +1,6 @@
 # Handover
 
-Current handover after eShop playground, parallel index progress reporting, and minAPI method-ref fix.
+Current handover after background/event-handler entrypoints, gRPC entrypoint detection, reverse symbol trace, classified effectful boundaries, eShop playground, parallel index progress reporting, and minAPI method-ref fix.
 
 ## Current State
 
@@ -21,10 +21,13 @@ dotnet publish src/Rig/Rig.csproj -c Release -r win-x64 --self-contained -o .rig
 Working commands:
 
 ```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\mini-ci.ps1
 .\.rig-bin\Rig.exe index playgrounds/EntryPointEffects/EntryPointEffects.slnx
 .\.rig-bin\Rig.exe runs
 .\.rig-bin\Rig.exe entrypoints
 .\.rig-bin\Rig.exe effects [--entrypoint <index>]
+.\.rig-bin\Rig.exe trace <symbol> [--paths]
+.\.rig-bin\Rig.exe trace --contains <text> [--paths]
 .\.rig-bin\Rig.exe callgraph <index> [--focus]
 .\.rig-bin\Rig.exe di
 .\.rig-bin\Rig.exe files --skipped
@@ -62,6 +65,8 @@ version pulled in by Roslyn; TODO in `Rig.Storage.csproj`.
 **MCP opportunity**: ~350ms per CLI call is fine for humans but too slow for agentic loops.
 An MCP server would open `RigDbContext` once and serve `Reads.cs` queries in <5ms.
 `ModelContextProtocol` NuGet package (Microsoft) is the SDK.
+This is intentionally deferred for now: avoiding live state and cache invalidation
+is more important than shaving subprocess cost until measured workflows demand it.
 
 ## Playgrounds
 
@@ -75,11 +80,12 @@ An MCP server would open `RigDbContext` once and serve `Reads.cs` queries in <5m
   IShellSettingsManager, IDeploymentTargetHandler, IDisplayManager,
   YesSql IQuery terminators (FirstOrDefaultAsync/ListAsync), ExecuteQuery, SessionExtensions.GetAsync.
 - `playgrounds/eShop/eShop.slnx` — dotnet/eShop multi-service e-commerce sample.
-  41 entry points (Catalog.API MinAPI, Identity.API MVC, Ordering.API MinAPI, Webhooks.API MinAPI),
-  56 effects: EF Core (CatalogContext, OrderingContext, WebhooksContext), Redis (StringGetLeaseAsync,
+  61 entry points (Basket.API gRPC, background/event handlers, Catalog.API MinAPI, Identity.API MVC, Ordering.API MinAPI, Webhooks.API MinAPI),
+  101 effects: EF Core (CatalogContext, OrderingContext, WebhooksContext), Redis (StringGetLeaseAsync,
   StringSetAsync, KeyDeleteAsync), EventBus (RabbitMQ PublishAsync with argument_type resolution),
-  Npgsql raw SQL, AI embeddings (GenerateAsync + GenerateVectorAsync extension method). Index in ~2 min.
-  Note: Basket.API has no HTTP entry points (gRPC only); WebApp/HybridApp/WebAppComponents excluded
+  RabbitMQ concrete publish (`IChannel.BasicPublishAsync`), Npgsql raw SQL, AI embeddings
+  (GenerateAsync + GenerateVectorAsync extension method). Index in ~20s locally after restore.
+  Note: Basket.API gRPC entrypoints expose Redis read/write/delete paths; background/event-handler entrypoints expose OrderProcessor and PaymentProcessor RabbitMQ publish paths. WebApp/HybridApp/WebAppComponents excluded
   (Blazor SSR and MAUI — MSBuildWorkspace can't compile Razor/XAML codegen).
   MediatR dispatch in Ordering.API is not traversed (dynamic dispatch).
 CleanArchitecture is no longer vendored in this repo or used as a unit/integration
@@ -102,6 +108,24 @@ Already-visited nodes (cycles) print with `[^]` and are not expanded again.
 Drops all BOUNDARY lines; CALL edges trimmed to reachable targets only.
 Header shows `(focused)` and `Nodes: X / Y on effect paths`.
 
+## Reverse Trace
+
+`rig trace <symbol>` lists entrypoints whose persisted callgraph reaches the
+target symbol. `rig trace --contains <text>` resolves a unique callgraph symbol
+substring first and errors on ambiguous matches. `--paths` prints upstream paths
+from entrypoint roots to the target and downstream calls, boundaries, and effects
+from the target.
+
+Trace derives reverse edges in memory from `callgraph_node_calls`; no reverse
+edge table or transitive reachability cache is persisted. Complexity is `O(N+E)`
+over loaded matching graphs. See `docs/sqlite-persistence-notes.md`.
+Callgraph node symbols and node-call targets store full Roslyn method keys when
+available; CLI visuals shorten those keys at render time.
+
+Effectful external boundary calls render in source position as `EFFECT` when a
+boundary and effect share the same file/line/method. Unmatched external calls
+still render as `BOUNDARY` in full trace/callgraph views.
+
 ## Important Caveats
 
 - Callgraph traversal uses single-impl DI dispatch (1 concrete registration → resolves to it).
@@ -113,10 +137,11 @@ Header shows `(focused)` and `Nodes: X / Y on effect paths`.
 
 ## Recommended Next Slice
 
-**MCP server** — wrap `Reads.cs` queries behind MCP tools.
-Tools: `rig_effects`, `rig_entrypoints`, `rig_callgraph`, `rig_di`, `rig_files`.
-Server starts once, opens `RigDbContext`, drops per-call cost to <5ms.
-Unblocks agent-driven analysis (Copilot, Claude) without subprocess overhead.
+**Trace ergonomics from random code locations** — map `file:line` to the
+containing indexed method symbol, then route it through `rig trace`.
+This needs method declaration start/end lines or equivalent span metadata in
+method observations. Keep the answer tied to the latest completed run; do not
+rebuild or inspect live source behind the user's back.
 
 Other candidates:
 - **Cycle detection** — annotate back-edges in callgraph traversal and expose in CLI.
@@ -143,6 +168,7 @@ Other candidates:
 - `src/Rig.Storage/RigDbContext.cs`
 - `src/Rig.Storage/Queries/Reads.cs`
 - `src/Rig.Storage/Queries/Writes.cs`
+- `scripts/mini-ci.ps1`
 - `playgrounds/EntryPointEffects/EntryPointEffects.slnx`
 - `playgrounds/EntryPointEffects/rig.rules.json`
 - `tests/Rig.Tests/Analysis/PlaygroundAnalysisTests.cs`
@@ -158,158 +184,9 @@ dotnet run --project src/Rig -- index playgrounds/EntryPointEffects/EntryPointEf
 dotnet run --project src/Rig -- runs
 dotnet run --project src/Rig -- entrypoints
 dotnet run --project src/Rig -- effects
+dotnet run --project src/Rig -- trace --contains TeamWorkflow.LoadTeamSummaryAsync --paths
+dotnet run --project src/Rig -- trace --contains RedisBasketRepository.GetBasketAsync --paths
+dotnet run --project src/Rig -- trace --contains GracePeriodManagerService.ExecuteAsync --paths
 dotnet run --project src/Rig -- files --skipped
 dotnet run --project src/Rig -- callgraph "minapi GET /minapi/teams/{id}"
 ```
-
-The playground at `playgrounds/EntryPointEffects` builds and includes:
-
-- Minimal API entrypoints
-- MVC controller entrypoints
-- a config-driven class-inheritance entrypoint fixture matching a
-  `FastEndpoints.Endpoint<TRequest,TResponse>`-style base type
-- HttpClient effects
-- EF Core read, pending write, and commit effects
-- Redis read/write effects
-- `foreach` looped effect observation
-- `Task.WhenAll` parallel fanout observation
-
-Roslyn-backed tests copy this playground to a fresh temp directory before
-restore/analyze. Keep that pattern for integration coverage so MSBuild `obj/bin`
-outputs and `.rig` databases do not contend on shared repo paths. The playground
-has local `Directory.Packages.props` and `NuGet.config` files so it can restore
-without depending on repo-root package management or user-level NuGet sources.
-
-The analyzer currently emits:
-
-- entrypoints
-- effects
-- effect observations
-- source file inventory with indexed/skipped classifications
-- DI registration facts
-- method observations backed by Roslyn symbols
-- invocation observations backed by Roslyn symbols
-- shallow application callgraphs with inline effects, direct symbol edges,
-  external boundaries, and unresolved boundaries
-
-Persistence now writes immutable runs to `.rig/rig.db` through EF Core/SQLite.
-The store keeps the full `AnalysisResult` projection as JSON for stable CLI
-reads and also writes queryable tables for source files, entrypoints, effects,
-effect observations, DI registrations, method observations, invocation
-observations, callgraphs, callgraph nodes, node calls, and boundary calls.
-Source file rows include status, confidence, basis, reason, and evidence.
-
-Current built-in detection rules live in `src/Rig/Rules/builtin-rules.json`.
-That file externalizes the implemented Minimal API entrypoint rules, MVC HTTP
-attribute rules, generic class-inheritance entrypoint rules, HTTP/EF Core/Redis
-effect rules, DI registration rules, and built-in file rules. The
-class-inheritance rule path is generic C#: rules provide base types, route
-provider methods, route-builder methods, handler method names, and whether the
-handler must be an override. The built-in FastEndpoints rule is now just JSON
-data. Effect rules can also carry declaring-type filters, which avoids
-method-name-only matches such as treating `MimeMessage.To.Add` as an EF Core
-pending write. Effect predicates compose with `AND`: every optional predicate
-present on the rule must match; `OR` is represented as parallel rules with the
-same output shape. `rig.rules.json` beside the solution can extend entrypoint,
-effect, DI, and file rules; the playground currently uses it to exclude a
-generated fixture.
-
-`SolutionAnalyzer` is now orchestration only. The old 1,135-line file was split
-into focused components:
-
-- `Analysis/Inventory/SolutionSourceLoader.cs`
-- `Analysis/Rules/AnalysisRuleSet.cs`
-- `Analysis/Extraction/EntryPointExtractor.cs`
-- `Analysis/Extraction/EffectExtractor.cs`
-- `Analysis/Extraction/EffectObservationExtractor.cs`
-- `Analysis/Extraction/DiRegistrationExtractor.cs`
-- `Analysis/Extraction/RoslynObservationExtractor.cs`
-- `Analysis/CallGraph/CallGraphBuilder.cs`
-- `Analysis/CallGraph/CallGraphIndexes.cs`
-- `Analysis/Rules/RuleTypeMatcher.cs`
-- `Analysis/RoslynSymbolHelpers.cs`
-- `Analysis/RoslynAnalysisModels.cs`
-
-## Verification
-
-Last verified with:
-
-```text
-dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false
-dotnet build RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false -warnaserror
-dotnet run --project src/Rig -- index playgrounds/EntryPointEffects/EntryPointEffects.slnx
-dotnet run --project src/Rig -- runs
-dotnet run --project src/Rig -- callgraph "minapi GET /minapi/teams/{id}"
-```
-
-Dead-code scan after the refactor found no stale moved helper methods or
-duplicate private model types.
-
-The `/p:UseSharedCompilation=false` flag avoids intermittent compiler-server
-timeouts observed during this slice.
-
-## Important Caveats
-
-This is still a prototype, but solution loading and local call resolution now
-use Roslyn/MSBuild workspace compilations and `SemanticModel` symbol lookup.
-
-Current callgraph resolution is intentionally shallow:
-
-- Minimal API inline lambdas are traversed directly from the endpoint handler.
-- MVC actions are matched by file and start line, then traversed by symbol.
-- Direct calls to in-solution methods resolve by Roslyn method symbols.
-- External and unresolved calls are now explicit boundary calls on callgraph
-  nodes.
-- MS DI registration facts are emitted, but callgraph traversal does not yet use
-  them to resolve interface/service calls.
-- Constructor injection resolution, interfaces, cycles, and richer dynamic
-  dispatch modeling are not fully implemented yet.
-
-See `docs/sqlite-persistence-notes.md` for the current decision on not storing
-the full AST as the primary index. Short version: persist compact
-symbol/reference observations first; keep full AST dumps as possible future
-diagnostic artifacts.
-
-Profiles are not implemented yet. Current detection is rule-driven where
-implemented, and solution-local `rig.rules.json` can extend those rule lists.
-
-## Recommended Next Slice
-
-Expand generic rule coverage, then use emitted MS DI registration facts for
-constructor/interface callgraph resolution.
-
-Suggested contract:
-
-- support additional handler methods such as FastEndpoints `HandleAsync` through
-  JSON only
-- add optional type/namespace receiver filters for DI registration rules
-- expose class-inheritance rule docs/examples for solution-local `rig.rules.json`
-- map constructor-injected fields/properties back to DI facts
-- resolve interface/service calls to implementation calls where DI facts are
-  exact
-- label DI-derived edges with confidence, basis, reason, and evidence
-- preserve current CLI output
-
-After that, add `rig di` or a general facts query surface so DI facts are
-visible without inspecting JSON/SQLite.
-
-## Useful Files
-
-- `docs/mvp-spec.md`
-- `docs/ubiquitous-language.md`
-- `docs/progress.md`
-- `docs/sqlite-persistence-notes.md`
-- `src/Rig/Rules/builtin-rules.json`
-- `src/Rig/Analysis/SolutionAnalyzer.cs`
-- `src/Rig/Analysis/AnalysisResult.cs`
-- `src/Rig/Analysis/CallGraph/CallGraphBuilder.cs`
-- `src/Rig/Analysis/Extraction/`
-- `src/Rig/Analysis/Inventory/SolutionSourceLoader.cs`
-- `src/Rig/Analysis/Rules/AnalysisRuleSet.cs`
-- `src/Rig/Cli/CliApplication.cs`
-- `src/Rig/Cli/RunStore.cs`
-- `src/Rig/Storage/RigDbContext.cs`
-- `playgrounds/EntryPointEffects/EntryPointEffects.slnx`
-- `playgrounds/EntryPointEffects/rig.rules.json`
-- `tests/Rig.Tests/Analysis/PlaygroundAnalysisTests.cs`
-- `tests/Rig.Tests/Cli/CliApplicationTests.cs`

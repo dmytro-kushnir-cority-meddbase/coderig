@@ -57,6 +57,52 @@ show callees: containing method -> invocation targets
 Raw AST persistence can still be useful later as an opt-in diagnostic artifact
 for extractor debugging, but it should not be the main product index.
 
+## Reverse Trace Queries
+
+`rig trace` answers "which entrypoints reach this method symbol?" from the
+persisted forward callgraph rows. It does not store reverse edges or transitive
+reachability as separate state.
+
+Callgraph node symbols and node-call targets store canonical Roslyn method keys
+where a method symbol exists. Human-readable CLI output derives short names from
+those keys at render time, so the database remains the symbol lookup surface.
+
+Current query model:
+
+```text
+callgraph_nodes       graph_index + node_index + symbol
+callgraph_node_calls  graph_index + node_index + target_symbol
+```
+
+Trace execution:
+
+```text
+1. find graph indexes whose nodes contain the target symbol
+2. load only those graph rows
+3. build reverse edges in memory for this command invocation
+4. walk target -> roots for upstream paths
+5. walk target -> leaves/boundaries/effects for downstream context
+```
+
+Complexity for a trace over matching graphs is `O(N + E)` time and memory, where
+`N` is loaded callgraph nodes and `E` is loaded call edges. The first filter is
+indexed by `(run_id, symbol)` on `callgraph_nodes`, so non-matching entrypoints
+are not loaded.
+
+Do not add a materialized reverse graph or transitive closure yet. Reconsider
+only after measurement shows repeated trace queries over large graphs dominate
+runtime. Candidate future indexes:
+
+```text
+callgraph_reverse_edges(run_id, graph_index, target_symbol, caller_symbol)
+entrypoint_reaches_symbol(run_id, graph_index, symbol)
+```
+
+`callgraph_reverse_edges` is low-risk but mostly duplicates forward edges.
+`entrypoint_reaches_symbol` is a true reachability cache: faster for lookup, but
+larger and easier to make stale or inconsistent with callgraph semantics. Treat
+it as a measured optimization, not a default schema shape.
+
 ## File-Based Rules
 
 File rules need source inventory before they need complex rule evaluation.
@@ -130,3 +176,9 @@ Implemented boundary call rows:
 
 This belongs next to invocation observations because the evidence is the same
 callsite, just classified differently.
+
+When an external boundary call also matches an effect rule, the stored facts
+remain separate: boundary rows preserve the structural call edge and effect rows
+preserve provider/operation/resource classification. CLI renderers join them at
+projection time by file/line/method and print the `EFFECT` in the boundary's
+source-order position, suppressing the duplicate boundary line.

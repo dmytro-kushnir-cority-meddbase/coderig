@@ -92,7 +92,7 @@ internal static class CallGraphBuilder
         {
             var calls = ResolveCalls(method.Body, method.SemanticModel, context);
             var reason = entryPoint.Kind == "mvc" ? "mvc_action_symbol" : "handler_method_symbol";
-            return (CreateNode(entryPoint.DisplayName, entryPoint.FilePath, entryPoint.Line, calls, method.Effects, "high", "compilation", reason), calls.Application);
+            return (CreateNode(method.Key, entryPoint.FilePath, entryPoint.Line, calls, method.Effects, "high", "compilation", reason), calls.Application);
         }
 
         var source = sources.First(source => string.Equals(source.FilePath, entryPoint.FilePath, StringComparison.OrdinalIgnoreCase));
@@ -151,7 +151,7 @@ internal static class CallGraphBuilder
         var key = RoslynSymbolHelpers.GetMethodKey(methodSymbol);
         var handlerLine = RoslynSymbolHelpers.GetCallNameLine(semanticModel.SyntaxTree, handler);
         return context.Methods.TryGetValue(key, out var method)
-            ? new ResolvedCallSet([new ResolvedCall(key, method.Symbol, handlerLine)], [])
+            ? new ResolvedCallSet([new ResolvedCall(key, handlerLine)], [])
             : new ResolvedCallSet([], [CreateExternalBoundaryCall(handler, semanticModel, methodSymbol)]);
     }
 
@@ -167,7 +167,7 @@ internal static class CallGraphBuilder
         }
 
         var calls = ResolveCalls(method.Body, method.SemanticModel, context);
-        nodes.Add(CreateNode(method.Symbol, method.FilePath, method.Line, calls, method.Effects, "high", "compilation", "direct_symbol_match"));
+        nodes.Add(CreateNode(method.Key, method.FilePath, method.Line, calls, method.Effects, "high", "compilation", "direct_symbol_match"));
 
         foreach (var call in calls.Application)
         {
@@ -192,7 +192,7 @@ internal static class CallGraphBuilder
             confidence,
             basis,
             reason,
-            calls.Application.OrderBy(call => call.Line).Select(call => call.DisplayName).Distinct(StringComparer.Ordinal).ToArray(),
+            calls.Application.OrderBy(call => call.Line).Select(call => call.Key).Distinct(StringComparer.Ordinal).ToArray(),
             calls.Boundary.DistinctBy(call => $"{call.Kind}|{call.Target}|{call.Line}").OrderBy(call => call.Line).ToArray(),
             effects.OrderBy(e => e.Line).ToList());
     }
@@ -239,7 +239,7 @@ internal static class CallGraphBuilder
             {
                 if (!calls.Any(call => string.Equals(call.Key, key, StringComparison.Ordinal)))
                 {
-                    calls.Add(new ResolvedCall(key, method.Symbol, line));
+                    calls.Add(new ResolvedCall(key, line));
                 }
                 continue;
             }
@@ -311,7 +311,7 @@ internal static class CallGraphBuilder
             {
                 if (!calls.Any(c => string.Equals(c.Key, groupKey, StringComparison.Ordinal)))
                 {
-                    calls.Add(new ResolvedCall(groupKey, groupMethod.Symbol, groupLine));
+                    calls.Add(new ResolvedCall(groupKey, groupLine));
                 }
             }
 
@@ -342,7 +342,7 @@ internal static class CallGraphBuilder
 
         var resolved = handlerKeys
             .Where(hk => context.Methods.ContainsKey(hk))
-            .Select(hk => new ResolvedCall(hk, context.Methods[hk].Symbol))
+            .Select(hk => new ResolvedCall(hk))
             .ToArray();
 
         return resolved.Length > 0 ? resolved : null;
@@ -367,7 +367,7 @@ internal static class CallGraphBuilder
         var concreteMethodKey = interfaceMethodKey.Replace(interfaceTypeKey, concreteTypeKey, StringComparison.Ordinal);
 
         return context.Methods.TryGetValue(concreteMethodKey, out var method)
-            ? new ResolvedCall(concreteMethodKey, method.Symbol)
+            ? new ResolvedCall(concreteMethodKey)
             : null;
     }
 

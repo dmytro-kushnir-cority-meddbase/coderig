@@ -105,7 +105,7 @@ Status: `in_progress`
 - [x] tree callgraph rendering with box-drawing characters
 - [x] `--focus` mode (backward BFS, effect-reachable nodes only)
 - [x] parallel compilation + MSBuild progress reporting for `rig index`
-- [x] eShop playground indexed (41 EPs, 100 effects: EF Core, Redis, EventBus, Npgsql, AI embeddings)
+- [x] eShop playground indexed (61 EPs, 101 effects: EF Core, Redis, EventBus, RabbitMQ, Npgsql, AI embeddings)
 - [x] `GenerateVectorAsync` extension method rule for AI embeddings
 - [x] eShop TOCTOU/concurrency review: `read_before_commit` and `concurrency_handled` observations on `efcore commit` effects
 - [x] 5 IdentityServer read rules (IIdentityServerInteractionService, IDeviceFlowInteractionService, IClientStore, IClientStoreExtensions, IResourceStoreExtensions)
@@ -124,6 +124,55 @@ Status: `todo`
 - [ ] compact callgraph projections
 
 ## Completed Slices (recent)
+
+### Classified effectful boundaries
+
+Status: `verified`
+
+- Added built-in RabbitMQ publish classification for `RabbitMQ.Client.IChannel.BasicPublishAsync`.
+- Trace/callgraph renderers now replace matching `BOUNDARY` lines with the detected `EFFECT` at the same invocation position, preserving source-order reading for effectful external calls.
+- Rebuilt local eShop index: 61 entrypoints, 101 effects.
+- Verification: `dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false`; `dotnet run --project src/Rig -- trace --contains GracePeriodManagerService.ExecuteAsync --paths`.
+
+### Mini CI and local tool install
+
+Status: `verified`
+
+- Added `scripts/mini-ci.ps1` to restore, Release build with warnings as errors, run Release tests, pack `src/Rig` as a dotnet tool, and reinstall the global `rig` tool from `.rig-nupkg`.
+- Script generates a unique local prerelease tool version from `Rig.csproj` version plus timestamp to avoid stale NuGet cache when iterating locally.
+- Installed global tool: `rig 0.1.1-ci.20260526110212`.
+- Verification: `powershell -ExecutionPolicy Bypass -File .\scripts\mini-ci.ps1`; `powershell -ExecutionPolicy Bypass -File .\scripts\mini-ci.ps1 -SkipTests`.
+
+### Background worker and integration event entrypoints
+
+Status: `verified`
+
+- Added built-in `dotnet.backgroundservice.execute` rule for `BackgroundService.ExecuteAsync`.
+- Extended class-inheritance matching to implemented interfaces, then added `eshop.integration_event_handler` for `IIntegrationEventHandler<T>.Handle`.
+- eShop now indexes background/event-handler entrypoints including `GracePeriodManagerService.ExecuteAsync` and payment/order/webhook integration handlers.
+- Rebuilt local eShop index: 61 entrypoints, 100 effects before RabbitMQ concrete publish classification.
+- Verification: `dotnet build RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false -warnaserror`; `dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false`.
+
+### gRPC service entrypoint detection
+
+Status: `verified`
+
+- Extended class-inheritance entrypoint rules with wildcard handler methods, default method labels, and optional handler parameter type predicates.
+- Added built-in `dotnet.grpc.service` rule for override methods with `Grpc.Core.ServerCallContext`.
+- eShop Basket gRPC service methods now index as `grpc RPC` entrypoints and their callgraphs reach Redis effects.
+- Rebuilt local eShop index: 44 entrypoints, 100 effects.
+- Verification: `dotnet build RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false -warnaserror`; `dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false`.
+
+### Reverse symbol trace
+
+Status: `verified`
+
+- Added `rig trace <symbol> [--paths]` and `rig trace --contains <text> [--paths]`.
+- Default trace output lists entrypoints whose persisted callgraph contains the target symbol.
+- `--paths` builds reverse edges in memory per invocation, prints upstream paths to the target, then prints downstream calls, boundaries, and effects from the target.
+- No reverse graph or transitive reachability table was added; trace is derived from persisted forward callgraph rows.
+- Documented trace complexity and future indexing thresholds in `docs/sqlite-persistence-notes.md`.
+- Verification: `dotnet build RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false -warnaserror`; `dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false`.
 
 ### Focused fast test expansion
 
@@ -219,25 +268,22 @@ Status: `committed` (d35847d / 3e3fa13)
 
 ## Current Slice
 
-Slice: MCP server (in-process state preservation)
-Phase: 7+
+Slice: Trace ergonomics from random code locations
+Phase: 7
 Status: `todo`
 
 Contract:
 
-- wrap CLI read queries (`Reads.cs`) behind an MCP tool server.
-- server starts once, opens `RigDbContext`, serves tool calls in <10ms (no per-call EF startup).
-- tools: `rig_effects`, `rig_entrypoints`, `rig_callgraph`, `rig_di`, `rig_files`.
-- index (`rig index`) remains a separate CLI invocation that writes to DB; server picks up changes on next start or via a reload tool.
-- this unblocks agent-driven analysis workflows (Copilot, Claude, etc.) without subprocess overhead.
+- map `file:line` to containing indexed method symbol.
+- store method declaration start/end lines or equivalent span metadata.
+- route `rig trace --file <path> --line <line>` through the same trace query.
+- preserve snapshot semantics: answer from latest completed run only.
 
 Notes:
 
-- ~300-350ms per CLI call is acceptable for human use but too slow for agentic loops (10–50 calls/session).
-- in-memory state after first load would drop per-call cost to <5ms.
-- `ModelContextProtocol` NuGet package (Microsoft) provides the server SDK.
-- `EFPrecompileQueriesStage=never` conflict (see TODO in Rig.Storage.csproj) is a candidate for resolution
-  once Roslyn analysis is fully isolated to `src/Rig` (Rig.Storage now has no Roslyn dependency).
+- Current `rig trace` works when the target callgraph symbol is known, or can be uniquely found by `--contains`.
+- Existing method observations store declaration line only, not body span, so arbitrary cursor-line lookup needs new method span metadata.
+- MCP server work is deferred; avoiding live state and cache invalidation is intentional.
 
 ## Next Suggested Slice
 

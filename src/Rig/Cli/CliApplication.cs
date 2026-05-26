@@ -33,6 +33,7 @@ public static class CliApplication
             "runs" => await RunRunsAsync(output, workingDirectory),
             "entrypoints" => await RunEntryPointsAsync(output, error, workingDirectory),
             "effects" => await RunEffectsAsync(args, output, error, workingDirectory),
+            "trace" => await RunTraceAsync(args, output, error, workingDirectory),
             "callgraph" => await RunCallGraphAsync(args, output, error, workingDirectory),
             "callgraphs" => await RunCallGraphsAsync(args, output, error, workingDirectory),
             "di" => await RunDiAsync(output, error, workingDirectory),
@@ -72,6 +73,8 @@ public static class CliApplication
         output.WriteLine("  rig callgraph <index> [--full] [--summary]");
         output.WriteLine("  rig callgraphs [--full] [--summary]");
         output.WriteLine("  rig effects [--entrypoint <index>]");
+        output.WriteLine("  rig trace <symbol> [--paths]");
+        output.WriteLine("  rig trace --contains <text> [--paths]");
         output.WriteLine("  rig di");
         output.WriteLine("  rig files --skipped");
         output.WriteLine("  rig profile validate");
@@ -222,6 +225,61 @@ public static class CliApplication
         }
 
         DiRenderer.Render(registrations, output);
+
+        return 0;
+    }
+
+    private static async Task<int> RunTraceAsync(
+        string[] args,
+        TextWriter output,
+        TextWriter error,
+        string workingDirectory)
+    {
+        var pathsMode = args.Contains("--paths");
+        string? symbol;
+
+        if (args.Length >= 3 && args[1] == "--contains")
+        {
+            await using var context = OpenContext(workingDirectory);
+            var matches = await Reads.FindCallGraphSymbolsAsync(context, args[2]);
+            if (matches is null)
+            {
+                return NoRunError(error);
+            }
+
+            if (matches.Count == 0)
+            {
+                error.WriteLine($"No callgraph symbol matches: {args[2]}");
+                return 2;
+            }
+
+            if (matches.Count > 1)
+            {
+                TraceRenderer.RenderAmbiguous(args[2], matches, error);
+                return 2;
+            }
+
+            symbol = matches[0];
+        }
+        else if (args.Length >= 2 && args[1] != "--paths")
+        {
+            symbol = args[1];
+        }
+        else
+        {
+            error.WriteLine("Usage: rig trace <symbol> [--paths]");
+            error.WriteLine("Usage: rig trace --contains <text> [--paths]");
+            return 2;
+        }
+
+        await using var traceContext = OpenContext(workingDirectory);
+        var trace = await Reads.LoadTraceAsync(traceContext, symbol);
+        if (trace is null)
+        {
+            return NoRunError(error);
+        }
+
+        TraceRenderer.Render(trace, pathsMode, output);
 
         return 0;
     }

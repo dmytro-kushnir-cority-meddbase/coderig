@@ -24,6 +24,8 @@ public sealed class CliApplicationTests
         output.ToString().ShouldContain("rig entrypoints");
         output.ToString().ShouldContain("rig callgraph <index>");
         output.ToString().ShouldContain("rig effects [--entrypoint <index>]");
+        output.ToString().ShouldContain("rig trace <symbol> [--paths]");
+        output.ToString().ShouldContain("rig trace --contains <text> [--paths]");
         output.ToString().ShouldContain("rig files --skipped");
         output.ToString().ShouldContain("rig profile validate");
     }
@@ -80,6 +82,20 @@ public sealed class CliApplicationTests
         exitCode.ShouldBe(2);
         output.ToString().ShouldBeEmpty();
         error.ToString().ShouldContain("Usage: rig files --skipped");
+    }
+
+    [Fact]
+    public async Task Trace_requires_symbol_or_contains_query()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["trace"], output, error);
+
+        exitCode.ShouldBe(2);
+        output.ToString().ShouldBeEmpty();
+        error.ToString().ShouldContain("Usage: rig trace <symbol> [--paths]");
+        error.ToString().ShouldContain("Usage: rig trace --contains <text> [--paths]");
     }
 
     [Fact]
@@ -171,10 +187,24 @@ public sealed class CliApplicationTests
         output.ToString().ShouldContain("TeamWorkflow.LoadTeamSummaryAsync");
         output.ToString().ShouldContain("BillingClient.LoadInvoiceAsync");
         output.ToString().ShouldContain("BillingClient.LoadInvoicesAsync");
-        output.ToString().ShouldContain("BOUNDARY external HttpClient.GetStringAsync");
+        output.ToString().ShouldContain("EFFECT http GET  GetStringAsync  billing.example/invoices/{teamId}");
         output.ToString().ShouldContain("EFFECT efcore read  ToListAsync  AppDbContext.Teams");
         output.ToString().ShouldContain("[looped_effect:foreach]");
         output.ToString().ShouldContain("[parallel_fanout:Task.WhenAll]");
+
+        output.GetStringBuilder().Clear();
+        var traceExitCode = await CliApplication.RunAsync(["trace", "--contains", "TeamWorkflow.LoadTeamSummaryAsync", "--paths"], output, error, workingDirectory);
+
+        traceExitCode.ShouldBe(0);
+        output.ToString().ShouldContain("Trace: global::EntryPointEffects.Api.Services.TeamWorkflow.LoadTeamSummaryAsync");
+        output.ToString().ShouldContain("Run:");
+        output.ToString().ShouldContain("Reached by entrypoints");
+        output.ToString().ShouldContain("mvc GET api/teams/{id}");
+        output.ToString().ShouldContain("minapi GET /minapi/teams/{id}");
+        output.ToString().ShouldContain("Paths");
+        output.ToString().ShouldContain("Upstream");
+        output.ToString().ShouldContain("Downstream");
+        output.ToString().ShouldContain("TeamWorkflow.LoadTeamSummaryAsync");
     }
 
 }

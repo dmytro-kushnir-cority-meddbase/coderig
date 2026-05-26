@@ -101,6 +101,51 @@
           "HandleAsync"
         ],
         "requireOverride": true
+      },
+      {
+        "id": "dotnet.grpc.service",
+        "kind": "grpc",
+        "baseTypes": [
+          "*"
+        ],
+        "routeProviderMethods": [],
+        "routeMethods": [],
+        "handlerMethods": [
+          "*"
+        ],
+        "requireOverride": true,
+        "defaultMethod": "RPC",
+        "handlerParameterTypes": [
+          "Grpc.Core.ServerCallContext"
+        ]
+      },
+      {
+        "id": "dotnet.backgroundservice.execute",
+        "kind": "background",
+        "baseTypes": [
+          "Microsoft.Extensions.Hosting.BackgroundService"
+        ],
+        "routeProviderMethods": [],
+        "routeMethods": [],
+        "handlerMethods": [
+          "ExecuteAsync"
+        ],
+        "requireOverride": true,
+        "defaultMethod": "RUN"
+      },
+      {
+        "id": "eshop.integration_event_handler",
+        "kind": "eventhandler",
+        "baseTypes": [
+          "eShop.EventBus.Abstractions.IIntegrationEventHandler"
+        ],
+        "routeProviderMethods": [],
+        "routeMethods": [],
+        "handlerMethods": [
+          "Handle"
+        ],
+        "requireOverride": false,
+        "defaultMethod": "HANDLE"
       }
     ]
   },
@@ -462,6 +507,20 @@
       "confidence": "high",
       "basis": "compilation+profile",
       "reason": "stackexchange_redis_method_match"
+    },
+    {
+      "provider": "rabbitmq",
+      "operation": "publish",
+      "methods": [
+        "BasicPublishAsync"
+      ],
+      "receiverTypes": [
+        "RabbitMQ.Client.IChannel"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "rabbitmq_basic_publish"
     },
     {
       "provider": "aws_s3",

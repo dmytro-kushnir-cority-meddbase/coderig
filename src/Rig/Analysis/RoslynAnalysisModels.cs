@@ -31,14 +31,14 @@ internal sealed record SourceModel(
 
 internal sealed record MethodModel(
     string Key,
-    string Symbol,
+    string DisplayName,
     string FilePath,
     int Line,
     MethodDeclarationSyntax Body,
     SemanticModel SemanticModel,
     IReadOnlyList<EffectInfo> Effects);
 
-internal sealed record ResolvedCall(string Key, string DisplayName, int Line = 0);
+internal sealed record ResolvedCall(string Key, int Line = 0);
 
 internal sealed record ResolvedCallSet(
     IReadOnlyList<ResolvedCall> Application,
