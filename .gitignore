@@ -5,6 +5,7 @@ TestResults/
 .rig-bin/
 .rig-nupkg/
 src/Rig/Storage/Compiled/
+.vscode/
 .idea/
 *.user
 *.suo
