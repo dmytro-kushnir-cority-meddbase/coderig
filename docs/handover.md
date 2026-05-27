@@ -53,6 +53,11 @@ Timings (R2R, win-x64): `entrypoints`/`di`/`files` ~295ms | `effects` ~315ms | `
 built-in → global (`~/.rig/rig.rules.json`) → solution-level (`rig.rules.json`) → per-project `rig.rules.json`.
 `SolutionSourceSet.ProjectDirectories` enables the per-project merge after workspace load.
 
+**Callgraph construction**: `CallGraphBuilder` owns orchestration and traversal.
+`EntryNodeResolver` builds entry nodes, `CallResolver` resolves invocation and method-group calls,
+`CallGraphIndexes` owns dispatch and single-implementation DI indexes, and `CallGraphNodeFactory`
+owns the final node projection shape.
+
 **.sln support**: `SolutionSourceLoader` filters `solution.Projects` to `LanguageNames.CSharp` only.
 Non-C# projects (e.g. F#, VB) in a `.sln` are silently skipped.
 

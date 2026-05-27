@@ -43,3 +43,10 @@ internal sealed record ResolvedCall(string Key, int Line = 0);
 internal sealed record ResolvedCallSet(
     IReadOnlyList<ResolvedCall> Application,
     IReadOnlyList<BoundaryCallInfo> Boundary);
+
+internal sealed record CallGraphContext(
+    IReadOnlyDictionary<string, MethodModel> Methods,
+    IReadOnlyList<EffectRule> DispatchRules,
+    IReadOnlyDictionary<string, IReadOnlyList<string>> DispatchIndex,
+    IReadOnlyDictionary<string, string> SingleImplIndex,
+    IReadOnlyList<EffectInfo> AllEffects);

@@ -125,6 +125,15 @@ Status: `todo`
 
 ## Completed Slices (recent)
 
+### Storage and callgraph refactor cleanup
+
+Status: `verified`
+
+- Removed unused `Reads.LoadLatestAsync` and kept CLI reads on focused query paths.
+- Extracted callgraph node reconstruction inside storage reads.
+- Split callgraph construction into `CallGraphBuilder` orchestration, `EntryNodeResolver`, `CallResolver`, and `CallGraphNodeFactory`.
+- Verification: `dotnet build RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false -warnaserror`; `dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false`.
+
 ### Callgraph cycle detection
 
 Status: `verified`
