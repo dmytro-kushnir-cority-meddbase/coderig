@@ -346,10 +346,10 @@ public static class CliApplication
         var summaryMode = args.Contains("--summary");
 
         await using var context = OpenContext(workingDirectory);
-        var runId = await Reads.GetLatestRunIdAsync(context);
+        var runId = await GetLatestRunIdOrWriteErrorAsync(context, error);
         if (runId is null)
         {
-            return NoRunError(error);
+            return 2;
         }
 
         var callGraph = await Reads.LoadCallGraphAsync(context, runId, entryPointIndex);
@@ -375,10 +375,10 @@ public static class CliApplication
         var summaryMode = args.Contains("--summary");
 
         await using var context = OpenContext(workingDirectory);
-        var runId = await Reads.GetLatestRunIdAsync(context);
+        var runId = await GetLatestRunIdOrWriteErrorAsync(context, error);
         if (runId is null)
         {
-            return NoRunError(error);
+            return 2;
         }
 
         var entryPoints = await Reads.LoadEntryPointsAsync(context);
@@ -407,6 +407,17 @@ public static class CliApplication
     {
         var storeDirectory = Path.Combine(workingDirectory, ".rig");
         return new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
+    }
+
+    private static async Task<string?> GetLatestRunIdOrWriteErrorAsync(RigDbContext context, TextWriter error)
+    {
+        var runId = await Reads.GetLatestRunIdAsync(context);
+        if (runId is null)
+        {
+            NoRunError(error);
+        }
+
+        return runId;
     }
 
     private static int NoRunError(TextWriter error)

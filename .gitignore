@@ -7,6 +7,7 @@ TestResults/
 src/Rig/Storage/Compiled/
 .vscode/
 .idea/
+gen-callgraphs.ps1
 *.user
 *.suo
 *.nupkg

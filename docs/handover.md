@@ -47,7 +47,7 @@ Timings (R2R, win-x64): `entrypoints`/`di`/`files` ~295ms | `effects` ~315ms | `
 - `Rig` references both; holds Roslyn analysis, rules, CLI routing.
 
 **Focused read queries** (`Rig.Storage/Queries/Reads.cs`): each CLI command hits only the tables it needs.
-`GetLatestRunIdAsync` is the shared primitive. `LoadLatestAsync` (full load) is preserved for future use.
+`GetLatestRunIdAsync` is the shared primitive; the old full `LoadLatestAsync` path has been removed.
 
 **Multi-file profile loading** (`AnalysisRuleSet.LoadForSolution`): cascades
 built-in → global (`~/.rig/rig.rules.json`) → solution-level (`rig.rules.json`) → per-project `rig.rules.json`.

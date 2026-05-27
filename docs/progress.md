@@ -259,7 +259,7 @@ Status: `committed` (2a49a20)
 
 Status: `committed` (6fba295)
 
-- `LoadLatestAsync` replaced: reads from ~10 normalized tables instead of JSON blob.
+- `LoadLatestAsync` replaced by focused reads, then removed once no command path used it.
 - New `callgraph_node_effects` join table links per-node effects to global effects table.
 - `rig di` command — lists DI registrations from DB.
 - `rig profile validate` — validates solution-local rules file.
