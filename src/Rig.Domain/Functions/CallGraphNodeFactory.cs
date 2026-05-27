@@ -1,12 +1,12 @@
 namespace Rig.Analysis;
 
-internal static class CallGraphNodeFactory
+public static class CallGraphNodeFactory
 {
     public static CallGraphNodeInfo Create(
         string symbol,
         string filePath,
         int line,
-        ResolvedCallSet calls,
+        ResolvedCallSetInfo calls,
         IReadOnlyList<EffectInfo> effects,
         string confidence,
         string basis,

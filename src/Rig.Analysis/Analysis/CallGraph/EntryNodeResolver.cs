@@ -4,7 +4,7 @@ namespace Rig.Analysis;
 
 internal sealed record EntryNodeResolution(
     CallGraphNodeInfo Node,
-    IReadOnlyList<ResolvedCall> Calls);
+    IReadOnlyList<ResolvedCallInfo> Calls);
 
 internal static class EntryNodeResolver
 {
@@ -47,7 +47,7 @@ internal static class EntryNodeResolver
         }
 
         return new EntryNodeResolution(
-            CallGraphNodeFactory.Create(entryPoint.DisplayName, entryPoint.FilePath, entryPoint.Line, new ResolvedCallSet([], []), [], "low", "compilation", "entrypoint_handler_unresolved"),
+            CallGraphNodeFactory.Create(entryPoint.DisplayName, entryPoint.FilePath, entryPoint.Line, new ResolvedCallSetInfo([], []), [], "low", "compilation", "entrypoint_handler_unresolved"),
             []);
     }
 
@@ -61,7 +61,7 @@ internal static class EntryNodeResolver
                 invocation.ArgumentList.Arguments[0].Expression.GetLiteralString() == entryPoint.Route);
     }
 
-    private static ResolvedCallSet ResolveMinimalApiHandlerCalls(
+    private static ResolvedCallSetInfo ResolveMinimalApiHandlerCalls(
         InvocationExpressionSyntax invocation,
         Microsoft.CodeAnalysis.SemanticModel semanticModel,
         CallGraphContext context)
@@ -69,7 +69,7 @@ internal static class EntryNodeResolver
         var handler = invocation.ArgumentList.Arguments.Skip(1).FirstOrDefault()?.Expression;
         if (handler is null)
         {
-            return new ResolvedCallSet([], []);
+            return new ResolvedCallSetInfo([], []);
         }
 
         if (handler is ParenthesizedLambdaExpressionSyntax or SimpleLambdaExpressionSyntax or AnonymousMethodExpressionSyntax)
@@ -80,13 +80,13 @@ internal static class EntryNodeResolver
         var methodSymbol = RoslynSymbolHelpers.ResolveMethodSymbol(handler, semanticModel);
         if (methodSymbol is null)
         {
-            return new ResolvedCallSet([], [CallResolver.CreateUnresolvedBoundaryCall(handler, semanticModel)]);
+            return new ResolvedCallSetInfo([], [CallResolver.CreateUnresolvedBoundaryCall(handler, semanticModel)]);
         }
 
         var key = RoslynSymbolHelpers.GetMethodKey(methodSymbol);
         var handlerLine = RoslynSymbolHelpers.GetCallNameLine(semanticModel.SyntaxTree, handler);
         return context.Methods.ContainsKey(key)
-            ? new ResolvedCallSet([new ResolvedCall(key, handlerLine)], [])
-            : new ResolvedCallSet([], [CallResolver.CreateExternalBoundaryCall(handler, semanticModel, methodSymbol)]);
+            ? new ResolvedCallSetInfo([new ResolvedCallInfo(key, handlerLine)], [])
+            : new ResolvedCallSetInfo([], [CallResolver.CreateExternalBoundaryCall(handler, semanticModel, methodSymbol)]);
     }
 }

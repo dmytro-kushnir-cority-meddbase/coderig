@@ -38,12 +38,6 @@ internal sealed record MethodModel(
     SemanticModel SemanticModel,
     IReadOnlyList<EffectInfo> Effects);
 
-internal sealed record ResolvedCall(string Key, int Line = 0);
-
-internal sealed record ResolvedCallSet(
-    IReadOnlyList<ResolvedCall> Application,
-    IReadOnlyList<BoundaryCallInfo> Boundary);
-
 internal sealed record CallGraphContext(
     IReadOnlyDictionary<string, MethodModel> Methods,
     IReadOnlyList<EffectRule> DispatchRules,

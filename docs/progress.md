@@ -133,6 +133,7 @@ Status: `verified`
 - Extracted callgraph node reconstruction inside storage reads.
 - Split callgraph construction into `CallGraphBuilder` orchestration, `EntryNodeResolver`, `CallResolver`, and `CallGraphNodeFactory`.
 - Split `src/Rig` into `src/Rig.Cli` and `src/Rig.Analysis`; the NuGet tool package id and command remain `rig`.
+- Moved pure domain helpers for glob matching and callgraph node materialization into `src/Rig.Domain`; Roslyn, rule loading, and detector policy stay in `src/Rig.Analysis`.
 - Verification: `dotnet build RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false -warnaserror`; `dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false`.
 
 ### Callgraph cycle detection

@@ -5,12 +5,12 @@ namespace Rig.Analysis;
 
 internal static class CallResolver
 {
-    public static ResolvedCallSet ResolveCalls(
+    public static ResolvedCallSetInfo ResolveCalls(
         SyntaxNode root,
         SemanticModel semanticModel,
         CallGraphContext context)
     {
-        var calls = new List<ResolvedCall>();
+        var calls = new List<ResolvedCallInfo>();
         var boundaryCalls = new List<BoundaryCallInfo>();
 
         foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
@@ -40,7 +40,7 @@ internal static class CallResolver
 
             if (context.Methods.ContainsKey(key))
             {
-                AddUnique(calls, new ResolvedCall(key, line));
+                AddUnique(calls, new ResolvedCallInfo(key, line));
                 continue;
             }
 
@@ -59,7 +59,7 @@ internal static class CallResolver
 
         AddMethodGroupCalls(root, semanticModel, context, calls);
 
-        return new ResolvedCallSet(calls, boundaryCalls);
+        return new ResolvedCallSetInfo(calls, boundaryCalls);
     }
 
     public static BoundaryCallInfo CreateExternalBoundaryCall(
@@ -97,7 +97,7 @@ internal static class CallResolver
         SyntaxNode root,
         SemanticModel semanticModel,
         CallGraphContext context,
-        List<ResolvedCall> calls)
+        List<ResolvedCallInfo> calls)
     {
         // Scan for method group references used as delegates; they are not InvocationExpressionSyntax.
         foreach (var node in root.DescendantNodes())
@@ -137,12 +137,12 @@ internal static class CallResolver
             var groupKey = RoslynSymbolHelpers.GetMethodKey(groupSymbol);
             if (context.Methods.ContainsKey(groupKey))
             {
-                AddUnique(calls, new ResolvedCall(groupKey, groupLine));
+                AddUnique(calls, new ResolvedCallInfo(groupKey, groupLine));
             }
         }
     }
 
-    private static IReadOnlyList<ResolvedCall>? TryResolveDispatch(
+    private static IReadOnlyList<ResolvedCallInfo>? TryResolveDispatch(
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel,
         IMethodSymbol methodSymbol,
@@ -162,13 +162,13 @@ internal static class CallResolver
 
         var resolved = handlerKeys
             .Where(context.Methods.ContainsKey)
-            .Select(hk => new ResolvedCall(hk))
+            .Select(hk => new ResolvedCallInfo(hk))
             .ToArray();
 
         return resolved.Length > 0 ? resolved : null;
     }
 
-    private static ResolvedCall? TryResolveSingleImplDispatch(
+    private static ResolvedCallInfo? TryResolveSingleImplDispatch(
         IMethodSymbol methodSymbol,
         CallGraphContext context)
     {
@@ -187,7 +187,7 @@ internal static class CallResolver
         var concreteMethodKey = interfaceMethodKey.Replace(interfaceTypeKey, concreteTypeKey, StringComparison.Ordinal);
 
         return context.Methods.ContainsKey(concreteMethodKey)
-            ? new ResolvedCall(concreteMethodKey)
+            ? new ResolvedCallInfo(concreteMethodKey)
             : null;
     }
 
@@ -218,7 +218,7 @@ internal static class CallResolver
             : semanticModel.GetTypeInfo(argument).Type?.OriginalDefinition.ToDisplayString();
     }
 
-    private static void AddUnique(List<ResolvedCall> calls, ResolvedCall call)
+    private static void AddUnique(List<ResolvedCallInfo> calls, ResolvedCallInfo call)
     {
         if (!calls.Any(existing => string.Equals(existing.Key, call.Key, StringComparison.Ordinal)))
         {
