@@ -1,4 +1,4 @@
-﻿namespace Rig.Analysis;
+﻿namespace Rig.Domain.Data;
 
 public sealed record EntryPointInfo(
     string Kind,
@@ -6,4 +6,5 @@ public sealed record EntryPointInfo(
     string Route,
     string DisplayName,
     string FilePath,
-    int Line);
+    int Line
+);

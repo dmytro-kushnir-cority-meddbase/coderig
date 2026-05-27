@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace Rig.Analysis;
+namespace Rig.Domain.Functions;
 
 public static class GlobMatcher
 {
@@ -9,13 +9,15 @@ public static class GlobMatcher
         return Regex.IsMatch(
             value.Replace('\\', '/'),
             ToRegex(glob),
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant
+        );
     }
 
     public static string ToRegex(string glob)
     {
         var normalized = glob.Replace('\\', '/');
-        var regex = Regex.Escape(normalized)
+        var regex = Regex
+            .Escape(normalized)
             .Replace("\\*\\*/", "(?:.*/)?", StringComparison.Ordinal)
             .Replace("\\*\\*", ".*", StringComparison.Ordinal)
             .Replace("\\*", "[^/]*", StringComparison.Ordinal)

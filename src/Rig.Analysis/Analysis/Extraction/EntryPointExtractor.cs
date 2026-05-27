@@ -1,16 +1,21 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Rig.Analysis.Analysis.Rules;
+using Rig.Domain.Data;
 
-namespace Rig.Analysis;
+namespace Rig.Analysis.Analysis.Extraction;
 
 internal static class EntryPointExtractor
 {
     public static IEnumerable<EntryPointInfo> FindMinimalApiEntryPoints(
         SourceModel source,
-        AnalysisRuleSet rules)
+        AnalysisRuleSet rules
+    )
     {
-        foreach (var invocation in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        foreach (
+            var invocation in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>()
+        )
         {
             if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
             {
@@ -19,13 +24,16 @@ internal static class EntryPointExtractor
 
             var methodName = memberAccess.Name.Identifier.ValueText;
             var rule = rules.MinimalApiEntryPoints.FirstOrDefault(rule =>
-                string.Equals(rule.Method, methodName, StringComparison.Ordinal));
+                string.Equals(rule.Method, methodName, StringComparison.Ordinal)
+            );
             if (rule is null)
             {
                 continue;
             }
 
-            var route = invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression.GetLiteralString();
+            var route = invocation
+                .ArgumentList.Arguments.FirstOrDefault()
+                ?.Expression.GetLiteralString();
             if (string.IsNullOrWhiteSpace(route))
             {
                 continue;
@@ -37,13 +45,15 @@ internal static class EntryPointExtractor
                 route,
                 $"minapi {rule.HttpMethod} {route}",
                 source.FilePath,
-                RoslynSymbolHelpers.GetLine(source.Tree, invocation));
+                RoslynSymbolHelpers.GetLine(source.Tree, invocation)
+            );
         }
     }
 
     public static IEnumerable<EntryPointInfo> FindMvcEntryPoints(
         SourceModel source,
-        AnalysisRuleSet rules)
+        AnalysisRuleSet rules
+    )
     {
         foreach (var controller in source.Root.DescendantNodes().OfType<ClassDeclarationSyntax>())
         {
@@ -52,9 +62,16 @@ internal static class EntryPointExtractor
                 continue;
             }
 
-            var controllerToken = controller.Identifier.ValueText[..^"Controller".Length].ToLowerInvariant();
-            var controllerRoute = GetAttributeStringArgument(controller.AttributeLists, "Route") ?? "[controller]";
-            controllerRoute = controllerRoute.Replace("[controller]", controllerToken, StringComparison.OrdinalIgnoreCase);
+            var controllerToken = controller
+                .Identifier.ValueText[..^"Controller".Length]
+                .ToLowerInvariant();
+            var controllerRoute =
+                GetAttributeStringArgument(controller.AttributeLists, "Route") ?? "[controller]";
+            controllerRoute = controllerRoute.Replace(
+                "[controller]",
+                controllerToken,
+                StringComparison.OrdinalIgnoreCase
+            );
 
             foreach (var method in controller.Members.OfType<MethodDeclarationSyntax>())
             {
@@ -72,16 +89,20 @@ internal static class EntryPointExtractor
                     route,
                     $"mvc {httpAttribute.Value.Method} {route}",
                     source.FilePath,
-                    RoslynSymbolHelpers.GetLine(source.Tree, method));
+                    RoslynSymbolHelpers.GetLine(source.Tree, method)
+                );
             }
         }
     }
 
     public static IEnumerable<EntryPointInfo> FindClassInheritanceEntryPoints(
         SourceModel source,
-        AnalysisRuleSet rules)
+        AnalysisRuleSet rules
+    )
     {
-        foreach (var typeDeclaration in source.Root.DescendantNodes().OfType<ClassDeclarationSyntax>())
+        foreach (
+            var typeDeclaration in source.Root.DescendantNodes().OfType<ClassDeclarationSyntax>()
+        )
         {
             var typeSymbol = source.SemanticModel.GetDeclaredSymbol(typeDeclaration);
             if (typeSymbol is null)
@@ -89,16 +110,22 @@ internal static class EntryPointExtractor
                 continue;
             }
 
-            foreach (var rule in rules.ClassInheritanceEntryPoints.Where(rule => HasBaseType(typeSymbol, rule.BaseTypes)))
+            foreach (
+                var rule in rules.ClassInheritanceEntryPoints.Where(rule =>
+                    HasBaseType(typeSymbol, rule.BaseTypes)
+                )
+            )
             {
                 var route = FindRoute(typeDeclaration, rule, source.SemanticModel);
 
                 foreach (var method in typeDeclaration.Members.OfType<MethodDeclarationSyntax>())
                 {
                     var methodName = method.Identifier.ValueText;
-                    if (!MatchesHandlerMethod(rule, methodName) ||
-                        !MatchesHandlerParameterTypes(rule, method, source.SemanticModel) ||
-                        (rule.RequireOverride && !IsOverride(method, source.SemanticModel)))
+                    if (
+                        !MatchesHandlerMethod(rule, methodName)
+                        || !MatchesHandlerParameterTypes(rule, method, source.SemanticModel)
+                        || (rule.RequireOverride && !IsOverride(method, source.SemanticModel))
+                    )
                     {
                         continue;
                     }
@@ -112,7 +139,8 @@ internal static class EntryPointExtractor
                         routeText,
                         $"{rule.Kind} {httpMethod} {routeText}",
                         source.FilePath,
-                        RoslynSymbolHelpers.GetLine(source.Tree, method));
+                        RoslynSymbolHelpers.GetLine(source.Tree, method)
+                    );
                 }
             }
         }
@@ -120,31 +148,47 @@ internal static class EntryPointExtractor
 
     private static (string Method, string? Route)? FindHttpAttribute(
         SyntaxList<AttributeListSyntax> attributes,
-        AnalysisRuleSet rules)
+        AnalysisRuleSet rules
+    )
     {
         foreach (var attribute in attributes.SelectMany(list => list.Attributes))
         {
             var attributeName = attribute.Name.ToString();
             var rule = rules.MvcHttpAttributes.FirstOrDefault(rule =>
-                string.Equals(rule.Attribute, attributeName, StringComparison.Ordinal));
+                string.Equals(rule.Attribute, attributeName, StringComparison.Ordinal)
+            );
             if (rule is null)
             {
                 continue;
             }
 
-            return (rule.HttpMethod, attribute.ArgumentList?.Arguments.FirstOrDefault()?.Expression.GetLiteralString());
+            return (
+                rule.HttpMethod,
+                attribute.ArgumentList?.Arguments.FirstOrDefault()?.Expression.GetLiteralString()
+            );
         }
 
         return null;
     }
 
-    private static string? GetAttributeStringArgument(SyntaxList<AttributeListSyntax> attributes, string attributeName)
+    private static string? GetAttributeStringArgument(
+        SyntaxList<AttributeListSyntax> attributes,
+        string attributeName
+    )
     {
         return attributes
             .SelectMany(list => list.Attributes)
-            .Where(attribute => string.Equals(attribute.Name.ToString(), attributeName, StringComparison.Ordinal)
-                || string.Equals(attribute.Name.ToString(), $"{attributeName}Attribute", StringComparison.Ordinal))
-            .Select(attribute => attribute.ArgumentList?.Arguments.FirstOrDefault()?.Expression.GetLiteralString())
+            .Where(attribute =>
+                string.Equals(attribute.Name.ToString(), attributeName, StringComparison.Ordinal)
+                || string.Equals(
+                    attribute.Name.ToString(),
+                    $"{attributeName}Attribute",
+                    StringComparison.Ordinal
+                )
+            )
+            .Select(attribute =>
+                attribute.ArgumentList?.Arguments.FirstOrDefault()?.Expression.GetLiteralString()
+            )
             .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
     }
 
@@ -198,14 +242,15 @@ internal static class EntryPointExtractor
 
     private static bool MatchesHandlerMethod(ClassInheritanceEntryPointRule rule, string methodName)
     {
-        return rule.HandlerMethods.Contains("*", StringComparer.Ordinal) ||
-            rule.HandlerMethods.Contains(methodName, StringComparer.Ordinal);
+        return rule.HandlerMethods.Contains("*", StringComparer.Ordinal)
+            || rule.HandlerMethods.Contains(methodName, StringComparer.Ordinal);
     }
 
     private static bool MatchesHandlerParameterTypes(
         ClassInheritanceEntryPointRule rule,
         MethodDeclarationSyntax method,
-        SemanticModel semanticModel)
+        SemanticModel semanticModel
+    )
     {
         if (rule.HandlerParameterTypes is null || rule.HandlerParameterTypes.Count == 0)
         {
@@ -219,18 +264,31 @@ internal static class EntryPointExtractor
 
         return rule.HandlerParameterTypes.All(expected =>
             methodSymbol.Parameters.Any(parameter =>
-                RuleTypeMatcher.MatchesDisplayName(parameter.Type.OriginalDefinition.ToDisplayString(), expected)));
+                RuleTypeMatcher.MatchesDisplayName(
+                    parameter.Type.OriginalDefinition.ToDisplayString(),
+                    expected
+                )
+            )
+        );
     }
 
     private static (string HttpMethod, string Route)? FindRoute(
         ClassDeclarationSyntax typeDeclaration,
         ClassInheritanceEntryPointRule rule,
-        SemanticModel semanticModel)
+        SemanticModel semanticModel
+    )
     {
-        foreach (var invocation in typeDeclaration.Members
-            .OfType<MethodDeclarationSyntax>()
-            .Where(method => rule.RouteProviderMethods.Contains(method.Identifier.ValueText, StringComparer.Ordinal))
-            .SelectMany(method => method.DescendantNodes().OfType<InvocationExpressionSyntax>()))
+        foreach (
+            var invocation in typeDeclaration
+                .Members.OfType<MethodDeclarationSyntax>()
+                .Where(method =>
+                    rule.RouteProviderMethods.Contains(
+                        method.Identifier.ValueText,
+                        StringComparer.Ordinal
+                    )
+                )
+                .SelectMany(method => method.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        )
         {
             var methodName = GetInvocationMethodName(invocation);
             if (methodName is null)
@@ -239,13 +297,17 @@ internal static class EntryPointExtractor
             }
 
             var routeMethod = rule.RouteMethods.FirstOrDefault(routeMethod =>
-                string.Equals(routeMethod.Method, methodName, StringComparison.Ordinal));
+                string.Equals(routeMethod.Method, methodName, StringComparison.Ordinal)
+            );
             if (routeMethod is null)
             {
                 continue;
             }
 
-            var route = ResolveString(invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression, semanticModel);
+            var route = ResolveString(
+                invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression,
+                semanticModel
+            );
             if (string.IsNullOrWhiteSpace(route))
             {
                 continue;
@@ -263,7 +325,7 @@ internal static class EntryPointExtractor
         {
             MemberAccessExpressionSyntax memberAccess => memberAccess.Name.Identifier.ValueText,
             IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
-            _ => null
+            _ => null,
         };
     }
 

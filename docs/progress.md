@@ -129,6 +129,7 @@ Status: `todo`
 
 Status: `verified`
 
+- Added repo-local CSharpier tool setup and `scripts/format.ps1`; `scripts/mini-ci.ps1` now runs `dotnet csharpier check .`.
 - Removed unused `Reads.LoadLatestAsync` and kept CLI reads on focused query paths.
 - Extracted callgraph node reconstruction inside storage reads.
 - Split callgraph construction into `CallGraphBuilder` orchestration, `EntryNodeResolver`, `CallResolver`, and `CallGraphNodeFactory`.

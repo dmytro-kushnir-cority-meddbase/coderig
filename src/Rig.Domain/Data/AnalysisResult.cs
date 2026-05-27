@@ -1,4 +1,4 @@
-namespace Rig.Analysis;
+namespace Rig.Domain.Data;
 
 public sealed record AnalysisResult(
     string SolutionPath,
@@ -8,4 +8,5 @@ public sealed record AnalysisResult(
     IReadOnlyList<DiRegistrationInfo> DiRegistrations,
     IReadOnlyList<CallGraphInfo> CallGraphs,
     IReadOnlyList<MethodObservationInfo> MethodObservations,
-    IReadOnlyList<InvocationObservationInfo> InvocationObservations);
+    IReadOnlyList<InvocationObservationInfo> InvocationObservations
+);

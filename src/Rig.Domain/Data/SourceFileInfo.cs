@@ -1,4 +1,4 @@
-﻿namespace Rig.Analysis;
+﻿namespace Rig.Domain.Data;
 
 public sealed record SourceFileInfo(
     string ProjectName,
@@ -7,4 +7,5 @@ public sealed record SourceFileInfo(
     string Confidence,
     string Basis,
     string Reason,
-    string Evidence);
+    string Evidence
+);

@@ -1,10 +1,16 @@
-using Rig.Analysis;
+using Rig.Domain.Data;
 
 namespace Rig.Cli.Rendering;
 
 internal static class CallGraphRenderer
 {
-    public static void Render(CallGraphInfo callGraph, int entryPointIndex, bool fullMode, bool summaryMode, TextWriter output)
+    public static void Render(
+        CallGraphInfo callGraph,
+        int entryPointIndex,
+        bool fullMode,
+        bool summaryMode,
+        TextWriter output
+    )
     {
         var allNodes = callGraph.Nodes;
         var focusMode = !fullMode;
@@ -27,7 +33,10 @@ internal static class CallGraphRenderer
             return;
         }
 
-        var focusSuffix = focusMode && !fullMode ? " (focused)" : fullMode ? " (full)" : "";
+        var focusSuffix =
+            focusMode && !fullMode ? " (focused)"
+            : fullMode ? " (full)"
+            : "";
         var nodeCountSuffix = focusMode ? $" / {allNodes.Count} on effect paths" : "";
         output.WriteLine($"Callgraph: [{entryPointIndex}] {callGraph.EntryPoint}{focusSuffix}");
         output.WriteLine($"Nodes: {nodes.Count}{nodeCountSuffix}");
@@ -40,7 +49,8 @@ internal static class CallGraphRenderer
         CallGraphInfo callGraph,
         IReadOnlyList<CallGraphNodeInfo> allNodes,
         int entryPointIndex,
-        TextWriter output)
+        TextWriter output
+    )
     {
         var allEffects = allNodes.SelectMany(n => n.Effects).ToList();
 
@@ -67,9 +77,13 @@ internal static class CallGraphRenderer
         foreach (var (effect, count) in ordered)
         {
             var countSuffix = count > 1 ? $"  [x{count}]" : "";
-            var observations = string.Join("", effect.Observations
-                .Select(o => $"  [{o.Type}:{o.Context}]"));
-            output.WriteLine($"  {effect.Provider,-16} {effect.Operation,-14}  {effect.Resource}{countSuffix}{observations}");
+            var observations = string.Join(
+                "",
+                effect.Observations.Select(o => $"  [{o.Type}:{o.Context}]")
+            );
+            output.WriteLine(
+                $"  {effect.Provider, -16} {effect.Operation, -14}  {effect.Resource}{countSuffix}{observations}"
+            );
         }
     }
 
@@ -83,7 +97,9 @@ internal static class CallGraphRenderer
         output.WriteLine($"Cycles: {cycles.Count}");
         foreach (var cycle in cycles)
         {
-            output.WriteLine($"  CYCLE {string.Join(" -> ", cycle.Path.Select(SymbolNameFormatter.Shorten))}");
+            output.WriteLine(
+                $"  CYCLE {string.Join(" -> ", cycle.Path.Select(SymbolNameFormatter.Shorten))}"
+            );
         }
     }
 
@@ -92,16 +108,28 @@ internal static class CallGraphRenderer
         IReadOnlyList<CallGraphNodeInfo> nodes,
         HashSet<string>? effectReachable,
         bool focusMode,
-        TextWriter output)
+        TextWriter output
+    )
     {
-        if (nodes.Count == 0) return;
+        if (nodes.Count == 0)
+            return;
 
         var symbolToNode = new Dictionary<string, CallGraphNodeInfo>();
         foreach (var node in nodes)
             symbolToNode.TryAdd(node.Symbol, node);
 
         var visited = new HashSet<string>();
-        RenderTreeNode(nodes[0], "  ", "  ", symbolToNode, callGraph.Cycles, effectReachable, focusMode, visited, output);
+        RenderTreeNode(
+            nodes[0],
+            "  ",
+            "  ",
+            symbolToNode,
+            callGraph.Cycles,
+            effectReachable,
+            focusMode,
+            visited,
+            output
+        );
     }
 
     private static void RenderTreeNode(
@@ -113,14 +141,18 @@ internal static class CallGraphRenderer
         HashSet<string>? effectReachable,
         bool focusMode,
         HashSet<string> visited,
-        TextWriter output)
+        TextWriter output
+    )
     {
-        output.WriteLine($"{linePrefix}{Path.GetFileName(node.FilePath)}:{node.Line}  {SymbolNameFormatter.Shorten(node.Symbol)}");
+        output.WriteLine(
+            $"{linePrefix}{Path.GetFileName(node.FilePath)}:{node.Line}  {SymbolNameFormatter.Shorten(node.Symbol)}"
+        );
 
-        if (!visited.Add(node.Symbol)) return;
+        if (!visited.Add(node.Symbol))
+            return;
 
-        var calls = node.Calls
-            .Where(c => !focusMode || effectReachable is null || effectReachable.Contains(c))
+        var calls = node
+            .Calls.Where(c => !focusMode || effectReachable is null || effectReachable.Contains(c))
             .ToList();
         IReadOnlyList<BoundaryCallInfo> boundaries = focusMode ? [] : node.BoundaryCalls;
         var effects = focusMode
@@ -142,10 +174,22 @@ internal static class CallGraphRenderer
                 if (visited.Contains(call))
                 {
                     var marker = IsCycleEdge(node.Symbol, call, cycles) ? "[cycle]" : "[^]";
-                    output.WriteLine($"{branch}{Path.GetFileName(childNode.FilePath)}:{childNode.Line}  {SymbolNameFormatter.Shorten(childNode.Symbol)}  {marker}");
+                    output.WriteLine(
+                        $"{branch}{Path.GetFileName(childNode.FilePath)}:{childNode.Line}  {SymbolNameFormatter.Shorten(childNode.Symbol)}  {marker}"
+                    );
                 }
                 else
-                    RenderTreeNode(childNode, branch, nextChildren, symbolToNode, cycles, effectReachable, focusMode, visited, output);
+                    RenderTreeNode(
+                        childNode,
+                        branch,
+                        nextChildren,
+                        symbolToNode,
+                        cycles,
+                        effectReachable,
+                        focusMode,
+                        visited,
+                        output
+                    );
             }
             else
             {
@@ -159,9 +203,11 @@ internal static class CallGraphRenderer
             bool isLast = idx == total;
             var branch = childrenPrefix + (isLast ? "└─ " : "├─ ");
             var effect = EffectRenderFormatter.FindEffectForBoundary(boundary, node.Effects);
-            output.WriteLine(effect is null
-                ? $"{branch}BOUNDARY {boundary.Kind} {boundary.Method}"
-                : $"{branch}{EffectRenderFormatter.FormatEffect(effect)}");
+            output.WriteLine(
+                effect is null
+                    ? $"{branch}BOUNDARY {boundary.Kind} {boundary.Method}"
+                    : $"{branch}{EffectRenderFormatter.FormatEffect(effect)}"
+            );
         }
 
         foreach (var effect in effects)
@@ -173,14 +219,20 @@ internal static class CallGraphRenderer
         }
     }
 
-    private static bool IsCycleEdge(string source, string target, IReadOnlyList<CallGraphCycleInfo> cycles)
+    private static bool IsCycleEdge(
+        string source,
+        string target,
+        IReadOnlyList<CallGraphCycleInfo> cycles
+    )
     {
         return cycles.Any(cycle =>
         {
             for (var i = 0; i < cycle.Path.Count - 1; i++)
             {
-                if (string.Equals(cycle.Path[i], source, StringComparison.Ordinal) &&
-                    string.Equals(cycle.Path[i + 1], target, StringComparison.Ordinal))
+                if (
+                    string.Equals(cycle.Path[i], source, StringComparison.Ordinal)
+                    && string.Equals(cycle.Path[i + 1], target, StringComparison.Ordinal)
+                )
                 {
                     return true;
                 }
@@ -190,8 +242,7 @@ internal static class CallGraphRenderer
         });
     }
 
-    private static HashSet<string> ComputeEffectReachable(
-        IReadOnlyList<CallGraphNodeInfo> nodes)
+    private static HashSet<string> ComputeEffectReachable(IReadOnlyList<CallGraphNodeInfo> nodes)
     {
         var callers = new Dictionary<string, HashSet<string>>();
         foreach (var node in nodes)
@@ -219,7 +270,8 @@ internal static class CallGraphRenderer
         while (queue.Count > 0)
         {
             var symbol = queue.Dequeue();
-            if (!callers.TryGetValue(symbol, out var callerSet)) continue;
+            if (!callers.TryGetValue(symbol, out var callerSet))
+                continue;
             foreach (var caller in callerSet)
             {
                 if (reachable.Add(caller))

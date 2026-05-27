@@ -1,52 +1,68 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Rig.Domain.Data;
 
-namespace Rig.Analysis;
+namespace Rig.Analysis.Analysis.CallGraph;
 
 internal sealed record CallGraphIndexSet(
     IReadOnlyDictionary<string, IReadOnlyList<string>> DispatchIndex,
-    IReadOnlyDictionary<string, string> SingleImplIndex);
+    IReadOnlyDictionary<string, string> SingleImplIndex
+);
 
 internal static class CallGraphIndexes
 {
     public static CallGraphIndexSet Build(
         IReadOnlyList<SourceModel> sources,
-        IReadOnlyList<DiRegistrationInfo> diRegistrations)
+        IReadOnlyList<DiRegistrationInfo> diRegistrations
+    )
     {
         return new CallGraphIndexSet(
             BuildDispatchIndex(sources),
-            BuildSingleImplIndex(diRegistrations));
+            BuildSingleImplIndex(diRegistrations)
+        );
     }
 
     private static IReadOnlyDictionary<string, IReadOnlyList<string>> BuildDispatchIndex(
-        IReadOnlyList<SourceModel> sources)
+        IReadOnlyList<SourceModel> sources
+    )
     {
         var index = new Dictionary<string, List<string>>(StringComparer.Ordinal);
 
         foreach (var source in sources)
         {
-            foreach (var classDecl in source.Root.DescendantNodes().OfType<ClassDeclarationSyntax>())
+            foreach (
+                var classDecl in source.Root.DescendantNodes().OfType<ClassDeclarationSyntax>()
+            )
             {
-                if (source.SemanticModel.GetDeclaredSymbol(classDecl) is not INamedTypeSymbol classSymbol)
+                if (
+                    source.SemanticModel.GetDeclaredSymbol(classDecl)
+                    is not INamedTypeSymbol classSymbol
+                )
                 {
                     continue;
                 }
 
                 foreach (var iface in classSymbol.AllInterfaces)
                 {
-                    if (!IsMessageHandlerInterface(iface.OriginalDefinition) || iface.TypeArguments.Length == 0)
+                    if (
+                        !IsMessageHandlerInterface(iface.OriginalDefinition)
+                        || iface.TypeArguments.Length == 0
+                    )
                     {
                         continue;
                     }
 
                     var messageKey = iface.TypeArguments[0].OriginalDefinition.ToDisplayString();
 
-                    var handleMethod = classDecl.Members
-                        .OfType<MethodDeclarationSyntax>()
+                    var handleMethod = classDecl
+                        .Members.OfType<MethodDeclarationSyntax>()
                         .FirstOrDefault(m => m.Identifier.ValueText is "Handle" or "HandleAsync");
 
-                    if (handleMethod is null ||
-                        source.SemanticModel.GetDeclaredSymbol(handleMethod) is not IMethodSymbol handleSymbol)
+                    if (
+                        handleMethod is null
+                        || source.SemanticModel.GetDeclaredSymbol(handleMethod)
+                            is not IMethodSymbol handleSymbol
+                    )
                     {
                         continue;
                     }
@@ -69,26 +85,31 @@ internal static class CallGraphIndexes
         return index.ToDictionary(
             kvp => kvp.Key,
             kvp => (IReadOnlyList<string>)kvp.Value.AsReadOnly(),
-            StringComparer.Ordinal);
+            StringComparer.Ordinal
+        );
     }
 
     private static IReadOnlyDictionary<string, string> BuildSingleImplIndex(
-        IReadOnlyList<DiRegistrationInfo> registrations)
+        IReadOnlyList<DiRegistrationInfo> registrations
+    )
     {
         return registrations
             .Where(r => r.ImplementationType is not null)
             .GroupBy(r => r.ServiceType, StringComparer.Ordinal)
-            .Where(g => g.Select(r => r.ImplementationType).Distinct(StringComparer.Ordinal).Count() == 1)
-            .ToDictionary(
-                g => g.Key,
-                g => g.First().ImplementationType!,
-                StringComparer.Ordinal);
+            .Where(g =>
+                g.Select(r => r.ImplementationType).Distinct(StringComparer.Ordinal).Count() == 1
+            )
+            .ToDictionary(g => g.Key, g => g.First().ImplementationType!, StringComparer.Ordinal);
     }
 
     private static bool IsMessageHandlerInterface(INamedTypeSymbol iface)
     {
         var ns = iface.ContainingNamespace?.ToDisplayString();
-        return ns is "MediatR" or "Mediator" &&
-               iface.Name is "IRequestHandler" or "ICommandHandler" or "IQueryHandler" or "INotificationHandler";
+        return ns is "MediatR" or "Mediator"
+            && iface.Name
+                is "IRequestHandler"
+                    or "ICommandHandler"
+                    or "IQueryHandler"
+                    or "INotificationHandler";
     }
 }

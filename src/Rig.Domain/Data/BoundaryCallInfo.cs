@@ -1,4 +1,4 @@
-﻿namespace Rig.Analysis;
+﻿namespace Rig.Domain.Data;
 
 public sealed record BoundaryCallInfo(
     string Kind,
@@ -8,4 +8,5 @@ public sealed record BoundaryCallInfo(
     int Line,
     string Confidence,
     string Basis,
-    string Reason);
+    string Reason
+);

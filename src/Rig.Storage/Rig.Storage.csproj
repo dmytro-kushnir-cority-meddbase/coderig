@@ -1,23 +1,21 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EFOptimizeContext>true</EFOptimizeContext>
+    <EFScaffoldModelStage>publish</EFScaffoldModelStage>
+    <EFPrecompileQueriesStage>never</EFPrecompileQueriesStage>
+    <EFTargetNamespace>Rig.Storage</EFTargetNamespace>
+  </PropertyGroup>
 
-    <PropertyGroup>
-        <TargetFramework>net10.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
-        <EFOptimizeContext>true</EFOptimizeContext>
-        <EFScaffoldModelStage>publish</EFScaffoldModelStage>
-        <EFPrecompileQueriesStage>never</EFPrecompileQueriesStage>
-        <EFTargetNamespace>Rig.Storage</EFTargetNamespace>
-    </PropertyGroup>
-    
-    <ItemGroup>
-        <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />
-        <PackageReference Include="Microsoft.EntityFrameworkCore.Tasks" PrivateAssets="all" />
-        <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
-    </ItemGroup>
-    
-    <ItemGroup>
-      <ProjectReference Include="..\Rig.Domain\Rig.Domain.csproj" />
-    </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tasks" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+  </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\Rig.Domain\Rig.Domain.csproj" />
+  </ItemGroup>
 </Project>

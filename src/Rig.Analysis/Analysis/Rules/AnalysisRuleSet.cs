@@ -1,7 +1,8 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Rig.Domain.Functions;
 
-namespace Rig.Analysis;
+namespace Rig.Analysis.Analysis.Rules;
 
 internal sealed record AnalysisRuleSet(
     IReadOnlyList<MinimalApiEntryPointRule> MinimalApiEntryPoints,
@@ -12,23 +13,30 @@ internal sealed record AnalysisRuleSet(
     IReadOnlyList<FileRule> FileInclude,
     IReadOnlyList<FileRule> FileExclude,
     IReadOnlyList<string> TestProjectPatterns,
-    IReadOnlyList<string> ProjectExcludePatterns)
+    IReadOnlyList<string> ProjectExcludePatterns
+)
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
     };
 
-    public static AnalysisRuleSet LoadForSolution(string solutionPath, IReadOnlyList<string>? extraRulesPaths = null)
+    public static AnalysisRuleSet LoadForSolution(
+        string solutionPath,
+        IReadOnlyList<string>? extraRulesPaths = null
+    )
     {
         var rules = LoadBuiltIn();
 
         var globalRulesPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".rig", "rig.rules.json");
+            ".rig",
+            "rig.rules.json"
+        );
         rules = rules.MergeWithFile(globalRulesPath);
 
-        var solutionDirectory = Path.GetDirectoryName(solutionPath) ?? Directory.GetCurrentDirectory();
+        var solutionDirectory =
+            Path.GetDirectoryName(solutionPath) ?? Directory.GetCurrentDirectory();
         rules = rules.MergeWithFile(Path.Combine(solutionDirectory, "rig.rules.json"));
 
         if (extraRulesPaths is not null)
@@ -77,12 +85,8 @@ internal sealed record AnalysisRuleSet(
             ClassInheritanceEntryPoints = ClassInheritanceEntryPoints
                 .Concat(document.EntryPoints?.ClassInheritance ?? [])
                 .ToArray(),
-            Effects = Effects
-                .Concat(document.Effects ?? [])
-                .ToArray(),
-            DiRegistrations = DiRegistrations
-                .Concat(document.DiRegistrations ?? [])
-                .ToArray(),
+            Effects = Effects.Concat(document.Effects ?? []).ToArray(),
+            DiRegistrations = DiRegistrations.Concat(document.DiRegistrations ?? []).ToArray(),
             FileInclude = FileInclude
                 .Concat(document.Files?.Include?.Select(rule => rule.ToFileRule("include")) ?? [])
                 .ToArray(),
@@ -96,7 +100,7 @@ internal sealed record AnalysisRuleSet(
             ProjectExcludePatterns = ProjectExcludePatterns
                 .Concat(document.Projects?.Exclude ?? [])
                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray()
+                .ToArray(),
         };
     }
 
@@ -125,15 +129,25 @@ internal sealed record AnalysisRuleSet(
         var candidates = new[]
         {
             Path.Combine(AppContext.BaseDirectory, "Rules", "builtin-rules.json"),
-            Path.Combine(Directory.GetCurrentDirectory(), "src", "Rig.Analysis", "Rules", "builtin-rules.json")
+            Path.Combine(
+                Directory.GetCurrentDirectory(),
+                "src",
+                "Rig.Analysis",
+                "Rules",
+                "builtin-rules.json"
+            ),
         };
 
-        var rulesPath = candidates.FirstOrDefault(File.Exists)
+        var rulesPath =
+            candidates.FirstOrDefault(File.Exists)
             ?? throw new InvalidOperationException("Could not find built-in analysis rules.");
 
         using var stream = File.OpenRead(rulesPath);
-        var document = JsonSerializer.Deserialize<AnalysisRulesDocument>(stream, JsonOptions)
-            ?? throw new InvalidOperationException($"Built-in analysis rules are invalid: {rulesPath}");
+        var document =
+            JsonSerializer.Deserialize<AnalysisRulesDocument>(stream, JsonOptions)
+            ?? throw new InvalidOperationException(
+                $"Built-in analysis rules are invalid: {rulesPath}"
+            );
 
         return new AnalysisRuleSet(
             document.EntryPoints?.MinimalApi ?? [],
@@ -144,7 +158,8 @@ internal sealed record AnalysisRuleSet(
             document.Files?.Include?.Select(rule => rule.ToFileRule("include")).ToArray() ?? [],
             document.Files?.Exclude?.Select(rule => rule.ToFileRule("exclude")).ToArray() ?? [],
             document.Files?.TestProjectPatterns ?? [],
-            document.Projects?.Exclude ?? []);
+            document.Projects?.Exclude ?? []
+        );
     }
 }
 
@@ -169,7 +184,8 @@ internal sealed record ClassInheritanceEntryPointRule(
     IReadOnlyList<string> HandlerMethods,
     bool RequireOverride,
     string? DefaultMethod = null,
-    IReadOnlyList<string>? HandlerParameterTypes = null);
+    IReadOnlyList<string>? HandlerParameterTypes = null
+);
 
 internal sealed record RouteMethodRule(string Method, string HttpMethod);
 
@@ -186,7 +202,8 @@ internal sealed record EffectRule(
     string Confidence,
     string Basis,
     string Reason,
-    bool TreatAsDispatch = false)
+    bool TreatAsDispatch = false
+)
 {
     public bool Matches(string methodName)
     {
@@ -198,7 +215,8 @@ internal sealed record DiRegistrationRule(
     IReadOnlyList<string> Methods,
     string Lifetime,
     string RegistrationKind,
-    string Reason)
+    string Reason
+)
 {
     public bool Matches(string methodName)
     {
@@ -266,6 +284,10 @@ internal sealed class FileRuleDocument
             Id,
             Glob,
             string.IsNullOrWhiteSpace(Reason) ? $"{direction}_file_rule" : Reason,
-            new Regex(GlobMatcher.ToRegex(Glob), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+            new Regex(
+                GlobMatcher.ToRegex(Glob),
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant
+            )
+        );
     }
 }

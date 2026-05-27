@@ -48,12 +48,15 @@ namespace EntryPointEffects.Api.Services
         AppDbContext db,
         MailKit.Net.Smtp.SmtpClient smtpClient,
         MediatR.IMediator mediator,
-        Ardalis.SharedKernel.IRepository<Team> repository)
+        Ardalis.SharedKernel.IRepository<Team> repository
+    )
     {
         public async Task ObserveAsync(Team team)
         {
             await db.Database.EnsureCreatedAsync();
-            await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO Teams (Name) VALUES ({team.Name})");
+            await db.Database.ExecuteSqlInterpolatedAsync(
+                $"INSERT INTO Teams (Name) VALUES ({team.Name})"
+            );
             await db.Teams.FromSqlRaw("SELECT Id, Name FROM Teams").ToListAsync();
 
             await smtpClient.ConnectAsync("smtp.test", 25, false);

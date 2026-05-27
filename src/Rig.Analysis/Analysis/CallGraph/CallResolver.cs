@@ -1,14 +1,17 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Rig.Analysis.Analysis.Rules;
+using Rig.Domain.Data;
 
-namespace Rig.Analysis;
+namespace Rig.Analysis.Analysis.CallGraph;
 
 internal static class CallResolver
 {
     public static ResolvedCallSetInfo ResolveCalls(
         SyntaxNode root,
         SemanticModel semanticModel,
-        CallGraphContext context)
+        CallGraphContext context
+    )
     {
         var calls = new List<ResolvedCallInfo>();
         var boundaryCalls = new List<BoundaryCallInfo>();
@@ -65,7 +68,8 @@ internal static class CallResolver
     public static BoundaryCallInfo CreateExternalBoundaryCall(
         SyntaxNode node,
         SemanticModel semanticModel,
-        IMethodSymbol methodSymbol)
+        IMethodSymbol methodSymbol
+    )
     {
         return new BoundaryCallInfo(
             "external",
@@ -75,12 +79,14 @@ internal static class CallResolver
             RoslynSymbolHelpers.GetCallNameLine(semanticModel.SyntaxTree, node),
             "high",
             "compilation",
-            "external_symbol");
+            "external_symbol"
+        );
     }
 
     public static BoundaryCallInfo CreateUnresolvedBoundaryCall(
         SyntaxNode node,
-        SemanticModel semanticModel)
+        SemanticModel semanticModel
+    )
     {
         return new BoundaryCallInfo(
             "unresolved",
@@ -90,14 +96,16 @@ internal static class CallResolver
             RoslynSymbolHelpers.GetCallNameLine(semanticModel.SyntaxTree, node),
             "low",
             "compilation",
-            "unresolved_call_target");
+            "unresolved_call_target"
+        );
     }
 
     private static void AddMethodGroupCalls(
         SyntaxNode root,
         SemanticModel semanticModel,
         CallGraphContext context,
-        List<ResolvedCallInfo> calls)
+        List<ResolvedCallInfo> calls
+    )
     {
         // Scan for method group references used as delegates; they are not InvocationExpressionSyntax.
         foreach (var node in root.DescendantNodes())
@@ -107,14 +115,19 @@ internal static class CallResolver
                 continue;
             }
 
-            if (node is IdentifierNameSyntax &&
-                node.Parent is MemberAccessExpressionSyntax parentMember &&
-                parentMember.Name == node)
+            if (
+                node is IdentifierNameSyntax
+                && node.Parent is MemberAccessExpressionSyntax parentMember
+                && parentMember.Name == node
+            )
             {
                 continue;
             }
 
-            if (node.Parent is InvocationExpressionSyntax parentCall && parentCall.Expression == node)
+            if (
+                node.Parent is InvocationExpressionSyntax parentCall
+                && parentCall.Expression == node
+            )
             {
                 continue;
             }
@@ -146,16 +159,22 @@ internal static class CallResolver
         InvocationExpressionSyntax invocation,
         SemanticModel semanticModel,
         IMethodSymbol methodSymbol,
-        CallGraphContext context)
+        CallGraphContext context
+    )
     {
-        var matchingRule = context.DispatchRules.FirstOrDefault(rule => IsDispatchCall(methodSymbol, rule));
+        var matchingRule = context.DispatchRules.FirstOrDefault(rule =>
+            IsDispatchCall(methodSymbol, rule)
+        );
         if (matchingRule is null)
         {
             return null;
         }
 
         var argumentType = GetInvocationArgumentType(invocation, semanticModel);
-        if (argumentType is null || !context.DispatchIndex.TryGetValue(argumentType, out var handlerKeys))
+        if (
+            argumentType is null
+            || !context.DispatchIndex.TryGetValue(argumentType, out var handlerKeys)
+        )
         {
             return null;
         }
@@ -170,21 +189,28 @@ internal static class CallResolver
 
     private static ResolvedCallInfo? TryResolveSingleImplDispatch(
         IMethodSymbol methodSymbol,
-        CallGraphContext context)
+        CallGraphContext context
+    )
     {
         if (methodSymbol.ContainingType.TypeKind != Microsoft.CodeAnalysis.TypeKind.Interface)
         {
             return null;
         }
 
-        var interfaceTypeKey = RoslynSymbolHelpers.GetTypeKey(methodSymbol.ContainingType.OriginalDefinition);
+        var interfaceTypeKey = RoslynSymbolHelpers.GetTypeKey(
+            methodSymbol.ContainingType.OriginalDefinition
+        );
         if (!context.SingleImplIndex.TryGetValue(interfaceTypeKey, out var concreteTypeKey))
         {
             return null;
         }
 
         var interfaceMethodKey = RoslynSymbolHelpers.GetMethodKey(methodSymbol);
-        var concreteMethodKey = interfaceMethodKey.Replace(interfaceTypeKey, concreteTypeKey, StringComparison.Ordinal);
+        var concreteMethodKey = interfaceMethodKey.Replace(
+            interfaceTypeKey,
+            concreteTypeKey,
+            StringComparison.Ordinal
+        );
 
         return context.Methods.ContainsKey(concreteMethodKey)
             ? new ResolvedCallInfo(concreteMethodKey)
@@ -205,12 +231,14 @@ internal static class CallResolver
 
         var containingType = methodSymbol.ContainingType.OriginalDefinition.ToDisplayString();
         return rule.DeclaringTypes.Any(dt =>
-            RuleTypeMatcher.MatchesDisplayName(containingType, dt, allowSubstring: true));
+            RuleTypeMatcher.MatchesDisplayName(containingType, dt, allowSubstring: true)
+        );
     }
 
     private static string? GetInvocationArgumentType(
         InvocationExpressionSyntax invocation,
-        SemanticModel semanticModel)
+        SemanticModel semanticModel
+    )
     {
         var argument = invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression;
         return argument is null
@@ -230,12 +258,16 @@ internal static class CallResolver
     {
         return node switch
         {
-            InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax m } => m.Name.Identifier.ValueText,
-            InvocationExpressionSyntax { Expression: IdentifierNameSyntax id } => id.Identifier.ValueText,
-            InvocationExpressionSyntax { Expression: GenericNameSyntax g } => g.Identifier.ValueText,
+            InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax m } => m.Name
+                .Identifier
+                .ValueText,
+            InvocationExpressionSyntax { Expression: IdentifierNameSyntax id } =>
+                id.Identifier.ValueText,
+            InvocationExpressionSyntax { Expression: GenericNameSyntax g } =>
+                g.Identifier.ValueText,
             MemberAccessExpressionSyntax memberAccess => memberAccess.Name.Identifier.ValueText,
             IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
-            _ => null
+            _ => null,
         };
     }
 }

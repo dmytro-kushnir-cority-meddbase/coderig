@@ -31,6 +31,13 @@ rig callgraph 0          # focused by default
 rig callgraph 0 --full   # all nodes
 ```
 
+## Formatting
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\format.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\format.ps1 -Check
+```
+
 ### Self-contained binary (win-x64, fastest startup)
 
 ```powershell

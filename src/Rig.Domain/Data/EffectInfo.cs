@@ -1,4 +1,4 @@
-﻿namespace Rig.Analysis;
+﻿namespace Rig.Domain.Data;
 
 public sealed record EffectInfo(
     string Provider,
@@ -10,4 +10,5 @@ public sealed record EffectInfo(
     string Confidence,
     string Basis,
     string Reason,
-    IReadOnlyList<EffectObservationInfo> Observations);
+    IReadOnlyList<EffectObservationInfo> Observations
+);

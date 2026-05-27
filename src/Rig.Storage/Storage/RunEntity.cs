@@ -1,4 +1,4 @@
-namespace Rig.Storage;
+namespace Rig.Storage.Storage;
 
 public sealed class RunEntity
 {
@@ -17,5 +17,4 @@ public sealed class RunEntity
     public int MethodObservationCount { get; set; }
 
     public int InvocationObservationCount { get; set; }
-
 }

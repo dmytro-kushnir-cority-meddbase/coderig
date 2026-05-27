@@ -14,9 +14,7 @@ internal static class SymbolNameFormatter
             : symbol;
 
         var parameterStart = withoutGlobal.IndexOf('(');
-        var memberPart = parameterStart >= 0
-            ? withoutGlobal[..parameterStart]
-            : withoutGlobal;
+        var memberPart = parameterStart >= 0 ? withoutGlobal[..parameterStart] : withoutGlobal;
 
         var lastDot = memberPart.LastIndexOf('.');
         if (lastDot < 0)
@@ -25,8 +23,6 @@ internal static class SymbolNameFormatter
         }
 
         var previousDot = memberPart.LastIndexOf('.', lastDot - 1);
-        return previousDot >= 0
-            ? memberPart[(previousDot + 1)..]
-            : memberPart;
+        return previousDot >= 0 ? memberPart[(previousDot + 1)..] : memberPart;
     }
 }

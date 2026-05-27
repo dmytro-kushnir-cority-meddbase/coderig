@@ -1,4 +1,4 @@
-namespace Rig.Analysis;
+namespace Rig.Analysis.Analysis.Rules;
 
 public static class AnalysisProfileValidator
 {

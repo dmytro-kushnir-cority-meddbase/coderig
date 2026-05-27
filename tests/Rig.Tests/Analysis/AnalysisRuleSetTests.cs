@@ -1,4 +1,5 @@
 using Rig.Analysis;
+using Rig.Analysis.Analysis.Rules;
 using Shouldly;
 
 namespace Rig.Tests.Analysis;
@@ -8,16 +9,19 @@ public sealed class AnalysisRuleSetTests
     [Fact]
     public void LoadForSolution_rejects_file_rules_without_id()
     {
-        using var workspace = TempRulesWorkspace.Create("""
-        {
-          "files": {
-            "exclude": [{ "glob": "**/*.g.cs", "reason": "generated" }]
-          }
-        }
-        """);
+        using var workspace = TempRulesWorkspace.Create(
+            """
+            {
+              "files": {
+                "exclude": [{ "glob": "**/*.g.cs", "reason": "generated" }]
+              }
+            }
+            """
+        );
 
         var exception = Should.Throw<InvalidOperationException>(() =>
-            AnalysisRuleSet.LoadForSolution(workspace.SolutionPath));
+            AnalysisRuleSet.LoadForSolution(workspace.SolutionPath)
+        );
 
         exception.Message.ShouldContain("File rule in `exclude` is missing `id`.");
     }
@@ -25,16 +29,19 @@ public sealed class AnalysisRuleSetTests
     [Fact]
     public void LoadForSolution_rejects_file_rules_without_glob()
     {
-        using var workspace = TempRulesWorkspace.Create("""
-        {
-          "files": {
-            "include": [{ "id": "include-contract", "reason": "contract_fixture" }]
-          }
-        }
-        """);
+        using var workspace = TempRulesWorkspace.Create(
+            """
+            {
+              "files": {
+                "include": [{ "id": "include-contract", "reason": "contract_fixture" }]
+              }
+            }
+            """
+        );
 
         var exception = Should.Throw<InvalidOperationException>(() =>
-            AnalysisRuleSet.LoadForSolution(workspace.SolutionPath));
+            AnalysisRuleSet.LoadForSolution(workspace.SolutionPath)
+        );
 
         exception.Message.ShouldContain("File rule `include-contract` is missing `glob`.");
     }
@@ -56,11 +63,13 @@ public sealed class AnalysisRuleSetTests
                 "exclude": ["*.AppHost"]
               }
             }
-            """);
+            """
+        );
 
         var rules = AnalysisRuleSet.LoadForSolution(
             workspace.SolutionPath,
-            [workspace.ExtraRulesPath]);
+            [workspace.ExtraRulesPath]
+        );
 
         rules.IsTestProject("Rig.Tests").ShouldBeTrue();
         rules.IsExcludedProject("Sample.AppHost").ShouldBeTrue();
@@ -81,7 +90,10 @@ public sealed class AnalysisRuleSetTests
 
         public string ExtraRulesPath { get; }
 
-        public static TempRulesWorkspace Create(string solutionRulesJson, string? extraRulesJson = null)
+        public static TempRulesWorkspace Create(
+            string solutionRulesJson,
+            string? extraRulesJson = null
+        )
         {
             var directory = Directory.CreateTempSubdirectory("rig-rules-").FullName;
             var solutionPath = Path.Combine(directory, "Sample.slnx");

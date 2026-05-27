@@ -1,4 +1,4 @@
-﻿namespace Rig.Analysis;
+﻿namespace Rig.Domain.Data;
 
 public record RunSummary(
     string Id,
@@ -8,4 +8,5 @@ public record RunSummary(
     int EffectCount,
     int DiRegistrationCount,
     int MethodObservationCount,
-    int InvocationObservationCount);
+    int InvocationObservationCount
+);

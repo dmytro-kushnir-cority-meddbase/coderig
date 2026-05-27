@@ -1,6 +1,7 @@
 using Microsoft.CodeAnalysis;
+using Rig.Analysis.Analysis.Rules;
 
-namespace Rig.Analysis;
+namespace Rig.Analysis.Analysis.Inventory;
 
 internal static class SourceFileClassifier
 {
@@ -8,7 +9,8 @@ internal static class SourceFileClassifier
         string solutionPath,
         Project project,
         string filePath,
-        AnalysisRuleSet rules)
+        AnalysisRuleSet rules
+    )
     {
         return Classify(solutionPath, project.Name, filePath, rules);
     }
@@ -17,7 +19,8 @@ internal static class SourceFileClassifier
         string solutionPath,
         string projectName,
         string filePath,
-        AnalysisRuleSet rules)
+        AnalysisRuleSet rules
+    )
     {
         var relativePath = GetRelativePath(solutionPath, filePath);
         var excludedByRule = rules.FindExcludedFile(relativePath);
@@ -28,7 +31,8 @@ internal static class SourceFileClassifier
                 "high",
                 "profile",
                 excludedByRule.Reason,
-                excludedByRule.Id);
+                excludedByRule.Id
+            );
         }
 
         var includedByRule = rules.FindIncludedFile(relativePath);
@@ -39,7 +43,8 @@ internal static class SourceFileClassifier
                 "high",
                 "profile",
                 includedByRule.Reason,
-                includedByRule.Id);
+                includedByRule.Id
+            );
         }
 
         if (rules.IsTestProject(projectName))
@@ -49,7 +54,8 @@ internal static class SourceFileClassifier
                 "medium",
                 "convention",
                 "test_source",
-                projectName);
+                projectName
+            );
         }
 
         return new SourceFileClassification(
@@ -57,12 +63,14 @@ internal static class SourceFileClassifier
             "high",
             "compilation",
             "project_document",
-            relativePath);
+            relativePath
+        );
     }
 
     private static string GetRelativePath(string solutionPath, string filePath)
     {
-        var solutionDirectory = Path.GetDirectoryName(solutionPath) ?? Directory.GetCurrentDirectory();
+        var solutionDirectory =
+            Path.GetDirectoryName(solutionPath) ?? Directory.GetCurrentDirectory();
         return Path.GetRelativePath(solutionDirectory, filePath).Replace('\\', '/');
     }
 }

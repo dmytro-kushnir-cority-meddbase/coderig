@@ -1,4 +1,4 @@
-﻿namespace Rig.Analysis;
+﻿namespace Rig.Domain.Data;
 
 public sealed record DiRegistrationInfo(
     string ServiceType,
@@ -10,4 +10,5 @@ public sealed record DiRegistrationInfo(
     string Confidence,
     string Basis,
     string Reason,
-    string Evidence);
+    string Evidence
+);

@@ -1,5 +1,5 @@
-using Rig.Analysis;
 using Rig.Cli.Rendering;
+using Rig.Domain.Data;
 using Shouldly;
 
 namespace Rig.Tests.Cli;
@@ -62,7 +62,8 @@ public sealed class CallGraphRendererTests
             "high",
             "compilation+profile",
             "ef_read",
-            []);
+            []
+        );
         var boundaryEffect = new EffectInfo(
             "http",
             "GET",
@@ -73,7 +74,8 @@ public sealed class CallGraphRendererTests
             "high",
             "compilation+profile",
             "httpclient_method_match",
-            []);
+            []
+        );
 
         return new CallGraphInfo(
             "minapi GET /teams",
@@ -86,8 +88,20 @@ public sealed class CallGraphRendererTests
                     "compilation",
                     "entry",
                     ["Repository.Load", "Telemetry.Track"],
-                    [new BoundaryCallInfo("external", "System.Net.Http.HttpClient.GetStringAsync", "HttpClient.GetStringAsync", @"C:\repo\Controller.cs", 11, "high", "compilation", "external_symbol")],
-                    [boundaryEffect]),
+                    [
+                        new BoundaryCallInfo(
+                            "external",
+                            "System.Net.Http.HttpClient.GetStringAsync",
+                            "HttpClient.GetStringAsync",
+                            @"C:\repo\Controller.cs",
+                            11,
+                            "high",
+                            "compilation",
+                            "external_symbol"
+                        ),
+                    ],
+                    [boundaryEffect]
+                ),
                 new CallGraphNodeInfo(
                     "Repository.Load",
                     @"C:\repo\Repository.cs",
@@ -97,7 +111,8 @@ public sealed class CallGraphRendererTests
                     "direct_symbol_match",
                     [],
                     [],
-                    [effect, effect]),
+                    [effect, effect]
+                ),
                 new CallGraphNodeInfo(
                     "Telemetry.Track",
                     @"C:\repo\Telemetry.cs",
@@ -107,8 +122,11 @@ public sealed class CallGraphRendererTests
                     "direct_symbol_match",
                     [],
                     [],
-                    [])
+                    []
+                ),
             ],
-            []);
+            []
+        );
     }
 }
+ 

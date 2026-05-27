@@ -1,4 +1,6 @@
-namespace Rig.Analysis;
+using Rig.Domain.Data;
+
+namespace Rig.Domain.Functions;
 
 public static class CallGraphCycleDetector
 {
@@ -15,8 +17,8 @@ public static class CallGraphCycleDetector
             Visit(node.Symbol);
         }
 
-        return cycles.Values
-            .OrderBy(cycle => string.Join(" -> ", cycle.Path), StringComparer.Ordinal)
+        return cycles
+            .Values.OrderBy(cycle => string.Join(" -> ", cycle.Path), StringComparer.Ordinal)
             .ToArray();
 
         void Visit(string symbol)
@@ -74,8 +76,11 @@ public static class CallGraphCycleDetector
             return "";
         }
 
-        var rotations = Enumerable.Range(0, uniquePath.Length)
-            .Select(start => string.Join("\u001f", uniquePath.Skip(start).Concat(uniquePath.Take(start))));
+        var rotations = Enumerable
+            .Range(0, uniquePath.Length)
+            .Select(start =>
+                string.Join("\u001f", uniquePath.Skip(start).Concat(uniquePath.Take(start)))
+            );
 
         return rotations.Min(StringComparer.Ordinal) ?? "";
     }
@@ -83,6 +88,6 @@ public static class CallGraphCycleDetector
     private enum VisitState
     {
         Visiting,
-        Done
+        Done,
     }
 }

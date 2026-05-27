@@ -1,4 +1,4 @@
-namespace Rig.Storage;
+namespace Rig.Storage.Storage;
 
 public sealed class CallGraphEntity
 {

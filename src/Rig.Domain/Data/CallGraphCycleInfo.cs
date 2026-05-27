@@ -1,4 +1,3 @@
-﻿namespace Rig.Analysis;
+﻿namespace Rig.Domain.Data;
 
-public sealed record CallGraphCycleInfo(
-    IReadOnlyList<string> Path);
+public sealed record CallGraphCycleInfo(IReadOnlyList<string> Path);

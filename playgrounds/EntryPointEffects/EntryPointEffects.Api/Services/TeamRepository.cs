@@ -12,11 +12,9 @@ public sealed class TeamRepository : ITeamRepository
         _db = db;
     }
 
-    public Task<List<Team>> GetAllAsync()
-        => _db.Teams.ToListAsync();
+    public Task<List<Team>> GetAllAsync() => _db.Teams.ToListAsync();
 
-    public Task<Team?> FindAsync(int id)
-        => _db.Teams.FindAsync(id).AsTask();
+    public Task<Team?> FindAsync(int id) => _db.Teams.FindAsync(id).AsTask();
 
     public async Task AddAsync(Team team)
     {

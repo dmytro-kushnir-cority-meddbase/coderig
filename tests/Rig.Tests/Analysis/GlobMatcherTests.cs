@@ -1,4 +1,4 @@
-using Rig.Analysis;
+using Rig.Domain.Functions;
 using Shouldly;
 
 namespace Rig.Tests.Analysis;

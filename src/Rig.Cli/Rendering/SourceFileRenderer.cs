@@ -1,4 +1,4 @@
-using Rig.Analysis;
+using Rig.Domain.Data;
 
 namespace Rig.Cli.Rendering;
 
@@ -10,7 +10,9 @@ internal static class SourceFileRenderer
         foreach (var sourceFile in sourceFiles)
         {
             output.WriteLine($"  {Path.GetFileName(sourceFile.FilePath)}");
-            output.WriteLine($"    project={sourceFile.ProjectName} conf={sourceFile.Confidence} basis={sourceFile.Basis} reason={sourceFile.Reason}");
+            output.WriteLine(
+                $"    project={sourceFile.ProjectName} conf={sourceFile.Confidence} basis={sourceFile.Basis} reason={sourceFile.Reason}"
+            );
             output.WriteLine($"    path={sourceFile.FilePath}");
         }
     }

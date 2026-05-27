@@ -1,8 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
-using Rig.Analysis;
 
-namespace Rig.Storage;
+namespace Rig.Storage.Storage;
 
 // Used only by `dotnet ef dbcontext optimize` at design time
 public sealed class RigDbContextDesignTimeFactory : IDesignTimeDbContextFactory<RigDbContext>
@@ -26,7 +25,8 @@ public sealed class RigDbContext(string databasePath) : DbContext
 
     public DbSet<MethodObservationEntity> MethodObservations => Set<MethodObservationEntity>();
 
-    public DbSet<InvocationObservationEntity> InvocationObservations => Set<InvocationObservationEntity>();
+    public DbSet<InvocationObservationEntity> InvocationObservations =>
+        Set<InvocationObservationEntity>();
 
     public DbSet<CallGraphEntity> CallGraphs => Set<CallGraphEntity>();
 
@@ -34,9 +34,11 @@ public sealed class RigDbContext(string databasePath) : DbContext
 
     public DbSet<CallGraphNodeCallEntity> CallGraphNodeCalls => Set<CallGraphNodeCallEntity>();
 
-    public DbSet<CallGraphBoundaryCallEntity> CallGraphBoundaryCalls => Set<CallGraphBoundaryCallEntity>();
+    public DbSet<CallGraphBoundaryCallEntity> CallGraphBoundaryCalls =>
+        Set<CallGraphBoundaryCallEntity>();
 
-    public DbSet<CallGraphNodeEffectEntity> CallGraphNodeEffects => Set<CallGraphNodeEffectEntity>();
+    public DbSet<CallGraphNodeEffectEntity> CallGraphNodeEffects =>
+        Set<CallGraphNodeEffectEntity>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -73,22 +75,40 @@ public sealed class RigDbContext(string databasePath) : DbContext
         {
             entity.ToTable("effects");
             entity.HasKey(effect => new { effect.RunId, effect.EffectIndex });
-            entity.HasIndex(effect => new { effect.RunId, effect.Provider, effect.Operation });
+            entity.HasIndex(effect => new
+            {
+                effect.RunId,
+                effect.Provider,
+                effect.Operation,
+            });
         });
 
         modelBuilder.Entity<EffectObservationEntity>(entity =>
         {
             entity.ToTable("effect_observations");
-            entity.HasKey(observation => new { observation.RunId, observation.EffectIndex, observation.ObservationIndex });
+            entity.HasKey(observation => new
+            {
+                observation.RunId,
+                observation.EffectIndex,
+                observation.ObservationIndex,
+            });
             entity.HasIndex(observation => new { observation.RunId, observation.Type });
         });
 
         modelBuilder.Entity<DiRegistrationEntity>(entity =>
         {
             entity.ToTable("di_registrations");
-            entity.HasKey(registration => new { registration.RunId, registration.RegistrationIndex });
+            entity.HasKey(registration => new
+            {
+                registration.RunId,
+                registration.RegistrationIndex,
+            });
             entity.HasIndex(registration => new { registration.RunId, registration.ServiceType });
-            entity.HasIndex(registration => new { registration.RunId, registration.ImplementationType });
+            entity.HasIndex(registration => new
+            {
+                registration.RunId,
+                registration.ImplementationType,
+            });
         });
 
         modelBuilder.Entity<MethodObservationEntity>(entity =>
@@ -103,7 +123,11 @@ public sealed class RigDbContext(string databasePath) : DbContext
         {
             entity.ToTable("invocation_observations");
             entity.HasKey(observation => new { observation.RunId, observation.InvocationIndex });
-            entity.HasIndex(observation => new { observation.RunId, observation.ContainingMethodSymbol });
+            entity.HasIndex(observation => new
+            {
+                observation.RunId,
+                observation.ContainingMethodSymbol,
+            });
             entity.HasIndex(observation => new { observation.RunId, observation.TargetSymbol });
         });
 
@@ -117,29 +141,56 @@ public sealed class RigDbContext(string databasePath) : DbContext
         modelBuilder.Entity<CallGraphNodeEntity>(entity =>
         {
             entity.ToTable("callgraph_nodes");
-            entity.HasKey(node => new { node.RunId, node.GraphIndex, node.NodeIndex });
+            entity.HasKey(node => new
+            {
+                node.RunId,
+                node.GraphIndex,
+                node.NodeIndex,
+            });
             entity.HasIndex(node => new { node.RunId, node.Symbol });
         });
 
         modelBuilder.Entity<CallGraphNodeCallEntity>(entity =>
         {
             entity.ToTable("callgraph_node_calls");
-            entity.HasKey(call => new { call.RunId, call.GraphIndex, call.NodeIndex, call.CallIndex });
+            entity.HasKey(call => new
+            {
+                call.RunId,
+                call.GraphIndex,
+                call.NodeIndex,
+                call.CallIndex,
+            });
         });
 
         modelBuilder.Entity<CallGraphBoundaryCallEntity>(entity =>
         {
             entity.ToTable("callgraph_boundary_calls");
-            entity.HasKey(call => new { call.RunId, call.GraphIndex, call.NodeIndex, call.BoundaryCallIndex });
+            entity.HasKey(call => new
+            {
+                call.RunId,
+                call.GraphIndex,
+                call.NodeIndex,
+                call.BoundaryCallIndex,
+            });
             entity.HasIndex(call => new { call.RunId, call.Kind });
         });
 
         modelBuilder.Entity<CallGraphNodeEffectEntity>(entity =>
         {
             entity.ToTable("callgraph_node_effects");
-            entity.HasKey(link => new { link.RunId, link.GraphIndex, link.NodeIndex, link.LinkIndex });
-            entity.HasIndex(link => new { link.RunId, link.GraphIndex, link.NodeIndex });
+            entity.HasKey(link => new
+            {
+                link.RunId,
+                link.GraphIndex,
+                link.NodeIndex,
+                link.LinkIndex,
+            });
+            entity.HasIndex(link => new
+            {
+                link.RunId,
+                link.GraphIndex,
+                link.NodeIndex,
+            });
         });
     }
 }
-

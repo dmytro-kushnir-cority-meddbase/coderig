@@ -1,4 +1,4 @@
-﻿namespace Rig.Analysis;
+﻿namespace Rig.Domain.Data;
 
 public sealed record InvocationObservationInfo(
     string ContainingMethodSymbol,
@@ -8,4 +8,5 @@ public sealed record InvocationObservationInfo(
     int Line,
     string Confidence,
     string Basis,
-    string Reason);
+    string Reason
+);

@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Rig.Analysis;
+using Rig.Analysis.Analysis.Inventory;
+using Rig.Analysis.Analysis.Rules;
 using Shouldly;
 
 namespace Rig.Tests.Analysis;
@@ -9,20 +11,28 @@ public sealed class SourceFileClassifierTests
     [Fact]
     public void Exclude_rules_take_precedence_over_include_rules()
     {
-        var rules = Rules("""
-        {
-          "files": {
-            "include": [{ "id": "include-generated", "glob": "**/Generated/*.g.cs", "reason": "explicit_include" }],
-            "exclude": [{ "id": "exclude-generated", "glob": "**/Generated/*.g.cs", "reason": "generated_fixture" }]
-          }
-        }
-        """);
+        var rules = Rules(
+            """
+            {
+              "files": {
+                "include": [{ "id": "include-generated", "glob": "**/Generated/*.g.cs", "reason": "explicit_include" }],
+                "exclude": [{ "id": "exclude-generated", "glob": "**/Generated/*.g.cs", "reason": "generated_fixture" }]
+              }
+            }
+            """
+        );
 
         var classification = SourceFileClassifier.Classify(
             SolutionPath(),
             "EntryPointEffects.Api",
-            Path.Combine(SolutionDirectory(), "EntryPointEffects.Api", "Generated", "Endpoint.g.cs"),
-            rules);
+            Path.Combine(
+                SolutionDirectory(),
+                "EntryPointEffects.Api",
+                "Generated",
+                "Endpoint.g.cs"
+            ),
+            rules
+        );
 
         classification.Status.ShouldBe("skipped");
         classification.Basis.ShouldBe("profile");
@@ -33,20 +43,23 @@ public sealed class SourceFileClassifierTests
     [Fact]
     public void Include_rules_can_force_test_project_source_to_index()
     {
-        var rules = Rules("""
-        {
-          "files": {
-            "include": [{ "id": "include-contract", "glob": "**/ContractFixture.cs", "reason": "contract_fixture" }],
-            "testProjectPatterns": ["*.Tests"]
-          }
-        }
-        """);
+        var rules = Rules(
+            """
+            {
+              "files": {
+                "include": [{ "id": "include-contract", "glob": "**/ContractFixture.cs", "reason": "contract_fixture" }],
+                "testProjectPatterns": ["*.Tests"]
+              }
+            }
+            """
+        );
 
         var classification = SourceFileClassifier.Classify(
             SolutionPath(),
             "Rig.Tests",
             Path.Combine(SolutionDirectory(), "Rig.Tests", "ContractFixture.cs"),
-            rules);
+            rules
+        );
 
         classification.Status.ShouldBe("indexed");
         classification.Basis.ShouldBe("profile");
@@ -57,19 +70,22 @@ public sealed class SourceFileClassifierTests
     [Fact]
     public void Test_project_patterns_skip_sources_by_convention()
     {
-        var rules = Rules("""
-        {
-          "files": {
-            "testProjectPatterns": ["*.Tests"]
-          }
-        }
-        """);
+        var rules = Rules(
+            """
+            {
+              "files": {
+                "testProjectPatterns": ["*.Tests"]
+              }
+            }
+            """
+        );
 
         var classification = SourceFileClassifier.Classify(
             SolutionPath(),
             "Rig.Tests",
             Path.Combine(SolutionDirectory(), "Rig.Tests", "SomeTest.cs"),
-            rules);
+            rules
+        );
 
         classification.Status.ShouldBe("skipped");
         classification.Confidence.ShouldBe("medium");
@@ -85,7 +101,8 @@ public sealed class SourceFileClassifierTests
             SolutionPath(),
             "Rig",
             Path.Combine(SolutionDirectory(), "src", "Rig", "Program.cs"),
-            Rules("{}"));
+            Rules("{}")
+        );
 
         classification.Status.ShouldBe("indexed");
         classification.Basis.ShouldBe("compilation");
@@ -97,7 +114,8 @@ public sealed class SourceFileClassifierTests
     {
         var document = JsonSerializer.Deserialize<AnalysisRulesDocument>(
             json,
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true }
+        );
         document.ShouldNotBeNull();
 
         return new AnalysisRuleSet(
@@ -109,7 +127,8 @@ public sealed class SourceFileClassifierTests
             document.Files?.Include?.Select(rule => rule.ToFileRule("include")).ToArray() ?? [],
             document.Files?.Exclude?.Select(rule => rule.ToFileRule("exclude")).ToArray() ?? [],
             document.Files?.TestProjectPatterns ?? [],
-            document.Projects?.Exclude ?? []);
+            document.Projects?.Exclude ?? []
+        );
     }
 
     private static string SolutionPath()

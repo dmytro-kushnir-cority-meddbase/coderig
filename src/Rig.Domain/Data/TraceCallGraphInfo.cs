@@ -1,5 +1,3 @@
-﻿namespace Rig.Analysis;
+﻿namespace Rig.Domain.Data;
 
-public sealed record TraceCallGraphInfo(
-    int EntryPointIndex,
-    CallGraphInfo CallGraph);
+public sealed record TraceCallGraphInfo(int EntryPointIndex, CallGraphInfo CallGraph);

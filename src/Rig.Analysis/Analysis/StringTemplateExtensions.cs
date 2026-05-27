@@ -1,6 +1,6 @@
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
-namespace Rig.Analysis;
+namespace Rig.Analysis.Analysis;
 
 internal static class StringTemplateExtensions
 {
@@ -8,8 +8,9 @@ internal static class StringTemplateExtensions
     {
         return expression switch
         {
-            LiteralExpressionSyntax literal when literal.Token.ValueText is { Length: > 0 } value => value,
-            _ => null
+            LiteralExpressionSyntax literal when literal.Token.ValueText is { Length: > 0 } value =>
+                value,
+            _ => null,
         };
     }
 
@@ -18,8 +19,10 @@ internal static class StringTemplateExtensions
         return expression switch
         {
             LiteralExpressionSyntax literal => literal.Token.ValueText,
-            InterpolatedStringExpressionSyntax interpolated => BuildInterpolatedTemplate(interpolated),
-            _ => null
+            InterpolatedStringExpressionSyntax interpolated => BuildInterpolatedTemplate(
+                interpolated
+            ),
+            _ => null,
         };
     }
 
@@ -49,7 +52,7 @@ internal static class StringTemplateExtensions
         {
             IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
             MemberAccessExpressionSyntax memberAccess => memberAccess.Name.Identifier.ValueText,
-            _ => "expr"
+            _ => "expr",
         };
     }
 }

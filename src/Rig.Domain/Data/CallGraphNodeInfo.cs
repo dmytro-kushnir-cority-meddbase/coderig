@@ -1,4 +1,4 @@
-﻿namespace Rig.Analysis;
+﻿namespace Rig.Domain.Data;
 
 public sealed record CallGraphNodeInfo(
     string Symbol,
@@ -9,4 +9,5 @@ public sealed record CallGraphNodeInfo(
     string Reason,
     IReadOnlyList<string> Calls,
     IReadOnlyList<BoundaryCallInfo> BoundaryCalls,
-    IReadOnlyList<EffectInfo> Effects);
+    IReadOnlyList<EffectInfo> Effects
+);

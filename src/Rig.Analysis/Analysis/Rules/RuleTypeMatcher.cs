@@ -1,6 +1,6 @@
 using Microsoft.CodeAnalysis;
 
-namespace Rig.Analysis;
+namespace Rig.Analysis.Analysis.Rules;
 
 internal static class RuleTypeMatcher
 {
@@ -10,16 +10,22 @@ internal static class RuleTypeMatcher
             .Select(type => type.OriginalDefinition.ToDisplayString())
             .Distinct(StringComparer.Ordinal);
 
-        return actualTypes.Any(actual => MatchesDisplayName(actual, ruleType, allowSubstring: true));
+        return actualTypes.Any(actual =>
+            MatchesDisplayName(actual, ruleType, allowSubstring: true)
+        );
     }
 
-    public static bool MatchesDisplayName(string actualType, string ruleType, bool allowSubstring = false)
+    public static bool MatchesDisplayName(
+        string actualType,
+        string ruleType,
+        bool allowSubstring = false
+    )
     {
-        return string.Equals(actualType, ruleType, StringComparison.Ordinal) ||
-            actualType.StartsWith($"{ruleType}<", StringComparison.Ordinal) ||
-            actualType.EndsWith($".{ruleType}", StringComparison.Ordinal) ||
-            actualType.Contains($".{ruleType}<", StringComparison.Ordinal) ||
-            (allowSubstring && actualType.Contains(ruleType, StringComparison.Ordinal));
+        return string.Equals(actualType, ruleType, StringComparison.Ordinal)
+            || actualType.StartsWith($"{ruleType}<", StringComparison.Ordinal)
+            || actualType.EndsWith($".{ruleType}", StringComparison.Ordinal)
+            || actualType.Contains($".{ruleType}<", StringComparison.Ordinal)
+            || (allowSubstring && actualType.Contains(ruleType, StringComparison.Ordinal));
     }
 
     private static IEnumerable<ITypeSymbol> EnumerateTypeAndInterfaces(ITypeSymbol type)

@@ -17,13 +17,9 @@ public sealed class TempPlayground : IDisposable
 
     public static async Task<TempPlayground> CreateEntryPointEffectsAsync()
     {
-        var repositoryRoot = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory,
-            "..",
-            "..",
-            "..",
-            "..",
-            ".."));
+        var repositoryRoot = Path.GetFullPath(
+            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..")
+        );
         var sourceDirectory = Path.Combine(repositoryRoot, "playgrounds", "EntryPointEffects");
         var rootDirectory = Directory.CreateTempSubdirectory("rig-entrypoint-effects-").FullName;
         var targetDirectory = Path.Combine(rootDirectory, "EntryPointEffects");
@@ -74,7 +70,11 @@ public sealed class TempPlayground : IDisposable
 
         foreach (var file in Directory.EnumerateFiles(sourceDirectory))
         {
-            File.Copy(file, Path.Combine(targetDirectory, Path.GetFileName(file)), overwrite: false);
+            File.Copy(
+                file,
+                Path.Combine(targetDirectory, Path.GetFileName(file)),
+                overwrite: false
+            );
         }
 
         foreach (var directory in Directory.EnumerateDirectories(sourceDirectory))
@@ -95,7 +95,7 @@ public sealed class TempPlayground : IDisposable
         {
             WorkingDirectory = workingDirectory,
             RedirectStandardError = true,
-            RedirectStandardOutput = true
+            RedirectStandardOutput = true,
         };
 
         foreach (var argument in arguments)
@@ -103,7 +103,8 @@ public sealed class TempPlayground : IDisposable
             startInfo.ArgumentList.Add(argument);
         }
 
-        using var process = Process.Start(startInfo)
+        using var process =
+            Process.Start(startInfo)
             ?? throw new InvalidOperationException("Could not start dotnet process.");
 
         var output = await process.StandardOutput.ReadToEndAsync();

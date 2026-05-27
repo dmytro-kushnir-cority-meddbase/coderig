@@ -24,6 +24,8 @@ New-Item -ItemType Directory -Force -Path $packageOutput | Out-Null
 
 Push-Location $repoRoot
 try {
+    dotnet tool restore
+    dotnet csharpier check .
     dotnet restore $solution
     dotnet build $solution -c $Configuration /p:UseSharedCompilation=false -warnaserror
 

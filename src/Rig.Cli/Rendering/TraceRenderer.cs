@@ -1,4 +1,4 @@
-using Rig.Analysis;
+using Rig.Domain.Data;
 
 namespace Rig.Cli.Rendering;
 
@@ -21,7 +21,7 @@ internal static class TraceRenderer
 
         foreach (var graph in trace.CallGraphs)
         {
-            output.WriteLine($"  [{graph.EntryPointIndex,3}] {graph.CallGraph.EntryPoint}");
+            output.WriteLine($"  [{graph.EntryPointIndex, 3}] {graph.CallGraph.EntryPoint}");
         }
 
         if (!pathsMode)
@@ -37,7 +37,11 @@ internal static class TraceRenderer
         }
     }
 
-    public static void RenderAmbiguous(string query, IReadOnlyList<string> symbols, TextWriter error)
+    public static void RenderAmbiguous(
+        string query,
+        IReadOnlyList<string> symbols,
+        TextWriter error
+    )
     {
         error.WriteLine($"Ambiguous symbol query: {query}");
         error.WriteLine();
@@ -50,10 +54,10 @@ internal static class TraceRenderer
 
     private static void RenderGraphPaths(string symbol, TraceCallGraphInfo graph, TextWriter output)
     {
-        output.WriteLine($"[{graph.EntryPointIndex,3}] {graph.CallGraph.EntryPoint}");
+        output.WriteLine($"[{graph.EntryPointIndex, 3}] {graph.CallGraph.EntryPoint}");
 
-        var nodesBySymbol = graph.CallGraph.Nodes
-            .GroupBy(node => node.Symbol, StringComparer.Ordinal)
+        var nodesBySymbol = graph
+            .CallGraph.Nodes.GroupBy(node => node.Symbol, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
 
         if (!nodesBySymbol.TryGetValue(symbol, out var targetNode))
@@ -77,10 +81,18 @@ internal static class TraceRenderer
         }
 
         output.WriteLine("  Downstream");
-        RenderDownstreamNode(targetNode, nodesBySymbol, "    ", new HashSet<string>(StringComparer.Ordinal), output);
+        RenderDownstreamNode(
+            targetNode,
+            nodesBySymbol,
+            "    ",
+            new HashSet<string>(StringComparer.Ordinal),
+            output
+        );
     }
 
-    private static Dictionary<string, List<string>> BuildCallersByTarget(IReadOnlyList<CallGraphNodeInfo> nodes)
+    private static Dictionary<string, List<string>> BuildCallersByTarget(
+        IReadOnlyList<CallGraphNodeInfo> nodes
+    )
     {
         var callersByTarget = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var node in nodes)
@@ -102,7 +114,8 @@ internal static class TraceRenderer
 
     private static (IReadOnlyList<IReadOnlyList<string>> Paths, bool Truncated) BuildUpstreamPaths(
         string targetSymbol,
-        Dictionary<string, List<string>> callersByTarget)
+        Dictionary<string, List<string>> callersByTarget
+    )
     {
         var paths = new List<IReadOnlyList<string>>();
         var stack = new Stack<string>();
@@ -148,7 +161,8 @@ internal static class TraceRenderer
     private static void RenderPath(
         IReadOnlyList<string> path,
         Dictionary<string, CallGraphNodeInfo> nodesBySymbol,
-        TextWriter output)
+        TextWriter output
+    )
     {
         for (var i = 0; i < path.Count; i++)
         {
@@ -169,7 +183,8 @@ internal static class TraceRenderer
         Dictionary<string, CallGraphNodeInfo> nodesBySymbol,
         string indent,
         HashSet<string> visited,
-        TextWriter output)
+        TextWriter output
+    )
     {
         output.WriteLine($"{indent}{FormatNode(node)}");
 
@@ -195,12 +210,19 @@ internal static class TraceRenderer
         foreach (var boundary in node.BoundaryCalls)
         {
             var effect = EffectRenderFormatter.FindEffectForBoundary(boundary, node.Effects);
-            output.WriteLine(effect is null
-                ? $"{indent}  BOUNDARY {boundary.Kind} {boundary.Method}"
-                : $"{indent}  {EffectRenderFormatter.FormatEffect(effect)}");
+            output.WriteLine(
+                effect is null
+                    ? $"{indent}  BOUNDARY {boundary.Kind} {boundary.Method}"
+                    : $"{indent}  {EffectRenderFormatter.FormatEffect(effect)}"
+            );
         }
 
-        foreach (var effect in EffectRenderFormatter.GetUnmatchedEffects(node.BoundaryCalls, node.Effects))
+        foreach (
+            var effect in EffectRenderFormatter.GetUnmatchedEffects(
+                node.BoundaryCalls,
+                node.Effects
+            )
+        )
         {
             output.WriteLine($"{indent}  {EffectRenderFormatter.FormatEffect(effect)}");
         }
