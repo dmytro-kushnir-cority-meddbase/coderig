@@ -1099,5 +1099,36 @@
       "*Tests",
       "*.Tests"
     ]
+  },
+  "observations": {
+    "readBeforeCommit": [
+      {
+        "commitMethods": ["SaveChangesAsync", "SaveChanges"],
+        "readMethods": [
+          "ToListAsync",
+          "FirstAsync",
+          "FirstOrDefaultAsync",
+          "SingleAsync",
+          "SingleOrDefaultAsync",
+          "AnyAsync",
+          "CountAsync",
+          "LongCountAsync",
+          "FindAsync"
+        ],
+        "readReceiverTypePatterns": ["DbSet", "IQueryable"]
+      }
+    ],
+    "concurrencyHandled": [
+      {
+        "commitMethods": ["SaveChangesAsync", "SaveChanges"],
+        "catchTypePatterns": ["DbUpdateConcurrencyException", "DbUpdateException"]
+      }
+    ],
+    "resilienceRetry": [
+      {
+        "wrapperMethods": ["Execute", "ExecuteAsync"],
+        "receiverTypePatterns": ["ResiliencePipeline", "ExecutionStrategy", "IExecutionStrategy"]
+      }
+    ]
   }
 }

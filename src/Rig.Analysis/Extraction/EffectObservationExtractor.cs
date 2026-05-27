@@ -1,25 +1,13 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Rig.Analysis.Rules;
 using Rig.Domain.Data;
 
 namespace Rig.Analysis.Extraction;
 
 internal static class EffectObservationExtractor
 {
-    private static readonly HashSet<string> EfReadMethodNames = new(StringComparer.Ordinal)
-    {
-        "ToListAsync",
-        "FirstAsync",
-        "FirstOrDefaultAsync",
-        "SingleAsync",
-        "SingleOrDefaultAsync",
-        "AnyAsync",
-        "CountAsync",
-        "LongCountAsync",
-        "FindAsync",
-    };
-
-    public static EffectInfo AttachObservations(InvocationExpressionSyntax invocation, EffectInfo effect, SemanticModel semanticModel)
+    public static EffectInfo AttachObservations(InvocationExpressionSyntax invocation, EffectInfo effect, SemanticModel semanticModel, AnalysisRuleSet rules)
     {
         var observations = new List<EffectObservationInfo>();
 
@@ -53,49 +41,60 @@ internal static class EffectObservationExtractor
             );
         }
 
-        var resilience = FindResilienceRetryContext(invocation, semanticModel);
-        if (resilience is not null)
+        foreach (var rule in rules.ResilienceRetryObservations)
         {
-            observations.Add(
-                new EffectObservationInfo(
-                    "resilience_retry",
-                    resilience.Value.Context,
-                    resilience.Value.Detail,
-                    "high",
-                    "compilation",
-                    "effect_inside_resilience_retry"
-                )
-            );
+            var resilience = FindResilienceRetryContext(invocation, semanticModel, rule);
+            if (resilience is not null)
+            {
+                observations.Add(
+                    new EffectObservationInfo(
+                        "resilience_retry",
+                        resilience.Value.Context,
+                        resilience.Value.Detail,
+                        "high",
+                        "compilation",
+                        "effect_inside_resilience_retry"
+                    )
+                );
+            }
         }
 
-        var readBeforeCommit = FindReadBeforeCommitContext(invocation, semanticModel);
-        if (readBeforeCommit is not null)
+        foreach (var rule in rules.ReadBeforeCommitObservations)
         {
-            observations.Add(
-                new EffectObservationInfo(
-                    "read_before_commit",
-                    readBeforeCommit.Value.Context,
-                    readBeforeCommit.Value.Detail,
-                    "medium",
-                    "compilation",
-                    "potential_lost_update"
-                )
-            );
+            var readBeforeCommit = FindReadBeforeCommitContext(invocation, semanticModel, rule);
+            if (readBeforeCommit is not null)
+            {
+                observations.Add(
+                    new EffectObservationInfo(
+                        "read_before_commit",
+                        readBeforeCommit.Value.Context,
+                        readBeforeCommit.Value.Detail,
+                        "medium",
+                        "compilation",
+                        "potential_lost_update"
+                    )
+                );
+                break;
+            }
         }
 
-        var concurrencyHandled = FindConcurrencyHandlingContext(invocation, semanticModel);
-        if (concurrencyHandled is not null)
+        foreach (var rule in rules.ConcurrencyHandledObservations)
         {
-            observations.Add(
-                new EffectObservationInfo(
-                    "concurrency_handled",
-                    concurrencyHandled.Value.Context,
-                    concurrencyHandled.Value.Detail,
-                    "high",
-                    "compilation",
-                    "efcore_optimistic_concurrency_catch"
-                )
-            );
+            var concurrencyHandled = FindConcurrencyHandlingContext(invocation, semanticModel, rule);
+            if (concurrencyHandled is not null)
+            {
+                observations.Add(
+                    new EffectObservationInfo(
+                        "concurrency_handled",
+                        concurrencyHandled.Value.Context,
+                        concurrencyHandled.Value.Detail,
+                        "high",
+                        "compilation",
+                        "efcore_optimistic_concurrency_catch"
+                    )
+                );
+                break;
+            }
         }
 
         return effect with
@@ -106,17 +105,15 @@ internal static class EffectObservationExtractor
 
     private static (string Context, string Detail)? FindReadBeforeCommitContext(
         InvocationExpressionSyntax invocation,
-        SemanticModel semanticModel
+        SemanticModel semanticModel,
+        ReadBeforeCommitObservationRule rule
     )
     {
         if (invocation.Expression is not MemberAccessExpressionSyntax commitAccess)
             return null;
 
         var name = commitAccess.Name.Identifier.ValueText;
-        if (
-            !string.Equals(name, "SaveChangesAsync", StringComparison.Ordinal)
-            && !string.Equals(name, "SaveChanges", StringComparison.Ordinal)
-        )
+        if (!rule.CommitMethods.Contains(name, StringComparer.Ordinal))
             return null;
 
         var methodBody = invocation
@@ -140,11 +137,11 @@ internal static class EffectObservationExtractor
                 continue;
             if (candidate.Expression is not MemberAccessExpressionSyntax readAccess)
                 continue;
-            if (!EfReadMethodNames.Contains(readAccess.Name.Identifier.ValueText))
+            if (!rule.ReadMethods.Contains(readAccess.Name.Identifier.ValueText, StringComparer.Ordinal))
                 continue;
 
             var receiverFqn = semanticModel.GetTypeInfo(readAccess.Expression).Type?.OriginalDefinition.ToDisplayString() ?? "";
-            if (!receiverFqn.Contains("DbSet", StringComparison.Ordinal) && !receiverFqn.Contains("IQueryable", StringComparison.Ordinal))
+            if (!rule.ReadReceiverTypePatterns.Any(pattern => receiverFqn.Contains(pattern, StringComparison.Ordinal)))
                 continue;
 
             var readLine = semanticModel.SyntaxTree.GetLineSpan(candidate.Span).StartLinePosition.Line + 1;
@@ -156,17 +153,15 @@ internal static class EffectObservationExtractor
 
     private static (string Context, string Detail)? FindConcurrencyHandlingContext(
         InvocationExpressionSyntax invocation,
-        SemanticModel semanticModel
+        SemanticModel semanticModel,
+        ConcurrencyHandledObservationRule rule
     )
     {
         if (invocation.Expression is not MemberAccessExpressionSyntax commitAccess)
             return null;
 
         var name = commitAccess.Name.Identifier.ValueText;
-        if (
-            !string.Equals(name, "SaveChangesAsync", StringComparison.Ordinal)
-            && !string.Equals(name, "SaveChanges", StringComparison.Ordinal)
-        )
+        if (!rule.CommitMethods.Contains(name, StringComparer.Ordinal))
             return null;
 
         foreach (var ancestor in invocation.Ancestors().OfType<TryStatementSyntax>())
@@ -177,10 +172,9 @@ internal static class EffectObservationExtractor
                     continue;
 
                 var catchTypeName = semanticModel.GetTypeInfo(catchClause.Declaration.Type).Type?.ToDisplayString() ?? "";
-                if (catchTypeName.Contains("DbUpdateConcurrencyException", StringComparison.Ordinal))
-                    return ("DbUpdateConcurrencyException", catchTypeName);
-                if (catchTypeName.Contains("DbUpdateException", StringComparison.Ordinal))
-                    return ("DbUpdateException", catchTypeName);
+                var matched = rule.CatchTypePatterns.FirstOrDefault(pattern => catchTypeName.Contains(pattern, StringComparison.Ordinal));
+                if (matched is not null)
+                    return (matched, catchTypeName);
             }
         }
 
@@ -207,7 +201,8 @@ internal static class EffectObservationExtractor
 
     private static (string Context, string Detail)? FindResilienceRetryContext(
         InvocationExpressionSyntax invocation,
-        SemanticModel semanticModel
+        SemanticModel semanticModel,
+        ResilienceRetryObservationRule rule
     )
     {
         foreach (var ancestor in invocation.Ancestors().OfType<InvocationExpressionSyntax>())
@@ -216,10 +211,7 @@ internal static class EffectObservationExtractor
                 continue;
 
             var methodName = memberAccess.Name.Identifier.ValueText;
-            if (
-                !string.Equals(methodName, "Execute", StringComparison.Ordinal)
-                && !string.Equals(methodName, "ExecuteAsync", StringComparison.Ordinal)
-            )
+            if (!rule.WrapperMethods.Contains(methodName, StringComparer.Ordinal))
                 continue;
 
             var receiverType = semanticModel.GetTypeInfo(memberAccess.Expression).Type;
@@ -227,15 +219,9 @@ internal static class EffectObservationExtractor
                 continue;
 
             var receiverTypeName = receiverType.OriginalDefinition.ToDisplayString();
-
-            if (receiverTypeName.Contains("ResiliencePipeline", StringComparison.Ordinal))
-                return ("ResiliencePipeline", receiverTypeName);
-
-            if (
-                receiverTypeName.Contains("ExecutionStrategy", StringComparison.Ordinal)
-                || receiverTypeName.Contains("IExecutionStrategy", StringComparison.Ordinal)
-            )
-                return ("ExecutionStrategy", receiverTypeName);
+            var matched = rule.ReceiverTypePatterns.FirstOrDefault(pattern => receiverTypeName.Contains(pattern, StringComparison.Ordinal));
+            if (matched is not null)
+                return (matched, receiverTypeName);
         }
 
         return null;

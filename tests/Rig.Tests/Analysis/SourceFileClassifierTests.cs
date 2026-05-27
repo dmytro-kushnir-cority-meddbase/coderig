@@ -122,7 +122,10 @@ public sealed class SourceFileClassifierTests
             document.Files?.Include?.Select(rule => rule.ToFileRule("include")).ToArray() ?? [],
             document.Files?.Exclude?.Select(rule => rule.ToFileRule("exclude")).ToArray() ?? [],
             document.Files?.TestProjectPatterns ?? [],
-            document.Projects?.Exclude ?? []
+            document.Projects?.Exclude ?? [],
+            [],
+            [],
+            []
         );
     }
 

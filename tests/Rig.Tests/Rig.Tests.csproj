@@ -25,4 +25,9 @@
     <ProjectReference Include="..\..\src\Rig.Analysis\Rig.Analysis.csproj" />
     <ProjectReference Include="..\..\src\Rig.Cli\Rig.Cli.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\src\Rig.Cli\builtin-rules.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 </Project>

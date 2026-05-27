@@ -18,12 +18,10 @@
   <ItemGroup>
     <PackageReference Include="System.CommandLine" />
   </ItemGroup>
- 
   <ItemGroup>
     <ProjectReference Include="..\Rig.Analysis\Rig.Analysis.csproj" />
     <ProjectReference Include="..\Rig.Storage\Rig.Storage.csproj" />
   </ItemGroup>
- 
   <ItemGroup>
     <Content Update="builtin-rules.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

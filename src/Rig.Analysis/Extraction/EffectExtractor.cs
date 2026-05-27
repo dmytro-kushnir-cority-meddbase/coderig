@@ -33,7 +33,7 @@ internal static class EffectExtractor
                 var effect = TryCreateEffect(rule, methodName, invocation, receiverExpression, source.FilePath, line, source.SemanticModel);
                 if (effect is not null)
                 {
-                    yield return EffectObservationExtractor.AttachObservations(invocation, effect, source.SemanticModel);
+                    yield return EffectObservationExtractor.AttachObservations(invocation, effect, source.SemanticModel, rules);
                 }
             }
         }

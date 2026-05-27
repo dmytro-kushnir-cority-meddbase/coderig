@@ -13,7 +13,10 @@ internal sealed record AnalysisRuleSet(
     IReadOnlyList<FileRule> FileInclude,
     IReadOnlyList<FileRule> FileExclude,
     IReadOnlyList<string> TestProjectPatterns,
-    IReadOnlyList<string> ProjectExcludePatterns
+    IReadOnlyList<string> ProjectExcludePatterns,
+    IReadOnlyList<ReadBeforeCommitObservationRule> ReadBeforeCommitObservations,
+    IReadOnlyList<ConcurrencyHandledObservationRule> ConcurrencyHandledObservations,
+    IReadOnlyList<ResilienceRetryObservationRule> ResilienceRetryObservations
 )
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
@@ -80,6 +83,9 @@ internal sealed record AnalysisRuleSet(
                 .Concat(document.Projects?.Exclude ?? [])
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray(),
+            ReadBeforeCommitObservations = ReadBeforeCommitObservations.Concat(document.Observations?.ReadBeforeCommit ?? []).ToArray(),
+            ConcurrencyHandledObservations = ConcurrencyHandledObservations.Concat(document.Observations?.ConcurrencyHandled ?? []).ToArray(),
+            ResilienceRetryObservations = ResilienceRetryObservations.Concat(document.Observations?.ResilienceRetry ?? []).ToArray(),
         };
     }
 
@@ -107,8 +113,8 @@ internal sealed record AnalysisRuleSet(
     {
         var candidates = new[]
         {
-            Path.Combine(AppContext.BaseDirectory, "Rules", "builtin-rules.json"),
-            Path.Combine(Directory.GetCurrentDirectory(), "src", "Rig.Analysis", "Rules", "builtin-rules.json"),
+            Path.Combine(AppContext.BaseDirectory, "builtin-rules.json"),
+            Path.Combine(Directory.GetCurrentDirectory(), "src", "Rig.Cli", "builtin-rules.json"),
         };
 
         var rulesPath =
@@ -128,7 +134,10 @@ internal sealed record AnalysisRuleSet(
             document.Files?.Include?.Select(rule => rule.ToFileRule("include")).ToArray() ?? [],
             document.Files?.Exclude?.Select(rule => rule.ToFileRule("exclude")).ToArray() ?? [],
             document.Files?.TestProjectPatterns ?? [],
-            document.Projects?.Exclude ?? []
+            document.Projects?.Exclude ?? [],
+            document.Observations?.ReadBeforeCommit ?? [],
+            document.Observations?.ConcurrencyHandled ?? [],
+            document.Observations?.ResilienceRetry ?? []
         );
     }
 }
@@ -189,6 +198,22 @@ internal sealed record DiRegistrationRule(IReadOnlyList<string> Methods, string 
     }
 }
 
+internal sealed record ReadBeforeCommitObservationRule(
+    IReadOnlyList<string> CommitMethods,
+    IReadOnlyList<string> ReadMethods,
+    IReadOnlyList<string> ReadReceiverTypePatterns
+);
+
+internal sealed record ConcurrencyHandledObservationRule(
+    IReadOnlyList<string> CommitMethods,
+    IReadOnlyList<string> CatchTypePatterns
+);
+
+internal sealed record ResilienceRetryObservationRule(
+    IReadOnlyList<string> WrapperMethods,
+    IReadOnlyList<string> ReceiverTypePatterns
+);
+
 internal sealed class AnalysisRulesDocument
 {
     public EntryPointRulesDocument? EntryPoints { get; set; }
@@ -200,6 +225,17 @@ internal sealed class AnalysisRulesDocument
     public FileRulesSection? Files { get; set; }
 
     public ProjectsSection? Projects { get; set; }
+
+    public ObservationsSection? Observations { get; set; }
+}
+
+internal sealed class ObservationsSection
+{
+    public List<ReadBeforeCommitObservationRule>? ReadBeforeCommit { get; set; }
+
+    public List<ConcurrencyHandledObservationRule>? ConcurrencyHandled { get; set; }
+
+    public List<ResilienceRetryObservationRule>? ResilienceRetry { get; set; }
 }
 
 internal sealed class ProjectsSection
