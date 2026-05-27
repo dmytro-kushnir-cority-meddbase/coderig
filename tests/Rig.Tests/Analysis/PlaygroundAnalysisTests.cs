@@ -25,6 +25,9 @@ public sealed class PlaygroundAnalysisTests
             {
                 "minapi GET /minapi/teams/{id}",
                 "minapi POST /minapi/teams",
+                "minapi GET /minapi/cycles/self",
+                "minapi GET /minapi/cycles/mutual",
+                "minapi GET /minapi/cycles/three-step",
                 "mvc GET api/teams/{id}",
                 "mvc POST api/teams",
                 "mvc GET api/teams/via-interface",
@@ -168,6 +171,27 @@ public sealed class PlaygroundAnalysisTests
         minApiGetGraph.Nodes.ShouldContain(node =>
             node.Symbol == "minapi GET /minapi/teams/{id}" &&
             node.Calls.Any(call => call.Contains("global::EntryPointEffects.Api.Services.TeamWorkflow.LoadTeamSummaryAsync", StringComparison.Ordinal)));
+
+        var selfCycleGraph = result.CallGraphs.Single(graph => graph.EntryPoint == "minapi GET /minapi/cycles/self");
+        selfCycleGraph.Cycles.ShouldHaveSingleItem().Path.ShouldSatisfyAllConditions(
+            path => path.Count.ShouldBe(2),
+            path => path[0].ShouldContain("CycleFixture.SelfRecursive"),
+            path => path[1].ShouldContain("CycleFixture.SelfRecursive"));
+
+        var mutualCycleGraph = result.CallGraphs.Single(graph => graph.EntryPoint == "minapi GET /minapi/cycles/mutual");
+        var mutualCycle = mutualCycleGraph.Cycles.ShouldHaveSingleItem().Path;
+        mutualCycle.Count.ShouldBe(3);
+        mutualCycle.ShouldContain(symbol => symbol.Contains("CycleFixture.MutualA", StringComparison.Ordinal));
+        mutualCycle.ShouldContain(symbol => symbol.Contains("CycleFixture.MutualB", StringComparison.Ordinal));
+        mutualCycle.First().ShouldBe(mutualCycle.Last());
+
+        var threeStepCycleGraph = result.CallGraphs.Single(graph => graph.EntryPoint == "minapi GET /minapi/cycles/three-step");
+        var threeStepCycle = threeStepCycleGraph.Cycles.ShouldHaveSingleItem().Path;
+        threeStepCycle.Count.ShouldBe(4);
+        threeStepCycle.ShouldContain(symbol => symbol.Contains("CycleFixture.ThreeStepA", StringComparison.Ordinal));
+        threeStepCycle.ShouldContain(symbol => symbol.Contains("CycleFixture.ThreeStepB", StringComparison.Ordinal));
+        threeStepCycle.ShouldContain(symbol => symbol.Contains("CycleFixture.ThreeStepC", StringComparison.Ordinal));
+        threeStepCycle.First().ShouldBe(threeStepCycle.Last());
     }
 
     [Fact]

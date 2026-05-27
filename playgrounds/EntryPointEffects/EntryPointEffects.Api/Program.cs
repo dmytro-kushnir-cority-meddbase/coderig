@@ -27,6 +27,10 @@ app.MapPost("/minapi/teams", async (CreateTeamRequest request, TeamWorkflow work
     return Results.Accepted();
 });
 
+app.MapGet("/minapi/cycles/self", () => CycleFixture.SelfRecursive(2));
+app.MapGet("/minapi/cycles/mutual", () => CycleFixture.MutualA(2));
+app.MapGet("/minapi/cycles/three-step", () => CycleFixture.ThreeStepA(2));
+
 app.MapControllers();
 
 app.Run();

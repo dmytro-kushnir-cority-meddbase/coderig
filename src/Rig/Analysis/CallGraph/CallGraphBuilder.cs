@@ -76,7 +76,7 @@ internal static class CallGraphBuilder
             VisitMethod(call.Key, context, nodes, visited);
         }
 
-        return new CallGraphInfo(entryPoint.DisplayName, nodes);
+        return new CallGraphInfo(entryPoint.DisplayName, nodes, CallGraphCycleDetector.Detect(nodes));
     }
 
     private static (CallGraphNodeInfo Node, IReadOnlyList<ResolvedCall> Calls) CreateEntryNode(

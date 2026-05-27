@@ -62,7 +62,7 @@ Status: `in_progress`
 - [x] unresolved call nodes
 - [x] edge confidence/basis/reason
 - [x] minAPI method-ref handler body resolution (fluent chain start-line fix)
-- [ ] cycle detection
+- [x] cycle detection
 
 ### Phase 4: HTTP, EF Core, and Redis Effects
 
@@ -124,6 +124,15 @@ Status: `todo`
 - [ ] compact callgraph projections
 
 ## Completed Slices (recent)
+
+### Callgraph cycle detection
+
+Status: `verified`
+
+- Added deterministic EntryPointEffects playground samples for self-recursion, two-method mutual recursion, and a three-method cycle.
+- Added `CallGraphCycleDetector` and `CallGraphCycleInfo`; callgraphs now carry detected cycles derived from persisted node calls.
+- `rig callgraph --full` prints `Cycles: N`, `CYCLE ...` summaries, and marks repeated cycle edges as `[cycle]`.
+- Verification: `dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false`.
 
 ### Classified effectful boundaries
 
@@ -288,19 +297,21 @@ Notes:
 
 ## Next Suggested Slice
 
-Slice: Cycle detection in callgraph
-Phase: 3
+Slice: Trace from file/line
+Phase: 7
 Status: `todo`
 
 Contract:
 
-- detect back-edges during callgraph traversal and annotate affected nodes.
-- expose cycles in CLI output (`rig callgraph` shows cycle markers).
-- add a test asserting cycle detection on a synthetic playground fixture.
+- map `file:line` to containing indexed method symbol.
+- store method declaration start/end lines or equivalent span metadata.
+- route `rig trace --file <path> --line <line>` through the same trace query.
+- preserve snapshot semantics: answer from latest completed run only.
 
 Notes:
 
-- `VisitMethod` already uses a `visited` HashSet to prevent infinite loops but does not report cycles.
+- Current `rig trace` works when the target callgraph symbol is known, or can be uniquely found by `--contains`.
+- Existing method observations store declaration line only, not body span, so arbitrary cursor-line lookup needs new method span metadata.
 - use `/p:UseSharedCompilation=false` while compiler-server timeouts remain possible.
 - Parked metadata idea: persist the `rig` tool/package version with each run so future DB reads can explain which analyzer version produced a run.
 

@@ -71,7 +71,11 @@ public sealed record DiRegistrationInfo(
 
 public sealed record CallGraphInfo(
     string EntryPoint,
-    IReadOnlyList<CallGraphNodeInfo> Nodes);
+    IReadOnlyList<CallGraphNodeInfo> Nodes,
+    IReadOnlyList<CallGraphCycleInfo> Cycles);
+
+public sealed record CallGraphCycleInfo(
+    IReadOnlyList<string> Path);
 
 public sealed record TraceInfo(
     string Symbol,

@@ -237,7 +237,7 @@ public static class Reads
                 nodeEffectsByNode.GetValueOrDefault(n.NodeIndex, [])))
             .ToArray();
 
-        return new CallGraphInfo(entryPointName, nodes);
+        return new CallGraphInfo(entryPointName, nodes, CallGraphCycleDetector.Detect(nodes));
     }
 
     public static async Task<AnalysisResult?> LoadLatestAsync(RigDbContext context, CancellationToken cancellationToken = default)
@@ -336,7 +336,11 @@ public static class Reads
                 .ToArray());
 
         var callGraphs = graphEntities
-            .Select(g => new CallGraphInfo(g.EntryPoint, nodesByGraph.GetValueOrDefault(g.GraphIndex, [])))
+            .Select(g =>
+            {
+                var nodes = nodesByGraph.GetValueOrDefault(g.GraphIndex, []);
+                return new CallGraphInfo(g.EntryPoint, nodes, CallGraphCycleDetector.Detect(nodes));
+            })
             .ToArray();
 
         return new AnalysisResult(run.SolutionPath, sourceFiles, entryPoints, effects.ToArray(), diRegistrations, callGraphs, [], []);

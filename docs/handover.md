@@ -71,8 +71,10 @@ is more important than shaving subprocess cost until measured workflows demand i
 ## Playgrounds
 
 - `playgrounds/EntryPointEffects/EntryPointEffects.slnx` — primary fast-iteration target.
-  8 entry points, 23 effects. Index in ~10s. Exercises MVC, MinAPI, FastEndpoints,
+  11 entry points, 23 effects. Index in ~10s. Exercises MVC, MinAPI, FastEndpoints,
   EF Core, Redis, HTTP client, single-impl DI dispatch, method-group delegates.
+  It also includes cycle fixtures for self-recursion, two-method mutual recursion,
+  and a three-method cycle.
 - `playgrounds/OrchardCore/OrchardCore.slnx` — large real-world CMS.
   296 entry points, 1007+ effects across 190/296 EPs. Index in ~5 minutes.
   Has `rig.rules.json` with rules for: IMemoryCache, IDistributedCache, IMessageBus,
@@ -102,7 +104,8 @@ dotnet test                    # 4 tests, all green
 ## Callgraph Rendering
 
 `rig callgraph <index>` renders a tree using box-drawing characters (├─ / └─ / │).
-Already-visited nodes (cycles) print with `[^]` and are not expanded again.
+Detected cycles print as `Cycles: N` plus `CYCLE ...` summaries. Repeated cycle
+edges render as `[cycle]`; non-cycle repeated nodes render as `[^]`.
 
 `--focus` mode: backward BFS from effect nodes, keeps only effect-reachable ancestors.
 Drops all BOUNDARY lines; CALL edges trimmed to reachable targets only.

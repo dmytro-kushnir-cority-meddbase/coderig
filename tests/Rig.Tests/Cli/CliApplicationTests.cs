@@ -120,7 +120,7 @@ public sealed class CliApplicationTests
         output.ToString().ShouldContain("Progress: Building callgraphs");
         output.ToString().ShouldContain("Progress: Saving run");
         output.ToString().ShouldContain("Run:");
-        output.ToString().ShouldContain("EntryPoints: 8");
+        output.ToString().ShouldContain("EntryPoints: 11");
         output.ToString().ShouldContain("Effects: 23");
         File.Exists(Path.Combine(workingDirectory, ".rig", "rig.db")).ShouldBeTrue();
 
@@ -130,7 +130,7 @@ public sealed class CliApplicationTests
         runsExitCode.ShouldBe(0);
         output.ToString().ShouldContain("Runs");
         output.ToString().ShouldContain(solutionPath);
-        output.ToString().ShouldContain("entrypoints=8 effects=23");
+        output.ToString().ShouldContain("entrypoints=11 effects=23");
         output.ToString().ShouldContain("di=");
 
         output.GetStringBuilder().Clear();
@@ -139,6 +139,9 @@ public sealed class CliApplicationTests
         entrypointsExitCode.ShouldBe(0);
         output.ToString().ShouldContain("[  6] minapi GET /minapi/teams/{id}");
         output.ToString().ShouldContain("minapi GET /minapi/teams/{id}");
+        output.ToString().ShouldContain("minapi GET /minapi/cycles/self");
+        output.ToString().ShouldContain("minapi GET /minapi/cycles/mutual");
+        output.ToString().ShouldContain("minapi GET /minapi/cycles/three-step");
         output.ToString().ShouldContain("mvc POST api/teams");
         output.ToString().ShouldContain("mvc GET api/teams/via-interface");
         output.ToString().ShouldContain("fastendpoint POST /fastendpoints/teams");
@@ -191,6 +194,15 @@ public sealed class CliApplicationTests
         output.ToString().ShouldContain("EFFECT efcore read  ToListAsync  AppDbContext.Teams");
         output.ToString().ShouldContain("[looped_effect:foreach]");
         output.ToString().ShouldContain("[parallel_fanout:Task.WhenAll]");
+
+        output.GetStringBuilder().Clear();
+        var cycleCallgraphExitCode = await CliApplication.RunAsync(["callgraph", "9", "--full"], output, error, workingDirectory);
+
+        cycleCallgraphExitCode.ShouldBe(0);
+        output.ToString().ShouldContain("Callgraph: [9] minapi GET /minapi/cycles/mutual");
+        output.ToString().ShouldContain("Cycles: 1");
+        output.ToString().ShouldContain("CYCLE CycleFixture.MutualA -> CycleFixture.MutualB -> CycleFixture.MutualA");
+        output.ToString().ShouldContain("[cycle]");
 
         output.GetStringBuilder().Clear();
         var traceExitCode = await CliApplication.RunAsync(["trace", "--contains", "TeamWorkflow.LoadTeamSummaryAsync", "--paths"], output, error, workingDirectory);

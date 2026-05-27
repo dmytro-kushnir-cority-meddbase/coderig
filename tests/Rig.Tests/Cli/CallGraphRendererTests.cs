@@ -108,6 +108,7 @@ public sealed class CallGraphRendererTests
                     [],
                     [],
                     [])
-            ]);
+            ],
+            []);
     }
 }
