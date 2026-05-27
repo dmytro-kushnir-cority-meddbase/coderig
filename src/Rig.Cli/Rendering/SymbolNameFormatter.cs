@@ -9,9 +9,7 @@ internal static class SymbolNameFormatter
             return symbol;
         }
 
-        var withoutGlobal = symbol.StartsWith("global::", StringComparison.Ordinal)
-            ? symbol["global::".Length..]
-            : symbol;
+        var withoutGlobal = symbol.StartsWith("global::", StringComparison.Ordinal) ? symbol["global::".Length..] : symbol;
 
         var parameterStart = withoutGlobal.IndexOf('(');
         var memberPart = parameterStart >= 0 ? withoutGlobal[..parameterStart] : withoutGlobal;

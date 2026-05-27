@@ -1,21 +1,16 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Rig.Analysis.Analysis.Rules;
+using Rig.Analysis.Rules;
 using Rig.Domain.Data;
 
-namespace Rig.Analysis.Analysis.Extraction;
+namespace Rig.Analysis.Extraction;
 
 internal static class EntryPointExtractor
 {
-    public static IEnumerable<EntryPointInfo> FindMinimalApiEntryPoints(
-        SourceModel source,
-        AnalysisRuleSet rules
-    )
+    public static IEnumerable<EntryPointInfo> FindMinimalApiEntryPoints(SourceModel source, AnalysisRuleSet rules)
     {
-        foreach (
-            var invocation in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>()
-        )
+        foreach (var invocation in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
             if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
             {
@@ -23,17 +18,13 @@ internal static class EntryPointExtractor
             }
 
             var methodName = memberAccess.Name.Identifier.ValueText;
-            var rule = rules.MinimalApiEntryPoints.FirstOrDefault(rule =>
-                string.Equals(rule.Method, methodName, StringComparison.Ordinal)
-            );
+            var rule = rules.MinimalApiEntryPoints.FirstOrDefault(rule => string.Equals(rule.Method, methodName, StringComparison.Ordinal));
             if (rule is null)
             {
                 continue;
             }
 
-            var route = invocation
-                .ArgumentList.Arguments.FirstOrDefault()
-                ?.Expression.GetLiteralString();
+            var route = invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression.GetLiteralString();
             if (string.IsNullOrWhiteSpace(route))
             {
                 continue;
@@ -50,10 +41,7 @@ internal static class EntryPointExtractor
         }
     }
 
-    public static IEnumerable<EntryPointInfo> FindMvcEntryPoints(
-        SourceModel source,
-        AnalysisRuleSet rules
-    )
+    public static IEnumerable<EntryPointInfo> FindMvcEntryPoints(SourceModel source, AnalysisRuleSet rules)
     {
         foreach (var controller in source.Root.DescendantNodes().OfType<ClassDeclarationSyntax>())
         {
@@ -62,16 +50,9 @@ internal static class EntryPointExtractor
                 continue;
             }
 
-            var controllerToken = controller
-                .Identifier.ValueText[..^"Controller".Length]
-                .ToLowerInvariant();
-            var controllerRoute =
-                GetAttributeStringArgument(controller.AttributeLists, "Route") ?? "[controller]";
-            controllerRoute = controllerRoute.Replace(
-                "[controller]",
-                controllerToken,
-                StringComparison.OrdinalIgnoreCase
-            );
+            var controllerToken = controller.Identifier.ValueText[..^"Controller".Length].ToLowerInvariant();
+            var controllerRoute = GetAttributeStringArgument(controller.AttributeLists, "Route") ?? "[controller]";
+            controllerRoute = controllerRoute.Replace("[controller]", controllerToken, StringComparison.OrdinalIgnoreCase);
 
             foreach (var method in controller.Members.OfType<MethodDeclarationSyntax>())
             {
@@ -95,14 +76,9 @@ internal static class EntryPointExtractor
         }
     }
 
-    public static IEnumerable<EntryPointInfo> FindClassInheritanceEntryPoints(
-        SourceModel source,
-        AnalysisRuleSet rules
-    )
+    public static IEnumerable<EntryPointInfo> FindClassInheritanceEntryPoints(SourceModel source, AnalysisRuleSet rules)
     {
-        foreach (
-            var typeDeclaration in source.Root.DescendantNodes().OfType<ClassDeclarationSyntax>()
-        )
+        foreach (var typeDeclaration in source.Root.DescendantNodes().OfType<ClassDeclarationSyntax>())
         {
             var typeSymbol = source.SemanticModel.GetDeclaredSymbol(typeDeclaration);
             if (typeSymbol is null)
@@ -110,11 +86,7 @@ internal static class EntryPointExtractor
                 continue;
             }
 
-            foreach (
-                var rule in rules.ClassInheritanceEntryPoints.Where(rule =>
-                    HasBaseType(typeSymbol, rule.BaseTypes)
-                )
-            )
+            foreach (var rule in rules.ClassInheritanceEntryPoints.Where(rule => HasBaseType(typeSymbol, rule.BaseTypes)))
             {
                 var route = FindRoute(typeDeclaration, rule, source.SemanticModel);
 
@@ -146,10 +118,7 @@ internal static class EntryPointExtractor
         }
     }
 
-    private static (string Method, string? Route)? FindHttpAttribute(
-        SyntaxList<AttributeListSyntax> attributes,
-        AnalysisRuleSet rules
-    )
+    private static (string Method, string? Route)? FindHttpAttribute(SyntaxList<AttributeListSyntax> attributes, AnalysisRuleSet rules)
     {
         foreach (var attribute in attributes.SelectMany(list => list.Attributes))
         {
@@ -162,33 +131,21 @@ internal static class EntryPointExtractor
                 continue;
             }
 
-            return (
-                rule.HttpMethod,
-                attribute.ArgumentList?.Arguments.FirstOrDefault()?.Expression.GetLiteralString()
-            );
+            return (rule.HttpMethod, attribute.ArgumentList?.Arguments.FirstOrDefault()?.Expression.GetLiteralString());
         }
 
         return null;
     }
 
-    private static string? GetAttributeStringArgument(
-        SyntaxList<AttributeListSyntax> attributes,
-        string attributeName
-    )
+    private static string? GetAttributeStringArgument(SyntaxList<AttributeListSyntax> attributes, string attributeName)
     {
         return attributes
             .SelectMany(list => list.Attributes)
             .Where(attribute =>
                 string.Equals(attribute.Name.ToString(), attributeName, StringComparison.Ordinal)
-                || string.Equals(
-                    attribute.Name.ToString(),
-                    $"{attributeName}Attribute",
-                    StringComparison.Ordinal
-                )
+                || string.Equals(attribute.Name.ToString(), $"{attributeName}Attribute", StringComparison.Ordinal)
             )
-            .Select(attribute =>
-                attribute.ArgumentList?.Arguments.FirstOrDefault()?.Expression.GetLiteralString()
-            )
+            .Select(attribute => attribute.ArgumentList?.Arguments.FirstOrDefault()?.Expression.GetLiteralString())
             .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
     }
 
@@ -264,10 +221,7 @@ internal static class EntryPointExtractor
 
         return rule.HandlerParameterTypes.All(expected =>
             methodSymbol.Parameters.Any(parameter =>
-                RuleTypeMatcher.MatchesDisplayName(
-                    parameter.Type.OriginalDefinition.ToDisplayString(),
-                    expected
-                )
+                RuleTypeMatcher.MatchesDisplayName(parameter.Type.OriginalDefinition.ToDisplayString(), expected)
             )
         );
     }
@@ -281,12 +235,7 @@ internal static class EntryPointExtractor
         foreach (
             var invocation in typeDeclaration
                 .Members.OfType<MethodDeclarationSyntax>()
-                .Where(method =>
-                    rule.RouteProviderMethods.Contains(
-                        method.Identifier.ValueText,
-                        StringComparer.Ordinal
-                    )
-                )
+                .Where(method => rule.RouteProviderMethods.Contains(method.Identifier.ValueText, StringComparer.Ordinal))
                 .SelectMany(method => method.DescendantNodes().OfType<InvocationExpressionSyntax>())
         )
         {
@@ -304,10 +253,7 @@ internal static class EntryPointExtractor
                 continue;
             }
 
-            var route = ResolveString(
-                invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression,
-                semanticModel
-            );
+            var route = ResolveString(invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression, semanticModel);
             if (string.IsNullOrWhiteSpace(route))
             {
                 continue;

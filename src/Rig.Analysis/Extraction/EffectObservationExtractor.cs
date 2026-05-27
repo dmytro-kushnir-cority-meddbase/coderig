@@ -2,7 +2,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Rig.Domain.Data;
 
-namespace Rig.Analysis.Analysis.Extraction;
+namespace Rig.Analysis.Extraction;
 
 internal static class EffectObservationExtractor
 {
@@ -19,11 +19,7 @@ internal static class EffectObservationExtractor
         "FindAsync",
     };
 
-    public static EffectInfo AttachObservations(
-        InvocationExpressionSyntax invocation,
-        EffectInfo effect,
-        SemanticModel semanticModel
-    )
+    public static EffectInfo AttachObservations(InvocationExpressionSyntax invocation, EffectInfo effect, SemanticModel semanticModel)
     {
         var observations = new List<EffectObservationInfo>();
 
@@ -147,19 +143,11 @@ internal static class EffectObservationExtractor
             if (!EfReadMethodNames.Contains(readAccess.Name.Identifier.ValueText))
                 continue;
 
-            var receiverFqn =
-                semanticModel
-                    .GetTypeInfo(readAccess.Expression)
-                    .Type?.OriginalDefinition.ToDisplayString()
-                ?? "";
-            if (
-                !receiverFqn.Contains("DbSet", StringComparison.Ordinal)
-                && !receiverFqn.Contains("IQueryable", StringComparison.Ordinal)
-            )
+            var receiverFqn = semanticModel.GetTypeInfo(readAccess.Expression).Type?.OriginalDefinition.ToDisplayString() ?? "";
+            if (!receiverFqn.Contains("DbSet", StringComparison.Ordinal) && !receiverFqn.Contains("IQueryable", StringComparison.Ordinal))
                 continue;
 
-            var readLine =
-                semanticModel.SyntaxTree.GetLineSpan(candidate.Span).StartLinePosition.Line + 1;
+            var readLine = semanticModel.SyntaxTree.GetLineSpan(candidate.Span).StartLinePosition.Line + 1;
             return ("before_commit", $"line_{readLine}");
         }
 
@@ -188,12 +176,8 @@ internal static class EffectObservationExtractor
                 if (catchClause.Declaration is null)
                     continue;
 
-                var catchTypeName =
-                    semanticModel.GetTypeInfo(catchClause.Declaration.Type).Type?.ToDisplayString()
-                    ?? "";
-                if (
-                    catchTypeName.Contains("DbUpdateConcurrencyException", StringComparison.Ordinal)
-                )
+                var catchTypeName = semanticModel.GetTypeInfo(catchClause.Declaration.Type).Type?.ToDisplayString() ?? "";
+                if (catchTypeName.Contains("DbUpdateConcurrencyException", StringComparison.Ordinal))
                     return ("DbUpdateConcurrencyException", catchTypeName);
                 if (catchTypeName.Contains("DbUpdateException", StringComparison.Ordinal))
                     return ("DbUpdateException", catchTypeName);
@@ -203,9 +187,7 @@ internal static class EffectObservationExtractor
         return null;
     }
 
-    private static (string Context, string Detail)? FindLoopContext(
-        InvocationExpressionSyntax invocation
-    )
+    private static (string Context, string Detail)? FindLoopContext(InvocationExpressionSyntax invocation)
     {
         foreach (var ancestor in invocation.Ancestors())
         {
@@ -259,9 +241,7 @@ internal static class EffectObservationExtractor
         return null;
     }
 
-    private static (string Context, string Detail)? FindParallelFanoutContext(
-        InvocationExpressionSyntax invocation
-    )
+    private static (string Context, string Detail)? FindParallelFanoutContext(InvocationExpressionSyntax invocation)
     {
         foreach (var ancestor in invocation.Ancestors().OfType<InvocationExpressionSyntax>())
         {
@@ -273,10 +253,7 @@ internal static class EffectObservationExtractor
             var methodName = memberAccess.Name.Identifier.ValueText;
             var receiver = memberAccess.Expression.ToString();
 
-            if (
-                string.Equals(receiver, "Task", StringComparison.Ordinal)
-                && string.Equals(methodName, "WhenAll", StringComparison.Ordinal)
-            )
+            if (string.Equals(receiver, "Task", StringComparison.Ordinal) && string.Equals(methodName, "WhenAll", StringComparison.Ordinal))
             {
                 return ("Task.WhenAll", "Task.WhenAll");
             }

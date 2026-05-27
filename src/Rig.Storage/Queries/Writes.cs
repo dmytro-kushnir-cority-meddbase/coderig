@@ -5,11 +5,7 @@ namespace Rig.Storage.Queries;
 
 public static class Writes
 {
-    public static async Task<string> SaveAsync(
-        RigDbContext context,
-        AnalysisResult result,
-        CancellationToken cancellationToken = default
-    )
+    public static async Task<string> SaveAsync(RigDbContext context, AnalysisResult result, CancellationToken cancellationToken = default)
     {
         var runId = Guid.NewGuid().ToString("n");
 
@@ -106,11 +102,7 @@ public static class Writes
                 }
             );
 
-            for (
-                var observationIndex = 0;
-                observationIndex < effect.Observations.Count;
-                observationIndex++
-            )
+            for (var observationIndex = 0; observationIndex < effect.Observations.Count; observationIndex++)
             {
                 var observation = effect.Observations[observationIndex];
                 context.EffectObservations.Add(
@@ -131,11 +123,7 @@ public static class Writes
         }
     }
 
-    private static void AddDiRegistrations(
-        RigDbContext context,
-        string runId,
-        AnalysisResult result
-    )
+    private static void AddDiRegistrations(RigDbContext context, string runId, AnalysisResult result)
     {
         for (var index = 0; index < result.DiRegistrations.Count; index++)
         {
@@ -160,11 +148,7 @@ public static class Writes
         }
     }
 
-    private static void AddMethodObservations(
-        RigDbContext context,
-        string runId,
-        AnalysisResult result
-    )
+    private static void AddMethodObservations(RigDbContext context, string runId, AnalysisResult result)
     {
         for (var index = 0; index < result.MethodObservations.Count; index++)
         {
@@ -184,11 +168,7 @@ public static class Writes
         }
     }
 
-    private static void AddInvocationObservations(
-        RigDbContext context,
-        string runId,
-        AnalysisResult result
-    )
+    private static void AddInvocationObservations(RigDbContext context, string runId, AnalysisResult result)
     {
         for (var index = 0; index < result.InvocationObservations.Count; index++)
         {
@@ -211,16 +191,9 @@ public static class Writes
         }
     }
 
-    private static void AddCallGraphs(
-        RigDbContext context,
-        string runId,
-        IReadOnlyList<EffectInfo> effects,
-        AnalysisResult result
-    )
+    private static void AddCallGraphs(RigDbContext context, string runId, IReadOnlyList<EffectInfo> effects, AnalysisResult result)
     {
-        var effectIndexByIdentity = effects
-            .Select((e, i) => (e, i))
-            .ToDictionary(pair => pair.e, pair => pair.i);
+        var effectIndexByIdentity = effects.Select((e, i) => (e, i)).ToDictionary(pair => pair.e, pair => pair.i);
 
         for (var graphIndex = 0; graphIndex < result.CallGraphs.Count; graphIndex++)
         {
@@ -266,11 +239,7 @@ public static class Writes
                     );
                 }
 
-                for (
-                    var boundaryCallIndex = 0;
-                    boundaryCallIndex < node.BoundaryCalls.Count;
-                    boundaryCallIndex++
-                )
+                for (var boundaryCallIndex = 0; boundaryCallIndex < node.BoundaryCalls.Count; boundaryCallIndex++)
                 {
                     var boundaryCall = node.BoundaryCalls[boundaryCallIndex];
                     context.CallGraphBoundaryCalls.Add(
@@ -294,12 +263,7 @@ public static class Writes
 
                 for (var linkIndex = 0; linkIndex < node.Effects.Count; linkIndex++)
                 {
-                    if (
-                        !effectIndexByIdentity.TryGetValue(
-                            node.Effects[linkIndex],
-                            out var effectIndex
-                        )
-                    )
+                    if (!effectIndexByIdentity.TryGetValue(node.Effects[linkIndex], out var effectIndex))
                     {
                         continue;
                     }

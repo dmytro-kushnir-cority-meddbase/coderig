@@ -2,7 +2,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Rig.Domain.Data;
 
-namespace Rig.Analysis.Analysis.Extraction;
+namespace Rig.Analysis.Extraction;
 
 internal static class RoslynObservationExtractor
 {
@@ -25,25 +25,17 @@ internal static class RoslynObservationExtractor
         }
     }
 
-    public static IEnumerable<InvocationObservationInfo> FindInvocationObservations(
-        SourceModel source
-    )
+    public static IEnumerable<InvocationObservationInfo> FindInvocationObservations(SourceModel source)
     {
-        foreach (
-            var invocation in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>()
-        )
+        foreach (var invocation in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
             var target = RoslynSymbolHelpers.ResolveMethodSymbol(invocation, source.SemanticModel);
-            var containingMethod = invocation
-                .Ancestors()
-                .OfType<MethodDeclarationSyntax>()
-                .FirstOrDefault();
+            var containingMethod = invocation.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
 
             if (
                 target is null
                 || containingMethod is null
-                || source.SemanticModel.GetDeclaredSymbol(containingMethod)
-                    is not IMethodSymbol containingSymbol
+                || source.SemanticModel.GetDeclaredSymbol(containingMethod) is not IMethodSymbol containingSymbol
             )
             {
                 continue;

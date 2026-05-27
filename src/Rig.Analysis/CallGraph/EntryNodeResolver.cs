@@ -2,24 +2,16 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 
-namespace Rig.Analysis.Analysis.CallGraph;
+namespace Rig.Analysis.CallGraph;
 
-internal sealed record EntryNodeResolution(
-    CallGraphNodeInfo Node,
-    IReadOnlyList<ResolvedCallInfo> Calls
-);
+internal sealed record EntryNodeResolution(CallGraphNodeInfo Node, IReadOnlyList<ResolvedCallInfo> Calls);
 
 internal static class EntryNodeResolver
 {
-    public static EntryNodeResolution Resolve(
-        EntryPointInfo entryPoint,
-        IReadOnlyList<SourceModel> sources,
-        CallGraphContext context
-    )
+    public static EntryNodeResolution Resolve(EntryPointInfo entryPoint, IReadOnlyList<SourceModel> sources, CallGraphContext context)
     {
         var method = context.Methods.Values.FirstOrDefault(method =>
-            string.Equals(method.FilePath, entryPoint.FilePath, StringComparison.OrdinalIgnoreCase)
-            && method.Line == entryPoint.Line
+            string.Equals(method.FilePath, entryPoint.FilePath, StringComparison.OrdinalIgnoreCase) && method.Line == entryPoint.Line
         );
 
         if (method is not null)
@@ -41,29 +33,16 @@ internal static class EntryNodeResolver
             );
         }
 
-        var source = sources.First(source =>
-            string.Equals(source.FilePath, entryPoint.FilePath, StringComparison.OrdinalIgnoreCase)
-        );
+        var source = sources.First(source => string.Equals(source.FilePath, entryPoint.FilePath, StringComparison.OrdinalIgnoreCase));
         var invocation = FindMinimalApiInvocation(entryPoint, source);
         if (invocation is not null)
         {
             var handlerArg = invocation.ArgumentList.Arguments.Skip(1).FirstOrDefault()?.Expression;
             var lambdaEffects = Array.Empty<EffectInfo>();
-            if (
-                handlerArg
-                is ParenthesizedLambdaExpressionSyntax
-                    or SimpleLambdaExpressionSyntax
-                    or AnonymousMethodExpressionSyntax
-            )
+            if (handlerArg is ParenthesizedLambdaExpressionSyntax or SimpleLambdaExpressionSyntax or AnonymousMethodExpressionSyntax)
             {
                 lambdaEffects = context
-                    .AllEffects.Where(e =>
-                        string.Equals(
-                            e.FilePath,
-                            source.FilePath,
-                            StringComparison.OrdinalIgnoreCase
-                        )
-                    )
+                    .AllEffects.Where(e => string.Equals(e.FilePath, source.FilePath, StringComparison.OrdinalIgnoreCase))
                     .Where(e => RoslynSymbolHelpers.IsLineInside(source.Tree, handlerArg, e.Line))
                     .ToArray();
             }
@@ -99,10 +78,7 @@ internal static class EntryNodeResolver
         );
     }
 
-    private static InvocationExpressionSyntax? FindMinimalApiInvocation(
-        EntryPointInfo entryPoint,
-        SourceModel source
-    )
+    private static InvocationExpressionSyntax? FindMinimalApiInvocation(EntryPointInfo entryPoint, SourceModel source)
     {
         return source
             .Root.DescendantNodes()
@@ -110,8 +86,7 @@ internal static class EntryNodeResolver
             .FirstOrDefault(invocation =>
                 RoslynSymbolHelpers.GetLine(source.Tree, invocation) == entryPoint.Line
                 && invocation.ArgumentList.Arguments.Count >= 2
-                && invocation.ArgumentList.Arguments[0].Expression.GetLiteralString()
-                    == entryPoint.Route
+                && invocation.ArgumentList.Arguments[0].Expression.GetLiteralString() == entryPoint.Route
             );
     }
 
@@ -127,12 +102,7 @@ internal static class EntryNodeResolver
             return new ResolvedCallSetInfo([], []);
         }
 
-        if (
-            handler
-            is ParenthesizedLambdaExpressionSyntax
-                or SimpleLambdaExpressionSyntax
-                or AnonymousMethodExpressionSyntax
-        )
+        if (handler is ParenthesizedLambdaExpressionSyntax or SimpleLambdaExpressionSyntax or AnonymousMethodExpressionSyntax)
         {
             return CallResolver.ResolveCalls(handler, semanticModel, context);
         }
@@ -140,19 +110,13 @@ internal static class EntryNodeResolver
         var methodSymbol = RoslynSymbolHelpers.ResolveMethodSymbol(handler, semanticModel);
         if (methodSymbol is null)
         {
-            return new ResolvedCallSetInfo(
-                [],
-                [CallResolver.CreateUnresolvedBoundaryCall(handler, semanticModel)]
-            );
+            return new ResolvedCallSetInfo([], [CallResolver.CreateUnresolvedBoundaryCall(handler, semanticModel)]);
         }
 
         var key = RoslynSymbolHelpers.GetMethodKey(methodSymbol);
         var handlerLine = RoslynSymbolHelpers.GetCallNameLine(semanticModel.SyntaxTree, handler);
         return context.Methods.ContainsKey(key)
             ? new ResolvedCallSetInfo([new ResolvedCallInfo(key, handlerLine)], [])
-            : new ResolvedCallSetInfo(
-                [],
-                [CallResolver.CreateExternalBoundaryCall(handler, semanticModel, methodSymbol)]
-            );
+            : new ResolvedCallSetInfo([], [CallResolver.CreateExternalBoundaryCall(handler, semanticModel, methodSymbol)]);
     }
 }

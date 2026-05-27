@@ -4,11 +4,7 @@ namespace Rig.Cli.Rendering;
 
 internal static class EffectRenderer
 {
-    public static void Render(
-        IReadOnlyList<EffectInfo> effects,
-        int? entryPointIndex,
-        TextWriter output
-    )
+    public static void Render(IReadOnlyList<EffectInfo> effects, int? entryPointIndex, TextWriter output)
     {
         output.WriteLine(entryPointIndex.HasValue ? $"Effects [{entryPointIndex}]" : "Effects");
 

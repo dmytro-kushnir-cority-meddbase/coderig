@@ -4,27 +4,16 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
-
   <ItemGroup>
-    <PackageReference
-      Include="Microsoft.Build.Framework"
-      ExcludeAssets="runtime"
-      PrivateAssets="all"
-    />
+    <PackageReference Include="Microsoft.Build.Framework" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Build.Locator" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" />
     <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.MSBuild" />
-    <PackageReference
-      Include="Microsoft.NET.StringTools"
-      PrivateAssets="all"
-      ExcludeAssets="runtime"
-    />
+    <PackageReference Include="Microsoft.NET.StringTools" PrivateAssets="all" ExcludeAssets="runtime" />
   </ItemGroup>
-
   <ItemGroup>
     <ProjectReference Include="..\Rig.Domain\Rig.Domain.csproj" />
   </ItemGroup>
-
   <ItemGroup>
     <Content Include="Rules\*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

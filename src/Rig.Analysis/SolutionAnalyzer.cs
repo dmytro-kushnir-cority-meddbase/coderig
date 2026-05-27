@@ -1,10 +1,10 @@
-using Rig.Analysis.Analysis.CallGraph;
-using Rig.Analysis.Analysis.Extraction;
-using Rig.Analysis.Analysis.Inventory;
-using Rig.Analysis.Analysis.Rules;
+using Rig.Analysis.CallGraph;
+using Rig.Analysis.Extraction;
+using Rig.Analysis.Inventory;
+using Rig.Analysis.Rules;
 using Rig.Domain.Data;
 
-namespace Rig.Analysis.Analysis;
+namespace Rig.Analysis;
 
 public static class SolutionAnalyzer
 {
@@ -19,12 +19,7 @@ public static class SolutionAnalyzer
         progress?.Invoke("Loading rules");
         var rules = AnalysisRuleSet.LoadForSolution(solutionFullPath, extraRulesPaths);
         progress?.Invoke("Loading solution");
-        var sourceSet = await SolutionSourceLoader.LoadAsync(
-            solutionFullPath,
-            rules,
-            cancellationToken,
-            progress
-        );
+        var sourceSet = await SolutionSourceLoader.LoadAsync(solutionFullPath, rules, cancellationToken, progress);
         progress?.Invoke("Merging project rules");
         rules = rules.MergeWithProjectDirectories(sourceSet.ProjectDirectories);
         var sources = sourceSet.IndexedSources;
@@ -49,9 +44,7 @@ public static class SolutionAnalyzer
         progress?.Invoke("Building projections");
         var entryPoints = extractionResults.SelectMany(result => result.EntryPoints).ToArray();
         var effects = extractionResults.SelectMany(result => result.Effects).ToArray();
-        var diRegistrations = extractionResults
-            .SelectMany(result => result.DiRegistrations)
-            .ToArray();
+        var diRegistrations = extractionResults.SelectMany(result => result.DiRegistrations).ToArray();
         var methodObservations = extractionResults
             .SelectMany(result => result.MethodObservations)
             .OrderBy(observation => observation.FilePath, StringComparer.OrdinalIgnoreCase)
@@ -72,9 +65,7 @@ public static class SolutionAnalyzer
             diRegistrations
         );
 
-        progress?.Invoke(
-            $"Analysis complete: {entryPoints.Length} entrypoints, {effects.Length} effects"
-        );
+        progress?.Invoke($"Analysis complete: {entryPoints.Length} entrypoints, {effects.Length} effects");
         return new AnalysisResult(
             solutionPath,
             sourceSet.SourceFiles,

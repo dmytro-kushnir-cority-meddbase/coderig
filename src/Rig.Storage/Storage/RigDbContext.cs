@@ -25,8 +25,7 @@ public sealed class RigDbContext(string databasePath) : DbContext
 
     public DbSet<MethodObservationEntity> MethodObservations => Set<MethodObservationEntity>();
 
-    public DbSet<InvocationObservationEntity> InvocationObservations =>
-        Set<InvocationObservationEntity>();
+    public DbSet<InvocationObservationEntity> InvocationObservations => Set<InvocationObservationEntity>();
 
     public DbSet<CallGraphEntity> CallGraphs => Set<CallGraphEntity>();
 
@@ -34,11 +33,9 @@ public sealed class RigDbContext(string databasePath) : DbContext
 
     public DbSet<CallGraphNodeCallEntity> CallGraphNodeCalls => Set<CallGraphNodeCallEntity>();
 
-    public DbSet<CallGraphBoundaryCallEntity> CallGraphBoundaryCalls =>
-        Set<CallGraphBoundaryCallEntity>();
+    public DbSet<CallGraphBoundaryCallEntity> CallGraphBoundaryCalls => Set<CallGraphBoundaryCallEntity>();
 
-    public DbSet<CallGraphNodeEffectEntity> CallGraphNodeEffects =>
-        Set<CallGraphNodeEffectEntity>();
+    public DbSet<CallGraphNodeEffectEntity> CallGraphNodeEffects => Set<CallGraphNodeEffectEntity>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -98,17 +95,9 @@ public sealed class RigDbContext(string databasePath) : DbContext
         modelBuilder.Entity<DiRegistrationEntity>(entity =>
         {
             entity.ToTable("di_registrations");
-            entity.HasKey(registration => new
-            {
-                registration.RunId,
-                registration.RegistrationIndex,
-            });
+            entity.HasKey(registration => new { registration.RunId, registration.RegistrationIndex });
             entity.HasIndex(registration => new { registration.RunId, registration.ServiceType });
-            entity.HasIndex(registration => new
-            {
-                registration.RunId,
-                registration.ImplementationType,
-            });
+            entity.HasIndex(registration => new { registration.RunId, registration.ImplementationType });
         });
 
         modelBuilder.Entity<MethodObservationEntity>(entity =>
@@ -123,11 +112,7 @@ public sealed class RigDbContext(string databasePath) : DbContext
         {
             entity.ToTable("invocation_observations");
             entity.HasKey(observation => new { observation.RunId, observation.InvocationIndex });
-            entity.HasIndex(observation => new
-            {
-                observation.RunId,
-                observation.ContainingMethodSymbol,
-            });
+            entity.HasIndex(observation => new { observation.RunId, observation.ContainingMethodSymbol });
             entity.HasIndex(observation => new { observation.RunId, observation.TargetSymbol });
         });
 

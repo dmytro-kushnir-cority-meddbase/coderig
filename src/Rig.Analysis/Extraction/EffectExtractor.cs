@@ -1,27 +1,22 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Rig.Analysis.Analysis.Rules;
+using Rig.Analysis.Rules;
 using Rig.Domain.Data;
 
-namespace Rig.Analysis.Analysis.Extraction;
+namespace Rig.Analysis.Extraction;
 
 internal static class EffectExtractor
 {
     public static IEnumerable<EffectInfo> FindEffects(SourceModel source, AnalysisRuleSet rules)
     {
-        foreach (
-            var invocation in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>()
-        )
+        foreach (var invocation in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
             if (!TryGetMemberInvocation(invocation, out var memberName, out var receiverExpression))
             {
                 continue;
             }
 
-            var methodSymbol = RoslynSymbolHelpers.ResolveMethodSymbol(
-                invocation,
-                source.SemanticModel
-            );
+            var methodSymbol = RoslynSymbolHelpers.ResolveMethodSymbol(invocation, source.SemanticModel);
             var methodName = methodSymbol?.Name ?? memberName;
             var line = RoslynSymbolHelpers.GetLine(source.Tree, invocation);
             var candidate = new InvocationEffectCandidate(
@@ -33,28 +28,12 @@ internal static class EffectExtractor
                 source.SemanticModel
             );
 
-            foreach (
-                var rule in rules.Effects.Where(rule =>
-                    !rule.TreatAsDispatch && Matches(rule, candidate)
-                )
-            )
+            foreach (var rule in rules.Effects.Where(rule => !rule.TreatAsDispatch && Matches(rule, candidate)))
             {
-                var effect = TryCreateEffect(
-                    rule,
-                    methodName,
-                    invocation,
-                    receiverExpression,
-                    source.FilePath,
-                    line,
-                    source.SemanticModel
-                );
+                var effect = TryCreateEffect(rule, methodName, invocation, receiverExpression, source.FilePath, line, source.SemanticModel);
                 if (effect is not null)
                 {
-                    yield return EffectObservationExtractor.AttachObservations(
-                        invocation,
-                        effect,
-                        source.SemanticModel
-                    );
+                    yield return EffectObservationExtractor.AttachObservations(invocation, effect, source.SemanticModel);
                 }
             }
         }
@@ -93,8 +72,7 @@ internal static class EffectExtractor
             return true;
         }
 
-        var containingNamespace =
-            methodSymbol?.ContainingType.ContainingNamespace?.ToDisplayString();
+        var containingNamespace = methodSymbol?.ContainingType.ContainingNamespace?.ToDisplayString();
         return containingNamespace is not null
             && rule.ContainingNamespaces.Any(ruleNamespace =>
                 string.Equals(ruleNamespace, containingNamespace, StringComparison.Ordinal)
@@ -114,14 +92,10 @@ internal static class EffectExtractor
             return true;
         }
 
-        return methodSymbol is not null
-            && rule.ContainingMethods.Contains(methodSymbol.Name, StringComparer.Ordinal);
+        return methodSymbol is not null && rule.ContainingMethods.Contains(methodSymbol.Name, StringComparer.Ordinal);
     }
 
-    private static bool MatchesOptionalTypes(
-        IReadOnlyList<string>? ruleTypes,
-        ITypeSymbol? actualType
-    )
+    private static bool MatchesOptionalTypes(IReadOnlyList<string>? ruleTypes, ITypeSymbol? actualType)
     {
         if (ruleTypes is null || ruleTypes.Count == 0)
         {
@@ -133,9 +107,7 @@ internal static class EffectExtractor
             return false;
         }
 
-        return ruleTypes.Any(ruleType =>
-            RuleTypeMatcher.MatchesTypeOrInterfaces(actualType, ruleType)
-        );
+        return ruleTypes.Any(ruleType => RuleTypeMatcher.MatchesTypeOrInterfaces(actualType, ruleType));
     }
 
     private static EffectInfo? TryCreateEffect(
@@ -150,15 +122,10 @@ internal static class EffectExtractor
     {
         var resource = rule.Resource switch
         {
-            "http_argument" => TryGetStringArgument(invocation) is { } url
-                ? NormalizeHttpResource(url)
-                : null,
+            "http_argument" => TryGetStringArgument(invocation) is { } url ? NormalizeHttpResource(url) : null,
             "string_argument" => TryGetStringArgument(invocation),
             "ef_dbset_receiver" => TryGetDbSetResource(receiverExpression, semanticModel),
-            "ef_query_root" => TryGetDbSetResource(
-                FindRootReceiver(receiverExpression),
-                semanticModel
-            ),
+            "ef_query_root" => TryGetDbSetResource(FindRootReceiver(receiverExpression), semanticModel),
             "ef_context_receiver" => TryGetContextResource(receiverExpression, semanticModel),
             "ef_database_facade" => TryGetDatabaseFacadeResource(receiverExpression, semanticModel),
             "receiver_type" => TryGetReceiverTypeResource(receiverExpression, semanticModel),
@@ -199,10 +166,7 @@ internal static class EffectExtractor
         return url.TrimStart('/');
     }
 
-    private static string? TryGetDbSetResource(
-        ExpressionSyntax expression,
-        SemanticModel semanticModel
-    )
+    private static string? TryGetDbSetResource(ExpressionSyntax expression, SemanticModel semanticModel)
     {
         if (expression is MemberAccessExpressionSyntax dbSetAccess)
         {
@@ -266,10 +230,7 @@ internal static class EffectExtractor
         return null;
     }
 
-    private static string? TryGetContextResource(
-        ExpressionSyntax expression,
-        SemanticModel semanticModel
-    )
+    private static string? TryGetContextResource(ExpressionSyntax expression, SemanticModel semanticModel)
     {
         return semanticModel.GetTypeInfo(expression).Type?.Name;
     }
@@ -279,10 +240,7 @@ internal static class EffectExtractor
         var current = expression;
         while (true)
         {
-            if (
-                current is InvocationExpressionSyntax invocation
-                && invocation.Expression is MemberAccessExpressionSyntax invocationAccess
-            )
+            if (current is InvocationExpressionSyntax invocation && invocation.Expression is MemberAccessExpressionSyntax invocationAccess)
             {
                 current = invocationAccess.Expression;
             }
@@ -303,10 +261,7 @@ internal static class EffectExtractor
         return current;
     }
 
-    private static string? TryGetDatabaseFacadeResource(
-        ExpressionSyntax expression,
-        SemanticModel semanticModel
-    )
+    private static string? TryGetDatabaseFacadeResource(ExpressionSyntax expression, SemanticModel semanticModel)
     {
         if (expression is not MemberAccessExpressionSyntax databaseAccess)
         {
@@ -314,29 +269,20 @@ internal static class EffectExtractor
         }
 
         var contextType = semanticModel.GetTypeInfo(databaseAccess.Expression).Type;
-        return contextType is null
-            ? null
-            : $"{contextType.Name}.{databaseAccess.Name.Identifier.ValueText}";
+        return contextType is null ? null : $"{contextType.Name}.{databaseAccess.Name.Identifier.ValueText}";
     }
 
-    private static string? TryGetReceiverTypeResource(
-        ExpressionSyntax expression,
-        SemanticModel semanticModel
-    )
+    private static string? TryGetReceiverTypeResource(ExpressionSyntax expression, SemanticModel semanticModel)
     {
         return semanticModel.GetTypeInfo(expression).Type?.OriginalDefinition.ToDisplayString();
     }
 
-    private static string? TryGetArgumentTypeResource(
-        InvocationExpressionSyntax invocation,
-        SemanticModel semanticModel
-    )
+    private static string? TryGetArgumentTypeResource(InvocationExpressionSyntax invocation, SemanticModel semanticModel)
     {
         var argument = invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression;
         return argument is null
             ? null
-            : semanticModel.GetTypeInfo(argument).Type?.OriginalDefinition.ToDisplayString()
-                ?? argument.ToString();
+            : semanticModel.GetTypeInfo(argument).Type?.OriginalDefinition.ToDisplayString() ?? argument.ToString();
     }
 
     private static bool TryGetMemberInvocation(

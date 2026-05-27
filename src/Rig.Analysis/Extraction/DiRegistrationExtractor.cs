@@ -1,25 +1,17 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Rig.Analysis.Analysis.Rules;
+using Rig.Analysis.Rules;
 using Rig.Domain.Data;
 
-namespace Rig.Analysis.Analysis.Extraction;
+namespace Rig.Analysis.Extraction;
 
 internal static class DiRegistrationExtractor
 {
-    public static IEnumerable<DiRegistrationInfo> FindDiRegistrations(
-        SourceModel source,
-        AnalysisRuleSet rules
-    )
+    public static IEnumerable<DiRegistrationInfo> FindDiRegistrations(SourceModel source, AnalysisRuleSet rules)
     {
-        foreach (
-            var invocation in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>()
-        )
+        foreach (var invocation in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
-            var methodSymbol = RoslynSymbolHelpers.ResolveMethodSymbol(
-                invocation,
-                source.SemanticModel
-            );
+            var methodSymbol = RoslynSymbolHelpers.ResolveMethodSymbol(invocation, source.SemanticModel);
             var methodName = methodSymbol?.Name ?? RoslynSymbolHelpers.TryGetMemberName(invocation);
             if (methodName is null)
             {
@@ -49,11 +41,7 @@ internal static class DiRegistrationExtractor
                     ? RoslynSymbolHelpers.GetTypeKey(genericTypes[1])
                     : TryGetFactoryForwardedImplementation(invocation, source.SemanticModel)
                         ?? (
-                            genericTypes.Length == 1
-                            && rule.RegistrationKind
-                                is "hosted_service"
-                                    or "http_client"
-                                    or "dbcontext"
+                            genericTypes.Length == 1 && rule.RegistrationKind is "hosted_service" or "http_client" or "dbcontext"
                                 ? RoslynSymbolHelpers.GetTypeKey(genericTypes[0])
                                 : null
                         );
@@ -80,34 +68,21 @@ internal static class DiRegistrationExtractor
         }
     }
 
-    private static string? TryGetFactoryForwardedImplementation(
-        InvocationExpressionSyntax registration,
-        SemanticModel semanticModel
-    )
+    private static string? TryGetFactoryForwardedImplementation(InvocationExpressionSyntax registration, SemanticModel semanticModel)
     {
         foreach (var argument in registration.ArgumentList.Arguments)
         {
             var forwardedInvocation = argument.Expression switch
             {
+                SimpleLambdaExpressionSyntax { ExpressionBody: InvocationExpressionSyntax invocation } => invocation,
+                ParenthesizedLambdaExpressionSyntax { ExpressionBody: InvocationExpressionSyntax invocation } => invocation,
                 SimpleLambdaExpressionSyntax
                 {
-                    ExpressionBody: InvocationExpressionSyntax invocation
+                    Block.Statements: [ReturnStatementSyntax { Expression: InvocationExpressionSyntax invocation }]
                 } => invocation,
                 ParenthesizedLambdaExpressionSyntax
                 {
-                    ExpressionBody: InvocationExpressionSyntax invocation
-                } => invocation,
-                SimpleLambdaExpressionSyntax
-                {
-                    Block.Statements: [
-                        ReturnStatementSyntax { Expression: InvocationExpressionSyntax invocation },
-                    ]
-                } => invocation,
-                ParenthesizedLambdaExpressionSyntax
-                {
-                    Block.Statements: [
-                        ReturnStatementSyntax { Expression: InvocationExpressionSyntax invocation },
-                    ]
+                    Block.Statements: [ReturnStatementSyntax { Expression: InvocationExpressionSyntax invocation }]
                 } => invocation,
                 _ => null,
             };
@@ -117,14 +92,8 @@ internal static class DiRegistrationExtractor
                 continue;
             }
 
-            var methodSymbol = RoslynSymbolHelpers.ResolveMethodSymbol(
-                forwardedInvocation,
-                semanticModel
-            );
-            if (
-                methodSymbol?.Name == "GetRequiredService"
-                && methodSymbol.TypeArguments.Length == 1
-            )
+            var methodSymbol = RoslynSymbolHelpers.ResolveMethodSymbol(forwardedInvocation, semanticModel);
+            if (methodSymbol?.Name == "GetRequiredService" && methodSymbol.TypeArguments.Length == 1)
             {
                 return RoslynSymbolHelpers.GetTypeKey(methodSymbol.TypeArguments[0]);
             }
@@ -133,20 +102,13 @@ internal static class DiRegistrationExtractor
         return null;
     }
 
-    private static string BuildEvidence(
-        SourceModel source,
-        InvocationExpressionSyntax invocation,
-        string methodName
-    )
+    private static string BuildEvidence(SourceModel source, InvocationExpressionSyntax invocation, string methodName)
     {
-        var containingMethod =
-            source.SemanticModel.GetEnclosingSymbol(invocation.SpanStart) as IMethodSymbol;
+        var containingMethod = source.SemanticModel.GetEnclosingSymbol(invocation.SpanStart) as IMethodSymbol;
         var containingType = containingMethod?.ContainingType is null
             ? ""
             : RoslynSymbolHelpers.GetTypeKey(containingMethod.ContainingType);
-        var containingMethodName = containingMethod is null
-            ? ""
-            : RoslynSymbolHelpers.GetMethodKey(containingMethod);
+        var containingMethodName = containingMethod is null ? "" : RoslynSymbolHelpers.GetMethodKey(containingMethod);
 
         return string.Join(
             " ",

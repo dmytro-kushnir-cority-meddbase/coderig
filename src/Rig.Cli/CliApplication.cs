@@ -1,6 +1,6 @@
 using System.Reflection;
-using Rig.Analysis.Analysis;
-using Rig.Analysis.Analysis.Rules;
+using Rig.Analysis;
+using Rig.Analysis.Rules;
 using Rig.Cli.Rendering;
 using Rig.Domain.Data;
 using Rig.Storage.Queries;
@@ -15,12 +15,7 @@ public static class CliApplication
         return RunAsync(args, output, error, Directory.GetCurrentDirectory());
     }
 
-    public static async Task<int> RunAsync(
-        string[] args,
-        TextWriter output,
-        TextWriter error,
-        string workingDirectory
-    )
+    public static async Task<int> RunAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
     {
         if (args.Length == 0 || IsHelp(args[0]))
         {
@@ -62,11 +57,8 @@ public static class CliApplication
 
     private static string GetVersion()
     {
-        return typeof(CliApplication)
-                .Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-                ?.InformationalVersion
-            ?? typeof(CliApplication).Assembly.GetName().Version?.ToString()
-            ?? "unknown";
+        return typeof(CliApplication).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? typeof(CliApplication).Assembly.GetName().Version?.ToString() ?? "unknown";
     }
 
     private static void WriteCommandSummary(TextWriter output)
@@ -87,12 +79,7 @@ public static class CliApplication
         output.WriteLine("  rig profile validate");
     }
 
-    private static async Task<int> RunIndexAsync(
-        string[] args,
-        TextWriter output,
-        TextWriter error,
-        string workingDirectory
-    )
+    private static async Task<int> RunIndexAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
     {
         if (args.Length < 2)
         {
@@ -129,9 +116,7 @@ public static class CliApplication
         {
             error.WriteLine("Failed to load solution for analysis.");
             error.WriteLine(exception.Message);
-            error.WriteLine(
-                "Ensure the target solution has been restored and builds successfully, then retry."
-            );
+            error.WriteLine("Ensure the target solution has been restored and builds successfully, then retry.");
             error.WriteLine($"  dotnet restore {args[1]}");
             error.WriteLine($"  dotnet build {args[1]}");
             return 2;
@@ -173,11 +158,7 @@ public static class CliApplication
         return 0;
     }
 
-    private static async Task<int> RunEntryPointsAsync(
-        TextWriter output,
-        TextWriter error,
-        string workingDirectory
-    )
+    private static async Task<int> RunEntryPointsAsync(TextWriter output, TextWriter error, string workingDirectory)
     {
         await using var context = OpenContext(workingDirectory);
         var entryPoints = await Reads.LoadEntryPointsAsync(context);
@@ -190,20 +171,13 @@ public static class CliApplication
         for (var i = 0; i < entryPoints.Count; i++)
         {
             var ep = entryPoints[i];
-            output.WriteLine(
-                $"  [{i, 3}] {ep.DisplayName}  {Path.GetFileName(ep.FilePath)}:{ep.Line}"
-            );
+            output.WriteLine($"  [{i, 3}] {ep.DisplayName}  {Path.GetFileName(ep.FilePath)}:{ep.Line}");
         }
 
         return 0;
     }
 
-    private static async Task<int> RunEffectsAsync(
-        string[] args,
-        TextWriter output,
-        TextWriter error,
-        string workingDirectory
-    )
+    private static async Task<int> RunEffectsAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
     {
         int? entryPointIndex = null;
         if (args.Length >= 3 && args[1] == "--entrypoint")
@@ -239,11 +213,7 @@ public static class CliApplication
         return 0;
     }
 
-    private static async Task<int> RunDiAsync(
-        TextWriter output,
-        TextWriter error,
-        string workingDirectory
-    )
+    private static async Task<int> RunDiAsync(TextWriter output, TextWriter error, string workingDirectory)
     {
         await using var context = OpenContext(workingDirectory);
         var registrations = await Reads.LoadDiRegistrationsAsync(context);
@@ -257,12 +227,7 @@ public static class CliApplication
         return 0;
     }
 
-    private static async Task<int> RunTraceAsync(
-        string[] args,
-        TextWriter output,
-        TextWriter error,
-        string workingDirectory
-    )
+    private static async Task<int> RunTraceAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
     {
         var pathsMode = args.Contains("--paths");
         string? symbol;
@@ -313,12 +278,7 @@ public static class CliApplication
         return 0;
     }
 
-    private static Task<int> RunProfileAsync(
-        string[] args,
-        TextWriter output,
-        TextWriter error,
-        string workingDirectory
-    )
+    private static Task<int> RunProfileAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
     {
         if (args.Length < 2 || args[1] != "validate")
         {
@@ -339,12 +299,7 @@ public static class CliApplication
         }
     }
 
-    private static async Task<int> RunFilesAsync(
-        string[] args,
-        TextWriter output,
-        TextWriter error,
-        string workingDirectory
-    )
+    private static async Task<int> RunFilesAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
     {
         if (args.Length != 2 || args[1] != "--skipped")
         {
@@ -364,12 +319,7 @@ public static class CliApplication
         return 0;
     }
 
-    private static async Task<int> RunCallGraphAsync(
-        string[] args,
-        TextWriter output,
-        TextWriter error,
-        string workingDirectory
-    )
+    private static async Task<int> RunCallGraphAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
     {
         if (args.Length < 2 || !int.TryParse(args[1], out var entryPointIndex))
         {
@@ -401,12 +351,7 @@ public static class CliApplication
         return 0;
     }
 
-    private static async Task<int> RunCallGraphsAsync(
-        string[] args,
-        TextWriter output,
-        TextWriter error,
-        string workingDirectory
-    )
+    private static async Task<int> RunCallGraphsAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
     {
         var fullMode = args.Contains("--full");
         var summaryMode = args.Contains("--summary");
@@ -446,10 +391,7 @@ public static class CliApplication
         return new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
     }
 
-    private static async Task<string?> GetLatestRunIdOrWriteErrorAsync(
-        RigDbContext context,
-        TextWriter error
-    )
+    private static async Task<string?> GetLatestRunIdOrWriteErrorAsync(RigDbContext context, TextWriter error)
     {
         var runId = await Reads.GetLatestRunIdAsync(context);
         if (runId is null)

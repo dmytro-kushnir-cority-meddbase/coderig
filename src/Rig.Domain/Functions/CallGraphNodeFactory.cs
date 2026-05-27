@@ -22,15 +22,8 @@ public static class CallGraphNodeFactory
             confidence,
             basis,
             reason,
-            calls
-                .Application.OrderBy(call => call.Line)
-                .Select(call => call.Key)
-                .Distinct(StringComparer.Ordinal)
-                .ToArray(),
-            calls
-                .Boundary.DistinctBy(call => $"{call.Kind}|{call.Target}|{call.Line}")
-                .OrderBy(call => call.Line)
-                .ToArray(),
+            calls.Application.OrderBy(call => call.Line).Select(call => call.Key).Distinct(StringComparer.Ordinal).ToArray(),
+            calls.Boundary.DistinctBy(call => $"{call.Kind}|{call.Target}|{call.Line}").OrderBy(call => call.Line).ToArray(),
             effects.OrderBy(e => e.Line).ToList()
         );
     }

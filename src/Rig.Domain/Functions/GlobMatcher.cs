@@ -6,11 +6,7 @@ public static class GlobMatcher
 {
     public static bool IsMatch(string value, string glob)
     {
-        return Regex.IsMatch(
-            value.Replace('\\', '/'),
-            ToRegex(glob),
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant
-        );
+        return Regex.IsMatch(value.Replace('\\', '/'), ToRegex(glob), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     public static string ToRegex(string glob)

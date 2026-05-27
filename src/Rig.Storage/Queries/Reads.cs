@@ -8,10 +8,7 @@ namespace Rig.Storage.Queries;
 public static class Reads
 {
     // Returns null when the DB doesn't exist or has no runs yet.
-    public static async Task<string?> GetLatestRunIdAsync(
-        RigDbContext context,
-        CancellationToken cancellationToken = default
-    )
+    public static async Task<string?> GetLatestRunIdAsync(RigDbContext context, CancellationToken cancellationToken = default)
     {
         if (!await context.Database.CanConnectAsync(cancellationToken))
         {
@@ -37,21 +34,11 @@ public static class Reads
         return await context
             .EntryPoints.Where(x => x.RunId == runId)
             .OrderBy(x => x.EntryPointIndex)
-            .Select(x => new EntryPointInfo(
-                x.Kind,
-                x.Method,
-                x.Route,
-                x.DisplayName,
-                x.FilePath,
-                x.Line
-            ))
+            .Select(x => new EntryPointInfo(x.Kind, x.Method, x.Route, x.DisplayName, x.FilePath, x.Line))
             .ToArrayAsync(cancellationToken);
     }
 
-    public static async Task<RunSummary?> GetLatestRunSummaryAsync(
-        RigDbContext context,
-        CancellationToken cancellationToken = default
-    )
+    public static async Task<RunSummary?> GetLatestRunSummaryAsync(RigDbContext context, CancellationToken cancellationToken = default)
     {
         if (!await context.Database.CanConnectAsync(cancellationToken))
         {
@@ -92,11 +79,7 @@ public static class Reads
             .ToArrayAsync(cancellationToken);
     }
 
-    public static async Task<TraceInfo?> LoadTraceAsync(
-        RigDbContext context,
-        string symbol,
-        CancellationToken cancellationToken = default
-    )
+    public static async Task<TraceInfo?> LoadTraceAsync(RigDbContext context, string symbol, CancellationToken cancellationToken = default)
     {
         var run = await GetLatestRunSummaryAsync(context, cancellationToken);
         if (run is null)
@@ -131,10 +114,7 @@ public static class Reads
         if (runId is null)
             return null;
 
-        var effectEntities = await context
-            .Effects.Where(x => x.RunId == runId)
-            .OrderBy(x => x.EffectIndex)
-            .ToArrayAsync(cancellationToken);
+        var effectEntities = await context.Effects.Where(x => x.RunId == runId).OrderBy(x => x.EffectIndex).ToArrayAsync(cancellationToken);
 
         var observationEntities = await context
             .EffectObservations.Where(x => x.RunId == runId)
@@ -184,15 +164,7 @@ public static class Reads
         return await context
             .SourceFiles.Where(x => x.RunId == runId && x.Status == "skipped")
             .OrderBy(x => x.FilePath)
-            .Select(x => new SourceFileInfo(
-                x.ProjectName,
-                x.FilePath,
-                x.Status,
-                x.Confidence,
-                x.Basis,
-                x.Reason,
-                x.Evidence
-            ))
+            .Select(x => new SourceFileInfo(x.ProjectName, x.FilePath, x.Status, x.Confidence, x.Basis, x.Reason, x.Evidence))
             .ToArrayAsync(cancellationToken);
     }
 
@@ -218,9 +190,7 @@ public static class Reads
             .ToArrayAsync(cancellationToken);
 
         var observationEntities = await context
-            .EffectObservations.Where(x =>
-                x.RunId == runId && effectIndices.Contains(x.EffectIndex)
-            )
+            .EffectObservations.Where(x => x.RunId == runId && effectIndices.Contains(x.EffectIndex))
             .OrderBy(x => x.EffectIndex)
             .ThenBy(x => x.ObservationIndex)
             .ToArrayAsync(cancellationToken);
@@ -276,9 +246,7 @@ public static class Reads
             .ToArrayAsync(cancellationToken);
 
         var observationEntities = await context
-            .EffectObservations.Where(x =>
-                x.RunId == runId && effectIndices.Contains(x.EffectIndex)
-            )
+            .EffectObservations.Where(x => x.RunId == runId && effectIndices.Contains(x.EffectIndex))
             .OrderBy(x => x.EffectIndex)
             .ThenBy(x => x.ObservationIndex)
             .ToArrayAsync(cancellationToken);
@@ -295,10 +263,7 @@ public static class Reads
         return new CallGraphInfo(entryPointName, nodes, CallGraphCycleDetector.Detect(nodes));
     }
 
-    private static IReadOnlyList<EffectInfo> BuildEffects(
-        EffectEntity[] effectEntities,
-        EffectObservationEntity[] observationEntities
-    )
+    private static IReadOnlyList<EffectInfo> BuildEffects(EffectEntity[] effectEntities, EffectObservationEntity[] observationEntities)
     {
         var observationsByEffect = observationEntities
             .GroupBy(x => x.EffectIndex)
@@ -306,15 +271,7 @@ public static class Reads
                 g => g.Key,
                 g =>
                     (IReadOnlyList<EffectObservationInfo>)
-                        g.Select(o => new EffectObservationInfo(
-                                o.Type,
-                                o.Context,
-                                o.Detail,
-                                o.Confidence,
-                                o.Basis,
-                                o.Reason
-                            ))
-                            .ToArray()
+                        g.Select(o => new EffectObservationInfo(o.Type, o.Context, o.Detail, o.Confidence, o.Basis, o.Reason)).ToArray()
             );
 
         return effectEntities
@@ -348,10 +305,7 @@ public static class Reads
 
         var callsByNode = callEntities
             .GroupBy(x => x.NodeIndex)
-            .ToDictionary(
-                g => g.Key,
-                g => (IReadOnlyList<string>)g.Select(c => c.TargetSymbol).ToArray()
-            );
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<string>)g.Select(c => c.TargetSymbol).ToArray());
 
         var boundaryCallsByNode = boundaryCallEntities
             .GroupBy(x => x.NodeIndex)
@@ -359,16 +313,7 @@ public static class Reads
                 g => g.Key,
                 g =>
                     (IReadOnlyList<BoundaryCallInfo>)
-                        g.Select(b => new BoundaryCallInfo(
-                                b.Kind,
-                                b.Target,
-                                b.Method,
-                                b.FilePath,
-                                b.Line,
-                                b.Confidence,
-                                b.Basis,
-                                b.Reason
-                            ))
+                        g.Select(b => new BoundaryCallInfo(b.Kind, b.Target, b.Method, b.FilePath, b.Line, b.Confidence, b.Basis, b.Reason))
                             .ToArray()
             );
 
@@ -378,9 +323,7 @@ public static class Reads
                 g => g.Key,
                 g =>
                     (IReadOnlyList<EffectInfo>)
-                        g.Select(link => effectsByIndex.GetValueOrDefault(link.EffectIndex))
-                            .OfType<EffectInfo>()
-                            .ToArray()
+                        g.Select(link => effectsByIndex.GetValueOrDefault(link.EffectIndex)).OfType<EffectInfo>().ToArray()
             );
 
         return nodeEntities
@@ -398,10 +341,7 @@ public static class Reads
             .ToArray();
     }
 
-    public static async Task<IReadOnlyList<RunSummary>> ListRunsAsync(
-        RigDbContext context,
-        CancellationToken cancellationToken = default
-    )
+    public static async Task<IReadOnlyList<RunSummary>> ListRunsAsync(RigDbContext context, CancellationToken cancellationToken = default)
     {
         if (!await context.Database.CanConnectAsync(cancellationToken))
         {

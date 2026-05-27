@@ -1,7 +1,3 @@
 ﻿namespace Rig.Domain.Data;
 
-public sealed record TraceInfo(
-    string Symbol,
-    RunSummary Run,
-    IReadOnlyList<TraceCallGraphInfo> CallGraphs
-);
+public sealed record TraceInfo(string Symbol, RunSummary Run, IReadOnlyList<TraceCallGraphInfo> CallGraphs);

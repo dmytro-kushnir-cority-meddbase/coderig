@@ -37,11 +37,7 @@ internal static class TraceRenderer
         }
     }
 
-    public static void RenderAmbiguous(
-        string query,
-        IReadOnlyList<string> symbols,
-        TextWriter error
-    )
+    public static void RenderAmbiguous(string query, IReadOnlyList<string> symbols, TextWriter error)
     {
         error.WriteLine($"Ambiguous symbol query: {query}");
         error.WriteLine();
@@ -81,18 +77,10 @@ internal static class TraceRenderer
         }
 
         output.WriteLine("  Downstream");
-        RenderDownstreamNode(
-            targetNode,
-            nodesBySymbol,
-            "    ",
-            new HashSet<string>(StringComparer.Ordinal),
-            output
-        );
+        RenderDownstreamNode(targetNode, nodesBySymbol, "    ", new HashSet<string>(StringComparer.Ordinal), output);
     }
 
-    private static Dictionary<string, List<string>> BuildCallersByTarget(
-        IReadOnlyList<CallGraphNodeInfo> nodes
-    )
+    private static Dictionary<string, List<string>> BuildCallersByTarget(IReadOnlyList<CallGraphNodeInfo> nodes)
     {
         var callersByTarget = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var node in nodes)
@@ -158,11 +146,7 @@ internal static class TraceRenderer
         return (paths, truncated);
     }
 
-    private static void RenderPath(
-        IReadOnlyList<string> path,
-        Dictionary<string, CallGraphNodeInfo> nodesBySymbol,
-        TextWriter output
-    )
+    private static void RenderPath(IReadOnlyList<string> path, Dictionary<string, CallGraphNodeInfo> nodesBySymbol, TextWriter output)
     {
         for (var i = 0; i < path.Count; i++)
         {
@@ -217,12 +201,7 @@ internal static class TraceRenderer
             );
         }
 
-        foreach (
-            var effect in EffectRenderFormatter.GetUnmatchedEffects(
-                node.BoundaryCalls,
-                node.Effects
-            )
-        )
+        foreach (var effect in EffectRenderFormatter.GetUnmatchedEffects(node.BoundaryCalls, node.Effects))
         {
             output.WriteLine($"{indent}  {EffectRenderFormatter.FormatEffect(effect)}");
         }

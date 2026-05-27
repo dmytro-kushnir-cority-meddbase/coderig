@@ -15,10 +15,7 @@ internal static class DiRenderer
         )
         {
             var registrationsForService = group.ToArray();
-            var collectionMarker =
-                registrationsForService.Length > 1
-                    ? $" ({registrationsForService.Length} registrations)"
-                    : "";
+            var collectionMarker = registrationsForService.Length > 1 ? $" ({registrationsForService.Length} registrations)" : "";
             output.WriteLine($"  {group.Key}{collectionMarker}");
 
             foreach (
@@ -28,15 +25,9 @@ internal static class DiRenderer
                     .ThenBy(r => r.Line)
             )
             {
-                output.WriteLine(
-                    $"    -> {reg.ImplementationType ?? "(self)"}  lifetime={reg.Lifetime} kind={reg.RegistrationKind}"
-                );
-                output.WriteLine(
-                    $"       conf={reg.Confidence} basis={reg.Basis} reason={reg.Reason}"
-                );
-                output.WriteLine(
-                    $"       loc={Path.GetFileName(reg.FilePath)}:{reg.Line} evidence={reg.Evidence}"
-                );
+                output.WriteLine($"    -> {reg.ImplementationType ?? "(self)"}  lifetime={reg.Lifetime} kind={reg.RegistrationKind}");
+                output.WriteLine($"       conf={reg.Confidence} basis={reg.Basis} reason={reg.Reason}");
+                output.WriteLine($"       loc={Path.GetFileName(reg.FilePath)}:{reg.Line} evidence={reg.Evidence}");
             }
         }
     }

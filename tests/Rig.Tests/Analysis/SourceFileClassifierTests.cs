@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Rig.Analysis;
-using Rig.Analysis.Analysis.Inventory;
-using Rig.Analysis.Analysis.Rules;
+using Rig.Analysis.Inventory;
+using Rig.Analysis.Rules;
 using Shouldly;
 
 namespace Rig.Tests.Analysis;
@@ -25,12 +25,7 @@ public sealed class SourceFileClassifierTests
         var classification = SourceFileClassifier.Classify(
             SolutionPath(),
             "EntryPointEffects.Api",
-            Path.Combine(
-                SolutionDirectory(),
-                "EntryPointEffects.Api",
-                "Generated",
-                "Endpoint.g.cs"
-            ),
+            Path.Combine(SolutionDirectory(), "EntryPointEffects.Api", "Generated", "Endpoint.g.cs"),
             rules
         );
 

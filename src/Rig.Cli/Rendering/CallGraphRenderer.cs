@@ -4,13 +4,7 @@ namespace Rig.Cli.Rendering;
 
 internal static class CallGraphRenderer
 {
-    public static void Render(
-        CallGraphInfo callGraph,
-        int entryPointIndex,
-        bool fullMode,
-        bool summaryMode,
-        TextWriter output
-    )
+    public static void Render(CallGraphInfo callGraph, int entryPointIndex, bool fullMode, bool summaryMode, TextWriter output)
     {
         var allNodes = callGraph.Nodes;
         var focusMode = !fullMode;
@@ -77,13 +71,8 @@ internal static class CallGraphRenderer
         foreach (var (effect, count) in ordered)
         {
             var countSuffix = count > 1 ? $"  [x{count}]" : "";
-            var observations = string.Join(
-                "",
-                effect.Observations.Select(o => $"  [{o.Type}:{o.Context}]")
-            );
-            output.WriteLine(
-                $"  {effect.Provider, -16} {effect.Operation, -14}  {effect.Resource}{countSuffix}{observations}"
-            );
+            var observations = string.Join("", effect.Observations.Select(o => $"  [{o.Type}:{o.Context}]"));
+            output.WriteLine($"  {effect.Provider, -16} {effect.Operation, -14}  {effect.Resource}{countSuffix}{observations}");
         }
     }
 
@@ -97,9 +86,7 @@ internal static class CallGraphRenderer
         output.WriteLine($"Cycles: {cycles.Count}");
         foreach (var cycle in cycles)
         {
-            output.WriteLine(
-                $"  CYCLE {string.Join(" -> ", cycle.Path.Select(SymbolNameFormatter.Shorten))}"
-            );
+            output.WriteLine($"  CYCLE {string.Join(" -> ", cycle.Path.Select(SymbolNameFormatter.Shorten))}");
         }
     }
 
@@ -119,17 +106,7 @@ internal static class CallGraphRenderer
             symbolToNode.TryAdd(node.Symbol, node);
 
         var visited = new HashSet<string>();
-        RenderTreeNode(
-            nodes[0],
-            "  ",
-            "  ",
-            symbolToNode,
-            callGraph.Cycles,
-            effectReachable,
-            focusMode,
-            visited,
-            output
-        );
+        RenderTreeNode(nodes[0], "  ", "  ", symbolToNode, callGraph.Cycles, effectReachable, focusMode, visited, output);
     }
 
     private static void RenderTreeNode(
@@ -144,20 +121,14 @@ internal static class CallGraphRenderer
         TextWriter output
     )
     {
-        output.WriteLine(
-            $"{linePrefix}{Path.GetFileName(node.FilePath)}:{node.Line}  {SymbolNameFormatter.Shorten(node.Symbol)}"
-        );
+        output.WriteLine($"{linePrefix}{Path.GetFileName(node.FilePath)}:{node.Line}  {SymbolNameFormatter.Shorten(node.Symbol)}");
 
         if (!visited.Add(node.Symbol))
             return;
 
-        var calls = node
-            .Calls.Where(c => !focusMode || effectReachable is null || effectReachable.Contains(c))
-            .ToList();
+        var calls = node.Calls.Where(c => !focusMode || effectReachable is null || effectReachable.Contains(c)).ToList();
         IReadOnlyList<BoundaryCallInfo> boundaries = focusMode ? [] : node.BoundaryCalls;
-        var effects = focusMode
-            ? node.Effects
-            : EffectRenderFormatter.GetUnmatchedEffects(boundaries, node.Effects);
+        var effects = focusMode ? node.Effects : EffectRenderFormatter.GetUnmatchedEffects(boundaries, node.Effects);
 
         int total = calls.Count + boundaries.Count + effects.Count;
         int idx = 0;
@@ -179,17 +150,7 @@ internal static class CallGraphRenderer
                     );
                 }
                 else
-                    RenderTreeNode(
-                        childNode,
-                        branch,
-                        nextChildren,
-                        symbolToNode,
-                        cycles,
-                        effectReachable,
-                        focusMode,
-                        visited,
-                        output
-                    );
+                    RenderTreeNode(childNode, branch, nextChildren, symbolToNode, cycles, effectReachable, focusMode, visited, output);
             }
             else
             {
@@ -219,11 +180,7 @@ internal static class CallGraphRenderer
         }
     }
 
-    private static bool IsCycleEdge(
-        string source,
-        string target,
-        IReadOnlyList<CallGraphCycleInfo> cycles
-    )
+    private static bool IsCycleEdge(string source, string target, IReadOnlyList<CallGraphCycleInfo> cycles)
     {
         return cycles.Any(cycle =>
         {

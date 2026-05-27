@@ -1,27 +1,23 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
-namespace Rig.Analysis.Analysis;
+namespace Rig.Analysis;
 
 internal static class RoslynSymbolHelpers
 {
     private static readonly SymbolDisplayFormat MethodKeyFormat = new(
         globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Included,
         typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
-        memberOptions: SymbolDisplayMemberOptions.IncludeContainingType
-            | SymbolDisplayMemberOptions.IncludeParameters,
-        parameterOptions: SymbolDisplayParameterOptions.IncludeType
-            | SymbolDisplayParameterOptions.IncludeName,
+        memberOptions: SymbolDisplayMemberOptions.IncludeContainingType | SymbolDisplayMemberOptions.IncludeParameters,
+        parameterOptions: SymbolDisplayParameterOptions.IncludeType | SymbolDisplayParameterOptions.IncludeName,
         genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters,
-        miscellaneousOptions: SymbolDisplayMiscellaneousOptions.EscapeKeywordIdentifiers
-            | SymbolDisplayMiscellaneousOptions.UseSpecialTypes
+        miscellaneousOptions: SymbolDisplayMiscellaneousOptions.EscapeKeywordIdentifiers | SymbolDisplayMiscellaneousOptions.UseSpecialTypes
     );
 
     public static IMethodSymbol? ResolveMethodSymbol(SyntaxNode node, SemanticModel semanticModel)
     {
         var symbolInfo = semanticModel.GetSymbolInfo(node);
-        return symbolInfo.Symbol as IMethodSymbol
-            ?? symbolInfo.CandidateSymbols.OfType<IMethodSymbol>().FirstOrDefault();
+        return symbolInfo.Symbol as IMethodSymbol ?? symbolInfo.CandidateSymbols.OfType<IMethodSymbol>().FirstOrDefault();
     }
 
     public static string GetMethodKey(IMethodSymbol symbol)
@@ -51,10 +47,10 @@ internal static class RoslynSymbolHelpers
     public static int GetCallNameLine(SyntaxTree tree, SyntaxNode node) =>
         node switch
         {
-            InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax m } =>
-                tree.GetLineSpan(m.Name.Span).StartLinePosition.Line + 1,
-            MemberAccessExpressionSyntax m => tree.GetLineSpan(m.Name.Span).StartLinePosition.Line
-                + 1,
+            InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax m } => tree.GetLineSpan(
+                m.Name.Span
+            ).StartLinePosition.Line + 1,
+            MemberAccessExpressionSyntax m => tree.GetLineSpan(m.Name.Span).StartLinePosition.Line + 1,
             IdentifierNameSyntax id => tree.GetLineSpan(id.Span).StartLinePosition.Line + 1,
             _ => GetLine(tree, node),
         };
@@ -69,8 +65,6 @@ internal static class RoslynSymbolHelpers
 
     public static string? TryGetMemberName(InvocationExpressionSyntax invocation)
     {
-        return invocation.Expression is MemberAccessExpressionSyntax memberAccess
-            ? memberAccess.Name.Identifier.ValueText
-            : null;
+        return invocation.Expression is MemberAccessExpressionSyntax memberAccess ? memberAccess.Name.Identifier.ValueText : null;
     }
 }

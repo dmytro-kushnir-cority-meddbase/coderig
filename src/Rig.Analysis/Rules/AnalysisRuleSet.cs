@@ -2,7 +2,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Rig.Domain.Functions;
 
-namespace Rig.Analysis.Analysis.Rules;
+namespace Rig.Analysis.Rules;
 
 internal sealed record AnalysisRuleSet(
     IReadOnlyList<MinimalApiEntryPointRule> MinimalApiEntryPoints,
@@ -16,27 +16,16 @@ internal sealed record AnalysisRuleSet(
     IReadOnlyList<string> ProjectExcludePatterns
 )
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-    };
+    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
-    public static AnalysisRuleSet LoadForSolution(
-        string solutionPath,
-        IReadOnlyList<string>? extraRulesPaths = null
-    )
+    public static AnalysisRuleSet LoadForSolution(string solutionPath, IReadOnlyList<string>? extraRulesPaths = null)
     {
         var rules = LoadBuiltIn();
 
-        var globalRulesPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".rig",
-            "rig.rules.json"
-        );
+        var globalRulesPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".rig", "rig.rules.json");
         rules = rules.MergeWithFile(globalRulesPath);
 
-        var solutionDirectory =
-            Path.GetDirectoryName(solutionPath) ?? Directory.GetCurrentDirectory();
+        var solutionDirectory = Path.GetDirectoryName(solutionPath) ?? Directory.GetCurrentDirectory();
         rules = rules.MergeWithFile(Path.Combine(solutionDirectory, "rig.rules.json"));
 
         if (extraRulesPaths is not null)
@@ -76,23 +65,13 @@ internal sealed record AnalysisRuleSet(
     {
         return this with
         {
-            MinimalApiEntryPoints = MinimalApiEntryPoints
-                .Concat(document.EntryPoints?.MinimalApi ?? [])
-                .ToArray(),
-            MvcHttpAttributes = MvcHttpAttributes
-                .Concat(document.EntryPoints?.MvcHttpAttributes ?? [])
-                .ToArray(),
-            ClassInheritanceEntryPoints = ClassInheritanceEntryPoints
-                .Concat(document.EntryPoints?.ClassInheritance ?? [])
-                .ToArray(),
+            MinimalApiEntryPoints = MinimalApiEntryPoints.Concat(document.EntryPoints?.MinimalApi ?? []).ToArray(),
+            MvcHttpAttributes = MvcHttpAttributes.Concat(document.EntryPoints?.MvcHttpAttributes ?? []).ToArray(),
+            ClassInheritanceEntryPoints = ClassInheritanceEntryPoints.Concat(document.EntryPoints?.ClassInheritance ?? []).ToArray(),
             Effects = Effects.Concat(document.Effects ?? []).ToArray(),
             DiRegistrations = DiRegistrations.Concat(document.DiRegistrations ?? []).ToArray(),
-            FileInclude = FileInclude
-                .Concat(document.Files?.Include?.Select(rule => rule.ToFileRule("include")) ?? [])
-                .ToArray(),
-            FileExclude = FileExclude
-                .Concat(document.Files?.Exclude?.Select(rule => rule.ToFileRule("exclude")) ?? [])
-                .ToArray(),
+            FileInclude = FileInclude.Concat(document.Files?.Include?.Select(rule => rule.ToFileRule("include")) ?? []).ToArray(),
+            FileExclude = FileExclude.Concat(document.Files?.Exclude?.Select(rule => rule.ToFileRule("exclude")) ?? []).ToArray(),
             TestProjectPatterns = TestProjectPatterns
                 .Concat(document.Files?.TestProjectPatterns ?? [])
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -129,25 +108,16 @@ internal sealed record AnalysisRuleSet(
         var candidates = new[]
         {
             Path.Combine(AppContext.BaseDirectory, "Rules", "builtin-rules.json"),
-            Path.Combine(
-                Directory.GetCurrentDirectory(),
-                "src",
-                "Rig.Analysis",
-                "Rules",
-                "builtin-rules.json"
-            ),
+            Path.Combine(Directory.GetCurrentDirectory(), "src", "Rig.Analysis", "Rules", "builtin-rules.json"),
         };
 
         var rulesPath =
-            candidates.FirstOrDefault(File.Exists)
-            ?? throw new InvalidOperationException("Could not find built-in analysis rules.");
+            candidates.FirstOrDefault(File.Exists) ?? throw new InvalidOperationException("Could not find built-in analysis rules.");
 
         using var stream = File.OpenRead(rulesPath);
         var document =
             JsonSerializer.Deserialize<AnalysisRulesDocument>(stream, JsonOptions)
-            ?? throw new InvalidOperationException(
-                $"Built-in analysis rules are invalid: {rulesPath}"
-            );
+            ?? throw new InvalidOperationException($"Built-in analysis rules are invalid: {rulesPath}");
 
         return new AnalysisRuleSet(
             document.EntryPoints?.MinimalApi ?? [],
@@ -211,12 +181,7 @@ internal sealed record EffectRule(
     }
 }
 
-internal sealed record DiRegistrationRule(
-    IReadOnlyList<string> Methods,
-    string Lifetime,
-    string RegistrationKind,
-    string Reason
-)
+internal sealed record DiRegistrationRule(IReadOnlyList<string> Methods, string Lifetime, string RegistrationKind, string Reason)
 {
     public bool Matches(string methodName)
     {
@@ -284,10 +249,7 @@ internal sealed class FileRuleDocument
             Id,
             Glob,
             string.IsNullOrWhiteSpace(Reason) ? $"{direction}_file_rule" : Reason,
-            new Regex(
-                GlobMatcher.ToRegex(Glob),
-                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant
-            )
+            new Regex(GlobMatcher.ToRegex(Glob), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
         );
     }
 }

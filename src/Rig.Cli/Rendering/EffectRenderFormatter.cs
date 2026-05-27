@@ -11,10 +11,7 @@ internal static class EffectRenderFormatter
         return $"EFFECT {effect.Provider} {effect.Operation}  {effect.Method}  {effect.Resource}{obsStr}";
     }
 
-    public static EffectInfo? FindEffectForBoundary(
-        BoundaryCallInfo boundary,
-        IReadOnlyList<EffectInfo> effects
-    )
+    public static EffectInfo? FindEffectForBoundary(BoundaryCallInfo boundary, IReadOnlyList<EffectInfo> effects)
     {
         return effects.FirstOrDefault(effect =>
             effect.Line == boundary.Line

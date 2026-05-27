@@ -1,10 +1,10 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Rig.Analysis.Analysis.Rules;
+using Rig.Analysis.Rules;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 
-namespace Rig.Analysis.Analysis.CallGraph;
+namespace Rig.Analysis.CallGraph;
 
 internal static class CallGraphBuilder
 {
@@ -22,23 +22,12 @@ internal static class CallGraphBuilder
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
 
         var indexes = CallGraphIndexes.Build(sources, diRegistrations);
-        var context = new CallGraphContext(
-            methods,
-            dispatchRules,
-            indexes.DispatchIndex,
-            indexes.SingleImplIndex,
-            effects
-        );
+        var context = new CallGraphContext(methods, dispatchRules, indexes.DispatchIndex, indexes.SingleImplIndex, effects);
 
-        return entryPoints
-            .Select(entryPoint => BuildCallGraph(entryPoint, sources, context))
-            .ToArray();
+        return entryPoints.Select(entryPoint => BuildCallGraph(entryPoint, sources, context)).ToArray();
     }
 
-    private static IEnumerable<MethodModel> FindApplicationMethods(
-        SourceModel source,
-        IReadOnlyList<EffectInfo> effects
-    )
+    private static IEnumerable<MethodModel> FindApplicationMethods(SourceModel source, IReadOnlyList<EffectInfo> effects)
     {
         foreach (var method in source.Root.DescendantNodes().OfType<MethodDeclarationSyntax>())
         {
@@ -51,33 +40,15 @@ internal static class CallGraphBuilder
             var displayName = RoslynSymbolHelpers.GetMethodDisplayName(methodSymbol);
             var line = RoslynSymbolHelpers.GetLine(source.Tree, method);
             var methodEffects = effects
-                .Where(effect =>
-                    string.Equals(
-                        effect.FilePath,
-                        source.FilePath,
-                        StringComparison.OrdinalIgnoreCase
-                    )
-                )
+                .Where(effect => string.Equals(effect.FilePath, source.FilePath, StringComparison.OrdinalIgnoreCase))
                 .Where(effect => RoslynSymbolHelpers.IsLineInside(source.Tree, method, effect.Line))
                 .ToArray();
 
-            yield return new MethodModel(
-                key,
-                displayName,
-                source.FilePath,
-                line,
-                method,
-                source.SemanticModel,
-                methodEffects
-            );
+            yield return new MethodModel(key, displayName, source.FilePath, line, method, source.SemanticModel, methodEffects);
         }
     }
 
-    private static CallGraphInfo BuildCallGraph(
-        EntryPointInfo entryPoint,
-        IReadOnlyList<SourceModel> sources,
-        CallGraphContext context
-    )
+    private static CallGraphInfo BuildCallGraph(EntryPointInfo entryPoint, IReadOnlyList<SourceModel> sources, CallGraphContext context)
     {
         var nodes = new List<CallGraphNodeInfo>();
         var visited = new HashSet<string>(StringComparer.Ordinal);
@@ -90,19 +61,10 @@ internal static class CallGraphBuilder
             VisitMethod(call.Key, context, nodes, visited);
         }
 
-        return new CallGraphInfo(
-            entryPoint.DisplayName,
-            nodes,
-            CallGraphCycleDetector.Detect(nodes)
-        );
+        return new CallGraphInfo(entryPoint.DisplayName, nodes, CallGraphCycleDetector.Detect(nodes));
     }
 
-    private static void VisitMethod(
-        string key,
-        CallGraphContext context,
-        List<CallGraphNodeInfo> nodes,
-        HashSet<string> visited
-    )
+    private static void VisitMethod(string key, CallGraphContext context, List<CallGraphNodeInfo> nodes, HashSet<string> visited)
     {
         if (!visited.Add(key) || !context.Methods.TryGetValue(key, out var method))
         {

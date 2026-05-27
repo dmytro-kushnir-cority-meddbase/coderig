@@ -1,5 +1,5 @@
 using Rig.Analysis;
-using Rig.Analysis.Analysis.Rules;
+using Rig.Analysis.Rules;
 using Shouldly;
 
 namespace Rig.Tests.Analysis;
@@ -19,9 +19,7 @@ public sealed class AnalysisRuleSetTests
             """
         );
 
-        var exception = Should.Throw<InvalidOperationException>(() =>
-            AnalysisRuleSet.LoadForSolution(workspace.SolutionPath)
-        );
+        var exception = Should.Throw<InvalidOperationException>(() => AnalysisRuleSet.LoadForSolution(workspace.SolutionPath));
 
         exception.Message.ShouldContain("File rule in `exclude` is missing `id`.");
     }
@@ -39,9 +37,7 @@ public sealed class AnalysisRuleSetTests
             """
         );
 
-        var exception = Should.Throw<InvalidOperationException>(() =>
-            AnalysisRuleSet.LoadForSolution(workspace.SolutionPath)
-        );
+        var exception = Should.Throw<InvalidOperationException>(() => AnalysisRuleSet.LoadForSolution(workspace.SolutionPath));
 
         exception.Message.ShouldContain("File rule `include-contract` is missing `glob`.");
     }
@@ -66,10 +62,7 @@ public sealed class AnalysisRuleSetTests
             """
         );
 
-        var rules = AnalysisRuleSet.LoadForSolution(
-            workspace.SolutionPath,
-            [workspace.ExtraRulesPath]
-        );
+        var rules = AnalysisRuleSet.LoadForSolution(workspace.SolutionPath, [workspace.ExtraRulesPath]);
 
         rules.IsTestProject("Rig.Tests").ShouldBeTrue();
         rules.IsExcludedProject("Sample.AppHost").ShouldBeTrue();
@@ -90,10 +83,7 @@ public sealed class AnalysisRuleSetTests
 
         public string ExtraRulesPath { get; }
 
-        public static TempRulesWorkspace Create(
-            string solutionRulesJson,
-            string? extraRulesJson = null
-        )
+        public static TempRulesWorkspace Create(string solutionRulesJson, string? extraRulesJson = null)
         {
             var directory = Directory.CreateTempSubdirectory("rig-rules-").FullName;
             var solutionPath = Path.Combine(directory, "Sample.slnx");
