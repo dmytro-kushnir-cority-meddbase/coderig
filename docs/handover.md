@@ -6,14 +6,15 @@ Current handover after background/event-handler entrypoints, gRPC entrypoint det
 
 The repo contains a CLI-first .NET 10 prototype split across three projects:
 
-- **`src/Rig`** — CLI exe; Roslyn workspace loading and analysis lives here
+- **`src/Rig.Cli`** — CLI exe and human-readable renderers
+- **`src/Rig.Analysis`** — Roslyn/MSBuild loading, rule loading, extraction, and callgraph construction
 - **`src/Rig.Domain`** — domain model records (`AnalysisResult`, `EntryPointInfo`, `EffectInfo`, etc.)
 - **`src/Rig.Storage`** — EF Core + SQLite; `RigDbContext`, `Reads.cs`, `Writes.cs`
 
 Published R2R binary at `.rig-bin/Rig.exe` (gitignored). Build with:
 
 ```powershell
-dotnet publish src/Rig/Rig.csproj -c Release -r win-x64 --self-contained -o .rig-bin `
+dotnet publish src/Rig.Cli/Rig.Cli.csproj -c Release -r win-x64 --self-contained -o .rig-bin `
   -p:PublishReadyToRun=true -p:DebugSymbols=false -p:DebugType=none `
   /p:TreatWarningsAsErrors=false
 ```
@@ -162,17 +163,17 @@ Other candidates:
 - `docs/ubiquitous-language.md`
 - `docs/progress.md`
 - `docs/sqlite-persistence-notes.md`
-- `src/Rig/Rules/builtin-rules.json`
-- `src/Rig/Analysis/SolutionAnalyzer.cs`
+- `src/Rig.Analysis/Rules/builtin-rules.json`
+- `src/Rig.Analysis/Analysis/SolutionAnalyzer.cs`
 - `src/Rig.Domain/AnalysisResult.cs`
-- `src/Rig/Analysis/CallGraph/CallGraphBuilder.cs`
-- `src/Rig/Analysis/CallGraph/CallGraphIndexes.cs`
-- `src/Rig/Analysis/Extraction/`
-- `src/Rig/Analysis/Rules/RuleTypeMatcher.cs`
-- `src/Rig/Analysis/Inventory/SolutionSourceLoader.cs`
-- `src/Rig/Analysis/Rules/AnalysisRuleSet.cs`
-- `src/Rig/Cli/CliApplication.cs`
-- `src/Rig/Cli/Rendering/`
+- `src/Rig.Analysis/Analysis/CallGraph/CallGraphBuilder.cs`
+- `src/Rig.Analysis/Analysis/CallGraph/CallGraphIndexes.cs`
+- `src/Rig.Analysis/Analysis/Extraction/`
+- `src/Rig.Analysis/Analysis/Rules/RuleTypeMatcher.cs`
+- `src/Rig.Analysis/Analysis/Inventory/SolutionSourceLoader.cs`
+- `src/Rig.Analysis/Analysis/Rules/AnalysisRuleSet.cs`
+- `src/Rig.Cli/Cli/CliApplication.cs`
+- `src/Rig.Cli/Cli/Rendering/`
 - `src/Rig.Storage/RigDbContext.cs`
 - `src/Rig.Storage/Queries/Reads.cs`
 - `src/Rig.Storage/Queries/Writes.cs`
@@ -188,13 +189,13 @@ Other candidates:
 Working commands:
 
 ```text
-dotnet run --project src/Rig -- index playgrounds/EntryPointEffects/EntryPointEffects.slnx
-dotnet run --project src/Rig -- runs
-dotnet run --project src/Rig -- entrypoints
-dotnet run --project src/Rig -- effects
-dotnet run --project src/Rig -- trace --contains TeamWorkflow.LoadTeamSummaryAsync --paths
-dotnet run --project src/Rig -- trace --contains RedisBasketRepository.GetBasketAsync --paths
-dotnet run --project src/Rig -- trace --contains GracePeriodManagerService.ExecuteAsync --paths
-dotnet run --project src/Rig -- files --skipped
-dotnet run --project src/Rig -- callgraph "minapi GET /minapi/teams/{id}"
+dotnet run --project src/Rig.Cli -- index playgrounds/EntryPointEffects/EntryPointEffects.slnx
+dotnet run --project src/Rig.Cli -- runs
+dotnet run --project src/Rig.Cli -- entrypoints
+dotnet run --project src/Rig.Cli -- effects
+dotnet run --project src/Rig.Cli -- trace --contains TeamWorkflow.LoadTeamSummaryAsync --paths
+dotnet run --project src/Rig.Cli -- trace --contains RedisBasketRepository.GetBasketAsync --paths
+dotnet run --project src/Rig.Cli -- trace --contains GracePeriodManagerService.ExecuteAsync --paths
+dotnet run --project src/Rig.Cli -- files --skipped
+dotnet run --project src/Rig.Cli -- callgraph "minapi GET /minapi/teams/{id}"
 ```

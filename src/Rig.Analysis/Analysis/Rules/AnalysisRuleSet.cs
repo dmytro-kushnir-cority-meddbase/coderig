@@ -125,7 +125,7 @@ internal sealed record AnalysisRuleSet(
         var candidates = new[]
         {
             Path.Combine(AppContext.BaseDirectory, "Rules", "builtin-rules.json"),
-            Path.Combine(Directory.GetCurrentDirectory(), "src", "Rig", "Rules", "builtin-rules.json")
+            Path.Combine(Directory.GetCurrentDirectory(), "src", "Rig.Analysis", "Rules", "builtin-rules.json")
         };
 
         var rulesPath = candidates.FirstOrDefault(File.Exists)

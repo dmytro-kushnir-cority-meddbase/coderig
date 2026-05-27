@@ -177,7 +177,7 @@ Start as one .NET project and split later when boundaries harden.
 Suggested layout:
 
 ```text
-src/Rig/
+src/Rig.Cli/
   Cli/
   Core/
   Roslyn/

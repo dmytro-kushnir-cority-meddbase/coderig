@@ -16,7 +16,7 @@ Current status after the first SQLite slice:
 - external and unresolved callgraph boundaries are persisted in
   `callgraph_boundary_calls`.
 - current built-in entrypoint, effect, DI, and file rules live in
-  `src/Rig/Rules/builtin-rules.json`.
+  `src/Rig.Analysis/Rules/builtin-rules.json`.
 
 ## Full AST Index Decision
 

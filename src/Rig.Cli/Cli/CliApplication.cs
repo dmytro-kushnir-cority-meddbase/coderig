@@ -294,7 +294,7 @@ public static class CliApplication
 
         try
         {
-            var _ = AnalysisRuleSet.LoadForSolution(workingDirectory);
+            AnalysisProfileValidator.ValidateForSolution(workingDirectory);
             output.WriteLine("Profile: valid");
             return Task.FromResult(0);
         }

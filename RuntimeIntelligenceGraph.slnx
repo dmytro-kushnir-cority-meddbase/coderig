@@ -1,8 +1,9 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Rig.Analysis/Rig.Analysis.csproj" />
     <Project Path="src/Rig.Domain/Rig.Domain.csproj" />
     <Project Path="src/Rig.Storage/Rig.Storage.csproj" />
-    <Project Path="src/Rig/Rig.csproj" />
+    <Project Path="src/Rig.Cli/Rig.Cli.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Rig.Tests/Rig.Tests.csproj" />

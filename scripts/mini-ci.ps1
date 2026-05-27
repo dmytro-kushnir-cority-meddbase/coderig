@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $solution = Join-Path $repoRoot "RuntimeIntelligenceGraph.slnx"
-$toolProject = Join-Path $repoRoot "src/Rig/Rig.csproj"
+$toolProject = Join-Path $repoRoot "src/Rig.Cli/Rig.Cli.csproj"
 $packageOutput = Join-Path $repoRoot ".rig-nupkg"
 
 if ([string]::IsNullOrWhiteSpace($ToolVersion)) {

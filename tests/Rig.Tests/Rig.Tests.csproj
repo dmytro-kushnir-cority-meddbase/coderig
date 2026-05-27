@@ -26,7 +26,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Rig\Rig.csproj" />
+    <ProjectReference Include="..\..\src\Rig.Analysis\Rig.Analysis.csproj" />
+    <ProjectReference Include="..\..\src\Rig.Cli\Rig.Cli.csproj" />
   </ItemGroup>
 
 </Project>

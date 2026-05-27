@@ -24,7 +24,8 @@ Preserve the architecture split:
 
 ## Repo Map
 
-- `src/Rig` - CLI executable, Roslyn/MSBuild loading, extraction, callgraph logic.
+- `src/Rig.Cli` - CLI executable, command routing, and human-readable rendering.
+- `src/Rig.Analysis` - Roslyn/MSBuild loading, extraction, rules, and callgraph logic.
 - `src/Rig.Domain` - dependency-free records such as `AnalysisResult`, `EffectInfo`, and `CallGraphInfo`.
 - `src/Rig.Storage` - EF Core/SQLite context, entities, focused read queries, writes.
 - `tests/Rig.Tests` - fast unit tests plus a small number of Roslyn integration smoke tests.
@@ -55,12 +56,12 @@ from the working tree so the current checkout is exercised:
 ```powershell
 dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false
 dotnet build RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false
-dotnet run --project src/Rig -- index playgrounds/EntryPointEffects/EntryPointEffects.slnx
-dotnet run --project src/Rig -- entrypoints
-dotnet run --project src/Rig -- effects
-dotnet run --project src/Rig -- callgraph 6 --full
-dotnet run --project src/Rig -- files --skipped
-dotnet run --project src/Rig -- profile validate
+dotnet run --project src/Rig.Cli -- index playgrounds/EntryPointEffects/EntryPointEffects.slnx
+dotnet run --project src/Rig.Cli -- entrypoints
+dotnet run --project src/Rig.Cli -- effects
+dotnet run --project src/Rig.Cli -- callgraph 6 --full
+dotnet run --project src/Rig.Cli -- files --skipped
+dotnet run --project src/Rig.Cli -- profile validate
 ```
 
 Use `/p:UseSharedCompilation=false` for build/test verification in this repo;

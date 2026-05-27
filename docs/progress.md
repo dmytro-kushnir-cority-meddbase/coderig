@@ -132,6 +132,7 @@ Status: `verified`
 - Removed unused `Reads.LoadLatestAsync` and kept CLI reads on focused query paths.
 - Extracted callgraph node reconstruction inside storage reads.
 - Split callgraph construction into `CallGraphBuilder` orchestration, `EntryNodeResolver`, `CallResolver`, and `CallGraphNodeFactory`.
+- Split `src/Rig` into `src/Rig.Cli` and `src/Rig.Analysis`; the NuGet tool package id and command remain `rig`.
 - Verification: `dotnet build RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false -warnaserror`; `dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false`.
 
 ### Callgraph cycle detection
@@ -151,14 +152,14 @@ Status: `verified`
 - Added high/medium boundary classifiers for RabbitMQ channel open, RabbitMQ exchange declare, DB connection open, DB reader row read, and resilience pipeline execution.
 - Trace/callgraph renderers now replace matching `BOUNDARY` lines with the detected `EFFECT` at the same invocation position, preserving source-order reading for effectful external calls.
 - Rebuilt local eShop index: 61 entrypoints, 109 effects.
-- Verification: `dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false`; `dotnet run --project src/Rig -- trace --contains GracePeriodManagerService.ExecuteAsync --paths`.
+- Verification: `dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false`; `dotnet run --project src/Rig.Cli -- trace --contains GracePeriodManagerService.ExecuteAsync --paths`.
 
 ### Mini CI and local tool install
 
 Status: `verified`
 
-- Added `scripts/mini-ci.ps1` to restore, Release build with warnings as errors, run Release tests, pack `src/Rig` as a dotnet tool, and reinstall the global `rig` tool from `.rig-nupkg`.
-- Script generates a unique local prerelease tool version from `Rig.csproj` version plus timestamp to avoid stale NuGet cache when iterating locally.
+- Added `scripts/mini-ci.ps1` to restore, Release build with warnings as errors, run Release tests, pack `src/Rig.Cli` as a dotnet tool, and reinstall the global `rig` tool from `.rig-nupkg`.
+- Script generates a unique local prerelease tool version from `Rig.Cli.csproj` version plus timestamp to avoid stale NuGet cache when iterating locally.
 - Installed global tool: `rig 0.1.1-ci.20260526110212`.
 - Verification: `powershell -ExecutionPolicy Bypass -File .\scripts\mini-ci.ps1`; `powershell -ExecutionPolicy Bypass -File .\scripts\mini-ci.ps1 -SkipTests`.
 
@@ -218,7 +219,7 @@ Status: `verified`
 
 Status: `verified`
 
-- `CliApplication` now delegates text projection to focused renderers under `src/Rig/Cli/Rendering`.
+- `CliApplication` now delegates text projection to focused renderers under `src/Rig.Cli/Cli/Rendering`.
 - `EffectObservationExtractor` owns contextual effect observations; `EffectExtractor` stays focused on rule matching and resource extraction.
 - `RuleTypeMatcher` centralizes repeated rule type-name matching.
 - `CallGraphIndexes` owns dispatch and single-implementation DI index construction; `CallGraphBuilder` keeps traversal and node construction.
