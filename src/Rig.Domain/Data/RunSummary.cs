@@ -8,5 +8,7 @@ public record RunSummary(
     int EffectCount,
     int DiRegistrationCount,
     int MethodObservationCount,
-    int InvocationObservationCount
+    int InvocationObservationCount,
+    string? ProjectIdentity = null,
+    string? SourceProjectPath = null
 );

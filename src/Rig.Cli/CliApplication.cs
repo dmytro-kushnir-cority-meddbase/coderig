@@ -32,6 +32,7 @@ public static class CliApplication
         return args[0] switch
         {
             "index" => await RunIndexAsync(args, output, error, workingDirectory),
+            "mine" => await RunMineAsync(args, output, error, workingDirectory),
             "runs" => await RunRunsAsync(output, workingDirectory),
             "entrypoints" => await RunEntryPointsAsync(output, error, workingDirectory),
             "effects" => await RunEffectsAsync(args, output, error, workingDirectory),
@@ -66,7 +67,8 @@ public static class CliApplication
         output.WriteLine("Runtime Intelligence Graph");
         output.WriteLine();
         output.WriteLine("Usage:");
-        output.WriteLine("  rig index <solution|project> [--rules <path>...]");
+        output.WriteLine("  rig index <solution|project> [--rules <path>...] [--identity <id>]");
+        output.WriteLine("  rig mine <solution> --from <project.csproj> [--rules <path>...] [--identity <id>] [--parallelism <n>]");
         output.WriteLine("  rig runs");
         output.WriteLine("  rig entrypoints");
         output.WriteLine("  rig callgraph <index> [--full] [--summary]");
@@ -89,27 +91,24 @@ public static class CliApplication
         }
 
         var extraRules = new List<string>();
+        string? identity = null;
         for (var i = 2; i < args.Length - 1; i++)
         {
-            if (args[i] == "--rules")
-            {
-                extraRules.Add(Path.GetFullPath(args[i + 1]));
-                i++;
-            }
+            if (args[i] == "--rules") { extraRules.Add(Path.GetFullPath(args[i + 1])); i++; }
+            else if (args[i] == "--identity") { identity = args[i + 1]; i++; }
         }
 
         AnalysisResult result;
         try
         {
             output.WriteLine($"Indexing: {Path.GetFullPath(args[1])}");
-            if (extraRules.Count > 0)
-            {
-                output.WriteLine($"Rules: {string.Join(", ", extraRules)}");
-            }
+            if (extraRules.Count > 0) output.WriteLine($"Rules: {string.Join(", ", extraRules)}");
+            if (identity is not null) output.WriteLine($"Identity: {identity}");
             result = await SolutionAnalyzer.AnalyzeAsync(
                 args[1],
                 progress: message => output.WriteLine($"Progress: {message}"),
-                extraRulesPaths: extraRules.Count > 0 ? extraRules : null
+                extraRulesPaths: extraRules.Count > 0 ? extraRules : null,
+                projectIdentity: identity
             );
         }
         catch (InvalidOperationException exception)
@@ -414,4 +413,119 @@ public static class CliApplication
         error.WriteLine("Run `rig --help` to see available commands.");
         return 2;
     }
+
+    // rig mine <solution> --from <project.csproj> [--rules <path>...] [--identity <id>] [--parallelism <n>]
+    // Traverses the project dependency graph starting from <project.csproj> in BFS order,
+    // indexing each reachable project.  Projects at the same BFS level are indexed in parallel.
+    private static async Task<int> RunMineAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
+    {
+        if (args.Length < 2)
+        {
+            error.WriteLine("Usage: rig mine <solution> --from <project.csproj> [--rules <path>...] [--identity <id>] [--parallelism <n>]");
+            return 2;
+        }
+
+        var solutionPath = Path.GetFullPath(args[1]);
+        string? fromProject = null;
+        var extraRules = new List<string>();
+        string? identity = null;
+        var parallelism = Math.Max(1, Environment.ProcessorCount / 2);
+
+        for (var i = 2; i < args.Length - 1; i++)
+        {
+            if (args[i] == "--from") { fromProject = Path.GetFullPath(args[i + 1]); i++; }
+            else if (args[i] == "--rules") { extraRules.Add(Path.GetFullPath(args[i + 1])); i++; }
+            else if (args[i] == "--identity") { identity = args[i + 1]; i++; }
+            else if (args[i] == "--parallelism" && int.TryParse(args[i + 1], out var p)) { parallelism = p; i++; }
+        }
+
+        if (fromProject is null)
+        {
+            error.WriteLine("--from <project.csproj> is required.");
+            return 2;
+        }
+
+        identity ??= ComputeIdentity(solutionPath);
+        output.WriteLine($"Mine: {solutionPath}");
+        output.WriteLine($"From: {fromProject}");
+        output.WriteLine($"Identity: {identity}");
+        output.WriteLine($"Parallelism: {parallelism}");
+
+        // Build the dependency graph from the solution (parse ProjectReference elements only — no MSBuild needed)
+        var depGraph = await DependencyGraph.BuildAsync(solutionPath, output);
+
+        // BFS from the starting project
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var queue = new Queue<string>();
+        queue.Enqueue(fromProject);
+
+        var totalIndexed = 0;
+        var totalFailed = 0;
+
+        while (queue.Count > 0)
+        {
+            // Collect the current BFS level — all projects with no unvisited dependencies
+            var batch = new List<string>();
+            while (queue.Count > 0)
+            {
+                var proj = queue.Dequeue();
+                if (visited.Add(proj))
+                    batch.Add(proj);
+            }
+
+            if (batch.Count == 0) break;
+
+            output.WriteLine($"\n[mine] Batch: {batch.Count} project(s)");
+
+            // Index this batch in parallel
+            var semaphore = new SemaphoreSlim(parallelism);
+            var batchTasks = batch.Select(async proj =>
+            {
+                await semaphore.WaitAsync();
+                try
+                {
+                    var projName = Path.GetFileNameWithoutExtension(proj);
+                    output.WriteLine($"  [mine] Indexing: {projName}");
+
+                    var rulesArgs = extraRules.SelectMany(r => new[] { "--rules", r }).ToArray();
+                    var indexArgs = new[] { "index", proj }
+                        .Concat(rulesArgs)
+                        .Concat(new[] { "--identity", identity! })
+                        .ToArray();
+
+                    var exitCode = await RunIndexAsync(indexArgs, output, error, workingDirectory);
+                    if (exitCode == 0)
+                    {
+                        Interlocked.Increment(ref totalIndexed);
+                        output.WriteLine($"  [mine] Done: {projName}");
+                    }
+                    else
+                    {
+                        Interlocked.Increment(ref totalFailed);
+                        output.WriteLine($"  [mine] Failed: {projName} (exit {exitCode})");
+                    }
+                }
+                finally { semaphore.Release(); }
+            });
+
+            await Task.WhenAll(batchTasks);
+
+            // Enqueue the next level: direct dependencies of this batch that haven't been visited
+            foreach (var proj in batch)
+            {
+                if (depGraph.TryGetValue(proj, out var deps))
+                {
+                    foreach (var dep in deps.Where(d => !visited.Contains(d)))
+                        queue.Enqueue(dep);
+                }
+            }
+        }
+
+        output.WriteLine($"\n[mine] Complete: {totalIndexed} indexed, {totalFailed} failed, {visited.Count} total projects reached.");
+        return totalFailed > 0 ? 1 : 0;
+    }
+
+    private static string ComputeIdentity(string solutionPath) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(solutionPath))))[..16];
 }

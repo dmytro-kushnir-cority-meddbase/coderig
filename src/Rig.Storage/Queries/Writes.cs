@@ -16,7 +16,10 @@ public static class Writes
             Id = runId,
             CreatedAtUtcText = DateTimeOffset.UtcNow.ToString("O"),
             SolutionPath = Path.GetFullPath(result.SolutionPath),
-
+            ProjectIdentity = result.ProjectIdentity,
+            SourceProjectPath = result.SourceProjectPath is not null
+                ? Path.GetFullPath(result.SourceProjectPath)
+                : null,
             EntryPointCount = result.EntryPoints.Count,
             EffectCount = result.Effects.Count,
             DiRegistrationCount = result.DiRegistrations.Count,
@@ -32,6 +35,11 @@ public static class Writes
         AddMethodObservations(context, runId, result);
         AddInvocationObservations(context, runId, result);
         AddCallGraphs(context, runId, result.Effects, result);
+
+        // Populate cross-run symbol index when a project identity is set.
+        // Upsert so re-indexing a project updates the run pointer for each symbol.
+        if (result.ProjectIdentity is not null)
+            UpsertSymbolIndex(context, runId, result.ProjectIdentity, result);
 
         await context.SaveChangesAsync(cancellationToken);
         return runId;
@@ -279,6 +287,40 @@ public static class Writes
                         }
                     );
                 }
+            }
+        }
+    }
+
+    private static void UpsertSymbolIndex(RigDbContext context, string runId, string projectIdentity, AnalysisResult result)
+    {
+        // Index every distinct source method from MethodObservations.
+        // Upsert semantics: if a prior run already has this (identity, symbol) we overwrite it
+        // with the latest run so the most recently indexed source wins.
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var obs in result.MethodObservations)
+        {
+            if (!seen.Add(obs.Symbol))
+                continue;
+
+            // ExecuteUpdate / raw SQL would be faster but EF Core doesn't support SQLite UPSERT
+            // portably without raw SQL in EFCore 8.  Use Find + Add/Update pattern instead.
+            var existing = context.SymbolIndex.Find(projectIdentity, obs.Symbol);
+            if (existing is null)
+            {
+                context.SymbolIndex.Add(new SymbolIndexEntity
+                {
+                    ProjectIdentity = projectIdentity,
+                    Symbol = obs.Symbol,
+                    RunId = runId,
+                    FilePath = obs.FilePath,
+                    Line = obs.Line,
+                });
+            }
+            else
+            {
+                existing.RunId = runId;
+                existing.FilePath = obs.FilePath;
+                existing.Line = obs.Line;
             }
         }
     }

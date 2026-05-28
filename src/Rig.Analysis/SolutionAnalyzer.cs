@@ -12,7 +12,8 @@ public static class SolutionAnalyzer
         string solutionPath,
         CancellationToken cancellationToken = default,
         Action<string>? progress = null,
-        IReadOnlyList<string>? extraRulesPaths = null
+        IReadOnlyList<string>? extraRulesPaths = null,
+        string? projectIdentity = null
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
@@ -66,6 +67,12 @@ public static class SolutionAnalyzer
         );
 
         progress?.Invoke($"Analysis complete: {entryPoints.Length} entrypoints, {effects.Length} effects");
+
+        // For project-level indexing, record the specific project path
+        var sourceProjectPath = solutionFullPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+                             || solutionFullPath.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase)
+            ? solutionFullPath : null;
+
         return new AnalysisResult(
             solutionPath,
             sourceSet.SourceFiles,
@@ -74,7 +81,9 @@ public static class SolutionAnalyzer
             diRegistrations,
             callGraphs,
             methodObservations,
-            invocationObservations
+            invocationObservations,
+            ProjectIdentity: projectIdentity,
+            SourceProjectPath: sourceProjectPath
         );
     }
 

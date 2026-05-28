@@ -37,6 +37,8 @@ public sealed class RigDbContext(string databasePath) : DbContext
 
     public DbSet<CallGraphNodeEffectEntity> CallGraphNodeEffects => Set<CallGraphNodeEffectEntity>();
 
+    public DbSet<SymbolIndexEntity> SymbolIndex => Set<SymbolIndexEntity>();
+
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
         optionsBuilder.UseSqlite($"Data Source={databasePath}");
@@ -51,6 +53,15 @@ public sealed class RigDbContext(string databasePath) : DbContext
             entity.Property(run => run.Id).ValueGeneratedNever();
             entity.Property(run => run.SolutionPath).IsRequired();
             entity.HasIndex(run => run.CreatedAtUtcText);
+            entity.HasIndex(run => run.ProjectIdentity);
+        });
+
+        modelBuilder.Entity<SymbolIndexEntity>(entity =>
+        {
+            entity.ToTable("symbol_index");
+            entity.HasKey(s => new { s.ProjectIdentity, s.Symbol });
+            entity.HasIndex(s => s.Symbol);
+            entity.HasIndex(s => s.ProjectIdentity);
         });
 
         modelBuilder.Entity<EntryPointEntity>(entity =>

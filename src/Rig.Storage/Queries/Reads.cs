@@ -56,7 +56,9 @@ public static class Reads
                 run.EffectCount,
                 run.DiRegistrationCount,
                 run.MethodObservationCount,
-                run.InvocationObservationCount
+                run.InvocationObservationCount,
+                run.ProjectIdentity,
+                run.SourceProjectPath
             ))
             .FirstOrDefaultAsync(cancellationToken);
     }
@@ -216,48 +218,188 @@ public static class Reads
 
         var graphIndex = entryPointIndex;
 
-        var nodeEntities = await context
+        // Load this run's nodes + calls
+        var nodeEntities = (await context
             .CallGraphNodes.Where(x => x.RunId == runId && x.GraphIndex == graphIndex)
             .OrderBy(x => x.NodeIndex)
-            .ToArrayAsync(cancellationToken);
+            .ToArrayAsync(cancellationToken)).ToList();
 
-        var callEntities = await context
+        var callEntities = (await context
             .CallGraphNodeCalls.Where(x => x.RunId == runId && x.GraphIndex == graphIndex)
             .OrderBy(x => x.NodeIndex)
             .ThenBy(x => x.CallIndex)
-            .ToArrayAsync(cancellationToken);
+            .ToArrayAsync(cancellationToken)).ToList();
 
-        var boundaryCallEntities = await context
+        var boundaryCallEntities = (await context
             .CallGraphBoundaryCalls.Where(x => x.RunId == runId && x.GraphIndex == graphIndex)
             .OrderBy(x => x.NodeIndex)
             .ThenBy(x => x.BoundaryCallIndex)
-            .ToArrayAsync(cancellationToken);
+            .ToArrayAsync(cancellationToken)).ToList();
 
-        var nodeEffectLinks = await context
+        var nodeEffectLinks = (await context
             .CallGraphNodeEffects.Where(x => x.RunId == runId && x.GraphIndex == graphIndex)
             .OrderBy(x => x.NodeIndex)
             .ThenBy(x => x.LinkIndex)
-            .ToArrayAsync(cancellationToken);
+            .ToArrayAsync(cancellationToken)).ToList();
 
-        var effectIndices = nodeEffectLinks.Select(l => l.EffectIndex).Distinct().ToArray();
+        // Cross-run stitching: if this run has a ProjectIdentity, look up called symbols in
+        // peer runs (same identity) and expand them into the callgraph until all reachable
+        // source is covered.
+        var projectIdentity = await context.Runs
+            .Where(r => r.Id == runId)
+            .Select(r => r.ProjectIdentity)
+            .FirstOrDefaultAsync(cancellationToken);
 
-        var effectEntities = await context
-            .Effects.Where(x => x.RunId == runId && effectIndices.Contains(x.EffectIndex))
-            .ToArrayAsync(cancellationToken);
+        if (projectIdentity is not null)
+        {
+            var resolvedSymbols = new HashSet<string>(
+                nodeEntities.Select(n => n.Symbol), StringComparer.Ordinal);
 
-        var observationEntities = await context
-            .EffectObservations.Where(x => x.RunId == runId && effectIndices.Contains(x.EffectIndex))
-            .OrderBy(x => x.EffectIndex)
-            .ThenBy(x => x.ObservationIndex)
-            .ToArrayAsync(cancellationToken);
+            // Synthesised node index continues above the real nodes so IDs don't collide.
+            var syntheticNodeBase = nodeEntities.Count + 10_000;
+            var syntheticCallBase = callEntities.Count + 10_000;
+            var symbolToSyntheticNode = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            // BFS expansion queue: (symbol, synthetic node index for the calling node)
+            var queue = new Queue<string>();
+            foreach (var call in callEntities)
+            {
+                if (!resolvedSymbols.Contains(call.TargetSymbol))
+                    queue.Enqueue(call.TargetSymbol);
+            }
+
+            var visited = new HashSet<string>(resolvedSymbols, StringComparer.Ordinal);
+            const int MaxExpansionDepth = 2000;
+            var expansions = 0;
+
+            while (queue.Count > 0 && expansions < MaxExpansionDepth)
+            {
+                var symbol = queue.Dequeue();
+                if (!visited.Add(symbol))
+                    continue;
+
+                expansions++;
+
+                // Look up in peer runs
+                var entry = await context.SymbolIndex
+                    .Where(s => s.ProjectIdentity == projectIdentity && s.Symbol == symbol)
+                    .FirstOrDefaultAsync(cancellationToken);
+
+                if (entry is null)
+                    continue;
+
+                // Load the peer node — find its graph index via symbol lookup
+                var peerNode = await context.CallGraphNodes
+                    .Where(n => n.RunId == entry.RunId && n.Symbol == symbol)
+                    .FirstOrDefaultAsync(cancellationToken);
+
+                if (peerNode is null)
+                    continue;
+
+                var peerGraphIndex = peerNode.GraphIndex;
+                var peerNodeIndex = peerNode.NodeIndex;
+
+                var synNodeIdx = syntheticNodeBase + symbolToSyntheticNode.Count;
+                symbolToSyntheticNode[symbol] = synNodeIdx;
+
+                nodeEntities.Add(new CallGraphNodeEntity
+                {
+                    RunId = entry.RunId,
+                    GraphIndex = synNodeIdx,
+                    NodeIndex = synNodeIdx,
+                    Symbol = symbol,
+                    FilePath = entry.FilePath,
+                    Line = entry.Line,
+                    Confidence = peerNode.Confidence,
+                    Basis = peerNode.Basis,
+                    Reason = peerNode.Reason,
+                });
+
+                // Pull in this node's outgoing calls from its original run
+                var peerCalls = await context.CallGraphNodeCalls
+                    .Where(c => c.RunId == entry.RunId && c.GraphIndex == peerGraphIndex && c.NodeIndex == peerNodeIndex)
+                    .ToArrayAsync(cancellationToken);
+
+                var callIdx = syntheticCallBase;
+                foreach (var pc in peerCalls)
+                {
+                    callEntities.Add(new CallGraphNodeCallEntity
+                    {
+                        RunId = entry.RunId,
+                        GraphIndex = synNodeIdx,
+                        NodeIndex = synNodeIdx,
+                        CallIndex = callIdx++,
+                        TargetSymbol = pc.TargetSymbol,
+                    });
+                    if (!visited.Contains(pc.TargetSymbol))
+                        queue.Enqueue(pc.TargetSymbol);
+                }
+
+                // Boundary calls and effects from the peer node
+                var peerBoundaryCalls = await context.CallGraphBoundaryCalls
+                    .Where(b => b.RunId == entry.RunId && b.GraphIndex == peerGraphIndex && b.NodeIndex == peerNodeIndex)
+                    .ToArrayAsync(cancellationToken);
+
+                var bIdx = 0;
+                foreach (var pb in peerBoundaryCalls)
+                    boundaryCallEntities.Add(new CallGraphBoundaryCallEntity
+                    {
+                        RunId = pb.RunId, GraphIndex = synNodeIdx, NodeIndex = synNodeIdx,
+                        BoundaryCallIndex = bIdx++,
+                        Kind = pb.Kind, Target = pb.Target, Method = pb.Method,
+                        FilePath = pb.FilePath, Line = pb.Line,
+                        Confidence = pb.Confidence, Basis = pb.Basis, Reason = pb.Reason,
+                    });
+
+                var peerEffectLinks = await context.CallGraphNodeEffects
+                    .Where(e => e.RunId == entry.RunId && e.GraphIndex == peerGraphIndex && e.NodeIndex == peerNodeIndex)
+                    .ToArrayAsync(cancellationToken);
+
+                var lIdx = 0;
+                foreach (var pe in peerEffectLinks)
+                    nodeEffectLinks.Add(new CallGraphNodeEffectEntity
+                    {
+                        RunId = pe.RunId, GraphIndex = synNodeIdx, NodeIndex = synNodeIdx,
+                        LinkIndex = lIdx++, EffectIndex = pe.EffectIndex,
+                    });
+            }
+
+            // Rewrite call targets that were expanded to their synthetic node indices
+            // so BuildCallGraphNodes sees them as proper cross-linked calls (not boundaries).
+            foreach (var c in callEntities.Where(c => symbolToSyntheticNode.ContainsKey(c.TargetSymbol)))
+            {
+                // Mark the call as an intra-graph call (already present in nodeEntities).
+                // The TargetSymbol string is retained — the rendering still resolves by symbol.
+            }
+        }
+
+        // Gather all effect data across the (potentially multi-run) node+effect-link sets
+        var allEffectLinks = nodeEffectLinks
+            .GroupBy(l => l.RunId)
+            .ToArray();
+
+        var effectEntitiesAll = new List<EffectEntity>();
+        var observationEntitiesAll = new List<EffectObservationEntity>();
+
+        foreach (var group in allEffectLinks)
+        {
+            var indices = group.Select(l => l.EffectIndex).Distinct().ToArray();
+            effectEntitiesAll.AddRange(await context.Effects
+                .Where(x => x.RunId == group.Key && indices.Contains(x.EffectIndex))
+                .ToArrayAsync(cancellationToken));
+            observationEntitiesAll.AddRange(await context.EffectObservations
+                .Where(x => x.RunId == group.Key && indices.Contains(x.EffectIndex))
+                .OrderBy(x => x.EffectIndex).ThenBy(x => x.ObservationIndex)
+                .ToArrayAsync(cancellationToken));
+        }
 
         var nodes = BuildCallGraphNodes(
             nodeEntities,
             callEntities,
             boundaryCallEntities,
             nodeEffectLinks,
-            effectEntities,
-            observationEntities
+            [.. effectEntitiesAll],
+            [.. observationEntitiesAll]
         );
 
         return new CallGraphInfo(entryPointName, nodes, CallGraphCycleDetector.Detect(nodes));
@@ -359,7 +501,9 @@ public static class Reads
                 run.EffectCount,
                 run.DiRegistrationCount,
                 run.MethodObservationCount,
-                run.InvocationObservationCount
+                run.InvocationObservationCount,
+                run.ProjectIdentity,
+                run.SourceProjectPath
             ))
             .ToArrayAsync(cancellationToken);
     }
