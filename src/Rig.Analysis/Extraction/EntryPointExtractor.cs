@@ -90,21 +90,38 @@ internal static class EntryPointExtractor
         foreach (var typeDeclaration in source.Root.DescendantNodes().OfType<ClassDeclarationSyntax>())
         {
             if (typeDeclaration.Modifiers.Any(m => m.IsKind(SyntaxKind.AbstractKeyword)))
+                continue;
+
+            // For partial classes, only process the declaration that carries the base list.
+            // Other partial files have no BaseList and would produce a duplicate entry point
+            // pointing to the wrong file (e.g. TestBed_PathologyDebug.cs instead of TestBed.cs).
+            if (typeDeclaration.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword))
+                && typeDeclaration.BaseList is null)
             {
                 continue;
             }
 
             var typeSymbol = source.SemanticModel.GetDeclaredSymbol(typeDeclaration);
             if (typeSymbol is null)
-            {
                 continue;
-            }
 
             foreach (var rule in rules.PageModelEntryPoints.Where(rule => HasBaseType(typeSymbol, rule.BaseTypes)))
             {
                 var ns = typeSymbol.ContainingNamespace?.ToDisplayString() ?? string.Empty;
                 var route = DerivePageRoute(ns, typeSymbol.Name, rule.NamespacePrefix);
                 var httpMethod = rule.DefaultMethod ?? "PAGE";
+
+                // C# 11+ primary constructor: class MyPage(int id) : ClientPage
+                if (typeDeclaration.ParameterList is { Parameters.Count: > 0 } primaryCtorParams)
+                {
+                    var paramSummary = string.Join(", ", primaryCtorParams.Parameters.Select(p => p.Identifier.ValueText));
+                    yield return new EntryPointInfo(
+                        rule.Kind, httpMethod, route,
+                        $"{rule.Kind} {httpMethod} {route}({paramSummary})",
+                        source.FilePath,
+                        RoslynSymbolHelpers.GetLine(source.Tree, typeDeclaration));
+                    continue;
+                }
 
                 var publicCtors = typeDeclaration.Members
                     .OfType<ConstructorDeclarationSyntax>()
@@ -113,15 +130,11 @@ internal static class EntryPointExtractor
 
                 if (publicCtors.Length == 0)
                 {
-                    // Implicit parameterless constructor
                     yield return new EntryPointInfo(
-                        rule.Kind,
-                        httpMethod,
-                        route,
+                        rule.Kind, httpMethod, route,
                         $"{rule.Kind} {httpMethod} {route}",
                         source.FilePath,
-                        RoslynSymbolHelpers.GetLine(source.Tree, typeDeclaration)
-                    );
+                        RoslynSymbolHelpers.GetLine(source.Tree, typeDeclaration));
                 }
                 else
                 {
@@ -129,13 +142,10 @@ internal static class EntryPointExtractor
                     {
                         var paramSummary = string.Join(", ", ctor.ParameterList.Parameters.Select(p => p.Identifier.ValueText));
                         yield return new EntryPointInfo(
-                            rule.Kind,
-                            httpMethod,
-                            route,
+                            rule.Kind, httpMethod, route,
                             $"{rule.Kind} {httpMethod} {route}({paramSummary})",
                             source.FilePath,
-                            RoslynSymbolHelpers.GetLine(source.Tree, ctor)
-                        );
+                            RoslynSymbolHelpers.GetLine(source.Tree, ctor));
                     }
                 }
             }
