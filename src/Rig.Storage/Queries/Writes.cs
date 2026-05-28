@@ -1,4 +1,5 @@
-﻿using Rig.Domain.Data;
+﻿using Microsoft.EntityFrameworkCore;
+using Rig.Domain.Data;
 using Rig.Storage.Storage;
 
 namespace Rig.Storage.Queries;
@@ -10,6 +11,7 @@ public static class Writes
         var runId = Guid.NewGuid().ToString("n");
 
         await context.Database.EnsureCreatedAsync(cancellationToken);
+        await MigrateAsync(context, cancellationToken);
 
         var run = new RunEntity
         {
@@ -289,6 +291,38 @@ public static class Writes
                 }
             }
         }
+    }
+
+    // Additive migrations for databases created before new columns/tables were introduced.
+    // EnsureCreatedAsync only creates tables in a brand-new DB — it never alters existing ones.
+    private static async Task MigrateAsync(RigDbContext context, CancellationToken cancellationToken)
+    {
+        await context.Database.ExecuteSqlRawAsync("""
+            ALTER TABLE runs ADD COLUMN IF NOT EXISTS ProjectIdentity TEXT;
+            """, cancellationToken).ContinueWith(_ => { }, cancellationToken); // ignore if already exists
+
+        await context.Database.ExecuteSqlRawAsync("""
+            ALTER TABLE runs ADD COLUMN IF NOT EXISTS SourceProjectPath TEXT;
+            """, cancellationToken).ContinueWith(_ => { }, cancellationToken);
+
+        await context.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS symbol_index (
+                ProjectIdentity TEXT NOT NULL,
+                Symbol          TEXT NOT NULL,
+                RunId           TEXT NOT NULL,
+                FilePath        TEXT NOT NULL,
+                Line            INTEGER NOT NULL,
+                PRIMARY KEY (ProjectIdentity, Symbol)
+            );
+            """, cancellationToken);
+
+        await context.Database.ExecuteSqlRawAsync("""
+            CREATE INDEX IF NOT EXISTS IX_symbol_index_Symbol ON symbol_index(Symbol);
+            """, cancellationToken);
+
+        await context.Database.ExecuteSqlRawAsync("""
+            CREATE INDEX IF NOT EXISTS IX_runs_ProjectIdentity ON runs(ProjectIdentity);
+            """, cancellationToken).ContinueWith(_ => { }, cancellationToken);
     }
 
     private static void UpsertSymbolIndex(RigDbContext context, string runId, string projectIdentity, AnalysisResult result)
