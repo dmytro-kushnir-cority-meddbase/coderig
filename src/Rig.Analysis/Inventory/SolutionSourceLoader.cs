@@ -148,11 +148,27 @@ internal static class SolutionSourceLoader
             results = [];
             foreach (var projectAnalyzer in manager.Projects.Values)
             {
-                progress?.Invoke($"MSBuild: running design-time build for {projectAnalyzer.ProjectFile.Name}");
+                var projectName = projectAnalyzer.ProjectFile.Name;
+                // Skip non-C# projects up front — sqlproj, fsproj etc. will fail to parse
+                var ext = Path.GetExtension(projectAnalyzer.ProjectFile.Path.ToString());
+                if (!string.Equals(ext, ".csproj", StringComparison.OrdinalIgnoreCase))
+                {
+                    progress?.Invoke($"MSBuild: skipping non-C# project {projectName}");
+                    continue;
+                }
+
+                progress?.Invoke($"MSBuild: running design-time build for {projectName}");
                 projectAnalyzer.SetGlobalProperty("DesignTimeBuild", "true");
                 projectAnalyzer.SetGlobalProperty("BuildingInsideVisualStudio", "true");
-                var built = projectAnalyzer.Build().FirstOrDefault();
-                if (built is not null) results.Add(built);
+                try
+                {
+                    var built = projectAnalyzer.Build().FirstOrDefault();
+                    if (built is not null) results.Add(built);
+                }
+                catch (Exception ex)
+                {
+                    progress?.Invoke($"MSBuild: skipping {projectName} — build failed: {ex.Message.Split('\n')[0].Trim()}");
+                }
             }
         }
 
@@ -164,9 +180,23 @@ internal static class SolutionSourceLoader
         var workspace = new AdhocWorkspace();
         var solution = workspace.AddSolution(Microsoft.CodeAnalysis.SolutionInfo.Create(SolutionId.CreateNewId(), VersionStamp.Create()));
 
+        // Pass 1 — assign stable ProjectIds keyed by normalised project path so cross-project
+        // references can be resolved in pass 2 without depending on ordering.
+        var projectIdByPath = analyzerResults
+            .Where(r => r.ProjectFilePath is not null)
+            .ToDictionary(
+                r => Path.GetFullPath(r.ProjectFilePath!),
+                r => ProjectId.CreateNewId(r.ProjectFilePath),
+                StringComparer.OrdinalIgnoreCase);
+
+        // Pass 2 — build each project, converting dep project refs to Roslyn ProjectReferences
+        // when the dependency is also in the indexed set.  This gives the semantic model a
+        // connected type graph so HasBaseType can traverse across project boundaries.
         foreach (var result in analyzerResults)
         {
-            var projectId = ProjectId.CreateNewId(result.ProjectFilePath);
+            var projectId = result.ProjectFilePath is not null
+                ? projectIdByPath.GetValueOrDefault(Path.GetFullPath(result.ProjectFilePath!), ProjectId.CreateNewId())
+                : ProjectId.CreateNewId();
 
             // Language version: read from MSBuild LangVersion property so the parser
             // handles modern C# syntax (primary constructors, collection expressions, etc.).
@@ -214,11 +244,37 @@ internal static class SolutionSourceLoader
                 .Where(r => r is not null)
                 .Select(r => r!);
 
+            // Project-to-project references within the indexed set become Roslyn ProjectReferences
+            // so the semantic model can cross project boundaries (e.g. Pages → MMS.Web.UI).
+            // DLL references whose output path matches an indexed project are dropped — Roslyn
+            // uses the live compilation of the referenced project instead.
+            var inWorkspaceProjectPaths = new HashSet<string>(
+                (result.ProjectReferences ?? [])
+                    .Select(p => Path.GetFullPath(p))
+                    .Where(p => projectIdByPath.ContainsKey(p)),
+                StringComparer.OrdinalIgnoreCase);
+
+            var inWorkspaceAssemblyNames = new HashSet<string>(
+                analyzerResults
+                    .Where(r => r.ProjectFilePath is not null
+                             && inWorkspaceProjectPaths.Contains(Path.GetFullPath(r.ProjectFilePath!)))
+                    .Select(r => r.Properties.TryGetValue("AssemblyName", out var n)
+                                 ? n
+                                 : Path.GetFileNameWithoutExtension(r.ProjectFilePath!)),
+                StringComparer.OrdinalIgnoreCase);
+
             var metadataRefs = allRefs
                 .Concat(siblingRefs)
                 .Where(File.Exists)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
+                // Skip DLLs whose assembly is provided by a live project reference
+                .Where(path => !inWorkspaceAssemblyNames.Contains(
+                    Path.GetFileNameWithoutExtension(path)))
                 .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
+                .ToArray();
+
+            var projectRefs = inWorkspaceProjectPaths
+                .Select(p => new ProjectReference(projectIdByPath[p]))
                 .ToArray();
 
             // Wire up Roslyn source generators/analyzers (e.g. proxy code-gen for ClientPage
@@ -253,6 +309,7 @@ internal static class SolutionSourceLoader
                 compilationOptions: compilationOptions,
                 parseOptions: parseOptions,
                 metadataReferences: metadataRefs,
+                projectReferences: projectRefs,
                 analyzerReferences: analyzerRefs,
                 documents: documents);
 
