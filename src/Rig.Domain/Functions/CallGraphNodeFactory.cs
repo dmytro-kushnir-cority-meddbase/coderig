@@ -23,7 +23,7 @@ public static class CallGraphNodeFactory
             basis,
             reason,
             calls.Application.OrderBy(call => call.Line).Select(call => call.Key).Distinct(StringComparer.Ordinal).ToArray(),
-            calls.Boundary.DistinctBy(call => $"{call.Kind}|{call.Target}|{call.Line}").OrderBy(call => call.Line).ToArray(),
+            calls.Boundary.GroupBy(call => $"{call.Kind}|{call.Target}|{call.Line}").Select(g => g.First()).OrderBy(call => call.Line).ToArray(),
             effects.OrderBy(e => e.Line).ToList()
         );
     }

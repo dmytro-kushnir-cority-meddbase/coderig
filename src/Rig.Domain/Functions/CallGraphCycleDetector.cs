@@ -26,7 +26,7 @@ public static class CallGraphCycleDetector
                 return;
             }
 
-            if (state.GetValueOrDefault(symbol) == VisitState.Done)
+            if (state.TryGetValue(symbol, out var existingState) && existingState == VisitState.Done)
             {
                 return;
             }
@@ -62,7 +62,8 @@ public static class CallGraphCycleDetector
         {
             var start = pathIndexes[repeatedSymbol];
             var cycle = path.Skip(start).Concat([repeatedSymbol]).ToArray();
-            cycles.TryAdd(GetCanonicalKey(cycle), new CallGraphCycleInfo(cycle));
+            var cycleKey = GetCanonicalKey(cycle);
+            if (!cycles.ContainsKey(cycleKey)) cycles.Add(cycleKey, new CallGraphCycleInfo(cycle));
         }
     }
 
@@ -78,7 +79,7 @@ public static class CallGraphCycleDetector
             .Range(0, uniquePath.Length)
             .Select(start => string.Join("\u001f", uniquePath.Skip(start).Concat(uniquePath.Take(start))));
 
-        return rotations.Min(StringComparer.Ordinal) ?? "";
+        return rotations.OrderBy(r => r, StringComparer.Ordinal).First();
     }
 
     private enum VisitState

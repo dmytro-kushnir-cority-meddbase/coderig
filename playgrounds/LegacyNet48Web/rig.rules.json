@@ -1,0 +1,125 @@
+{
+  "entrypoints": {
+    "pageModel": [
+      {
+        "id": "playground.clientpage",
+        "kind": "page",
+        "baseTypes": ["MMS.Web.UI.ClientPage"],
+        "namespacePrefix": "LegacyNet48Web.Pages.",
+        "defaultMethod": "PAGE"
+      }
+    ],
+    "classInheritance": [
+      {
+        "id": "playground.servicebase",
+        "kind": "background",
+        "baseTypes": ["MedDBase.Nucleus.Interfaces.Services.ServiceBase"],
+        "handlerMethods": ["Startup"],
+        "requireOverride": false,
+        "defaultMethod": "RUN"
+      },
+      {
+        "id": "playground.backgroundprocess",
+        "kind": "background",
+        "baseTypes": ["MedDBase.Application.Core.Background.IBackgroundProcess"],
+        "handlerMethods": ["Process"],
+        "requireOverride": false,
+        "defaultMethod": "RUN"
+      }
+    ]
+  },
+  "effects": [
+    {
+      "provider": "llblgen",
+      "operation": "fetch",
+      "methods": ["Fetch", "FetchAsync", "FetchEntity", "FetchEntityAsync"],
+      "declaringTypes": [
+        "SD.LLBLGen.Pro.ORMSupportClasses.EntityBase2",
+        "SD.LLBLGen.Pro.ORMSupportClasses.DataAccessAdapterBase"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "LLBLGen entity fetch"
+    },
+    {
+      "provider": "llblgen",
+      "operation": "save",
+      "methods": ["Save", "SaveAsync", "SaveEntity", "SaveEntityAsync"],
+      "declaringTypes": [
+        "SD.LLBLGen.Pro.ORMSupportClasses.EntityBase2",
+        "SD.LLBLGen.Pro.ORMSupportClasses.DataAccessAdapterBase"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "LLBLGen entity save"
+    },
+    {
+      "provider": "llblgen",
+      "operation": "delete",
+      "methods": ["Delete", "DeleteAsync", "DeleteEntity"],
+      "declaringTypes": [
+        "SD.LLBLGen.Pro.ORMSupportClasses.EntityBase2",
+        "SD.LLBLGen.Pro.ORMSupportClasses.DataAccessAdapterBase"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "LLBLGen entity delete"
+    },
+    {
+      "provider": "llblgen",
+      "operation": "query",
+      "methods": ["GetMulti", "GetMultiAsync"],
+      "declaringTypes": [
+        "SD.LLBLGen.Pro.ORMSupportClasses.EntityCollectionBase2",
+        "SD.LLBLGen.Pro.ORMSupportClasses.DataAccessAdapterBase"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "LLBLGen collection fetch"
+    },
+    {
+      "provider": "llblgen",
+      "operation": "tx_begin",
+      "methods": ["StartTransaction"],
+      "declaringTypes": ["SD.LLBLGen.Pro.ORMSupportClasses.DataAccessAdapterBase"],
+      "resource": "argument_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "LLBLGen transaction begin"
+    },
+    {
+      "provider": "llblgen",
+      "operation": "tx_commit",
+      "methods": ["Commit"],
+      "declaringTypes": ["SD.LLBLGen.Pro.ORMSupportClasses.DataAccessAdapterBase"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "LLBLGen transaction commit"
+    },
+    {
+      "provider": "llblgen",
+      "operation": "tx_rollback",
+      "methods": ["Rollback"],
+      "declaringTypes": ["SD.LLBLGen.Pro.ORMSupportClasses.DataAccessAdapterBase"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "LLBLGen transaction rollback"
+    },
+    {
+      "provider": "chamber_msg",
+      "operation": "tell",
+      "methods": ["tell"],
+      "declaringTypes": ["MedDBase.Messages.ChamberMsgExtensions"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "ChamberMsg async dispatch"
+    }
+  ]
+}

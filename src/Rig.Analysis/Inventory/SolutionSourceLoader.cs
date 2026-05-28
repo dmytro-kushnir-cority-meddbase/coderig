@@ -20,13 +20,41 @@ internal static class SolutionSourceLoader
         Action<string>? progress = null
     )
     {
-        RegisterMSBuild();
+        var msbuildInstance = RegisterMSBuild();
 
-        var workspace = MSBuildWorkspace.Create();
+        // DesignTimeBuild skips actual build execution (codegen, resource compilation)
+        // so MSBuild only evaluates project properties and item lists — which is all we need.
+        // BuildingInsideVisualStudio suppresses project-system-specific targets that may fail
+        // when invoked outside VS.
+        var workspaceProperties = new Dictionary<string, string>
+        {
+            ["DesignTimeBuild"] = "true",
+            ["BuildingInsideVisualStudio"] = "true",
+        };
+        if (msbuildInstance is not null)
+            workspaceProperties["MSBuildExtensionsPath"] = msbuildInstance.MSBuildPath;
+
+        var workspace = MSBuildWorkspace.Create(workspaceProperties);
         var loadProgress = progress is null
             ? null
             : new InlineProgress<ProjectLoadProgress>(load => ReportProgress(progress, FormatProjectLoadProgress(load)));
-        var solution = await workspace.OpenSolutionAsync(solutionPath, loadProgress, cancellationToken);
+
+        Project[] csharpProjects;
+        if (IsProjectFile(solutionPath))
+        {
+            var project = await workspace.OpenProjectAsync(solutionPath, loadProgress, cancellationToken);
+            csharpProjects = project.Language == LanguageNames.CSharp && !rules.IsExcludedProject(project.Name)
+                ? [project]
+                : [];
+        }
+        else
+        {
+            var solution = await workspace.OpenSolutionAsync(solutionPath, loadProgress, cancellationToken);
+            csharpProjects = solution
+                .Projects.Where(p => p.Language == LanguageNames.CSharp)
+                .Where(p => !rules.IsExcludedProject(p.Name))
+                .ToArray();
+        }
 
         var workspaceFailures = workspace
             .Diagnostics.Where(diagnostic => diagnostic.Kind == WorkspaceDiagnosticKind.Failure)
@@ -40,19 +68,15 @@ internal static class SolutionSourceLoader
             );
         }
 
-        var csharpProjects = solution
-            .Projects.Where(p => p.Language == LanguageNames.CSharp)
-            .Where(p => !rules.IsExcludedProject(p.Name))
-            .ToArray();
-
-        ReportProgress(progress, $"Loaded {solution.Projects.Count()} projects; indexing {csharpProjects.Length} C# projects");
+        ReportProgress(progress, $"Loaded {csharpProjects.Length} C# project(s) to index");
 
         var compilationErrors = new ConcurrentBag<string>();
         var compiledProjects = 0;
-        await Parallel.ForEachAsync(
-            csharpProjects,
-            new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = MaxParallelism },
-            async (project, ct) =>
+        var compileSemaphore = new SemaphoreSlim(MaxParallelism);
+        await Task.WhenAll(csharpProjects.Select(async project =>
+        {
+            await compileSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
                 var current = Interlocked.Increment(ref compiledProjects);
                 if (ShouldReportProgress(current, csharpProjects.Length))
@@ -60,7 +84,7 @@ internal static class SolutionSourceLoader
                     ReportProgress(progress, $"Compiling project {current}/{csharpProjects.Length}: {project.Name}");
                 }
 
-                var compilation = await project.GetCompilationAsync(ct);
+                var compilation = await project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
                 if (compilation is null)
                 {
                     compilationErrors.Add($"{project.Name}: compilation unavailable");
@@ -68,13 +92,17 @@ internal static class SolutionSourceLoader
                 }
 
                 foreach (
-                    var diagnostic in compilation.GetDiagnostics(ct).Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+                    var diagnostic in compilation.GetDiagnostics(cancellationToken).Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
                 )
                 {
                     compilationErrors.Add($"{project.Name}: {diagnostic}");
                 }
             }
-        );
+            finally
+            {
+                compileSemaphore.Release();
+            }
+        })).ConfigureAwait(false);
 
         var compilationErrorList = compilationErrors.OrderBy(error => error, StringComparer.Ordinal).ToArray();
         if (compilationErrorList.Length > 0)
@@ -86,10 +114,11 @@ internal static class SolutionSourceLoader
 
         var projectResults = new ConcurrentBag<ProjectSourceLoadResult>();
         var readProjects = 0;
-        await Parallel.ForEachAsync(
-            csharpProjects,
-            new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = MaxParallelism },
-            async (project, ct) =>
+        var readSemaphore = new SemaphoreSlim(MaxParallelism);
+        await Task.WhenAll(csharpProjects.Select(async project =>
+        {
+            await readSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
                 var current = Interlocked.Increment(ref readProjects);
                 if (ShouldReportProgress(current, csharpProjects.Length))
@@ -97,14 +126,19 @@ internal static class SolutionSourceLoader
                     ReportProgress(progress, $"Reading source project {current}/{csharpProjects.Length}: {project.Name}");
                 }
 
-                projectResults.Add(await LoadProjectSourcesAsync(solutionPath, project, rules, ct));
+                projectResults.Add(await LoadProjectSourcesAsync(solutionPath, project, rules, cancellationToken).ConfigureAwait(false));
             }
-        );
+            finally
+            {
+                readSemaphore.Release();
+            }
+        })).ConfigureAwait(false);
 
         var projectDirectories = csharpProjects
             .Select(p => p.FilePath)
             .Where(path => path is not null)
-            .Select(path => Path.GetDirectoryName(path!)!)
+            .Select(path => Path.GetDirectoryName(path) ?? string.Empty)
+            .Where(dir => dir.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
@@ -210,6 +244,12 @@ internal static class SolutionSourceLoader
 
     private sealed record ProjectSourceLoadResult(IReadOnlyList<SourceFileInfo> SourceFiles, IReadOnlyList<SourceModel> Sources);
 
+    private static bool IsProjectFile(string path)
+    {
+        return path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool IsExcludedProjectDiagnostic(string diagnosticMessage, AnalysisRuleSet rules)
     {
         // Diagnostic messages contain the .csproj path; extract the project name and check exclusion rules.
@@ -222,19 +262,44 @@ internal static class SolutionSourceLoader
         return rules.IsExcludedProject(projectName);
     }
 
-    private static void RegisterMSBuild()
+    private static VisualStudioInstance? _registeredInstance;
+
+    private static VisualStudioInstance? RegisterMSBuild()
     {
         if (MSBuildLocator.IsRegistered)
-        {
-            return;
-        }
+            return _registeredInstance;
 
         lock (MSBuildRegistrationLock)
         {
-            if (!MSBuildLocator.IsRegistered)
+            if (MSBuildLocator.IsRegistered)
+                return _registeredInstance;
+
+            // Prefer a VS2022+ instance found via VS Setup API; fall back to RegisterDefaults.
+            var instance = MSBuildLocator
+                .QueryVisualStudioInstances()
+                .Where(i => i.DiscoveryType == DiscoveryType.VisualStudioSetup)
+                .OrderByDescending(i => i.Version)
+                .FirstOrDefault();
+
+            if (instance is not null)
+            {
+                // Expose the MSBuild.exe path so the BuildHost-net472 subprocess launched by
+                // Roslyn finds the same MSBuild DLLs as the main process.  Without this the
+                // BuildHost may fail to initialise Microsoft.Build.Shared.XMakeElements on
+                // machines where MSBUILD_EXE_PATH is not set in the shell environment.
+                var msbuildExe = Path.Combine(instance.MSBuildPath, "MSBuild.exe");
+                if (File.Exists(msbuildExe))
+                    Environment.SetEnvironmentVariable("MSBUILD_EXE_PATH", msbuildExe);
+
+                MSBuildLocator.RegisterInstance(instance);
+                _registeredInstance = instance;
+            }
+            else
             {
                 MSBuildLocator.RegisterDefaults();
             }
+
+            return _registeredInstance;
         }
     }
 }

@@ -8,6 +8,7 @@ internal sealed record AnalysisRuleSet(
     IReadOnlyList<MinimalApiEntryPointRule> MinimalApiEntryPoints,
     IReadOnlyList<MvcHttpAttributeRule> MvcHttpAttributes,
     IReadOnlyList<ClassInheritanceEntryPointRule> ClassInheritanceEntryPoints,
+    IReadOnlyList<PageModelEntryPointRule> PageModelEntryPoints,
     IReadOnlyList<EffectRule> Effects,
     IReadOnlyList<DiRegistrationRule> DiRegistrations,
     IReadOnlyList<FileRule> FileInclude,
@@ -16,7 +17,8 @@ internal sealed record AnalysisRuleSet(
     IReadOnlyList<string> ProjectExcludePatterns,
     IReadOnlyList<ReadBeforeCommitObservationRule> ReadBeforeCommitObservations,
     IReadOnlyList<ConcurrencyHandledObservationRule> ConcurrencyHandledObservations,
-    IReadOnlyList<ResilienceRetryObservationRule> ResilienceRetryObservations
+    IReadOnlyList<ResilienceRetryObservationRule> ResilienceRetryObservations,
+    IReadOnlyList<string> LoadedRulesPaths
 )
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
@@ -29,7 +31,28 @@ internal sealed record AnalysisRuleSet(
         rules = rules.MergeWithFile(globalRulesPath);
 
         var solutionDirectory = Path.GetDirectoryName(solutionPath) ?? Directory.GetCurrentDirectory();
-        rules = rules.MergeWithFile(Path.Combine(solutionDirectory, "rig.rules.json"));
+        // For project files (.csproj/.fsproj), walk up to find rig.rules.json at repo/solution root.
+        // For solution files (.sln/.slnx), the rules file is expected right next to the solution.
+        var isProjectFile = solutionPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+            || solutionPath.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase);
+        if (isProjectFile)
+        {
+            var dir = solutionDirectory;
+            for (var depth = 0; depth < 8 && dir is not null; depth++)
+            {
+                var candidate = Path.Combine(dir, "rig.rules.json");
+                if (File.Exists(candidate))
+                {
+                    rules = rules.MergeWithFile(candidate);
+                    break;
+                }
+                dir = Path.GetDirectoryName(dir);
+            }
+        }
+        else
+        {
+            rules = rules.MergeWithFile(Path.Combine(solutionDirectory, "rig.rules.json"));
+        }
 
         if (extraRulesPaths is not null)
         {
@@ -54,14 +77,21 @@ internal sealed record AnalysisRuleSet(
 
     private AnalysisRuleSet MergeWithFile(string rulesPath)
     {
-        if (!File.Exists(rulesPath))
-        {
+        var normalizedPath = Path.GetFullPath(rulesPath);
+        if (!File.Exists(normalizedPath))
             return this;
-        }
+        if (LoadedRulesPaths.Contains(normalizedPath, StringComparer.OrdinalIgnoreCase))
+            return this;
 
-        using var stream = File.OpenRead(rulesPath);
+        using var stream = File.OpenRead(normalizedPath);
         var document = JsonSerializer.Deserialize<AnalysisRulesDocument>(stream, JsonOptions);
-        return document is null ? this : MergeDocument(document);
+        if (document is null)
+            return this;
+
+        return MergeDocument(document) with
+        {
+            LoadedRulesPaths = LoadedRulesPaths.Append(normalizedPath).ToArray(),
+        };
     }
 
     private AnalysisRuleSet MergeDocument(AnalysisRulesDocument document)
@@ -71,6 +101,7 @@ internal sealed record AnalysisRuleSet(
             MinimalApiEntryPoints = MinimalApiEntryPoints.Concat(document.EntryPoints?.MinimalApi ?? []).ToArray(),
             MvcHttpAttributes = MvcHttpAttributes.Concat(document.EntryPoints?.MvcHttpAttributes ?? []).ToArray(),
             ClassInheritanceEntryPoints = ClassInheritanceEntryPoints.Concat(document.EntryPoints?.ClassInheritance ?? []).ToArray(),
+            PageModelEntryPoints = PageModelEntryPoints.Concat(document.EntryPoints?.PageModel ?? []).ToArray(),
             Effects = Effects.Concat(document.Effects ?? []).ToArray(),
             DiRegistrations = DiRegistrations.Concat(document.DiRegistrations ?? []).ToArray(),
             FileInclude = FileInclude.Concat(document.Files?.Include?.Select(rule => rule.ToFileRule("include")) ?? []).ToArray(),
@@ -129,6 +160,7 @@ internal sealed record AnalysisRuleSet(
             document.EntryPoints?.MinimalApi ?? [],
             document.EntryPoints?.MvcHttpAttributes ?? [],
             document.EntryPoints?.ClassInheritance ?? [],
+            document.EntryPoints?.PageModel ?? [],
             document.Effects ?? [],
             document.DiRegistrations ?? [],
             document.Files?.Include?.Select(rule => rule.ToFileRule("include")).ToArray() ?? [],
@@ -137,7 +169,8 @@ internal sealed record AnalysisRuleSet(
             document.Projects?.Exclude ?? [],
             document.Observations?.ReadBeforeCommit ?? [],
             document.Observations?.ConcurrencyHandled ?? [],
-            document.Observations?.ResilienceRetry ?? []
+            document.Observations?.ResilienceRetry ?? [],
+            [Path.GetFullPath(rulesPath)]
         );
     }
 }
@@ -153,6 +186,14 @@ internal sealed record FileRule(string Id, string Glob, string Reason, Regex Reg
 internal sealed record MinimalApiEntryPointRule(string Method, string HttpMethod);
 
 internal sealed record MvcHttpAttributeRule(string Attribute, string HttpMethod);
+
+internal sealed record PageModelEntryPointRule(
+    string Id,
+    string Kind,
+    IReadOnlyList<string> BaseTypes,
+    string NamespacePrefix,
+    string? DefaultMethod = null
+);
 
 internal sealed record ClassInheritanceEntryPointRule(
     string Id,
@@ -250,6 +291,8 @@ internal sealed class EntryPointRulesDocument
     public List<MvcHttpAttributeRule>? MvcHttpAttributes { get; set; }
 
     public List<ClassInheritanceEntryPointRule>? ClassInheritance { get; set; }
+
+    public List<PageModelEntryPointRule>? PageModel { get; set; }
 }
 
 internal sealed class FileRulesSection

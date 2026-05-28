@@ -89,6 +89,7 @@ public static class SolutionAnalyzer
             .FindMinimalApiEntryPoints(source, rules)
             .Concat(EntryPointExtractor.FindMvcEntryPoints(source, rules))
             .Concat(EntryPointExtractor.FindClassInheritanceEntryPoints(source, rules))
+            .Concat(EntryPointExtractor.FindPageModelEntryPoints(source, rules))
             .ToArray();
 
         return new SourceExtractionResult(

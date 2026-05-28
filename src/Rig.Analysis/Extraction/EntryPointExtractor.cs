@@ -50,8 +50,12 @@ internal static class EntryPointExtractor
                 continue;
             }
 
-            var controllerToken = controller.Identifier.ValueText[..^"Controller".Length].ToLowerInvariant();
-            var controllerRoute = GetAttributeStringArgument(controller.AttributeLists, "Route") ?? "[controller]";
+            var controllerName = controller.Identifier.ValueText;
+            var controllerToken = controllerName.Substring(0, controllerName.Length - "Controller".Length).ToLowerInvariant();
+            var controllerRoute =
+                GetAttributeStringArgument(controller.AttributeLists, "RoutePrefix")
+                ?? GetAttributeStringArgument(controller.AttributeLists, "Route")
+                ?? "[controller]";
             controllerRoute = controllerRoute.Replace("[controller]", controllerToken, StringComparison.OrdinalIgnoreCase);
 
             foreach (var method in controller.Members.OfType<MethodDeclarationSyntax>())
@@ -74,6 +78,78 @@ internal static class EntryPointExtractor
                 );
             }
         }
+    }
+
+    public static IEnumerable<EntryPointInfo> FindPageModelEntryPoints(SourceModel source, AnalysisRuleSet rules)
+    {
+        if (rules.PageModelEntryPoints.Count == 0)
+        {
+            yield break;
+        }
+
+        foreach (var typeDeclaration in source.Root.DescendantNodes().OfType<ClassDeclarationSyntax>())
+        {
+            if (typeDeclaration.Modifiers.Any(m => m.IsKind(SyntaxKind.AbstractKeyword)))
+            {
+                continue;
+            }
+
+            var typeSymbol = source.SemanticModel.GetDeclaredSymbol(typeDeclaration);
+            if (typeSymbol is null)
+            {
+                continue;
+            }
+
+            foreach (var rule in rules.PageModelEntryPoints.Where(rule => HasBaseType(typeSymbol, rule.BaseTypes)))
+            {
+                var ns = typeSymbol.ContainingNamespace?.ToDisplayString() ?? string.Empty;
+                var route = DerivePageRoute(ns, typeSymbol.Name, rule.NamespacePrefix);
+                var httpMethod = rule.DefaultMethod ?? "PAGE";
+
+                var publicCtors = typeDeclaration.Members
+                    .OfType<ConstructorDeclarationSyntax>()
+                    .Where(c => c.Modifiers.Any(m => m.IsKind(SyntaxKind.PublicKeyword)))
+                    .ToArray();
+
+                if (publicCtors.Length == 0)
+                {
+                    // Implicit parameterless constructor
+                    yield return new EntryPointInfo(
+                        rule.Kind,
+                        httpMethod,
+                        route,
+                        $"{rule.Kind} {httpMethod} {route}",
+                        source.FilePath,
+                        RoslynSymbolHelpers.GetLine(source.Tree, typeDeclaration)
+                    );
+                }
+                else
+                {
+                    foreach (var ctor in publicCtors)
+                    {
+                        var paramSummary = string.Join(", ", ctor.ParameterList.Parameters.Select(p => p.Identifier.ValueText));
+                        yield return new EntryPointInfo(
+                            rule.Kind,
+                            httpMethod,
+                            route,
+                            $"{rule.Kind} {httpMethod} {route}({paramSummary})",
+                            source.FilePath,
+                            RoslynSymbolHelpers.GetLine(source.Tree, ctor)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    private static string DerivePageRoute(string namespaceName, string className, string prefix)
+    {
+        var withClass = namespaceName.Length > 0 ? $"{namespaceName}.{className}" : className;
+        if (withClass.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            withClass = withClass[prefix.Length..];
+        }
+        return withClass.Replace('.', '/');
     }
 
     public static IEnumerable<EntryPointInfo> FindClassInheritanceEntryPoints(SourceModel source, AnalysisRuleSet rules)
@@ -120,6 +196,9 @@ internal static class EntryPointExtractor
 
     private static (string Method, string? Route)? FindHttpAttribute(SyntaxList<AttributeListSyntax> attributes, AnalysisRuleSet rules)
     {
+        string? httpMethod = null;
+        string? verbRoute = null;
+
         foreach (var attribute in attributes.SelectMany(list => list.Attributes))
         {
             var attributeName = attribute.Name.ToString();
@@ -131,10 +210,19 @@ internal static class EntryPointExtractor
                 continue;
             }
 
-            return (rule.HttpMethod, attribute.ArgumentList?.Arguments.FirstOrDefault()?.Expression.GetLiteralString());
+            httpMethod = rule.HttpMethod;
+            verbRoute = attribute.ArgumentList?.Arguments.FirstOrDefault()?.Expression.GetLiteralString();
+            break;
         }
 
-        return null;
+        if (httpMethod is null)
+        {
+            return null;
+        }
+
+        // If the HTTP verb attribute has no route, check for a separate [Route] attribute on the method.
+        var route = verbRoute ?? GetAttributeStringArgument(attributes, "Route");
+        return (httpMethod, route);
     }
 
     private static string? GetAttributeStringArgument(SyntaxList<AttributeListSyntax> attributes, string attributeName)
@@ -199,8 +287,8 @@ internal static class EntryPointExtractor
 
     private static bool MatchesHandlerMethod(ClassInheritanceEntryPointRule rule, string methodName)
     {
-        return rule.HandlerMethods.Contains("*", StringComparer.Ordinal)
-            || rule.HandlerMethods.Contains(methodName, StringComparer.Ordinal);
+        return (rule.HandlerMethods ?? []).Contains("*", StringComparer.Ordinal)
+            || (rule.HandlerMethods ?? []).Contains(methodName, StringComparer.Ordinal);
     }
 
     private static bool MatchesHandlerParameterTypes(
@@ -235,7 +323,7 @@ internal static class EntryPointExtractor
         foreach (
             var invocation in typeDeclaration
                 .Members.OfType<MethodDeclarationSyntax>()
-                .Where(method => rule.RouteProviderMethods.Contains(method.Identifier.ValueText, StringComparer.Ordinal))
+                .Where(method => (rule.RouteProviderMethods ?? []).Contains(method.Identifier.ValueText, StringComparer.Ordinal))
                 .SelectMany(method => method.DescendantNodes().OfType<InvocationExpressionSyntax>())
         )
         {

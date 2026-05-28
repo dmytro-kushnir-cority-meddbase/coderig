@@ -19,7 +19,7 @@ public sealed class CliApplicationTests
         error.ToString().ShouldBeEmpty();
         output.ToString().ShouldContain("Runtime Intelligence Graph");
         output.ToString().ShouldContain("Usage:");
-        output.ToString().ShouldContain("rig index <solution>");
+        output.ToString().ShouldContain("rig index <solution|project>");
         output.ToString().ShouldContain("rig runs");
         output.ToString().ShouldContain("rig entrypoints");
         output.ToString().ShouldContain("rig callgraph <index>");

@@ -206,7 +206,7 @@ public sealed class PlaygroundAnalysisTests
         threeStepCycle.First().ShouldBe(threeStepCycle.Last());
     }
 
-    [Fact]
+    [Fact(Skip = "requires eShop playground to be cloned")]
     public async Task Eshop_grpc_services_are_entrypoints_and_reach_redis_effects()
     {
         var solutionPath = Path.GetFullPath(
@@ -245,7 +245,7 @@ public sealed class PlaygroundAnalysisTests
         );
     }
 
-    [Fact]
+    [Fact(Skip = "requires eShop playground to be cloned")]
     public async Task Eshop_background_workers_and_event_handlers_are_entrypoints()
     {
         var solutionPath = Path.GetFullPath(

@@ -66,7 +66,7 @@ public static class CliApplication
         output.WriteLine("Runtime Intelligence Graph");
         output.WriteLine();
         output.WriteLine("Usage:");
-        output.WriteLine("  rig index <solution> [--rules <path>...]");
+        output.WriteLine("  rig index <solution|project> [--rules <path>...]");
         output.WriteLine("  rig runs");
         output.WriteLine("  rig entrypoints");
         output.WriteLine("  rig callgraph <index> [--full] [--summary]");
@@ -83,8 +83,8 @@ public static class CliApplication
     {
         if (args.Length < 2)
         {
-            error.WriteLine("Missing solution path.");
-            error.WriteLine("Usage: rig index <solution> [--rules <path>...]");
+            error.WriteLine("Missing solution or project path.");
+            error.WriteLine("Usage: rig index <solution|project> [--rules <path>...]");
             return 2;
         }
 
@@ -114,7 +114,7 @@ public static class CliApplication
         }
         catch (InvalidOperationException exception)
         {
-            error.WriteLine("Failed to load solution for analysis.");
+            error.WriteLine("Failed to load solution/project for analysis.");
             error.WriteLine(exception.Message);
             error.WriteLine("Ensure the target solution has been restored and builds successfully, then retry.");
             error.WriteLine($"  dotnet restore {args[1]}");
