@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
+using System.Reflection;
 using Buildalyzer;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Text;
 using Rig.Analysis.Rules;
 using Rig.Domain.Data;
@@ -165,12 +167,66 @@ internal static class SolutionSourceLoader
         foreach (var result in analyzerResults)
         {
             var projectId = ProjectId.CreateNewId(result.ProjectFilePath);
+
+            // Language version: read from MSBuild LangVersion property so the parser
+            // handles modern C# syntax (primary constructors, collection expressions, etc.).
+            // Falls back to LanguageVersion.Default if unset or unparseable.
+            LanguageVersion langVersion = LanguageVersion.Default;
+            if (result.Properties.TryGetValue("LangVersion", out var lv) && lv is not null)
+                Microsoft.CodeAnalysis.CSharp.LanguageVersionFacts.TryParse(lv, out langVersion);
             var parseOptions = new CSharpParseOptions(
+                languageVersion: langVersion,
                 preprocessorSymbols: result.PreprocessorSymbols ?? []);
 
-            var metadataRefs = (result.References ?? [])
+            // Compilation options: OutputKind must be Library for class library / web projects
+            // so the compiler doesn't require a Main method (CS5001).  AllowUnsafe and Nullable
+            // are also propagated from the MSBuild properties so method resolution succeeds.
+            var outputType = result.Properties.TryGetValue("OutputType", out var ot) ? ot : "Library";
+            var outputKind = outputType.Equals("Exe", StringComparison.OrdinalIgnoreCase)
+                             || outputType.Equals("WinExe", StringComparison.OrdinalIgnoreCase)
+                ? OutputKind.ConsoleApplication : OutputKind.DynamicallyLinkedLibrary;
+            var allowUnsafe = result.Properties.TryGetValue("AllowUnsafeBlocks", out var unsafeStr)
+                && bool.TryParse(unsafeStr, out var unsafeBool) && unsafeBool;
+            var nullableContext = result.Properties.TryGetValue("Nullable", out var nullableStr)
+                && nullableStr?.Equals("enable", StringComparison.OrdinalIgnoreCase) == true
+                ? NullableContextOptions.Enable : NullableContextOptions.Disable;
+            var compilationOptions = new CSharpCompilationOptions(outputKind,
+                allowUnsafe: allowUnsafe,
+                nullableContextOptions: nullableContext);
+
+            var allRefs = result.References ?? [];
+
+            // When a net48 project (like MedDBase.Pages) references a netstandard2.0 library
+            // (like MedDBase.DataAccessTier.dll) that was compiled against the netstandard2.0
+            // build of a package (e.g. LLBLGen), but Buildalyzer resolves the net452 build for
+            // the net48 TFM, the base-type chain inside the netstandard2.0 DLL is unresolvable.
+            // To fix this: for every net452 reference we have, also add the netstandard2.0 sibling
+            // if it exists, so both assembly identities are in the compilation.
+            var siblingRefs = allRefs
                 .Where(File.Exists)
+                .Select(r =>
+                {
+                    var ns20 = r.Replace(Path.DirectorySeparatorChar + "net452" + Path.DirectorySeparatorChar,
+                                         Path.DirectorySeparatorChar + "netstandard2.0" + Path.DirectorySeparatorChar,
+                                         StringComparison.OrdinalIgnoreCase);
+                    return ns20 != r && File.Exists(ns20) ? ns20 : null;
+                })
+                .Where(r => r is not null)
+                .Select(r => r!);
+
+            var metadataRefs = allRefs
+                .Concat(siblingRefs)
+                .Where(File.Exists)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
+                .ToArray();
+
+            // Wire up Roslyn source generators/analyzers (e.g. proxy code-gen for ClientPage
+            // subclasses).  Without these the compilation is missing generated types and semantic
+            // analysis fails for files that reference them.
+            var analyzerRefs = (result.AnalyzerReferences ?? [])
+                .Where(File.Exists)
+                .Select(path => (AnalyzerReference)new AnalyzerFileReference(path, SimpleAnalyzerLoader.Instance))
                 .ToArray();
 
             var documents = (result.SourceFiles ?? [])
@@ -194,9 +250,11 @@ internal static class SolutionSourceLoader
                 assemblyName,
                 LanguageNames.CSharp,
                 filePath: result.ProjectFilePath,
+                compilationOptions: compilationOptions,
+                parseOptions: parseOptions,
                 metadataReferences: metadataRefs,
-                documents: documents,
-                parseOptions: parseOptions);
+                analyzerReferences: analyzerRefs,
+                documents: documents);
 
             solution = solution.AddProject(projectInfo);
         }
@@ -255,6 +313,15 @@ internal static class SolutionSourceLoader
         || path.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase);
 
     private sealed record ProjectSourceLoadResult(IReadOnlyList<SourceFileInfo> SourceFiles, IReadOnlyList<SourceModel> Sources);
+
+    // Minimal IAnalyzerAssemblyLoader implementation for loading source-generator DLLs into
+    // the Roslyn compilation.  AnalyzerAssemblyLoader has no public constructor in Roslyn 5.x.
+    private sealed class SimpleAnalyzerLoader : IAnalyzerAssemblyLoader
+    {
+        internal static readonly SimpleAnalyzerLoader Instance = new();
+        public void AddDependencyLocation(string fullPath) { }
+        public Assembly LoadFromPath(string fullPath) => Assembly.LoadFrom(fullPath);
+    }
 
     private sealed class ProgressLogWriter(Action<string> progress) : TextWriter
     {
