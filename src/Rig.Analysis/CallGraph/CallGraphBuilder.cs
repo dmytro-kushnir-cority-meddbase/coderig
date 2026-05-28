@@ -55,6 +55,9 @@ internal static class CallGraphBuilder
 
         var entryNode = EntryNodeResolver.Resolve(entryPoint, sources, context);
         nodes.Add(entryNode.Node);
+        // Seed visited with the entry node's own symbol so self-recursive entry methods
+        // (e.g. a [ClientAction] method that calls itself) don't get added a second time.
+        visited.Add(entryNode.Node.Symbol);
 
         foreach (var call in entryNode.Calls)
         {

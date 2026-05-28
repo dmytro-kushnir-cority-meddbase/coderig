@@ -192,7 +192,10 @@ internal sealed record PageModelEntryPointRule(
     string Kind,
     IReadOnlyList<string> BaseTypes,
     string NamespacePrefix,
-    string? DefaultMethod = null
+    string? DefaultMethod = null,
+    // When set, methods decorated with any of these attributes become the entry points
+    // rather than constructors.  Route = <page-route>.<MethodName>(<params>).
+    IReadOnlyList<string>? HandlerMethodAttributes = null
 );
 
 internal sealed record ClassInheritanceEntryPointRule(

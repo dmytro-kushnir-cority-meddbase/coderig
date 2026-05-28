@@ -108,16 +108,41 @@ internal static class EntryPointExtractor
             foreach (var rule in rules.PageModelEntryPoints.Where(rule => HasBaseType(typeSymbol, rule.BaseTypes)))
             {
                 var ns = typeSymbol.ContainingNamespace?.ToDisplayString() ?? string.Empty;
-                var route = DerivePageRoute(ns, typeSymbol.Name, rule.NamespacePrefix);
+                var pageRoute = DerivePageRoute(ns, typeSymbol.Name, rule.NamespacePrefix);
                 var httpMethod = rule.DefaultMethod ?? "PAGE";
 
+                // Attribute-handler mode: methods decorated with handlerMethodAttributes become
+                // the entry points instead of constructors.  Used for patterns like [ClientAction]
+                // where each tagged method is an independently callable AJAX endpoint.
+                if (rule.HandlerMethodAttributes is { Count: > 0 } attrNames)
+                {
+                    foreach (var method in typeDeclaration.Members.OfType<MethodDeclarationSyntax>())
+                    {
+                        if (!HasAnyAttribute(method.AttributeLists, attrNames))
+                            continue;
+
+                        var methodName = method.Identifier.ValueText;
+                        var paramSummary = string.Join(", ", method.ParameterList.Parameters.Select(p => p.Identifier.ValueText));
+                        var actionRoute = $"{pageRoute}.{methodName}";
+                        var displayName = paramSummary.Length > 0
+                            ? $"{rule.Kind} {httpMethod} {actionRoute}({paramSummary})"
+                            : $"{rule.Kind} {httpMethod} {actionRoute}";
+                        yield return new EntryPointInfo(
+                            rule.Kind, httpMethod, actionRoute, displayName,
+                            source.FilePath,
+                            RoslynSymbolHelpers.GetLine(source.Tree, method));
+                    }
+                    continue;
+                }
+
+                // Constructor mode (default): page load entry point.
                 // C# 11+ primary constructor: class MyPage(int id) : ClientPage
                 if (typeDeclaration.ParameterList is { Parameters.Count: > 0 } primaryCtorParams)
                 {
                     var paramSummary = string.Join(", ", primaryCtorParams.Parameters.Select(p => p.Identifier.ValueText));
                     yield return new EntryPointInfo(
-                        rule.Kind, httpMethod, route,
-                        $"{rule.Kind} {httpMethod} {route}({paramSummary})",
+                        rule.Kind, httpMethod, pageRoute,
+                        $"{rule.Kind} {httpMethod} {pageRoute}({paramSummary})",
                         source.FilePath,
                         RoslynSymbolHelpers.GetLine(source.Tree, typeDeclaration));
                     continue;
@@ -131,8 +156,8 @@ internal static class EntryPointExtractor
                 if (publicCtors.Length == 0)
                 {
                     yield return new EntryPointInfo(
-                        rule.Kind, httpMethod, route,
-                        $"{rule.Kind} {httpMethod} {route}",
+                        rule.Kind, httpMethod, pageRoute,
+                        $"{rule.Kind} {httpMethod} {pageRoute}",
                         source.FilePath,
                         RoslynSymbolHelpers.GetLine(source.Tree, typeDeclaration));
                 }
@@ -142,8 +167,8 @@ internal static class EntryPointExtractor
                     {
                         var paramSummary = string.Join(", ", ctor.ParameterList.Parameters.Select(p => p.Identifier.ValueText));
                         yield return new EntryPointInfo(
-                            rule.Kind, httpMethod, route,
-                            $"{rule.Kind} {httpMethod} {route}({paramSummary})",
+                            rule.Kind, httpMethod, pageRoute,
+                            $"{rule.Kind} {httpMethod} {pageRoute}({paramSummary})",
                             source.FilePath,
                             RoslynSymbolHelpers.GetLine(source.Tree, ctor));
                     }
@@ -255,6 +280,24 @@ internal static class EntryPointExtractor
         }
 
         return $"{prefix.TrimEnd('/')}/{suffix.TrimStart('/')}".Trim('/');
+    }
+
+    private static bool HasAnyAttribute(SyntaxList<AttributeListSyntax> attributeLists, IReadOnlyList<string> attributeNames)
+    {
+        foreach (var attr in attributeLists.SelectMany(al => al.Attributes))
+        {
+            var name = attr.Name.ToString();
+            // Match "ClientAction", "ClientActionAttribute", or fully qualified variants
+            if (attributeNames.Any(expected =>
+                string.Equals(name, expected, StringComparison.Ordinal)
+                || string.Equals(name, expected + "Attribute", StringComparison.Ordinal)
+                || name.EndsWith("." + expected, StringComparison.Ordinal)
+                || name.EndsWith("." + expected + "Attribute", StringComparison.Ordinal)))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static bool HasBaseType(INamedTypeSymbol typeSymbol, IReadOnlyList<string> baseTypes)
