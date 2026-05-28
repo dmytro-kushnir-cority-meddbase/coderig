@@ -260,12 +260,23 @@ public static class Reads
             var syntheticCallBase = callEntities.Count + 10_000;
             var symbolToSyntheticNode = new Dictionary<string, int>(StringComparer.Ordinal);
 
-            // BFS expansion queue: (symbol, synthetic node index for the calling node)
+            // BFS expansion queue seeded from:
+            //   1. callgraph_node_calls with targets not yet in this run's nodes
+            //   2. callgraph_boundary_calls (external calls that weren't traced in this run)
+            //      — these are the BOUNDARY external lines; try to find them in peer runs
             var queue = new Queue<string>();
             foreach (var call in callEntities)
             {
                 if (!resolvedSymbols.Contains(call.TargetSymbol))
                     queue.Enqueue(call.TargetSymbol);
+            }
+            // Boundary calls: the Target field IS the full Roslyn symbol
+            // (e.g. "global::MedDBase.ServiceLayer.X.Method(params)").
+            // Enqueue each so the BFS can look them up in symbol_index.
+            foreach (var bc in boundaryCallEntities.Where(b => b.Kind == "external" && !string.IsNullOrEmpty(b.Target)))
+            {
+                if (!resolvedSymbols.Contains(bc.Target))
+                    queue.Enqueue(bc.Target);
             }
 
             var visited = new HashSet<string>(resolvedSymbols, StringComparer.Ordinal);
@@ -280,24 +291,24 @@ public static class Reads
 
                 expansions++;
 
-                // Look up in peer runs
+                // Look up in peer runs — try exact match first, then substring for boundary calls
+                // where the symbol may be a short form like "IGenericServiceProvider.ProvideService"
+                // while symbol_index has "global::MedDBase...IGenericServiceProvider.ProvideService(...)"
                 var entry = await context.SymbolIndex
-                    .Where(s => s.ProjectIdentity == projectIdentity && s.Symbol == symbol)
+                    .Where(s => s.ProjectIdentity == projectIdentity &&
+                                (s.Symbol == symbol || s.Symbol.Contains(symbol)))
                     .FirstOrDefaultAsync(cancellationToken);
 
                 if (entry is null)
                     continue;
 
-                // Load the peer node — find its graph index via symbol lookup
+                // Locate the peer method.
+                // Primary: look for an existing callgraph node (entry-point projects).
+                // Fallback: library projects have 0 entry points → no callgraph_nodes rows.
+                //   Use method_observations (FilePath/Line) + invocation_observations (outgoing calls).
                 var peerNode = await context.CallGraphNodes
                     .Where(n => n.RunId == entry.RunId && n.Symbol == symbol)
                     .FirstOrDefaultAsync(cancellationToken);
-
-                if (peerNode is null)
-                    continue;
-
-                var peerGraphIndex = peerNode.GraphIndex;
-                var peerNodeIndex = peerNode.NodeIndex;
 
                 var synNodeIdx = syntheticNodeBase + symbolToSyntheticNode.Count;
                 symbolToSyntheticNode[symbol] = synNodeIdx;
@@ -310,35 +321,55 @@ public static class Reads
                     Symbol = symbol,
                     FilePath = entry.FilePath,
                     Line = entry.Line,
-                    Confidence = peerNode.Confidence,
-                    Basis = peerNode.Basis,
-                    Reason = peerNode.Reason,
+                    Confidence = peerNode?.Confidence ?? "medium",
+                    Basis = peerNode?.Basis ?? "cross_run",
+                    Reason = peerNode?.Reason ?? "cross_run_stitching",
                 });
 
-                // Pull in this node's outgoing calls from its original run
-                var peerCalls = await context.CallGraphNodeCalls
-                    .Where(c => c.RunId == entry.RunId && c.GraphIndex == peerGraphIndex && c.NodeIndex == peerNodeIndex)
-                    .ToArrayAsync(cancellationToken);
-
+                // Pull outgoing calls:
+                //   If a callgraph node exists, use its pre-built call list.
+                //   Otherwise fall back to invocation_observations for the same run.
                 var callIdx = syntheticCallBase;
-                foreach (var pc in peerCalls)
+                if (peerNode is not null)
                 {
-                    callEntities.Add(new CallGraphNodeCallEntity
+                    var peerCalls = await context.CallGraphNodeCalls
+                        .Where(c => c.RunId == entry.RunId && c.GraphIndex == peerNode.GraphIndex && c.NodeIndex == peerNode.NodeIndex)
+                        .ToArrayAsync(cancellationToken);
+
+                    foreach (var pc in peerCalls)
                     {
-                        RunId = entry.RunId,
-                        GraphIndex = synNodeIdx,
-                        NodeIndex = synNodeIdx,
-                        CallIndex = callIdx++,
-                        TargetSymbol = pc.TargetSymbol,
-                    });
-                    if (!visited.Contains(pc.TargetSymbol))
-                        queue.Enqueue(pc.TargetSymbol);
+                        callEntities.Add(new CallGraphNodeCallEntity
+                        {
+                            RunId = entry.RunId, GraphIndex = synNodeIdx, NodeIndex = synNodeIdx,
+                            CallIndex = callIdx++, TargetSymbol = pc.TargetSymbol,
+                        });
+                        if (!visited.Contains(pc.TargetSymbol)) queue.Enqueue(pc.TargetSymbol);
+                    }
+                }
+                else
+                {
+                    // Library method: derive outgoing calls from invocation_observations
+                    var peerInvocations = await context.InvocationObservations
+                        .Where(i => i.RunId == entry.RunId && i.ContainingMethodSymbol == symbol)
+                        .ToArrayAsync(cancellationToken);
+
+                    foreach (var iv in peerInvocations)
+                    {
+                        callEntities.Add(new CallGraphNodeCallEntity
+                        {
+                            RunId = entry.RunId, GraphIndex = synNodeIdx, NodeIndex = synNodeIdx,
+                            CallIndex = callIdx++, TargetSymbol = iv.TargetSymbol,
+                        });
+                        if (!visited.Contains(iv.TargetSymbol)) queue.Enqueue(iv.TargetSymbol);
+                    }
                 }
 
-                // Boundary calls and effects from the peer node
-                var peerBoundaryCalls = await context.CallGraphBoundaryCalls
-                    .Where(b => b.RunId == entry.RunId && b.GraphIndex == peerGraphIndex && b.NodeIndex == peerNodeIndex)
-                    .ToArrayAsync(cancellationToken);
+                // Boundary calls — only available if we had a real callgraph node
+                var peerBoundaryCalls = peerNode is not null
+                    ? await context.CallGraphBoundaryCalls
+                        .Where(b => b.RunId == entry.RunId && b.GraphIndex == peerNode.GraphIndex && b.NodeIndex == peerNode.NodeIndex)
+                        .ToArrayAsync(cancellationToken)
+                    : [];
 
                 var bIdx = 0;
                 foreach (var pb in peerBoundaryCalls)
@@ -351,9 +382,11 @@ public static class Reads
                         Confidence = pb.Confidence, Basis = pb.Basis, Reason = pb.Reason,
                     });
 
-                var peerEffectLinks = await context.CallGraphNodeEffects
-                    .Where(e => e.RunId == entry.RunId && e.GraphIndex == peerGraphIndex && e.NodeIndex == peerNodeIndex)
-                    .ToArrayAsync(cancellationToken);
+                var peerEffectLinks = peerNode is not null
+                    ? await context.CallGraphNodeEffects
+                        .Where(e => e.RunId == entry.RunId && e.GraphIndex == peerNode.GraphIndex && e.NodeIndex == peerNode.NodeIndex)
+                        .ToArrayAsync(cancellationToken)
+                    : [];
 
                 var lIdx = 0;
                 foreach (var pe in peerEffectLinks)
