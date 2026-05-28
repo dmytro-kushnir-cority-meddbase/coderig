@@ -136,6 +136,10 @@ internal static class SolutionSourceLoader
             progress?.Invoke($"MSBuild: running design-time build for {Path.GetFileNameWithoutExtension(solutionPath)}");
             analyzer!.SetGlobalProperty("DesignTimeBuild", "true");
             analyzer.SetGlobalProperty("BuildingInsideVisualStudio", "true");
+            // Prevent the MSBuild compiler server from being shared across parallel processes —
+            // concurrent Buildalyzer calls can corrupt each other's bin/ output if they share
+            // compilation state.
+            analyzer.SetGlobalProperty("UseSharedCompilation", "false");
             var built = analyzer.Build().FirstOrDefault()
                 ?? throw new InvalidOperationException($"Buildalyzer produced no build results for '{solutionPath}'.");
             results = [built];
@@ -159,6 +163,7 @@ internal static class SolutionSourceLoader
 
                 progress?.Invoke($"MSBuild: running design-time build for {projectName}");
                 projectAnalyzer.SetGlobalProperty("DesignTimeBuild", "true");
+                projectAnalyzer.SetGlobalProperty("UseSharedCompilation", "false");
                 projectAnalyzer.SetGlobalProperty("BuildingInsideVisualStudio", "true");
                 try
                 {
@@ -172,10 +177,10 @@ internal static class SolutionSourceLoader
             }
         }
 
-        return BuildWorkspaceFromResults(results);
+        return BuildWorkspaceFromResults(results, progress);
     }
 
-    private static AdhocWorkspace BuildWorkspaceFromResults(IReadOnlyList<IAnalyzerResult> analyzerResults)
+    private static AdhocWorkspace BuildWorkspaceFromResults(IReadOnlyList<IAnalyzerResult> analyzerResults, Action<string>? progress = null)
     {
         var workspace = new AdhocWorkspace();
         var solution = workspace.AddSolution(Microsoft.CodeAnalysis.SolutionInfo.Create(SolutionId.CreateNewId(), VersionStamp.Create()));
@@ -268,8 +273,7 @@ internal static class SolutionSourceLoader
                 .Where(File.Exists)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 // Skip DLLs whose assembly is provided by a live project reference
-                .Where(path => !inWorkspaceAssemblyNames.Contains(
-                    Path.GetFileNameWithoutExtension(path)))
+                .Where(path => !inWorkspaceAssemblyNames.Contains(Path.GetFileNameWithoutExtension(path)))
                 .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
                 .ToArray();
 
