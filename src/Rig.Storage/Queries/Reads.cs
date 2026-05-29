@@ -382,11 +382,40 @@ public static class Reads
                         Confidence = pb.Confidence, Basis = pb.Basis, Reason = pb.Reason,
                     });
 
-                var peerEffectLinks = peerNode is not null
-                    ? await context.CallGraphNodeEffects
+                // Load effect links — from stored callgraph_node_effects when available,
+                // or by matching file+line from the effects table for library methods
+                // (projects indexed without entry points have effects but no callgraph nodes).
+                IReadOnlyList<CallGraphNodeEffectEntity> peerEffectLinks;
+                if (peerNode is not null)
+                {
+                    peerEffectLinks = await context.CallGraphNodeEffects
                         .Where(e => e.RunId == entry.RunId && e.GraphIndex == peerNode.GraphIndex && e.NodeIndex == peerNode.NodeIndex)
-                        .ToArrayAsync(cancellationToken)
-                    : [];
+                        .ToArrayAsync(cancellationToken);
+                }
+                else if (!string.IsNullOrEmpty(entry.FilePath))
+                {
+                    // Find effects in the peer run that fall within the same source method.
+                    // Use file path as a proxy — all effects in this file around the method's
+                    // start line (within a generous window) are attributed to this node.
+                    var peerEffectsInFile = await context.Effects
+                        .Where(e => e.RunId == entry.RunId && e.FilePath == entry.FilePath
+                                 && e.Line >= entry.Line)
+                        .Take(50)
+                        .Select(e => e.EffectIndex)
+                        .ToArrayAsync(cancellationToken);
+
+                    peerEffectLinks = peerEffectsInFile
+                        .Select((idx, i) => new CallGraphNodeEffectEntity
+                        {
+                            RunId = entry.RunId, GraphIndex = synNodeIdx, NodeIndex = synNodeIdx,
+                            LinkIndex = i, EffectIndex = idx,
+                        })
+                        .ToArray();
+                }
+                else
+                {
+                    peerEffectLinks = [];
+                }
 
                 var lIdx = 0;
                 foreach (var pe in peerEffectLinks)

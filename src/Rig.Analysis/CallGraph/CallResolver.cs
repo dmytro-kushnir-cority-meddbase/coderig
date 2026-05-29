@@ -177,7 +177,14 @@ internal static class CallResolver
         var interfaceMethodKey = RoslynSymbolHelpers.GetMethodKey(methodSymbol);
         var concreteMethodKey = interfaceMethodKey.Replace(interfaceTypeKey, concreteTypeKey, StringComparison.Ordinal);
 
-        return context.Methods.ContainsKey(concreteMethodKey) ? new ResolvedCallInfo(concreteMethodKey) : null;
+        if (context.Methods.ContainsKey(concreteMethodKey))
+            return new ResolvedCallInfo(concreteMethodKey);
+
+        // Implementation not in this run's source — return a sentinel ResolvedCall with the
+        // concrete key so the caller emits an "external" boundary call referencing the
+        // implementation rather than the interface.  Cross-run stitching can then find it
+        // in symbol_index via the concrete symbol.
+        return new ResolvedCallInfo(concreteMethodKey, CrossRunOnly: true);
     }
 
     private static bool IsDispatchCall(IMethodSymbol methodSymbol, EffectRule rule)

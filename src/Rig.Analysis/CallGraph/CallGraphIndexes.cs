@@ -67,8 +67,19 @@ internal static class CallGraphIndexes
 
     private static IReadOnlyDictionary<string, string> BuildSingleImplIndex(IReadOnlyList<DiRegistrationInfo> registrations)
     {
+        // Roslyn's GetTypeKey includes the "global::" prefix; XML/config registrations typically
+        // don't.  Normalise by adding "global::" to both service and implementation types so the
+        // lookup in TryResolveSingleImplCall (which uses GetTypeKey) always matches.
+        static string Normalise(string t) =>
+            t.StartsWith("global::", StringComparison.Ordinal) ? t : "global::" + t;
+
         return registrations
             .Where(r => r.ImplementationType is not null)
+            .Select(r => r with
+            {
+                ServiceType = Normalise(r.ServiceType),
+                ImplementationType = Normalise(r.ImplementationType!),
+            })
             .GroupBy(r => r.ServiceType, StringComparer.Ordinal)
             .Where(g => g.Select(r => r.ImplementationType).Distinct(StringComparer.Ordinal).Count() == 1)
             .ToDictionary(g => g.Key, g => g.First().ImplementationType!, StringComparer.Ordinal);
