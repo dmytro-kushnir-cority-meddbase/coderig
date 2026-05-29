@@ -522,6 +522,22 @@ public static class CliApplication
         }
 
         output.WriteLine($"\n[mine] Complete: {totalIndexed} indexed, {totalFailed} failed, {visited.Count} total projects reached.");
+
+        // Write a reachable-projects index alongside the .rig database so subsequent
+        // queries can filter to only runs that belong to this dependency closure.
+        var indexPath = Path.Combine(workingDirectory, "reachable-projects.json");
+        var indexData = new
+        {
+            identity = identity,
+            solutionPath = Path.GetFullPath(solutionPath),
+            entryProject = Path.GetFullPath(fromProject),
+            indexedAt = DateTimeOffset.UtcNow.ToString("O"),
+            projects = visited.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray(),
+        };
+        File.WriteAllText(indexPath, System.Text.Json.JsonSerializer.Serialize(indexData,
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        output.WriteLine($"[mine] Reachable projects index written: {indexPath}");
+
         return totalFailed > 0 ? 1 : 0;
     }
 

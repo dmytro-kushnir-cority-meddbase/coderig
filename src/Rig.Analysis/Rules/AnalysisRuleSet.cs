@@ -18,7 +18,10 @@ internal sealed record AnalysisRuleSet(
     IReadOnlyList<ReadBeforeCommitObservationRule> ReadBeforeCommitObservations,
     IReadOnlyList<ConcurrencyHandledObservationRule> ConcurrencyHandledObservations,
     IReadOnlyList<ResilienceRetryObservationRule> ResilienceRetryObservations,
-    IReadOnlyList<string> LoadedRulesPaths
+    IReadOnlyList<string> LoadedRulesPaths,
+    // Pre-declared interface→implementation mappings (e.g. from XML service descriptors).
+    // These are merged directly into the SingleImplIndex without requiring code-level DI patterns.
+    IReadOnlyList<StaticDiMapping> StaticDiMappings
 )
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
@@ -104,6 +107,7 @@ internal sealed record AnalysisRuleSet(
             PageModelEntryPoints = PageModelEntryPoints.Concat(document.EntryPoints?.PageModel ?? []).ToArray(),
             Effects = Effects.Concat(document.Effects ?? []).ToArray(),
             DiRegistrations = DiRegistrations.Concat(document.DiRegistrations ?? []).ToArray(),
+            StaticDiMappings = StaticDiMappings.Concat(document.StaticDiMappings ?? []).ToArray(),
             FileInclude = FileInclude.Concat(document.Files?.Include?.Select(rule => rule.ToFileRule("include")) ?? []).ToArray(),
             FileExclude = FileExclude.Concat(document.Files?.Exclude?.Select(rule => rule.ToFileRule("exclude")) ?? []).ToArray(),
             TestProjectPatterns = TestProjectPatterns
@@ -170,7 +174,8 @@ internal sealed record AnalysisRuleSet(
             document.Observations?.ReadBeforeCommit ?? [],
             document.Observations?.ConcurrencyHandled ?? [],
             document.Observations?.ResilienceRetry ?? [],
-            [Path.GetFullPath(rulesPath)]
+            [Path.GetFullPath(rulesPath)],
+            document.StaticDiMappings ?? []
         );
     }
 }
@@ -258,6 +263,15 @@ internal sealed record ResilienceRetryObservationRule(
     IReadOnlyList<string> ReceiverTypePatterns
 );
 
+// Pre-declared interface→implementation mapping sourced from external DI descriptors
+// (e.g. XML service files, web.config appSettings) rather than from code patterns.
+internal sealed record StaticDiMapping(
+    string ServiceType,
+    string ImplementationType,
+    string Lifetime = "singleton",
+    string RegistrationKind = "static"
+);
+
 internal sealed class AnalysisRulesDocument
 {
     public EntryPointRulesDocument? EntryPoints { get; set; }
@@ -265,6 +279,8 @@ internal sealed class AnalysisRulesDocument
     public List<EffectRule>? Effects { get; set; }
 
     public List<DiRegistrationRule>? DiRegistrations { get; set; }
+
+    public List<StaticDiMapping>? StaticDiMappings { get; set; }
 
     public FileRulesSection? Files { get; set; }
 

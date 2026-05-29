@@ -57,13 +57,21 @@ public static class SolutionAnalyzer
             .ThenBy(observation => observation.Line)
             .ToArray();
 
+        // Merge static DI mappings from rules into the registrations used by SingleImplIndex.
+        // These pre-declared mappings (e.g. from XML service descriptors) resolve interface
+        // calls that would otherwise stop at BOUNDARY external.
+        var staticRegistrations = rules.StaticDiMappings.Select(m => new DiRegistrationInfo(
+            m.ServiceType, m.ImplementationType, m.Lifetime, m.RegistrationKind,
+            string.Empty, 0, "high", "rules", "static_di_mapping", string.Empty)).ToArray();
+        var allDiRegistrations = diRegistrations.Concat(staticRegistrations).ToArray();
+
         progress?.Invoke($"Building callgraphs for {entryPoints.Length} entrypoints");
         var callGraphs = CallGraphBuilder.Build(
             entryPoints,
             sources,
             effects,
             rules.Effects.Where(r => r.TreatAsDispatch).ToArray(),
-            diRegistrations
+            allDiRegistrations
         );
 
         progress?.Invoke($"Analysis complete: {entryPoints.Length} entrypoints, {effects.Length} effects");
