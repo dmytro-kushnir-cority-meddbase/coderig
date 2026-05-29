@@ -21,7 +21,9 @@ internal sealed record AnalysisRuleSet(
     IReadOnlyList<string> LoadedRulesPaths,
     // Pre-declared interface→implementation mappings (e.g. from XML service descriptors).
     // These are merged directly into the SingleImplIndex without requiring code-level DI patterns.
-    IReadOnlyList<StaticDiMapping> StaticDiMappings
+    IReadOnlyList<StaticDiMapping> StaticDiMappings,
+    // Paths to XML service descriptor directories/files whose mappings are mined at index time.
+    IReadOnlyList<string> XmlDiFiles
 )
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
@@ -108,6 +110,7 @@ internal sealed record AnalysisRuleSet(
             Effects = Effects.Concat(document.Effects ?? []).ToArray(),
             DiRegistrations = DiRegistrations.Concat(document.DiRegistrations ?? []).ToArray(),
             StaticDiMappings = StaticDiMappings.Concat(document.StaticDiMappings ?? []).ToArray(),
+            XmlDiFiles = XmlDiFiles.Concat(document.XmlDiFiles ?? []).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             FileInclude = FileInclude.Concat(document.Files?.Include?.Select(rule => rule.ToFileRule("include")) ?? []).ToArray(),
             FileExclude = FileExclude.Concat(document.Files?.Exclude?.Select(rule => rule.ToFileRule("exclude")) ?? []).ToArray(),
             TestProjectPatterns = TestProjectPatterns
@@ -175,7 +178,8 @@ internal sealed record AnalysisRuleSet(
             document.Observations?.ConcurrencyHandled ?? [],
             document.Observations?.ResilienceRetry ?? [],
             [Path.GetFullPath(rulesPath)],
-            document.StaticDiMappings ?? []
+            document.StaticDiMappings ?? [],
+            document.XmlDiFiles ?? []
         );
     }
 }
@@ -281,6 +285,11 @@ internal sealed class AnalysisRulesDocument
     public List<DiRegistrationRule>? DiRegistrations { get; set; }
 
     public List<StaticDiMapping>? StaticDiMappings { get; set; }
+
+    // Paths to directories (or individual files) containing XML service descriptors.
+    // Each <Service type="Impl"><Implements type="IFace"/></Service> becomes a
+    // DiRegistrationInfo entry fed into SingleImplIndex at callgraph build time.
+    public List<string>? XmlDiFiles { get; set; }
 
     public FileRulesSection? Files { get; set; }
 

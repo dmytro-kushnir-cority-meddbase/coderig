@@ -57,13 +57,18 @@ public static class SolutionAnalyzer
             .ThenBy(observation => observation.Line)
             .ToArray();
 
-        // Merge static DI mappings from rules into the registrations used by SingleImplIndex.
-        // These pre-declared mappings (e.g. from XML service descriptors) resolve interface
-        // calls that would otherwise stop at BOUNDARY external.
+        // Mine XML service descriptor files (e.g. App_Data/Common/Xml/Services/*.xml) and
+        // any inline static mappings, then merge with code-detected DI registrations.
+        var xmlRegistrations = XmlDiMiner.Mine(rules);
         var staticRegistrations = rules.StaticDiMappings.Select(m => new DiRegistrationInfo(
             m.ServiceType, m.ImplementationType, m.Lifetime, m.RegistrationKind,
-            string.Empty, 0, "high", "rules", "static_di_mapping", string.Empty)).ToArray();
-        var allDiRegistrations = diRegistrations.Concat(staticRegistrations).ToArray();
+            string.Empty, 0, "high", "rules", "static_di_mapping", string.Empty));
+        var allDiRegistrations = diRegistrations
+            .Concat(xmlRegistrations)
+            .Concat(staticRegistrations)
+            .ToArray();
+        if (xmlRegistrations.Count > 0)
+            progress?.Invoke($"XML DI miner: {xmlRegistrations.Count} mappings from {rules.XmlDiFiles.Count} path(s)");
 
         progress?.Invoke($"Building callgraphs for {entryPoints.Length} entrypoints");
         var callGraphs = CallGraphBuilder.Build(
