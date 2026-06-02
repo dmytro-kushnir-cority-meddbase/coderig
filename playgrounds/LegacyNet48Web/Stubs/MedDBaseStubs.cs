@@ -41,6 +41,28 @@ namespace MedDBase.Application.Core.Background
     }
 }
 
+namespace MedDBase.Application.Workflows
+{
+    // A framework base whose virtual lifecycle hooks are the real entry points: a subclass becomes
+    // reachable only through the methods it OVERRIDES (the requireOverride classInheritance shape).
+    public abstract class WorkflowControllerBase
+    {
+        public virtual void OnSave() { }
+        public virtual void OnCancel() { }
+    }
+}
+
+namespace MedDBase.Wcf
+{
+    // A FIRST-PARTY OperationContract stand-in. The real System.ServiceModel.OperationContract is
+    // third-party and dropped by the runtime-assembly filter, so a first-party attribute is what
+    // lets the fixture exercise the attribute-gated (baseTypes:["*"]) WCF classInheritance rule.
+    [System.AttributeUsage(System.AttributeTargets.Method)]
+    public sealed class OperationContractAttribute : System.Attribute
+    {
+    }
+}
+
 namespace MedDBase.Messages
 {
     public interface IChamberMsg

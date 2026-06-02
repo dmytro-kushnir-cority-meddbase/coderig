@@ -680,14 +680,25 @@ public static class Reads
             .Distinct()
             .ToArray();
 
+        var interfaceEdgeRows = await context.TypeRelationFacts
+            .Where(t => t.RelationKind == "interface")
+            .Select(t => new { t.TypeSymbolId, t.RelatedSymbolId })
+            .ToArrayAsync(cancellationToken);
+        var interfaceEdges = interfaceEdgeRows
+            .Select(t => (t.TypeSymbolId, t.RelatedSymbolId))
+            .Distinct()
+            .ToArray();
+
+        // All methods (not just .ctor): page EPs use the .ctor rows, class-inheritance EPs use the
+        // named handler rows. IsOverride feeds RequireOverride rules (e.g. WorkflowControllerBase.OnSave).
         var methodRows = await context.SymbolFacts
-            .Where(s => s.Kind == "method" && s.Name == ".ctor")
-            .Select(s => new { s.SymbolId, s.Name, s.ContainingSymbolId, s.Signature, s.FilePath, s.Line })
+            .Where(s => s.Kind == "method")
+            .Select(s => new { s.SymbolId, s.Name, s.ContainingSymbolId, s.Signature, s.FilePath, s.Line, s.IsOverride })
             .ToArrayAsync(cancellationToken);
         var methods = methodRows
             .GroupBy(m => (m.FilePath, m.Line))
             .Select(g => g.First())
-            .Select(m => (m.SymbolId, m.Name, m.ContainingSymbolId, m.Signature, m.FilePath, m.Line))
+            .Select(m => (m.SymbolId, m.Name, m.ContainingSymbolId, m.Signature, m.FilePath, m.Line, m.IsOverride))
             .ToArray();
 
         var typeRows = await context.SymbolFacts
@@ -713,7 +724,7 @@ public static class Reads
             .Select(r => (r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line))
             .ToArray();
 
-        return new FactEntryPointDeriver.FactEntryPointData(baseEdges, methods, types, ctorRefs!);
+        return new FactEntryPointDeriver.FactEntryPointData(baseEdges, methods, types, ctorRefs!, interfaceEdges);
     }
 
     // Loads invocation reference facts for fact-based effect derivation.

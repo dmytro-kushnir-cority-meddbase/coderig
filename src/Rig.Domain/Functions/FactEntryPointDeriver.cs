@@ -23,6 +23,15 @@ namespace Rig.Domain.Functions;
 //       - Emit one entry point per such method (deduped by FilePath+Line).
 //       - Route = namespace stripped of rule.NamespacePrefix, last '.' replaced by '.', rest by '/'.
 //
+//   (C) CLASS-INHERITANCE entry points (FactClassInheritanceRule — background/service/WCF/HTTP/
+//       actor/lifecycle handlers): a method is an entry point when its declaring type is a subtype
+//       of one of the rule's base types (BFS over base AND interface edges — so DataSyncProcess :
+//       IBackgroundProcess and Master : IHealthcodeService both qualify) and the method's name
+//       matches rule.HandlerMethods (or "*"), optionally gated by RequireOverride and/or an
+//       attribute (e.g. WCF [OperationContract]). Route = the declaring type's FQN + ".Method"
+//       (the same fallback the Roslyn pass uses when no route provider matches). This is the case
+//       that took backend projects from 0 entry points; see docs/effect-capture-validation.md (G1).
+//
 // Fact limitation: parameter *names* are not in symbol_facts (Signature carries types only).
 // DisplayName therefore uses the type-only Signature for page constructors and the method's
 // Signature for actions.  This matches the information available from stage-1 facts.
@@ -32,18 +41,24 @@ public static class FactEntryPointDeriver
     public sealed record FactEntryPointData(
         // (TypeSymbolId, RelatedSymbolId) base-type edges
         IReadOnlyList<(string TypeId, string BaseId)> BaseEdges,
-        // method symbols (kind="method") — we use only .ctor rows for page EPs
-        IReadOnlyList<(string SymbolId, string Name, string? ContainingSymbolId, string Signature, string FilePath, int Line)> Methods,
+        // method symbols (kind="method") — ALL methods. Page EPs use only the .ctor rows;
+        // class-inheritance EPs use the named handler rows (IsOverride gates RequireOverride rules).
+        IReadOnlyList<(string SymbolId, string Name, string? ContainingSymbolId, string Signature, string FilePath, int Line, bool IsOverride)> Methods,
         // type symbols (kind="type") — for page EPs where the class has no explicit ctor.
         // IsAbstract gates out base/abstract pages, which are never navigable entry points.
         IReadOnlyList<(string SymbolId, string Namespace, string FilePath, int Line, bool IsAbstract)> Types,
         // ctor reference_facts: ctor calls to attribute constructors
-        IReadOnlyList<(string TargetSymbolId, string? EnclosingSymbolId, string FilePath, int Line)> CtorRefs
+        IReadOnlyList<(string TargetSymbolId, string? EnclosingSymbolId, string FilePath, int Line)> CtorRefs,
+        // (TypeSymbolId, RelatedSymbolId) implemented-interface edges. Merged with BaseEdges for the
+        // class-inheritance closure so interface-rooted rules (IBackgroundProcess, IHealthcodeService)
+        // match. Defaults to empty so existing callers/tests stay source-compatible.
+        IReadOnlyList<(string TypeId, string BaseId)>? InterfaceEdges = null
     );
 
     public static IReadOnlyList<DerivedEntryPoint> Derive(
         FactEntryPointData data,
-        IReadOnlyList<FactEntryPointRule> rules)
+        IReadOnlyList<FactEntryPointRule> rules,
+        IReadOnlyList<FactClassInheritanceRule>? classInheritanceRules = null)
     {
         // Pre-index for performance. The base-edge lookup is keyed by the generic-stripped base so
         // the BFS can cross generic bases (see TypeClosure).
@@ -70,6 +85,20 @@ public static class FactEntryPointDeriver
             }
         }
 
+        if (classInheritanceRules is { Count: > 0 })
+        {
+            // Pattern C closure spans base + interface edges (interface-rooted backend rules).
+            var inheritanceEdges = TypeClosure.BuildBaseEdgeLookup(
+                data.BaseEdges.Concat(data.InterfaceEdges ?? []));
+            var attributeRefsByMethod = data.CtorRefs
+                .Where(r => r.EnclosingSymbolId is not null)
+                .ToLookup(r => r.EnclosingSymbolId!, r => r.TargetSymbolId, StringComparer.Ordinal);
+            var handlers = data.Methods.Where(m => m.Name != ".ctor").ToArray();
+
+            foreach (var rule in classInheritanceRules)
+                DeriveClassInheritance(handlers, inheritanceEdges, attributeRefsByMethod, rule, results, seen);
+        }
+
         return results;
     }
 
@@ -77,7 +106,7 @@ public static class FactEntryPointDeriver
 
     private static void DerivePages(
         ILookup<string, string> baseEdges,
-        ILookup<string, (string SymbolId, string Name, string? ContainingSymbolId, string Signature, string FilePath, int Line)> ctorsByContaining,
+        ILookup<string, (string SymbolId, string Name, string? ContainingSymbolId, string Signature, string FilePath, int Line, bool IsOverride)> ctorsByContaining,
         Dictionary<string, (string SymbolId, string Namespace, string FilePath, int Line, bool IsAbstract)> typeById,
         FactEntryPointRule rule,
         List<DerivedEntryPoint> results,
@@ -207,6 +236,100 @@ public static class FactEntryPointDeriver
             var displayName = $"{rule.Kind} {rule.DefaultMethod} {route}";
             results.Add(new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, r.FilePath, r.Line));
         }
+    }
+
+    // --- Pattern C: class-inheritance entry points (background / service / WCF / HTTP / actor) ---
+
+    private static void DeriveClassInheritance(
+        IReadOnlyList<(string SymbolId, string Name, string? ContainingSymbolId, string Signature, string FilePath, int Line, bool IsOverride)> handlers,
+        ILookup<string, string> inheritanceEdges,
+        ILookup<string, string> attributeRefsByMethod,
+        FactClassInheritanceRule rule,
+        List<DerivedEntryPoint> results,
+        HashSet<(string, int)> seen)
+    {
+        // baseTypes:["*"] means "no base-type gate" (the WCF rule, narrowed instead by its attribute).
+        // Otherwise gate on STRICT descendants — a handler declared on the root base itself (e.g. the
+        // abstract ServiceBase.Startup) is not an entry point; only its concrete subtypes are.
+        var anyBase = rule.BaseTypes.Contains("*", StringComparer.Ordinal);
+        var closure = anyBase ? null : TypeClosure.ComputeStrictDescendants(inheritanceEdges, rule.BaseTypes);
+
+        // handlerMethods:["*"] means "any method name" (again the WCF rule — gated by the attribute).
+        var anyMethod = rule.HandlerMethods.Contains("*", StringComparer.Ordinal);
+
+        foreach (var m in handlers)
+        {
+            if (m.ContainingSymbolId is null)
+                continue;
+            if (closure is not null && !TypeClosure.Contains(closure, m.ContainingSymbolId))
+                continue;
+            if (!anyMethod && !rule.HandlerMethods.Contains(m.Name, StringComparer.Ordinal))
+                continue;
+            if (rule.RequireOverride && !m.IsOverride)
+                continue;
+            if (rule.HandlerMethodAttributePrefixes.Count > 0
+                && !attributeRefsByMethod[m.SymbolId].Any(target =>
+                    rule.HandlerMethodAttributePrefixes.Any(p => target.StartsWith(p, StringComparison.Ordinal))))
+                continue;
+            if (rule.HandlerParameterTypeSimpleNames.Count > 0
+                && !HasAllParameterTypes(m.Signature, rule.HandlerParameterTypeSimpleNames))
+                continue;
+
+            if (!seen.Add((m.FilePath, m.Line)))
+                continue;
+
+            var route = BuildInheritanceRoute(m.ContainingSymbolId, m.Name);
+            if (route is null)
+                continue;
+            var displayName = $"{rule.Kind} {rule.DefaultMethod} {route}";
+            results.Add(new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, m.FilePath, m.Line));
+        }
+    }
+
+    // True when the method's signature carries a parameter of every required (simple-named) type.
+    // Fact signatures show parameter TYPES only (no names), so each comma-separated token in the
+    // parenthesised tail is a type; we reduce it to its simple name and match. Approximate vs. the
+    // Roslyn semantic-model match, but the discriminating types (e.g. ServerCallContext) are distinct.
+    private static bool HasAllParameterTypes(string signature, IReadOnlyList<string> requiredSimpleNames)
+    {
+        var open = signature.IndexOf('(');
+        var close = signature.LastIndexOf(')');
+        if (open < 0 || close <= open)
+            return false;
+        var paramSimpleNames = new HashSet<string>(
+            signature
+                .Substring(open + 1, close - open - 1)
+                .Split(',')
+                .Select(t => t.Trim())
+                .Where(t => t.Length > 0)
+                .Select(SimpleTypeToken),
+            StringComparer.Ordinal);
+        return requiredSimpleNames.All(paramSimpleNames.Contains);
+    }
+
+    // "Grpc.Core.ServerCallContext" / "ref System.Int32" / "System.Threading.Tasks.Task<T>" -> simple name.
+    private static string SimpleTypeToken(string token)
+    {
+        var space = token.LastIndexOf(' '); // drop ref/out/in/params modifiers
+        if (space >= 0)
+            token = token.Substring(space + 1);
+        var generic = token.IndexOf('<');
+        if (generic >= 0)
+            token = token.Substring(0, generic);
+        var lastDot = token.LastIndexOf('.');
+        return lastDot >= 0 ? token.Substring(lastDot + 1) : token;
+    }
+
+    // "T:MedDBase.Application.Workflows.Master" + "ProcessHealthcodeQueue"
+    //   -> "MedDBase.Application.Workflows.Master.ProcessHealthcodeQueue"
+    // Mirrors the Roslyn pass's default route (typeSymbol.ToDisplayString() + "." + methodName) for
+    // class-inheritance rules, which carry no namespace prefix. Generic arity markers are stripped.
+    private static string? BuildInheritanceRoute(string containingTypeId, string methodName)
+    {
+        if (!containingTypeId.StartsWith("T:", StringComparison.Ordinal))
+            return null;
+        var type = StripArityMarkers(containingTypeId.Substring(2));
+        return $"{type}.{methodName}";
     }
 
     // "M:MedDBase.Pages.TestBed.GCCollect"          -> "TestBed.GCCollect"

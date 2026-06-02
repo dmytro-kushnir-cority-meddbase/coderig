@@ -63,6 +63,50 @@ public sealed class FactDerivationTests
     }
 
     [Fact]
+    public async Task Class_inheritance_backend_entry_points_are_derived()
+    {
+        using var playground = await TempPlayground.CreateLegacyNet48Async();
+        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+
+        var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
+        var pageRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var classRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var entryPoints = FactEntryPointDeriver.Derive(FactProjection.EntryPointData(result), pageRules, classRules);
+
+        // classInheritance entry points = everything that isn't a page/action.
+        var backend = entryPoints
+            .Where(e => e.Kind is not ("page" or "action"))
+            .Select(e => (e.Kind, e.Route))
+            .OrderBy(e => e.Route, StringComparer.Ordinal)
+            .ToArray();
+
+        // Coverage:
+        //  * ReportGeneratorService : ServiceBase           -> base-edge closure + handlerMethods["Startup"]
+        //  * DataSyncProcess : IBackgroundProcess           -> INTERFACE-edge closure + handlerMethods["Process"]
+        //  * InvoiceWorkflowController : WorkflowControllerBase -> requireOverride: only the OVERRIDE OnSave
+        //  * ClaimsService.SubmitClaim                       -> baseTypes:["*"] gated by [OperationContract]
+        backend.ShouldBe(
+            new[]
+            {
+                ("background", "LegacyNet48Web.Background.DataSyncProcess.Process"),
+                ("workflow",   "LegacyNet48Web.Background.InvoiceWorkflowController.OnSave"),
+                ("background", "LegacyNet48Web.Background.ReportGeneratorService.Startup"),
+                ("wcf",        "LegacyNet48Web.Background.ClaimsService.SubmitClaim"),
+            }.OrderBy(e => e.Item2, StringComparer.Ordinal).ToArray());
+
+        // Negative cases that must be EXCLUDED:
+        var routes = entryPoints.Select(e => e.Route).ToArray();
+        // The abstract handler on the ROOT base type (ServiceBase.Startup) is not an entry point.
+        routes.ShouldNotContain(r => r.EndsWith("ServiceBase.Startup", StringComparison.Ordinal));
+        routes.ShouldNotContain(r => r.Contains("IBackgroundProcess", StringComparison.Ordinal));
+        // requireOverride: a plain (non-override) method matching a handler name is excluded.
+        routes.ShouldNotContain(r => r.EndsWith("InvoiceWorkflowController.HelperSave", StringComparison.Ordinal));
+        routes.ShouldNotContain(r => r.Contains("WorkflowControllerBase", StringComparison.Ordinal));
+        // WCF attribute gate: a method without [OperationContract] is excluded.
+        routes.ShouldNotContain(r => r.EndsWith("ClaimsService.Helper", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Clientpage_proxy_effects_exclude_non_proxy_ShowDialog()
     {
         using var playground = await TempPlayground.CreateLegacyNet48Async();

@@ -112,6 +112,35 @@ public sealed record FactEntryPointRule(
     IReadOnlyList<string> HandlerMethodAttributePrefixes
 );
 
+// Fact-matchable projection of a classInheritance entry-point rule (from
+// AnalysisRuleSet.ClassInheritanceEntryPoints). Backend handlers — background/service/WCF/HTTP/
+// actor/lifecycle — whose declaring type derives one of the base types (BFS over base AND
+// interface edges) and whose name matches a handler method. This is the rule family that took
+// backend projects from 0 entry points (see docs/effect-capture-validation.md, gap G1).
+//
+// Fact-layer scope vs. the Roslyn pass: routeProviderMethods / routeMethods / handlerParameterTypes
+// are NOT projected — no real rule uses them, and the fact route falls back to the declaring type's
+// FQN + ".Method" (exactly the Roslyn fallback when no route provider matches). Attribute gating is
+// supported via HandlerMethodAttributePrefixes, but only first-party attribute refs survive indexing
+// (System.* attributes like [OperationContract] are dropped by the runtime-assembly filter), so a
+// WCF rule gated on a third-party attribute matches in the fixture but not yet in the real index.
+public sealed record FactClassInheritanceRule(
+    string Id,
+    string Kind,          // "background" | "wcf" | "http" | "echoactor" | "startup" ...
+    string DefaultMethod, // "RUN" | "INVOKE" | "POST" ...
+    IReadOnlyList<string> BaseTypes,      // BFS roots; ["*"] disables the base-type gate
+    IReadOnlyList<string> HandlerMethods, // exact method names; ["*"] matches any name
+    bool RequireOverride,                 // when true, only override methods qualify
+    // Attribute DocID prefixes (e.g. "M:System.ServiceModel.OperationContractAttribute."); when set,
+    // a matched method must additionally carry one of these attributes.
+    IReadOnlyList<string> HandlerMethodAttributePrefixes,
+    // Simple (un-namespaced) parameter-type names the method must ALL carry (e.g. "ServerCallContext"
+    // for the gRPC rule). Matched against the fact Signature's parameter-type tokens by simple name —
+    // the discriminator that stops a baseTypes:["*"]/handlerMethods:["*"] rule from matching every
+    // override. Without honoring it the gRPC rule would degrade to "every override method".
+    IReadOnlyList<string> HandlerParameterTypeSimpleNames
+);
+
 // The fact-matchable projection of an effect rule — the same rule data the Roslyn pass uses
 // (AnalysisRuleSet.Effects), reduced to what stage-1 facts can match: the method name and the
 // type gates. Carries rule data into the (Analysis-agnostic) Domain deriver so effect detection

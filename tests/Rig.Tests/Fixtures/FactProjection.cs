@@ -18,11 +18,17 @@ public static class FactProjection
             .Distinct()
             .ToArray();
 
+        var interfaceEdges = result
+            .TypeRelations.Where(t => t.RelationKind == "interface")
+            .Select(t => (t.TypeSymbolId, t.RelatedSymbolId))
+            .Distinct()
+            .ToArray();
+
         var methods = result
-            .Symbols.Where(s => s.Kind == "method" && s.Name == ".ctor")
+            .Symbols.Where(s => s.Kind == "method")
             .GroupBy(m => (m.FilePath, m.Line))
             .Select(g => g.First())
-            .Select(m => (m.SymbolId, m.Name, m.ContainingSymbolId, m.Signature, m.FilePath, m.Line))
+            .Select(m => (m.SymbolId, m.Name, m.ContainingSymbolId, m.Signature, m.FilePath, m.Line, m.IsOverride))
             .ToArray();
 
         var types = result
@@ -40,7 +46,7 @@ public static class FactProjection
             .Select(r => (r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line))
             .ToArray();
 
-        return new FactEntryPointDeriver.FactEntryPointData(baseEdges, methods, types, ctorRefs!);
+        return new FactEntryPointDeriver.FactEntryPointData(baseEdges, methods, types, ctorRefs!, interfaceEdges);
     }
 
     public static IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)> Invocations(

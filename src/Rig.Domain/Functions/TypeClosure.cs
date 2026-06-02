@@ -38,6 +38,41 @@ public static class TypeClosure
         return visited;
     }
 
+    // BFS that collects only STRICT descendants of the roots: a type reached via at least one edge.
+    // Unlike Compute, the root seeds are NOT members unless they are themselves reached as a child of
+    // another root (e.g. ChamberedServiceBase is included because it derives the co-root ServiceBase,
+    // but a pure top-level root like ServiceBase is excluded). This mirrors the Roslyn classInheritance
+    // gate, which matches a type iff one of its *ancestors* is a listed base type — never the type
+    // itself — so abstract handlers declared on the root base aren't emitted as entry points.
+    public static HashSet<string> ComputeStrictDescendants(ILookup<string, string> strippedBaseEdges, IReadOnlyList<string> roots)
+    {
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var frontier = new Queue<string>();
+
+        foreach (var root in roots)
+        {
+            var normalised = root.StartsWith("T:", StringComparison.Ordinal) ? root : $"T:{root}";
+            foreach (var seed in ExpandGeneric(normalised))
+                if (visited.Add(seed))
+                    frontier.Enqueue(seed);
+        }
+
+        var strict = new HashSet<string>(StringComparer.Ordinal);
+        while (frontier.Count > 0)
+        {
+            var current = frontier.Dequeue();
+            foreach (var child in strippedBaseEdges[StripGeneric(current)])
+                foreach (var expanded in ExpandGeneric(child))
+                {
+                    strict.Add(expanded); // reached via an edge => a strict descendant of some root
+                    if (visited.Add(expanded))
+                        frontier.Enqueue(expanded);
+                }
+        }
+
+        return strict;
+    }
+
     // True when the type (or its generic-stripped form) is in the closure.
     public static bool Contains(HashSet<string> closure, string typeId) =>
         ExpandGeneric(typeId).Any(closure.Contains);

@@ -729,7 +729,8 @@ public static class CliApplication
             foreach (var e in effects)
                 output.WriteLine($"effect\t{e.Provider}\t{e.Operation}\t{e.ResourceType}\t{e.EnclosingSymbolId}\t{e.FilePath}\t{e.Line}");
             var tsvEpRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-            foreach (var ep in FactEntryPointDeriver.Derive(epData, tsvEpRules))
+            var tsvClassRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(workingDirectory, extraRules);
+            foreach (var ep in FactEntryPointDeriver.Derive(epData, tsvEpRules, tsvClassRules))
                 output.WriteLine($"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}");
             return 0;
         }
@@ -747,7 +748,8 @@ public static class CliApplication
         // --- Page + action entry points (fact-based BFS + attribute-ref detection) ---
         // epData was loaded above (shared with the effect deriver's base-type gates).
         var epRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var derivedEps = FactEntryPointDeriver.Derive(epData, epRules);
+        var classRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(workingDirectory, extraRules);
+        var derivedEps = FactEntryPointDeriver.Derive(epData, epRules, classRules);
 
         output.WriteLine();
         output.WriteLine($"Entry points re-derived from facts: {derivedEps.Count}");

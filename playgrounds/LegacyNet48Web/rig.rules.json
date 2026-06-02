@@ -33,6 +33,23 @@
         "handlerMethods": ["Process"],
         "requireOverride": false,
         "defaultMethod": "RUN"
+      },
+      {
+        "id": "playground.workflowcontroller",
+        "kind": "workflow",
+        "baseTypes": ["MedDBase.Application.Workflows.WorkflowControllerBase"],
+        "handlerMethods": ["OnSave", "OnCancel", "HelperSave"],
+        "requireOverride": true,
+        "defaultMethod": "SAVE"
+      },
+      {
+        "id": "playground.wcf",
+        "kind": "wcf",
+        "baseTypes": ["*"],
+        "handlerMethods": ["*"],
+        "requireOverride": false,
+        "handlerMethodAttributes": ["MedDBase.Wcf.OperationContractAttribute", "OperationContract"],
+        "defaultMethod": "INVOKE"
       }
     ]
   },
