@@ -32,4 +32,5 @@ namespace SD.LLBLGen.Pro.ORMSupportClasses
 
     public interface IPredicate { }
     public interface IEntityCollection2 { }
+    public interface ITransaction { }
 }

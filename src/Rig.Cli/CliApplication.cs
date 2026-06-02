@@ -670,7 +670,7 @@ public static class CliApplication
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var effects = FactEffectDeriver.Derive(invocations, effectRules, providerFilter: null, baseEdges: epData.BaseEdges);
+        var effects = FactEffectDeriver.Derive(invocations, effectRules, providerFilter: null, baseEdges: epData.BaseEdges, ctorRefs: epData.CtorRefs);
 
         // Effects whose enclosing method is reachable from the entry point.
         var hits = effects
@@ -720,7 +720,7 @@ public static class CliApplication
         // --- Effects (data-driven over facts) ---
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var effects = FactEffectDeriver.Derive(invocations, effectRules, providerFilter: null, baseEdges: epData.BaseEdges);
+        var effects = FactEffectDeriver.Derive(invocations, effectRules, providerFilter: null, baseEdges: epData.BaseEdges, ctorRefs: epData.CtorRefs);
 
         // Machine-readable mode: emit full-fidelity rows (full DocIDs/paths) for tooling that joins
         // effects/entry points against the call graph. `rig derive --format tsv`.

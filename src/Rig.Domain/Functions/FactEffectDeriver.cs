@@ -24,7 +24,8 @@ public static class FactEffectDeriver
         IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)> invocations,
         IReadOnlyList<FactEffectRule> rules,
         string? providerFilter = null,
-        IReadOnlyList<(string TypeId, string BaseId)>? baseEdges = null)
+        IReadOnlyList<(string TypeId, string BaseId)>? baseEdges = null,
+        IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)>? ctorRefs = null)
     {
         // Precompute a base-type closure per distinct DeclaringTypeBaseTypes set (e.g. ProxyBase).
         // Without base edges, base-gated rules match nothing (the generated proxies aren't indexed).
@@ -45,6 +46,10 @@ public static class FactEffectDeriver
             return closure;
         }
 
+        // Invocation rules are the default; constructor rules (MatchConstructor) match ctor refs.
+        var invocationRules = rules.Where(r => !r.MatchConstructor).ToArray();
+        var constructorRules = rules.Where(r => r.MatchConstructor).ToArray();
+
         var results = new List<DerivedEffect>();
         foreach (var inv in invocations)
         {
@@ -53,7 +58,7 @@ public static class FactEffectDeriver
                 continue;
             var (declaringType, methodName) = parsed.Value;
 
-            foreach (var rule in rules)
+            foreach (var rule in invocationRules)
             {
                 if (providerFilter is not null && !string.Equals(rule.Provider, providerFilter, StringComparison.OrdinalIgnoreCase))
                     continue;
@@ -66,6 +71,34 @@ public static class FactEffectDeriver
                 break; // first matching rule wins
             }
         }
+
+        // Constructor-matched effects (G5): `new XxxEntity(pk[, txn])` is an llblgen fetch. The
+        // constructed type (parsed from the ctor DocID) is gated like a declaring type; the argument
+        // count from the DocID signature separates the fetch ctor from the empty `new XxxEntity()`.
+        if (constructorRules.Length > 0 && ctorRefs is not null)
+        {
+            foreach (var ctor in ctorRefs)
+            {
+                var parsed = ParseConstructor(ctor.Target);
+                if (parsed is null)
+                    continue;
+                var (constructedType, argCount) = parsed.Value;
+
+                foreach (var rule in constructorRules)
+                {
+                    if (providerFilter is not null && !string.Equals(rule.Provider, providerFilter, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (argCount < rule.MinArguments)
+                        continue;
+                    if (!TypeGateMatches(rule, constructedType, receiverType: null, ClosureFor(rule)))
+                        continue;
+
+                    results.Add(new DerivedEffect(rule.Provider, rule.Operation, constructedType, ctor.Enclosing, ctor.FilePath, ctor.Line));
+                    break;
+                }
+            }
+        }
+
         return results;
     }
 
@@ -165,6 +198,46 @@ public static class FactEffectDeriver
         if (string.IsNullOrEmpty(methodName))
             return null;
         return (declaring, methodName);
+    }
+
+    // "M:Ns.InvoiceEntity.#ctor(System.Int32,SD....ITransaction)" -> ("Ns.InvoiceEntity", 2).
+    // "M:Ns.InvoiceEntity.#ctor" -> ("Ns.InvoiceEntity", 0). The constructed type is the segment
+    // before ".#ctor"; the argument count is the number of top-level (brace-depth-0) parameters, so
+    // generic args like List{System.Int32} don't inflate the count.
+    private static (string ConstructedType, int ArgCount)? ParseConstructor(string docId)
+    {
+        if (!docId.StartsWith("M:", StringComparison.Ordinal))
+            return null;
+        var body = docId.Substring(2);
+        var paren = body.IndexOf('(');
+        var head = paren >= 0 ? body.Substring(0, paren) : body;
+        // head ends with ".#ctor" (instance) or ".#cctor" (static) — strip the ctor segment.
+        var ctorMarker = head.LastIndexOf(".#", StringComparison.Ordinal);
+        if (ctorMarker < 0)
+            return null;
+        var constructedType = StripTypeArityMarkers(head.Substring(0, ctorMarker));
+
+        var argCount = 0;
+        if (paren >= 0)
+        {
+            var close = body.LastIndexOf(')');
+            if (close > paren)
+            {
+                var inner = body.Substring(paren + 1, close - paren - 1);
+                if (inner.Length > 0)
+                {
+                    argCount = 1;
+                    var depth = 0;
+                    foreach (var c in inner)
+                    {
+                        if (c == '{' || c == '<' || c == '(') depth++;
+                        else if (c == '}' || c == '>' || c == ')') depth--;
+                        else if (c == ',' && depth == 0) argCount++;
+                    }
+                }
+            }
+        }
+        return (constructedType, argCount);
     }
 
     // Removes backtick-arity suffixes from each dot-separated segment of a type name.

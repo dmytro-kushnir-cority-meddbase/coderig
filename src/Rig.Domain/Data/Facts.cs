@@ -168,4 +168,11 @@ public sealed record FactEffectRule(
     // clientpage_proxy effect iff its declaring type derives MedDBase.Pages.ProxyBase (the base of
     // every generated <Page>Proxy). Requires the deriver to be given base edges + the generated
     // proxy source to be indexed. When set, it is authoritative (AND-ed with any suffix gate).
-    IReadOnlyList<string>? DeclaringTypeBaseTypes = null);
+    IReadOnlyList<string>? DeclaringTypeBaseTypes = null,
+    // When true, this rule matches CONSTRUCTOR references (RefKind="ctor") instead of invocations —
+    // for llblgen entity-constructor fetches: `new XxxEntity(pk[, txn])` is a read, but it is a ctor
+    // call, not a Fetch() invocation, so the method-name rules can't see it (gap G5). The type gates
+    // (declaringTypes namespace / declaringTypeBaseTypes EntityBase2) apply to the CONSTRUCTED type;
+    // MinArguments distinguishes the fetch ctor (pk arg) from the empty `new XxxEntity()`.
+    bool MatchConstructor = false,
+    int MinArguments = 0);

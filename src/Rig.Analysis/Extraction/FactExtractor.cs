@@ -62,6 +62,17 @@ internal static class FactExtractor
             AddReference(references, target, refKind, EnclosingSymbolId(name, model), tree, name);
         }
 
+        // --- Object creations -> ctor refs ---
+        // GetSymbolInfo on a type *name* resolves to the type (recorded as typeUse above), never the
+        // constructor — so `new XxxEntity(pk)` would otherwise carry no constructor/argument fact.
+        // Resolve the invoked constructor here so ctor-matched effect rules (the llblgen entity-ctor
+        // fetch, gap G5) can see the constructed type and its argument count from the ctor DocID.
+        foreach (var creation in root.DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>())
+        {
+            if (model.GetSymbolInfo(creation).Symbol is IMethodSymbol { MethodKind: MethodKind.Constructor } ctor)
+                AddReference(references, ctor, "ctor", EnclosingSymbolId(creation, model), tree, creation);
+        }
+
         return new FactExtractionResult(symbols, references, relations);
     }
 

@@ -246,7 +246,12 @@ internal sealed record EffectRule(
     // Optional base-type gate: the declaring type must derive (BFS over base edges) one of these
     // base types. The faithful gate for generated navigation proxies — a Show/ShowDialog/Redirect
     // call is a clientpage_proxy effect iff its declaring type derives MedDBase.Pages.ProxyBase.
-    IReadOnlyList<string>? DeclaringTypeBaseTypes = null
+    IReadOnlyList<string>? DeclaringTypeBaseTypes = null,
+    // When true, match CONSTRUCTOR refs (new XxxEntity(pk[, txn])) rather than invocations — the
+    // llblgen entity-ctor fetch (gap G5). Type gates apply to the constructed type; MinArguments
+    // separates the fetch ctor from the empty `new XxxEntity()`.
+    bool MatchConstructor = false,
+    int MinArguments = 0
 )
 {
     public bool Matches(string methodName)

@@ -69,6 +69,18 @@
     },
     {
       "provider": "llblgen",
+      "operation": "fetch",
+      "methods": [],
+      "declaringTypeBaseTypes": ["SD.LLBLGen.Pro.ORMSupportClasses.EntityBase2"],
+      "matchConstructor": true,
+      "minArguments": 1,
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "llblgen_entity_constructor_fetch"
+    },
+    {
+      "provider": "llblgen",
       "operation": "save",
       "methods": ["Save", "SaveAsync", "SaveEntity", "SaveEntityAsync"],
       "declaringTypes": [

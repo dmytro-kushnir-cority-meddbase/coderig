@@ -127,6 +127,27 @@ Still open in G4: HTTP/PDF print, background-queue dispatch, and OpenAI/LLM
 (`SmartLetter.GetSmartLetterResponse` — not in the current mine scope, 0 symbols). Their real rules
 need the actual client type names, so they wait on the broadened re-extraction (task #6).
 
+## G5 resolution — llblgen entity-constructor fetch reads (Jun 2026)
+
+`new XxxEntity(pk[, txn])` is an llblgen fetch (read), but it's a constructor call. Two gaps fixed:
+1. **Extraction**: `GetSymbolInfo` on a type *name* resolves to the type (recorded as `typeUse`),
+   never the constructor — so object creations carried no constructor/argument fact. `FactExtractor`
+   now has an object-creation pass that resolves the invoked constructor and emits a `ctor` ref with
+   the constructor DocID (carrying the argument types). **This is a stage-1 fact change → needs
+   re-extraction to take effect on the real index** (the fixture analyzes fresh, so its test works now).
+2. **Deriver/rule**: `FactEffectRule` gained `MatchConstructor` + `MinArguments`; `FactEffectDeriver`
+   now matches `ctor` refs for such rules, gating the CONSTRUCTED type (parsed from the ctor DocID,
+   brace-depth-aware arg count) by the usual type gates. The fixture rule `llblgen`/`fetch`
+   (declaringTypeBaseTypes `EntityBase2`, `matchConstructor`, `minArguments:1`) derives exactly the
+   two with-argument `new InvoiceEntity(pk)` / `(pk, txn)` fetches and excludes the empty
+   `new InvoiceEntity { ... }` (`Llblgen_entity_constructor_fetches_are_derived`).
+
+Real meddbase rule deferred to the re-extraction (task #6): the entity types live in MMSEntityClasses
+(outside current mine scope, so the `EntityBase2` base edge isn't indexed) AND the current DB predates
+the object-creation ctor extraction. After re-mining, add a `matchConstructor` llblgen fetch rule
+gated on the entity namespace (or `EntityBase2`) and validate against the `new XxxEntity(pk, txn)`
+sites (e.g. `new InvoiceEntity(controller.PkInvoice, transaction)` at Master_HealthcodeServiceImpl.cs:1277).
+
 ## Distinction that matters
 Detector *logic* is largely sound; captured effects are real and cross-project stitching works.
 The dominant misses are **EP coverage** (G1) and **mine scope** (G8), then **rule additions**

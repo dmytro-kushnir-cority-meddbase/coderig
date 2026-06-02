@@ -156,6 +156,32 @@ public sealed class FactDerivationTests
     }
 
     [Fact]
+    public async Task Llblgen_entity_constructor_fetches_are_derived()
+    {
+        using var playground = await TempPlayground.CreateLegacyNet48Async();
+        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+
+        var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
+        var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var epData = FactProjection.EntryPointData(result);
+        var effects = FactEffectDeriver.Derive(
+            FactProjection.Invocations(result), rules, providerFilter: null,
+            baseEdges: epData.BaseEdges, ctorRefs: epData.CtorRefs);
+
+        // G5: new InvoiceEntity(pk) and new InvoiceEntity(pk, txn) are llblgen fetches; the empty
+        // `new InvoiceEntity { ... }` ctor is NOT. ResourceType for a ctor-fetch is the entity type.
+        var entityFetches = effects
+            .Where(e => e.Provider == "llblgen" && e.Operation == "fetch"
+                && e.ResourceType.Contains("InvoiceEntity", StringComparison.Ordinal))
+            .ToArray();
+
+        // Exactly the two with-argument constructors in EntityFetcher.Load — the empty ctors
+        // (object initializers in EntityFetcher / WorkflowHandlers / ReferralPane) are excluded.
+        entityFetches.Length.ShouldBe(2);
+        entityFetches.ShouldAllBe(e => e.EnclosingSymbolId!.Contains("EntityFetcher.Load", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Clientpage_proxy_effects_exclude_non_proxy_ShowDialog()
     {
         using var playground = await TempPlayground.CreateLegacyNet48Async();

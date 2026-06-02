@@ -31,6 +31,8 @@ public static class FactEffectRuleProvider
             rule.DeclaringTypes ?? [],
             rule.ReceiverTypes ?? [],
             rule.DeclaringTypeNameEndsWith,
-            rule.DeclaringTypeBaseTypes);
+            rule.DeclaringTypeBaseTypes,
+            rule.MatchConstructor,
+            rule.MinArguments);
     }
 }
