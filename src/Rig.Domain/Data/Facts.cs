@@ -125,4 +125,10 @@ public sealed record FactEffectRule(
     // Optional suffix gate: the declaring type's simple name (last segment) must end with one
     // of these suffixes. Used to narrow a broad namespace-prefix gate — e.g. "Proxy" narrows
     // declaringTypes:["MedDBase.Pages"] so it matches XxxProxy.Show() but not MessageBox.Show().
-    IReadOnlyList<string>? DeclaringTypeNameEndsWith = null);
+    IReadOnlyList<string>? DeclaringTypeNameEndsWith = null,
+    // Optional base-type gate: the declaring type must be a subclass (BFS over base edges) of one
+    // of these base types. The faithful gate for generated navigation proxies — a call is a
+    // clientpage_proxy effect iff its declaring type derives MedDBase.Pages.ProxyBase (the base of
+    // every generated <Page>Proxy). Requires the deriver to be given base edges + the generated
+    // proxy source to be indexed. When set, it is authoritative (AND-ed with any suffix gate).
+    IReadOnlyList<string>? DeclaringTypeBaseTypes = null);

@@ -357,6 +357,25 @@ internal static class SolutionSourceLoader
             sources.Add(new SourceModel(project.Name, document.FilePath, tree, root, semanticModel));
         }
 
+        // Also index SOURCE-GENERATED documents (Roslyn source generators wired as analyzer refs,
+        // e.g. RequestResponseProxyGenerator emitting <Page>Proxy : ProxyBase). These are not in
+        // project.Documents, so without this their types (and the proxy base-type facts the
+        // clientpage_proxy effect gate relies on) would be missing.
+        foreach (var generated in await project.GetSourceGeneratedDocumentsAsync(cancellationToken))
+        {
+            var tree = await generated.GetSyntaxTreeAsync(cancellationToken);
+            var root = tree is null ? null : await tree.GetRootAsync(cancellationToken);
+            var semanticModel = await generated.GetSemanticModelAsync(cancellationToken);
+            if (tree is null || root is null || semanticModel is null) continue;
+
+            // Synthetic, stable path for the generated document (HintName); used only as the fact
+            // FilePath. Marked as a generated, indexed source file for provenance.
+            var generatedPath = generated.FilePath ?? $"<generated>/{project.Name}/{generated.HintName}";
+            sourceFiles.Add(new SourceFileInfo(
+                project.Name, generatedPath, "indexed", "high", "generated", "source_generator", ""));
+            sources.Add(new SourceModel(project.Name, generatedPath, tree, root, semanticModel));
+        }
+
         return new ProjectSourceLoadResult(sourceFiles, sources);
     }
 

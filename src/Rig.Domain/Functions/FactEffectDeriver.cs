@@ -18,11 +18,33 @@ namespace Rig.Domain.Functions;
 // receiver type (slice 2 in the refactor doc).
 public static class FactEffectDeriver
 {
+    private static readonly HashSet<string> EmptyClosure = new(StringComparer.Ordinal);
+
     public static IReadOnlyList<DerivedEffect> Derive(
         IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)> invocations,
         IReadOnlyList<FactEffectRule> rules,
-        string? providerFilter = null)
+        string? providerFilter = null,
+        IReadOnlyList<(string TypeId, string BaseId)>? baseEdges = null)
     {
+        // Precompute a base-type closure per distinct DeclaringTypeBaseTypes set (e.g. ProxyBase).
+        // Without base edges, base-gated rules match nothing (the generated proxies aren't indexed).
+        var baseEdgeLookup = baseEdges is null ? null : TypeClosure.BuildBaseEdgeLookup(baseEdges);
+        var closureCache = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        HashSet<string>? ClosureFor(FactEffectRule rule)
+        {
+            if (rule.DeclaringTypeBaseTypes is not { Count: > 0 } roots)
+                return null;
+            if (baseEdgeLookup is null)
+                return EmptyClosure;
+            var key = string.Join("|", roots);
+            if (!closureCache.TryGetValue(key, out var closure))
+            {
+                closure = TypeClosure.Compute(baseEdgeLookup, roots);
+                closureCache[key] = closure;
+            }
+            return closure;
+        }
+
         var results = new List<DerivedEffect>();
         foreach (var inv in invocations)
         {
@@ -37,7 +59,7 @@ public static class FactEffectDeriver
                     continue;
                 if (!rule.Methods.Contains(methodName, StringComparer.Ordinal))
                     continue;
-                if (!TypeGateMatches(rule, declaringType, receiverType: null))
+                if (!TypeGateMatches(rule, declaringType, receiverType: null, ClosureFor(rule)))
                     continue;
 
                 results.Add(new DerivedEffect(rule.Provider, rule.Operation, declaringType, inv.Enclosing, inv.FilePath, inv.Line));
@@ -52,8 +74,19 @@ public static class FactEffectDeriver
     // must match a receiverTypes entry. When declaringTypeNameEndsWith is also set, the declaring
     // type's simple name (last segment) must additionally end with one of the given suffixes —
     // this narrows a broad namespace-prefix gate without hardcoding a type list.
-    private static bool TypeGateMatches(FactEffectRule rule, string declaringType, string? receiverType)
+    private static bool TypeGateMatches(
+        FactEffectRule rule, string declaringType, string? receiverType, HashSet<string>? declaringBaseClosure)
     {
+        // Base-type gate (e.g. ProxyBase): when set it is authoritative — the declaring type must
+        // be in the base-type closure, AND any simple-name suffix gate must also hold.
+        if (rule.DeclaringTypeBaseTypes is { Count: > 0 })
+        {
+            if (declaringBaseClosure is null
+                || !TypeClosure.Contains(declaringBaseClosure, "T:" + declaringType))
+                return false;
+            return DeclaringTypeNameSuffixMatches(rule, declaringType);
+        }
+
         var hasDeclaring = rule.DeclaringTypes.Count > 0;
         var hasReceiver = rule.ReceiverTypes.Count > 0;
         if (!hasDeclaring && !hasReceiver)

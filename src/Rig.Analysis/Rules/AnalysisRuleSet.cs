@@ -242,7 +242,11 @@ internal sealed record EffectRule(
     // Optional suffix gate on the declaring type's simple name. Narrows a broad namespace-prefix
     // gate: e.g. declaringTypeNameEndsWith:["Proxy"] + declaringTypes:["MedDBase.Pages"] matches
     // XxxProxy.Show() but not MessageBox.Show().
-    IReadOnlyList<string>? DeclaringTypeNameEndsWith = null
+    IReadOnlyList<string>? DeclaringTypeNameEndsWith = null,
+    // Optional base-type gate: the declaring type must derive (BFS over base edges) one of these
+    // base types. The faithful gate for generated navigation proxies — a Show/ShowDialog/Redirect
+    // call is a clientpage_proxy effect iff its declaring type derives MedDBase.Pages.ProxyBase.
+    IReadOnlyList<string>? DeclaringTypeBaseTypes = null
 )
 {
     public bool Matches(string methodName)

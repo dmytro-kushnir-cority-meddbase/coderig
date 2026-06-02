@@ -44,6 +44,7 @@ public static class CliApplication
             "symbols" => await RunSymbolsAsync(args, output, error, workingDirectory),
             "refs" => await RunRefsAsync(args, output, error, workingDirectory),
             "path" => await RunPathAsync(args, output, error, workingDirectory),
+            "reaches" => await RunReachesAsync(args, output, error, workingDirectory),
             "derive" => await RunDeriveAsync(args, output, error, workingDirectory),
             "files" => await RunFilesAsync(args, output, error, workingDirectory),
             "profile" => await RunProfileAsync(args, output, error, workingDirectory),
@@ -85,6 +86,7 @@ public static class CliApplication
         output.WriteLine("  rig symbols <pattern> [--kind <k>] [--limit <n>]");
         output.WriteLine("  rig refs <pattern> [--first-party] [--kind <refkind>] [--limit <n>]");
         output.WriteLine("  rig path <fromPattern> <toPattern>");
+        output.WriteLine("  rig reaches <fromPattern> [--rules <path>...] [--maxdepth <n>] [--format tsv]   (effects reachable from an entry point)");
         output.WriteLine("  rig derive [--rules <path>...] [--limit <n>]   (stage-2 pass over facts: effects + handoffs)");
         output.WriteLine("  rig files --skipped");
         output.WriteLine("  rig profile validate");
@@ -642,6 +644,59 @@ public static class CliApplication
         return 0;
     }
 
+    // rig reaches <fromPattern> [--rules <path>...] [--maxdepth <n>] [--format tsv]
+    // Reachability over the SAME fact call graph that powers `rig path` (incl. interface->impl
+    // dispatch), intersected with the derived effects: "from this entry point, which captured
+    // effects are reachable, and at what depth". Validates effect capture along real call paths.
+    private static async Task<int> RunReachesAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
+    {
+        if (args.Length < 2)
+        {
+            error.WriteLine("Usage: rig reaches <fromPattern> [--rules <path>...] [--maxdepth <n>] [--format tsv]");
+            return 2;
+        }
+        var fromPattern = args[1];
+        var maxDepth = int.TryParse(GetOption(args, "--maxdepth"), out var d) ? d : 12;
+        var tsv = string.Equals(GetOption(args, "--format"), "tsv", StringComparison.OrdinalIgnoreCase);
+        var extraRules = new List<string>();
+        for (var i = 0; i < args.Length; i++)
+            if (args[i] == "--rules" && i + 1 < args.Length) { extraRules.Add(Path.GetFullPath(args[i + 1])); i++; }
+
+        await using var context = new RigDbContext(Path.Combine(workingDirectory, ".rig", "rig.db"));
+
+        var graph = await Reads.LoadFactGraphAsync(context);
+        var reachable = FactPathFinder.Reaches(graph, fromPattern, maxDepth);
+
+        var epData = await Reads.LoadFactEntryPointDataAsync(context);
+        var invocations = await Reads.LoadInvocationRefsAsync(context);
+        var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var effects = FactEffectDeriver.Derive(invocations, effectRules, providerFilter: null, baseEdges: epData.BaseEdges);
+
+        // Effects whose enclosing method is reachable from the entry point.
+        var hits = effects
+            .Where(e => e.EnclosingSymbolId is not null && reachable.ContainsKey(e.EnclosingSymbolId))
+            .Select(e => (Depth: reachable[e.EnclosingSymbolId!], Effect: e))
+            .OrderBy(h => h.Depth)
+            .ToList();
+
+        if (tsv)
+        {
+            foreach (var h in hits)
+                output.WriteLine($"{h.Depth}\t{h.Effect.Provider}\t{h.Effect.Operation}\t{h.Effect.ResourceType}\t{h.Effect.EnclosingSymbolId}\t{ShortenPath(h.Effect.FilePath)}:{h.Effect.Line}");
+            return 0;
+        }
+
+        output.WriteLine($"From: {fromPattern}");
+        output.WriteLine($"Reachable methods (<= depth {maxDepth}): {reachable.Count}");
+        output.WriteLine($"Effects captured on reachable methods: {hits.Count}");
+        foreach (var g in hits.GroupBy(h => (h.Effect.Provider, h.Effect.Operation)).OrderByDescending(g => g.Count()))
+            output.WriteLine($"  {g.Count(),4}  {g.Key.Provider} {g.Key.Operation}");
+        output.WriteLine("--- nearest effects (depth  provider op  resource  <- method) ---");
+        foreach (var h in hits.Take(40))
+            output.WriteLine($"  d{h.Depth}  {h.Effect.Provider} {h.Effect.Operation}  {ShortName(h.Effect.ResourceType)}  <- {ShortName(h.Effect.EnclosingSymbolId)}");
+        return 0;
+    }
+
     // rig derive [--rules <path>...] [--limit <n>] — the stage-2 pass over facts (no Roslyn):
     // re-derives effects, page/action entry points, and delegate/method-group handoff entry
     // points from the reference index in a single command, one DB open, one rule load.
@@ -658,10 +713,26 @@ public static class CliApplication
         var storeDirectory = Path.Combine(workingDirectory, ".rig");
         await using var context = new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
 
+        // Entry-point fact data is loaded up front: its base edges also feed the effect deriver's
+        // base-type gates (e.g. clientpage_proxy = declaring type derives MedDBase.Pages.ProxyBase).
+        var epData = await Reads.LoadFactEntryPointDataAsync(context);
+
         // --- Effects (data-driven over facts) ---
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var effects = FactEffectDeriver.Derive(invocations, effectRules);
+        var effects = FactEffectDeriver.Derive(invocations, effectRules, providerFilter: null, baseEdges: epData.BaseEdges);
+
+        // Machine-readable mode: emit full-fidelity rows (full DocIDs/paths) for tooling that joins
+        // effects/entry points against the call graph. `rig derive --format tsv`.
+        if (string.Equals(GetOption(args, "--format"), "tsv", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var e in effects)
+                output.WriteLine($"effect\t{e.Provider}\t{e.Operation}\t{e.ResourceType}\t{e.EnclosingSymbolId}\t{e.FilePath}\t{e.Line}");
+            var tsvEpRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+            foreach (var ep in FactEntryPointDeriver.Derive(epData, tsvEpRules))
+                output.WriteLine($"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}");
+            return 0;
+        }
 
         output.WriteLine($"Effects re-derived from facts: {effects.Count}");
         foreach (var group in effects
@@ -674,7 +745,7 @@ public static class CliApplication
         }
 
         // --- Page + action entry points (fact-based BFS + attribute-ref detection) ---
-        var epData = await Reads.LoadFactEntryPointDataAsync(context);
+        // epData was loaded above (shared with the effect deriver's base-type gates).
         var epRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         var derivedEps = FactEntryPointDeriver.Derive(epData, epRules);
 

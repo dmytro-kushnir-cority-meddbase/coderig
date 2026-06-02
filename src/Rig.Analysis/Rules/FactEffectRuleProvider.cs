@@ -30,6 +30,7 @@ public static class FactEffectRuleProvider
             rule.Methods,
             rule.DeclaringTypes ?? [],
             rule.ReceiverTypes ?? [],
-            rule.DeclaringTypeNameEndsWith);
+            rule.DeclaringTypeNameEndsWith,
+            rule.DeclaringTypeBaseTypes);
     }
 }

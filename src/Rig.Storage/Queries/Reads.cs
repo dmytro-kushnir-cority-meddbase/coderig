@@ -692,12 +692,13 @@ public static class Reads
 
         var typeRows = await context.SymbolFacts
             .Where(s => s.Kind == "type")
-            .Select(s => new { s.SymbolId, s.Namespace, s.FilePath, s.Line })
+            .Select(s => new { s.SymbolId, s.Namespace, s.FilePath, s.Line, s.Modifiers })
             .ToArrayAsync(cancellationToken);
         var types = typeRows
             .GroupBy(t => t.SymbolId)
             .Select(g => g.First())
-            .Select(t => (t.SymbolId, t.Namespace, t.FilePath, t.Line))
+            .Select(t => (t.SymbolId, t.Namespace, t.FilePath, t.Line,
+                IsAbstract: t.Modifiers.Split(' ').Contains("abstract")))
             .ToArray();
 
         // ctor refs with RefKind="ctor" capture attribute applications (e.g. [ClientAction])

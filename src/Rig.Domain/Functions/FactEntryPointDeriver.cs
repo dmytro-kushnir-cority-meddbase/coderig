@@ -34,8 +34,9 @@ public static class FactEntryPointDeriver
         IReadOnlyList<(string TypeId, string BaseId)> BaseEdges,
         // method symbols (kind="method") — we use only .ctor rows for page EPs
         IReadOnlyList<(string SymbolId, string Name, string? ContainingSymbolId, string Signature, string FilePath, int Line)> Methods,
-        // type symbols (kind="type") — for page EPs where the class has no explicit ctor
-        IReadOnlyList<(string SymbolId, string Namespace, string FilePath, int Line)> Types,
+        // type symbols (kind="type") — for page EPs where the class has no explicit ctor.
+        // IsAbstract gates out base/abstract pages, which are never navigable entry points.
+        IReadOnlyList<(string SymbolId, string Namespace, string FilePath, int Line, bool IsAbstract)> Types,
         // ctor reference_facts: ctor calls to attribute constructors
         IReadOnlyList<(string TargetSymbolId, string? EnclosingSymbolId, string FilePath, int Line)> CtorRefs
     );
@@ -44,8 +45,9 @@ public static class FactEntryPointDeriver
         FactEntryPointData data,
         IReadOnlyList<FactEntryPointRule> rules)
     {
-        // Pre-index for performance
-        var baseEdges = data.BaseEdges.ToLookup(e => e.BaseId, e => e.TypeId, StringComparer.Ordinal);
+        // Pre-index for performance. The base-edge lookup is keyed by the generic-stripped base so
+        // the BFS can cross generic bases (see TypeClosure).
+        var baseEdges = TypeClosure.BuildBaseEdgeLookup(data.BaseEdges);
         var ctorsByContaining = data.Methods
             .Where(m => m.Name == ".ctor")
             .ToLookup(m => m.ContainingSymbolId ?? "", StringComparer.Ordinal);
@@ -59,7 +61,7 @@ public static class FactEntryPointDeriver
             if (rule.HandlerMethodAttributePrefixes.Count > 0)
             {
                 // Pattern B: action entry points via attribute ctor refs
-                DeriveActions(data.CtorRefs, rule, results, seen);
+                DeriveActions(data.CtorRefs, baseEdges, rule, results, seen);
             }
             else
             {
@@ -76,15 +78,19 @@ public static class FactEntryPointDeriver
     private static void DerivePages(
         ILookup<string, string> baseEdges,
         ILookup<string, (string SymbolId, string Name, string? ContainingSymbolId, string Signature, string FilePath, int Line)> ctorsByContaining,
-        Dictionary<string, (string SymbolId, string Namespace, string FilePath, int Line)> typeById,
+        Dictionary<string, (string SymbolId, string Namespace, string FilePath, int Line, bool IsAbstract)> typeById,
         FactEntryPointRule rule,
         List<DerivedEntryPoint> results,
         HashSet<(string, int)> seen)
     {
-        var closure = BfsClosure(baseEdges, rule.BaseTypes);
+        var closure = TypeClosure.Compute(baseEdges, rule.BaseTypes);
 
         foreach (var typeId in closure)
         {
+            // Abstract/base pages are never navigable — skip them (they only exist to be subclassed).
+            if (typeById.TryGetValue(typeId, out var typeInfo) && typeInfo.IsAbstract)
+                continue;
+
             // Route = strip the namespace prefix, convert remaining '.' to '/'
             // e.g. T:MedDBase.Pages.Accounts.MakePaymentComponents.Create2
             //   -> strip "T:" prefix -> strip "MedDBase.Pages." -> "Accounts.MakePaymentComponents.Create2"
@@ -120,67 +126,37 @@ public static class FactEntryPointDeriver
         }
     }
 
-    // BFS over the base-type edges, collecting all descendant TypeSymbolIds.
-    // Handles generic instantiations by also querying on the stripped (non-generic) prefix.
-    // Rule base-type names like "MMS.Web.UI.ClientPage" are normalised to their DocID form
-    // "T:MMS.Web.UI.ClientPage" so they match the keys in type_relation_facts.
-    private static HashSet<string> BfsClosure(ILookup<string, string> baseEdges, IReadOnlyList<string> roots)
-    {
-        var visited = new HashSet<string>(StringComparer.Ordinal);
-        var frontier = new Queue<string>();
-
-        foreach (var root in roots)
-        {
-            // Normalise: add "T:" DocID prefix if not already present
-            var normalised = root.StartsWith("T:", StringComparison.Ordinal) ? root : $"T:{root}";
-            // Seed both the exact root and its stripped form (handles T:Foo`1 vs T:Foo{A})
-            foreach (var seed in ExpandGeneric(normalised))
-            {
-                if (visited.Add(seed))
-                    frontier.Enqueue(seed);
-            }
-        }
-
-        while (frontier.Count > 0)
-        {
-            var current = frontier.Dequeue();
-            foreach (var child in baseEdges[current])
-            {
-                foreach (var expanded in ExpandGeneric(child))
-                {
-                    if (visited.Add(expanded))
-                        frontier.Enqueue(expanded);
-                }
-            }
-        }
-
-        return visited;
-    }
-
-    // Given a DocID like T:Foo.Bar{A,B} or T:Foo.Bar`2, returns both the original and
-    // the bare prefix T:Foo.Bar (so that base-edge lookups can match both the instantiated
-    // and the open-generic forms stored in type_relation_facts).
-    private static IEnumerable<string> ExpandGeneric(string typeId)
-    {
-        yield return typeId;
-        var brace = typeId.IndexOf('{');
-        if (brace > 0)
-        {
-            yield return typeId.Substring(0, brace);
-            yield break;
-        }
-        var backtick = typeId.IndexOf('`');
-        if (backtick > 0)
-            yield return typeId.Substring(0, backtick);
-    }
-
     // "MedDBase.Pages.Accounts.MakePaymentComponents.Create2" + prefix "MedDBase.Pages."
     //   -> "Accounts/MakePaymentComponents/Create2"
     private static string? BuildTypeRoute(string fqn, string namespacePrefix)
     {
         if (!fqn.StartsWith(namespacePrefix, StringComparison.Ordinal))
             return null;
-        return fqn.Substring(namespacePrefix.Length).Replace('.', '/');
+        return StripArityMarkers(fqn.Substring(namespacePrefix.Length)).Replace('.', '/');
+    }
+
+    // Removes generic-arity markers (`1, `2, ...) from anywhere in a DocID-derived name so display
+    // routes read cleanly (WorkflowPaneBase`1.Save -> WorkflowPaneBase.Save). Unlike a single
+    // IndexOf('`')+truncate, this preserves everything AFTER the arity (notably the method name).
+    private static string StripArityMarkers(string text)
+    {
+        var backtick = text.IndexOf('`');
+        if (backtick < 0)
+            return text;
+        var sb = new System.Text.StringBuilder(text.Length);
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] == '`')
+            {
+                i++; // skip the backtick
+                while (i < text.Length && char.IsDigit(text[i]))
+                    i++; // skip the arity digits
+                i--; // the for-loop will re-increment
+                continue;
+            }
+            sb.Append(text[i]);
+        }
+        return sb.ToString();
     }
 
     // Build the page entry-point DisplayName from the ctor signature.
@@ -198,16 +174,27 @@ public static class FactEntryPointDeriver
 
     private static void DeriveActions(
         IReadOnlyList<(string TargetSymbolId, string? EnclosingSymbolId, string FilePath, int Line)> ctorRefs,
+        ILookup<string, string> baseEdges,
         FactEntryPointRule rule,
         List<DerivedEntryPoint> results,
         HashSet<(string, int)> seen)
     {
+        // An attribute-decorated method is an action entry point ONLY when its declaring type is a
+        // subtype of one of the rule's base types (e.g. ClientPage). Components/widgets that carry
+        // the same attribute but inherit a different base (e.g. ClientControl) are NOT entry points —
+        // this gate is what the Roslyn pass enforces and the fact deriver previously skipped.
+        var closure = TypeClosure.Compute(baseEdges, rule.BaseTypes);
+
         foreach (var r in ctorRefs)
         {
             if (r.EnclosingSymbolId is null)
                 continue;
             if (!rule.HandlerMethodAttributePrefixes.Any(prefix =>
                     r.TargetSymbolId.StartsWith(prefix, StringComparison.Ordinal)))
+                continue;
+
+            var declaringTypeId = DeclaringTypeId(r.EnclosingSymbolId);
+            if (declaringTypeId is null || !TypeClosure.Contains(closure, declaringTypeId))
                 continue;
 
             if (!seen.Add((r.FilePath, r.Line)))
@@ -234,10 +221,9 @@ public static class FactEntryPointDeriver
         var paren = body.IndexOf('(');
         if (paren >= 0)
             body = body.Substring(0, paren);
-        // Strip generic arity markers
-        var backtick = body.IndexOf('`');
-        if (backtick >= 0)
-            body = body.Substring(0, backtick);
+        // Strip generic arity markers in place (WorkflowPaneBase`1.Save -> WorkflowPaneBase.Save) —
+        // truncating at the first '`' would wrongly drop the method name for generic declaring types.
+        body = StripArityMarkers(body);
 
         // body = "MedDBase.Pages.Accounts.AdvancedPayerDialog.HandleEvent"
         // Strip namespace prefix "MedDBase.Pages."
@@ -255,5 +241,25 @@ public static class FactEntryPointDeriver
         var classPath = body.Substring(0, lastDot).Replace('.', '/');
         var methodName = body.Substring(lastDot); // includes the '.'
         return classPath + methodName; // e.g. "Accounts/AdvancedPayerDialog.HandleEvent"
+    }
+
+    // "M:MedDBase.Pages.Accounts.AdvancedPayerDialog.HandleEvent(int)" -> "T:MedDBase.Pages.Accounts.AdvancedPayerDialog"
+    // Strips the M: prefix, the parameter list, the method's generic arity, and the trailing
+    // ".Method" segment, then re-prefixes "T:" to form the declaring type's DocID.
+    private static string? DeclaringTypeId(string enclosingSymbolId)
+    {
+        if (!enclosingSymbolId.StartsWith("M:", StringComparison.Ordinal))
+            return null;
+        var body = enclosingSymbolId.Substring(2);
+        var paren = body.IndexOf('(');
+        if (paren >= 0)
+            body = body.Substring(0, paren);
+        // Do NOT strip the generic arity globally: a generic *type* keeps its `n (e.g.
+        // ConfigurationPaneBase`1.Save) and ClosureContains normalises it. Only the segment after
+        // the last '.' is the method name, which we drop to leave the declaring type.
+        var lastDot = body.LastIndexOf('.');
+        if (lastDot <= 0)
+            return null; // no declaring type segment
+        return "T:" + body.Substring(0, lastDot);
     }
 }

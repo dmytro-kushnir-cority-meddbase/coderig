@@ -7,6 +7,14 @@
         "baseTypes": ["MMS.Web.UI.ClientPage"],
         "namespacePrefix": "LegacyNet48Web.Pages.",
         "defaultMethod": "PAGE"
+      },
+      {
+        "id": "playground.clientaction",
+        "kind": "action",
+        "baseTypes": ["MMS.Web.UI.ClientPage"],
+        "namespacePrefix": "LegacyNet48Web.Pages.",
+        "defaultMethod": "ACTION",
+        "handlerMethodAttributes": ["MMS.Web.UI.Attributes.ClientActionAttribute", "ClientAction"]
       }
     ],
     "classInheritance": [
@@ -120,6 +128,26 @@
       "confidence": "high",
       "basis": "compilation+profile",
       "reason": "ChamberMsg async dispatch"
+    },
+    {
+      "provider": "clientpage_proxy",
+      "operation": "show",
+      "methods": ["Show", "ShowDialog"],
+      "declaringTypeBaseTypes": ["LegacyNet48Web.Pages.Proxies.ProxyBase"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "fact_derived",
+      "reason": "clientpage_proxy_navigate_to_page_fact"
+    },
+    {
+      "provider": "clientpage_proxy",
+      "operation": "redirect",
+      "methods": ["Redirect", "RedirectEmbedded"],
+      "declaringTypeBaseTypes": ["LegacyNet48Web.Pages.Proxies.ProxyBase"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "fact_derived",
+      "reason": "clientpage_proxy_redirect_fact"
     }
   ]
 }
