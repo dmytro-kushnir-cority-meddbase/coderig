@@ -13,6 +13,16 @@ namespace MMS.Web.UI
     {
         protected virtual void OnInit() { }
     }
+
+    // The OTHER page family: PageLoad.Create() reflects + instantiates PageBase subclasses and
+    // invokes their Initialise/OnAction lifecycle hooks (the legacy + login path). Not a ClientPage,
+    // so the ClientPage rules never see it (gap G2). PageBase subclasses are page entry points, and
+    // their reflection-invoked Initialise/OnAction are handler entry points.
+    public abstract class PageBase
+    {
+        public virtual void Initialise() { }
+        public virtual void OnAction() { }
+    }
 }
 
 namespace MMS.Web.UI.Attributes

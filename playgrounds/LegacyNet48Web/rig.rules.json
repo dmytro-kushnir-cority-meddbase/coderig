@@ -15,9 +15,24 @@
         "namespacePrefix": "LegacyNet48Web.Pages.",
         "defaultMethod": "ACTION",
         "handlerMethodAttributes": ["MMS.Web.UI.Attributes.ClientActionAttribute", "ClientAction"]
+      },
+      {
+        "id": "playground.pagebase",
+        "kind": "page",
+        "baseTypes": ["MMS.Web.UI.PageBase"],
+        "namespacePrefix": "LegacyNet48Web.Pages.",
+        "defaultMethod": "PAGE"
       }
     ],
     "classInheritance": [
+      {
+        "id": "playground.pagebase.handlers",
+        "kind": "pagehandler",
+        "baseTypes": ["MMS.Web.UI.PageBase"],
+        "handlerMethods": ["Initialise", "OnAction"],
+        "requireOverride": false,
+        "defaultMethod": "HANDLE"
+      },
       {
         "id": "playground.servicebase",
         "kind": "background",

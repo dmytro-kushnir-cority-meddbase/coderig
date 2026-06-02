@@ -49,9 +49,10 @@ public sealed class FactDerivationTests
         var pageRoutes = entryPoints.Where(e => e.Kind == "page").Select(e => e.Route).ToArray();
         pageRoutes.ShouldNotContain("Accounts/InvoiceMainBase");
         pageRoutes.ShouldNotContain(r => r.Contains("WorkflowPaneBase", StringComparison.Ordinal));
-        pageRoutes.OrderBy(r => r).ShouldBe(
+        pageRoutes.OrderBy(r => r, StringComparer.Ordinal).ShouldBe(
             new[]
             {
+                "Account/Public/LegacyLogin", // PageBase reflection page (G2) — also a "page" kind
                 "Account/Public/Login",
                 "Account/Public/Login",
                 "Account/Public/Main",
@@ -60,6 +61,24 @@ public sealed class FactDerivationTests
                 "Admin/UserManagement",
                 "Workflows/ReferralPane",
             });
+    }
+
+    [Fact]
+    public async Task PageBase_reflection_pages_are_entry_points()
+    {
+        using var playground = await TempPlayground.CreateLegacyNet48Async();
+        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+
+        var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
+        var pageRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var classRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var entryPoints = FactEntryPointDeriver.Derive(FactProjection.EntryPointData(result), pageRules, classRules);
+
+        // G2: LegacyLogin : PageBase (not a ClientPage) is a navigable page entry point...
+        entryPoints.ShouldContain(e => e.Kind == "page" && e.Route == "Account/Public/LegacyLogin");
+        // ...and its reflection-invoked lifecycle hooks are handler entry points.
+        entryPoints.ShouldContain(e => e.Kind == "pagehandler" && e.Route.EndsWith("LegacyLogin.Initialise", StringComparison.Ordinal));
+        entryPoints.ShouldContain(e => e.Kind == "pagehandler" && e.Route.EndsWith("LegacyLogin.OnAction", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -92,6 +111,9 @@ public sealed class FactDerivationTests
                 ("workflow",   "LegacyNet48Web.Background.InvoiceWorkflowController.OnSave"),
                 ("background", "LegacyNet48Web.Background.ReportGeneratorService.Startup"),
                 ("wcf",        "LegacyNet48Web.Background.ClaimsService.SubmitClaim"),
+                // PageBase reflection-page handlers (G2) — classInheritance on Initialise/OnAction.
+                ("pagehandler", "LegacyNet48Web.Pages.Account.Public.LegacyLogin.Initialise"),
+                ("pagehandler", "LegacyNet48Web.Pages.Account.Public.LegacyLogin.OnAction"),
             }.OrderBy(e => e.Item2, StringComparer.Ordinal).ToArray());
 
         // Negative cases that must be EXCLUDED:

@@ -148,6 +148,19 @@ the object-creation ctor extraction. After re-mining, add a `matchConstructor` l
 gated on the entity namespace (or `EntityBase2`) and validate against the `new XxxEntity(pk, txn)`
 sites (e.g. `new InvoiceEntity(controller.PkInvoice, transaction)` at Master_HealthcodeServiceImpl.cs:1277).
 
+## G2 resolution — PageBase reflection pages (Jun 2026)
+
+`PageLoad.Create()` reflects + instantiates `PageBase` subclasses and calls their `Initialise`/
+`OnAction` hooks (the legacy + login path). These were unmodeled because they aren't `ClientPage`.
+Captured purely as rule data (no engine change): a `pageModel` rule (`baseTypes:["MedDBase.Pages.PageBase"]`)
+makes each `PageBase` subclass a navigable `page` entry point, and a `classInheritance` rule
+(`handlerMethods:["Initialise","OnAction"]`) makes the reflection-invoked hooks `pagehandler` entry
+points (so effects in `OnAction` become reachable — nothing calls it from the ctor). Fixture test
+`PageBase_reflection_pages_are_entry_points` proves both.
+
+Validated on the live DB (`meddbase-analysis` rules): page EPs 908 → **1000** (+92 PageBase pages,
+incl. the login path) and **45 new `pagehandler`** entry points.
+
 ## Distinction that matters
 Detector *logic* is largely sound; captured effects are real and cross-project stitching works.
 The dominant misses are **EP coverage** (G1) and **mine scope** (G8), then **rule additions**
