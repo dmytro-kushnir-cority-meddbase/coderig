@@ -161,6 +161,39 @@ points (so effects in `OnAction` become reachable — nothing calls it from the 
 Validated on the live DB (`meddbase-analysis` rules): page EPs 908 → **1000** (+92 PageBase pages,
 incl. the login path) and **45 new `pagehandler`** entry points.
 
+## G8 resolution — supervised re-extraction (Jun 2026)
+
+Re-mined MedDBase: `rig mine --from MedDBase.Pages.csproj` over `MedDBase.slnx`, identity
+`1E8E07368F463951`, `--parallelism 1`, after rebuilding `MedDBase.Pages.csproj` (its transitive
+closure repopulates the ~322 bin DLLs — the depletion trap). **136 projects indexed, 0 failed.** The
+service/entity layers now have body facts (`Application.Core`, `ServiceLayer`, `Nucleus`,
+`DataAccessTier`, …). Re-deriving over the broadened index: effects **2,192 → 9,947**, entry points
+**6,385 → 6,525**.
+
+Post-mine rule validation (committed to `meddbase-analysis`):
+- **G1 classInheritance FQNs fixed** — `IBackgroundProcess`/`ChamberedServiceBase` were under a stale
+  `.Background.` namespace. Corrected (verified by a subagent: real FQNs + `Process`/`Startup` handler
+  names confirmed). `background` EPs 1 → 3. Yield capped by mine coverage: only 2 types had
+  `ChamberedServiceBase` inheritance facts; the other ~12 subclasses (ServiceTier/PatientPortal/Plugins)
+  weren't reached — a coverage item, not a rules bug.
+- **G5 entity-ctor fetch fires** — `+1,359 llblgen fetch` effects. Gated on the first-party base
+  `declaringTypeBaseTypes:["…EntityClasses.CommonEntityBase"]`. Notes: this codebase is LLBLGen
+  *SelfServicing* (`CommonEntityBase : EntityBase`), not Adapter (`EntityBase2` has 0 refs). A gate on
+  the third-party `EntityBase` matches 0 because the `CommonEntityBase → EntityBase` first-party→third-
+  party edge didn't bind during indexing; `CommonEntityBase` is the most-specific base whose closure
+  already reaches the entities (1,359). A namespace gate reaches 1,577 — the ~218 gap is entity→base
+  edges missing below `CommonEntityBase` (per-project binding gaps), a coverage item.
+
+Remaining (still open, tracked in task #6):
+- **clientpage_proxy → ProxyBase flip is blocked**: `ProxyBase` is indexed but no generated
+  `<Page>Proxy : ProxyBase` types are — the `RequestResponseProxyGenerator` source generator doesn't
+  run in the mine's design-time builds, so the generated-proxy edges are absent. Flipping now would
+  zero out the (imprecise but non-zero) namespace-gated clientpage_proxy effects. Needs the index path
+  to run source generators (or capture `GetSourceGeneratedDocumentsAsync`) during the mine.
+- Broader mine coverage (the ~12 ChamberedServiceBase subclasses; the ~218 entity edge gaps).
+- `MedDBase.Nucleus.Interfaces.Services.ServiceBase` FQN (left untouched — not found under that name).
+- Real G4 HTTP/PDF-print/queue/LLM rules once those client types are confirmed indexed.
+
 ## Distinction that matters
 Detector *logic* is largely sound; captured effects are real and cross-project stitching works.
 The dominant misses are **EP coverage** (G1) and **mine scope** (G8), then **rule additions**
