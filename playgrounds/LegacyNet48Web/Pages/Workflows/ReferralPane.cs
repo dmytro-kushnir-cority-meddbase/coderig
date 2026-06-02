@@ -1,4 +1,5 @@
 using MMS.Web.UI.Attributes;
+using LegacyNet48Web.Entities;
 
 namespace LegacyNet48Web.Pages.Workflows
 {
@@ -11,5 +12,13 @@ namespace LegacyNet48Web.Pages.Workflows
 
         [ClientAction]
         public void Submit() { }
+
+        // Overrides the GENERIC base's virtual Save and writes to the DB. No [ClientAction] here —
+        // the attribute lives on the base. This is the base-virtual -> override dispatch shape:
+        // a call resolved to WorkflowPaneBase`1.Save must reach THIS override (and its effect).
+        public override void Save()
+        {
+            new DataAdapter().SaveEntity(new InvoiceEntity());
+        }
     }
 }

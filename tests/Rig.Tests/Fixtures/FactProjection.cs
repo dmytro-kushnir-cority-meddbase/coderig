@@ -49,6 +49,39 @@ public static class FactProjection
         return new FactEntryPointDeriver.FactEntryPointData(baseEdges, methods, types, ctorRefs!, interfaceEdges);
     }
 
+    // Mirrors Reads.LoadFactGraphAsync: the fact-derived call graph (call edges + interface and base
+    // edges + method descriptors with IsOverride) for FactPathFinder.
+    public static FactGraphData GraphData(AnalysisResult result)
+    {
+        var callEdges = result
+            .References.Where(r => r.EnclosingSymbolId != null
+                && (r.RefKind == "invocation" || r.RefKind == "methodGroup" || r.RefKind == "ctor"))
+            .Select(r => new CallEdge(r.EnclosingSymbolId!, r.TargetSymbolId, r.RefKind, r.FilePath, r.Line))
+            .Distinct()
+            .ToArray();
+
+        var implEdges = result
+            .TypeRelations.Where(t => t.RelationKind == "interface")
+            .Select(t => new ImplementsEdge(t.TypeSymbolId, t.RelatedSymbolId))
+            .Distinct()
+            .ToArray();
+
+        var baseEdges = result
+            .TypeRelations.Where(t => t.RelationKind == "base")
+            .Select(t => new BaseEdge(t.TypeSymbolId, t.RelatedSymbolId))
+            .Distinct()
+            .ToArray();
+
+        var methods = result
+            .Symbols.Where(s => s.Kind == "method")
+            .GroupBy(m => m.SymbolId)
+            .Select(g => g.First())
+            .Select(m => new MethodRef(m.SymbolId, m.Name, m.ContainingSymbolId, m.IsOverride))
+            .ToArray();
+
+        return new FactGraphData(callEdges, implEdges, methods, baseEdges);
+    }
+
     public static IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)> Invocations(
         AnalysisResult result) =>
         result

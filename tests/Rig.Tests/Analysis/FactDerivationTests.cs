@@ -107,6 +107,26 @@ public sealed class FactDerivationTests
     }
 
     [Fact]
+    public async Task Call_graph_dispatches_base_virtual_to_override()
+    {
+        using var playground = await TempPlayground.CreateLegacyNet48Async();
+        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+
+        var graph = FactProjection.GraphData(result);
+
+        // WorkflowPaneBase`1.Save is a VIRTUAL with an empty body — no call edges leave it. The only
+        // way to reach ReferralPane.Save (its override, which writes to the DB) is base-virtual ->
+        // override dispatch. This is the G6/G3 hop that makes framework virtuals / abstract
+        // [ClientAction] reach the effects in their concrete overrides. The base is GENERIC, so this
+        // also exercises generic-stripped dispatch.
+        var reachable = FactPathFinder.Reaches(graph, "WorkflowPaneBase`1.Save");
+
+        reachable.Keys.ShouldContain(k => k.Contains("ReferralPane.Save", StringComparison.Ordinal));
+        // ...and through the override it reaches the llblgen write (SaveEntity).
+        reachable.Keys.ShouldContain(k => k.Contains("SaveEntity", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Clientpage_proxy_effects_exclude_non_proxy_ShowDialog()
     {
         using var playground = await TempPlayground.CreateLegacyNet48Async();

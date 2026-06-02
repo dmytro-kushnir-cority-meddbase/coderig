@@ -633,17 +633,26 @@ public static class Reads
             .Distinct()
             .ToArray();
 
+        var baseRows = await context.TypeRelationFacts
+            .Where(t => t.RelationKind == "base")
+            .Select(t => new { t.TypeSymbolId, t.RelatedSymbolId })
+            .ToArrayAsync(cancellationToken);
+        var baseEdges = baseRows
+            .Select(t => new BaseEdge(t.TypeSymbolId, t.RelatedSymbolId))
+            .Distinct()
+            .ToArray();
+
         var methodRows = await context.SymbolFacts
             .Where(s => s.Kind == "method")
-            .Select(s => new { s.SymbolId, s.Name, s.ContainingSymbolId })
+            .Select(s => new { s.SymbolId, s.Name, s.ContainingSymbolId, s.IsOverride })
             .ToArrayAsync(cancellationToken);
         var methods = methodRows
             .GroupBy(m => m.SymbolId)
             .Select(g => g.First())
-            .Select(m => new MethodRef(m.SymbolId, m.Name, m.ContainingSymbolId))
+            .Select(m => new MethodRef(m.SymbolId, m.Name, m.ContainingSymbolId, m.IsOverride))
             .ToArray();
 
-        return new FactGraphData(callEdges, implEdges, methods);
+        return new FactGraphData(callEdges, implEdges, methods, baseEdges);
     }
 
     // Derives handoff (delegate / method-group) entry points from facts — a category the

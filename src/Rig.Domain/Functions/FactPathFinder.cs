@@ -82,6 +82,13 @@ public static class FactPathFinder
         public Dictionary<string, List<CallEdge>> Adjacency = new(StringComparer.Ordinal);
         public Dictionary<string, List<MethodRef>> MethodsByType = new(StringComparer.Ordinal);
         public Dictionary<string, List<string>> ImplsByInterface = new(StringComparer.Ordinal);
+        // Generic-stripped base-edge lookup (stripped base id -> subtype ids), for base-virtual/
+        // abstract -> override dispatch. Stripped so a call on the open-generic base reaches overrides
+        // on subtypes that store the instantiated base edge (see TypeClosure). Empty when no base edges.
+        public ILookup<string, string> StrippedBaseEdges = Enumerable.Empty<string>().ToLookup(x => x, StringComparer.Ordinal);
+        // Memoised strict-descendant closure per (stripped) base type, so transitive override dispatch
+        // doesn't re-BFS the hierarchy on every visit during the main traversal.
+        public Dictionary<string, HashSet<string>> DescendantsCache = new(StringComparer.Ordinal);
         public HashSet<string> Nodes = new(StringComparer.Ordinal);
     }
 
@@ -103,6 +110,8 @@ public static class FactPathFinder
         index.ImplsByInterface = graph.ImplementsEdges
             .GroupBy(e => e.InterfaceType, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.Select(e => e.ImplType).Distinct().ToList(), StringComparer.Ordinal);
+        index.StrippedBaseEdges = TypeClosure.BuildBaseEdgeLookup(
+            (graph.BaseEdges ?? new List<BaseEdge>()).Select(e => (e.SubType, e.BaseType)));
         foreach (var method in graph.Methods)
             index.Nodes.Add(method.SymbolId);
         return index;
@@ -117,7 +126,11 @@ public static class FactPathFinder
                 yield return (edge.Callee, edge.Kind, edge.FilePath, edge.Line);
 
         var parsed = ParseMethod(current);
-        if (parsed is not null && index.ImplsByInterface.TryGetValue(parsed.Value.TypeId, out var impls))
+        if (parsed is null)
+            yield break;
+
+        // Interface -> concrete DI dispatch (single-impl hop).
+        if (index.ImplsByInterface.TryGetValue(parsed.Value.TypeId, out var impls))
         {
             foreach (var impl in impls)
             {
@@ -130,6 +143,31 @@ public static class FactPathFinder
                 }
             }
         }
+
+        // Base-virtual/abstract -> override dispatch (G6/G3): a call resolved to a base-type method
+        // also reaches the SAME-named OVERRIDE on every (transitive) subtype. This is what makes an
+        // abstract [ClientAction] (or framework virtual like OnSave) reach the effects in its concrete
+        // override. Gated on IsOverride so it doesn't dispatch to unrelated same-named (hidden) methods.
+        foreach (var sub in Descendants(parsed.Value.TypeId, index))
+        {
+            if (!index.MethodsByType.TryGetValue(sub, out var subMethods))
+                continue;
+            foreach (var m in subMethods)
+            {
+                if (m.IsOverride && string.Equals(m.Name, parsed.Value.Name, StringComparison.Ordinal))
+                    yield return (m.SymbolId, "override-dispatch", null, 0);
+            }
+        }
+    }
+
+    // Transitive strict descendants of a type, memoised. Keyed on the generic-stripped id so the
+    // instantiated/open-generic forms share one cache entry.
+    private static HashSet<string> Descendants(string typeId, GraphIndex index)
+    {
+        var key = TypeClosure.StripGeneric(typeId);
+        if (!index.DescendantsCache.TryGetValue(key, out var set))
+            index.DescendantsCache[key] = set = TypeClosure.ComputeStrictDescendants(index.StrippedBaseEdges, new[] { typeId });
+        return set;
     }
 
     private static void Enqueue(

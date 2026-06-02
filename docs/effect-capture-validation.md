@@ -95,6 +95,24 @@ service/process implementers live in projects outside the current Pages+Workflow
 So lighting up real backend EPs = correct the rule FQNs **and** broaden the mine (the re-extraction
 task) — a rules-data + scope change, not a deriver change. The deriver itself is done and validated.
 
+## G6/G3 resolution — base-virtual/abstract → override dispatch (Jun 2026)
+
+`FactPathFinder` now adds **base-virtual/abstract → override dispatch** alongside the existing
+interface→impl hop. When a call resolves to a base-type method, the traversal also reaches the
+SAME-named **override** on every (transitive, generic-stripped) subtype, gated on the `IsOverride`
+fact so it never dispatches to unrelated same-named (method-hiding) members. This is what makes an
+abstract `[ClientAction]` (e.g. `Home2ActionsBase.SendFollowUpReferral`) or a framework virtual
+(`WorkflowControllerBase.OnSave`) reach the effects declared in its concrete override.
+
+Implementation: `FactGraphData` now carries base edges + per-method `IsOverride`; the index builds a
+generic-stripped base-edge lookup and a memoised strict-descendant closure (`TypeClosure`). Fixture
+test `FactDerivationTests.Call_graph_dispatches_base_virtual_to_override` proves a call resolved to
+the GENERIC virtual `WorkflowPaneBase\`1.Save` (empty body, no call edges) reaches `ReferralPane.Save`
+and its llblgen write purely via override dispatch. On the live DB, `rig reaches SendFollowUpReferral`
+(an abstract method — empty body) now reaches 327 methods; that reachability can only come from
+dispatch hops. (It captures 0 *effects* today because those overrides' effects are llblgen-entity
+ctor/receiver reads (G5) or live in projects outside the current mine scope (G8) — both still open.)
+
 ## Distinction that matters
 Detector *logic* is largely sound; captured effects are real and cross-project stitching works.
 The dominant misses are **EP coverage** (G1) and **mine scope** (G8), then **rule additions**

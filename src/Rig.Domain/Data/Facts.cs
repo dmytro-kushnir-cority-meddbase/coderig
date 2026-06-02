@@ -65,14 +65,22 @@ public sealed record CallEdge(string Caller, string Callee, string Kind, string 
 // An "implType implements ifaceType" edge (from a type-relation fact).
 public sealed record ImplementsEdge(string ImplType, string InterfaceType);
 
-// Minimal method descriptor for interface->concrete resolution.
-public sealed record MethodRef(string SymbolId, string Name, string? ContainingTypeId);
+// A "subType derives baseType" edge (from a "base" type-relation fact). Drives base-virtual/
+// abstract -> override dispatch in the call graph (G6/G3).
+public sealed record BaseEdge(string SubType, string BaseType);
+
+// Minimal method descriptor for interface->concrete and base->override resolution.
+// IsOverride gates override-dispatch so base.M reaches only subtypes that actually override M.
+public sealed record MethodRef(string SymbolId, string Name, string? ContainingTypeId, bool IsOverride = false);
 
 // The fact-derived call graph loaded for cross-project path finding (stage 2 over facts).
 public sealed record FactGraphData(
     IReadOnlyList<CallEdge> CallEdges,
     IReadOnlyList<ImplementsEdge> ImplementsEdges,
-    IReadOnlyList<MethodRef> Methods
+    IReadOnlyList<MethodRef> Methods,
+    // subType -> baseType edges; enables base-virtual/abstract -> override dispatch. Defaults to
+    // empty so existing constructions stay source-compatible.
+    IReadOnlyList<BaseEdge>? BaseEdges = null
 );
 
 // One hop in a found path.
