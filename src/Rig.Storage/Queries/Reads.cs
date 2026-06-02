@@ -569,4 +569,160 @@ public static class Reads
             ))
             .ToArrayAsync(cancellationToken);
     }
+
+    // --- Stage-3 fact queries: cross-project (all runs), DocID-keyed. No latest-run concept. ---
+
+    public static async Task<IReadOnlyList<SymbolSearchHit>> SearchSymbolsAsync(
+        RigDbContext context, string pattern, string? kind, int limit, CancellationToken cancellationToken = default)
+    {
+        var like = $"%{pattern}%";
+        var query = context.SymbolFacts
+            .Where(s => EF.Functions.Like(s.Name, like) || EF.Functions.Like(s.SymbolId, like));
+        if (kind is not null)
+            query = query.Where(s => s.Kind == kind);
+
+        // Dedupe by SymbolId across runs (multi-target siblings / re-indexed projects).
+        var rows = await query.OrderBy(s => s.SymbolId).Take(5000).ToArrayAsync(cancellationToken);
+        return rows
+            .GroupBy(s => s.SymbolId)
+            .Take(limit)
+            .Select(g => g.First())
+            .Select(s => new SymbolSearchHit(s.SymbolId, s.Kind, s.Signature, s.FilePath, s.Line, s.DefiningAssembly))
+            .ToArray();
+    }
+
+    public static async Task<IReadOnlyList<ReferenceHit>> FindReferencesAsync(
+        RigDbContext context, string pattern, bool firstPartyOnly, string? refKind, int limit, CancellationToken cancellationToken = default)
+    {
+        var like = $"%{pattern}%";
+        var query = context.ReferenceFacts.Where(r => EF.Functions.Like(r.TargetSymbolId, like));
+        if (firstPartyOnly)
+            query = query.Where(r => r.TargetInSource);
+        if (refKind is not null)
+            query = query.Where(r => r.RefKind == refKind);
+
+        var rows = await query
+            .OrderBy(r => r.TargetSymbolId).ThenBy(r => r.FilePath).ThenBy(r => r.Line)
+            .Take(limit)
+            .ToArrayAsync(cancellationToken);
+        return rows
+            .Select(r => new ReferenceHit(r.TargetSymbolId, r.RefKind, r.EnclosingSymbolId, r.FilePath, r.Line, r.TargetInSource))
+            .ToArray();
+    }
+
+    // Loads the fact-derived call graph for cross-project path finding (stage 2 over facts).
+    // No Roslyn, no entry-point anchoring — every method's call edges, across all runs.
+    public static async Task<FactGraphData> LoadFactGraphAsync(RigDbContext context, CancellationToken cancellationToken = default)
+    {
+        var callRows = await context.ReferenceFacts
+            .Where(r => r.EnclosingSymbolId != null
+                && (r.RefKind == "invocation" || r.RefKind == "methodGroup" || r.RefKind == "ctor"))
+            .Select(r => new { r.EnclosingSymbolId, r.TargetSymbolId, r.RefKind, r.FilePath, r.Line })
+            .ToArrayAsync(cancellationToken);
+        var callEdges = callRows
+            .Select(r => new CallEdge(r.EnclosingSymbolId!, r.TargetSymbolId, r.RefKind, r.FilePath, r.Line))
+            .Distinct()
+            .ToArray();
+
+        var implRows = await context.TypeRelationFacts
+            .Where(t => t.RelationKind == "interface")
+            .Select(t => new { t.TypeSymbolId, t.RelatedSymbolId })
+            .ToArrayAsync(cancellationToken);
+        var implEdges = implRows
+            .Select(t => new ImplementsEdge(t.TypeSymbolId, t.RelatedSymbolId))
+            .Distinct()
+            .ToArray();
+
+        var methodRows = await context.SymbolFacts
+            .Where(s => s.Kind == "method")
+            .Select(s => new { s.SymbolId, s.Name, s.ContainingSymbolId })
+            .ToArrayAsync(cancellationToken);
+        var methods = methodRows
+            .GroupBy(m => m.SymbolId)
+            .Select(g => g.First())
+            .Select(m => new MethodRef(m.SymbolId, m.Name, m.ContainingSymbolId))
+            .ToArray();
+
+        return new FactGraphData(callEdges, implEdges, methods);
+    }
+
+    // Derives handoff (delegate / method-group) entry points from facts — a category the
+    // structural entry-point rules miss. First-party targets only (TargetInSource). No re-index.
+    public static async Task<IReadOnlyList<HandoffEntryPoint>> DeriveHandoffEntryPointsAsync(
+        RigDbContext context, int limit, CancellationToken cancellationToken = default)
+    {
+        var rows = await context.ReferenceFacts
+            .Where(r => r.RefKind == "methodGroup" && r.TargetInSource && r.EnclosingSymbolId != null)
+            .Select(r => new { r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line })
+            .ToArrayAsync(cancellationToken);
+
+        return rows
+            .GroupBy(r => (r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line))
+            .Select(g => g.Key)
+            .OrderBy(k => k.TargetSymbolId, StringComparer.Ordinal)
+            .Take(limit)
+            .Select(k => new HandoffEntryPoint(k.TargetSymbolId, k.EnclosingSymbolId!, k.FilePath, k.Line))
+            .ToArray();
+    }
+
+    // Loads the facts needed by FactEntryPointDeriver: base-type edges, constructor+type symbols,
+    // and ctor reference_facts (attribute applications).  No Roslyn, no latest-run concept —
+    // queries are cross-run (all facts in the DB); deduplication happens in the deriver.
+    public static async Task<FactEntryPointDeriver.FactEntryPointData> LoadFactEntryPointDataAsync(
+        RigDbContext context, CancellationToken cancellationToken = default)
+    {
+        var baseEdgeRows = await context.TypeRelationFacts
+            .Where(t => t.RelationKind == "base")
+            .Select(t => new { t.TypeSymbolId, t.RelatedSymbolId })
+            .ToArrayAsync(cancellationToken);
+        var baseEdges = baseEdgeRows
+            .Select(t => (t.TypeSymbolId, t.RelatedSymbolId))
+            .Distinct()
+            .ToArray();
+
+        var methodRows = await context.SymbolFacts
+            .Where(s => s.Kind == "method" && s.Name == ".ctor")
+            .Select(s => new { s.SymbolId, s.Name, s.ContainingSymbolId, s.Signature, s.FilePath, s.Line })
+            .ToArrayAsync(cancellationToken);
+        var methods = methodRows
+            .GroupBy(m => (m.FilePath, m.Line))
+            .Select(g => g.First())
+            .Select(m => (m.SymbolId, m.Name, m.ContainingSymbolId, m.Signature, m.FilePath, m.Line))
+            .ToArray();
+
+        var typeRows = await context.SymbolFacts
+            .Where(s => s.Kind == "type")
+            .Select(s => new { s.SymbolId, s.Namespace, s.FilePath, s.Line })
+            .ToArrayAsync(cancellationToken);
+        var types = typeRows
+            .GroupBy(t => t.SymbolId)
+            .Select(g => g.First())
+            .Select(t => (t.SymbolId, t.Namespace, t.FilePath, t.Line))
+            .ToArray();
+
+        // ctor refs with RefKind="ctor" capture attribute applications (e.g. [ClientAction])
+        // as well as regular constructor calls.  The deriver filters by TargetSymbolId prefix.
+        var ctorRefRows = await context.ReferenceFacts
+            .Where(r => r.RefKind == "ctor" && r.EnclosingSymbolId != null)
+            .Select(r => new { r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line })
+            .ToArrayAsync(cancellationToken);
+        var ctorRefs = ctorRefRows
+            .GroupBy(r => (r.FilePath, r.Line))
+            .Select(g => g.First())
+            .Select(r => (r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line))
+            .ToArray();
+
+        return new FactEntryPointDeriver.FactEntryPointData(baseEdges, methods, types, ctorRefs!);
+    }
+
+    // Loads invocation reference facts for fact-based effect derivation.
+    public static async Task<IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)>>
+        LoadInvocationRefsAsync(RigDbContext context, CancellationToken cancellationToken = default)
+    {
+        var rows = await context.ReferenceFacts
+            .Where(r => r.RefKind == "invocation")
+            .Select(r => new { r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line })
+            .ToArrayAsync(cancellationToken);
+        return rows.Select(r => (r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line)).ToArray();
+    }
 }

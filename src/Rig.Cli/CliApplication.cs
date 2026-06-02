@@ -3,6 +3,7 @@ using Rig.Analysis;
 using Rig.Analysis.Rules;
 using Rig.Cli.Rendering;
 using Rig.Domain.Data;
+using Rig.Domain.Functions;
 using Rig.Storage.Queries;
 using Rig.Storage.Storage;
 
@@ -40,6 +41,10 @@ public static class CliApplication
             "callgraph" => await RunCallGraphAsync(args, output, error, workingDirectory),
             "callgraphs" => await RunCallGraphsAsync(args, output, error, workingDirectory),
             "di" => await RunDiAsync(output, error, workingDirectory),
+            "symbols" => await RunSymbolsAsync(args, output, error, workingDirectory),
+            "refs" => await RunRefsAsync(args, output, error, workingDirectory),
+            "path" => await RunPathAsync(args, output, error, workingDirectory),
+            "derive" => await RunDeriveAsync(args, output, error, workingDirectory),
             "files" => await RunFilesAsync(args, output, error, workingDirectory),
             "profile" => await RunProfileAsync(args, output, error, workingDirectory),
             _ => UnknownCommand(args[0], error),
@@ -77,6 +82,10 @@ public static class CliApplication
         output.WriteLine("  rig trace <symbol> [--paths]");
         output.WriteLine("  rig trace --contains <text> [--paths]");
         output.WriteLine("  rig di");
+        output.WriteLine("  rig symbols <pattern> [--kind <k>] [--limit <n>]");
+        output.WriteLine("  rig refs <pattern> [--first-party] [--kind <refkind>] [--limit <n>]");
+        output.WriteLine("  rig path <fromPattern> <toPattern>");
+        output.WriteLine("  rig derive [--rules <path>...] [--limit <n>]   (stage-2 pass over facts: effects + handoffs)");
         output.WriteLine("  rig files --skipped");
         output.WriteLine("  rig profile validate");
     }
@@ -544,4 +553,173 @@ public static class CliApplication
     private static string ComputeIdentity(string solutionPath) =>
         Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(solutionPath))))[..16];
+
+    // rig symbols <pattern> [--kind <k>] [--limit <n>]
+    private static async Task<int> RunSymbolsAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
+    {
+        if (args.Length < 2)
+        {
+            error.WriteLine("Usage: rig symbols <pattern> [--kind <k>] [--limit <n>]");
+            return 2;
+        }
+
+        var pattern = args[1];
+        var kind = GetOption(args, "--kind");
+        var limit = int.TryParse(GetOption(args, "--limit"), out var l) ? l : 50;
+
+        var storeDirectory = Path.Combine(workingDirectory, ".rig");
+        await using var context = new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
+        var hits = await Reads.SearchSymbolsAsync(context, pattern, kind, limit);
+
+        output.WriteLine($"Symbols matching '{pattern}'{(kind is null ? "" : $" kind={kind}")}");
+        foreach (var hit in hits)
+            output.WriteLine($"  {hit.Kind,-8} {hit.SymbolId}  {ShortenPath(hit.FilePath)}:{hit.Line}");
+        output.WriteLine($"  ({hits.Count} shown)");
+        return 0;
+    }
+
+    // rig refs <pattern> [--first-party] [--kind <refkind>] [--limit <n>]
+    private static async Task<int> RunRefsAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
+    {
+        if (args.Length < 2)
+        {
+            error.WriteLine("Usage: rig refs <pattern> [--first-party] [--kind <refkind>] [--limit <n>]");
+            return 2;
+        }
+
+        var pattern = args[1];
+        var firstParty = args.Contains("--first-party");
+        var refKind = GetOption(args, "--kind");
+        var limit = int.TryParse(GetOption(args, "--limit"), out var l) ? l : 200;
+
+        var storeDirectory = Path.Combine(workingDirectory, ".rig");
+        await using var context = new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
+        var hits = await Reads.FindReferencesAsync(context, pattern, firstParty, refKind, limit);
+
+        output.WriteLine($"References to '{pattern}'{(firstParty ? " (first-party)" : "")}{(refKind is null ? "" : $" kind={refKind}")}");
+        foreach (var group in hits.GroupBy(h => h.TargetSymbolId).OrderBy(g => g.Key, StringComparer.Ordinal))
+        {
+            output.WriteLine($"  {group.Key}");
+            foreach (var hit in group)
+                output.WriteLine($"    {hit.RefKind,-11} {hit.EnclosingSymbolId ?? "(top-level)"}  {ShortenPath(hit.FilePath)}:{hit.Line}");
+        }
+        output.WriteLine($"  ({hits.Count} reference(s) shown)");
+        return 0;
+    }
+
+    // rig path <fromPattern> <toPattern>  — BFS the fact-derived call graph (cross-project,
+    // entry-point-independent, with interface->concrete dispatch) and print the first path found.
+    private static async Task<int> RunPathAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
+    {
+        if (args.Length < 3)
+        {
+            error.WriteLine("Usage: rig path <fromPattern> <toPattern>");
+            return 2;
+        }
+
+        var fromPattern = args[1];
+        var toPattern = args[2];
+
+        var storeDirectory = Path.Combine(workingDirectory, ".rig");
+        await using var context = new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
+        var graph = await Reads.LoadFactGraphAsync(context);
+        output.WriteLine($"Fact graph: {graph.CallEdges.Count} call edges, {graph.ImplementsEdges.Count} implements edges, {graph.Methods.Count} methods");
+
+        var path = FactPathFinder.Find(graph, fromPattern, toPattern);
+        if (path is null)
+        {
+            output.WriteLine($"No path from '{fromPattern}' to '{toPattern}'.");
+            return 1;
+        }
+
+        output.WriteLine($"Path '{fromPattern}' -> '{toPattern}' ({path.Count} nodes):");
+        for (var i = 0; i < path.Count; i++)
+        {
+            var step = path[i];
+            var via = i == 0 ? "" : $"  [{step.Kind}{(step.FilePath is null ? "" : $" @ {ShortenPath(step.FilePath)}:{step.Line}")}]";
+            output.WriteLine($"  {new string(' ', i * 2)}{step.SymbolId}{via}");
+        }
+        return 0;
+    }
+
+    // rig derive [--rules <path>...] [--limit <n>] — the stage-2 pass over facts (no Roslyn):
+    // re-derives effects, page/action entry points, and delegate/method-group handoff entry
+    // points from the reference index in a single command, one DB open, one rule load.
+    // Effects and entry points are matched against the same AnalysisRuleSet JSON the Roslyn
+    // pass uses (detectors are data, not code).
+    private static async Task<int> RunDeriveAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
+    {
+        var limit = int.TryParse(GetOption(args, "--limit"), out var l) ? l : 40;
+        var extraRules = new List<string>();
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--rules" && i + 1 < args.Length) { extraRules.Add(Path.GetFullPath(args[i + 1])); i++; }
+        }
+        var storeDirectory = Path.Combine(workingDirectory, ".rig");
+        await using var context = new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
+
+        // --- Effects (data-driven over facts) ---
+        var invocations = await Reads.LoadInvocationRefsAsync(context);
+        var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var effects = FactEffectDeriver.Derive(invocations, effectRules);
+
+        output.WriteLine($"Effects re-derived from facts: {effects.Count}");
+        foreach (var group in effects
+            .GroupBy(e => (e.Provider, e.Operation))
+            .OrderByDescending(g => g.Count()))
+        {
+            output.WriteLine($"  {group.Key.Provider} {group.Key.Operation}: {group.Count()}");
+            foreach (var e in group.Take(limit / 8 + 1))
+                output.WriteLine($"      {ShortName(e.ResourceType)}  <- {ShortName(e.EnclosingSymbolId)}  {ShortenPath(e.FilePath)}:{e.Line}");
+        }
+
+        // --- Page + action entry points (fact-based BFS + attribute-ref detection) ---
+        var epData = await Reads.LoadFactEntryPointDataAsync(context);
+        var epRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var derivedEps = FactEntryPointDeriver.Derive(epData, epRules);
+
+        output.WriteLine();
+        output.WriteLine($"Entry points re-derived from facts: {derivedEps.Count}");
+        foreach (var kindGroup in derivedEps
+            .GroupBy(e => e.Kind)
+            .OrderByDescending(g => g.Count()))
+        {
+            output.WriteLine($"  {kindGroup.Key}: {kindGroup.Count()}");
+            foreach (var e in kindGroup.Take(limit / 4 + 1))
+                output.WriteLine($"      {e.Route}  {ShortenPath(e.FilePath)}:{e.Line}");
+        }
+
+        // --- Handoff / background entry points (delegate/method-group, derived from facts) ---
+        var handoffs = await Reads.DeriveHandoffEntryPointsAsync(context, limit);
+        output.WriteLine();
+        output.WriteLine($"Handoff entry points (delegate/method-group) derived from facts: {handoffs.Count}");
+        foreach (var h in handoffs)
+            output.WriteLine($"  {h.Target}\n      registered in {h.RegisteredIn}  {ShortenPath(h.FilePath)}:{h.Line}");
+        return 0;
+    }
+
+    private static string ShortName(string? symbolId)
+    {
+        if (string.IsNullOrEmpty(symbolId))
+            return "(top-level)";
+        var s = symbolId!;
+        var paren = s.IndexOf('(');
+        if (paren >= 0)
+            s = s.Substring(0, paren);
+        var lastDot = s.LastIndexOf('.');
+        var prevDot = lastDot > 0 ? s.LastIndexOf('.', lastDot - 1) : -1;
+        return prevDot >= 0 ? s.Substring(prevDot + 1) : s;
+    }
+
+    private static string? GetOption(string[] args, string name)
+    {
+        var index = Array.IndexOf(args, name);
+        return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
+    }
+
+    private static string ShortenPath(string path)
+    {
+        var parts = path.Replace('\\', '/').Split('/');
+        return parts.Length <= 3 ? path : string.Join('/', parts[^3..]);
+    }
 }

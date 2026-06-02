@@ -14,5 +14,9 @@ public sealed record AnalysisResult(
     // across project boundaries at query time.
     string? ProjectIdentity = null,
     // Which specific project was indexed (csproj path).  Null for solution-level runs.
-    string? SourceProjectPath = null
+    string? SourceProjectPath = null,
+    // Stage-1 rule-agnostic facts (symbol + reference index). See docs/fact-layer-refactor.md.
+    IReadOnlyList<SymbolFact>? Symbols = null,
+    IReadOnlyList<ReferenceFact>? References = null,
+    IReadOnlyList<TypeRelationFact>? TypeRelations = null
 );

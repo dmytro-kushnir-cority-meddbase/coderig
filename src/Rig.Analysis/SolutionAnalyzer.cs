@@ -56,6 +56,9 @@ public static class SolutionAnalyzer
             .OrderBy(observation => observation.FilePath, StringComparer.OrdinalIgnoreCase)
             .ThenBy(observation => observation.Line)
             .ToArray();
+        var symbolFacts = extractionResults.SelectMany(result => result.Symbols).ToArray();
+        var referenceFacts = extractionResults.SelectMany(result => result.References).ToArray();
+        var typeRelationFacts = extractionResults.SelectMany(result => result.TypeRelations).ToArray();
 
         // Mine XML service descriptor files (e.g. App_Data/Common/Xml/Services/*.xml) and
         // any inline static mappings, then merge with code-detected DI registrations.
@@ -79,7 +82,8 @@ public static class SolutionAnalyzer
             allDiRegistrations
         );
 
-        progress?.Invoke($"Analysis complete: {entryPoints.Length} entrypoints, {effects.Length} effects");
+        progress?.Invoke($"Analysis complete: {entryPoints.Length} entrypoints, {effects.Length} effects, "
+            + $"{symbolFacts.Length} symbols, {referenceFacts.Length} references");
 
         // For project-level indexing, record the specific project path
         var sourceProjectPath = solutionFullPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
@@ -96,7 +100,10 @@ public static class SolutionAnalyzer
             methodObservations,
             invocationObservations,
             ProjectIdentity: projectIdentity,
-            SourceProjectPath: sourceProjectPath
+            SourceProjectPath: sourceProjectPath,
+            Symbols: symbolFacts,
+            References: referenceFacts,
+            TypeRelations: typeRelationFacts
         );
     }
 
@@ -114,12 +121,17 @@ public static class SolutionAnalyzer
             .Concat(EntryPointExtractor.FindPageModelEntryPoints(source, rules))
             .ToArray();
 
+        var facts = FactExtractor.Extract(source);
+
         return new SourceExtractionResult(
             entryPoints,
             EffectExtractor.FindEffects(source, rules).ToArray(),
             DiRegistrationExtractor.FindDiRegistrations(source, rules).ToArray(),
             RoslynObservationExtractor.FindMethodObservations(source).ToArray(),
-            RoslynObservationExtractor.FindInvocationObservations(source).ToArray()
+            RoslynObservationExtractor.FindInvocationObservations(source).ToArray(),
+            facts.Symbols,
+            facts.References,
+            facts.TypeRelations
         );
     }
 }

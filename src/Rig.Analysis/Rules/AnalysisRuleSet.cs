@@ -216,7 +216,11 @@ internal sealed record ClassInheritanceEntryPointRule(
     IReadOnlyList<string> HandlerMethods,
     bool RequireOverride,
     string? DefaultMethod = null,
-    IReadOnlyList<string>? HandlerParameterTypes = null
+    IReadOnlyList<string>? HandlerParameterTypes = null,
+    // When set, a matched method must additionally carry one of these attributes
+    // (e.g. WCF [OperationContract]).  Gates rules with baseTypes:["*"]+handlerMethods:["*"]
+    // so they don't match every method in the project.
+    IReadOnlyList<string>? HandlerMethodAttributes = null
 );
 
 internal sealed record RouteMethodRule(string Method, string HttpMethod);
@@ -234,7 +238,11 @@ internal sealed record EffectRule(
     string Confidence,
     string Basis,
     string Reason,
-    bool TreatAsDispatch = false
+    bool TreatAsDispatch = false,
+    // Optional suffix gate on the declaring type's simple name. Narrows a broad namespace-prefix
+    // gate: e.g. declaringTypeNameEndsWith:["Proxy"] + declaringTypes:["MedDBase.Pages"] matches
+    // XxxProxy.Show() but not MessageBox.Show().
+    IReadOnlyList<string>? DeclaringTypeNameEndsWith = null
 )
 {
     public bool Matches(string methodName)

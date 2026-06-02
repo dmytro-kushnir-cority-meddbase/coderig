@@ -213,6 +213,15 @@ internal static class EntryPointExtractor
                         continue;
                     }
 
+                    // Attribute gate: when the rule declares handlerMethodAttributes, the method
+                    // must carry one of them (e.g. WCF [OperationContract]). Without this, a rule
+                    // with baseTypes:["*"] + handlerMethods:["*"] matches every method.
+                    if (rule.HandlerMethodAttributes is { Count: > 0 } requiredAttributes
+                        && !HasAnyAttribute(method.AttributeLists, requiredAttributes))
+                    {
+                        continue;
+                    }
+
                     var httpMethod = route?.HttpMethod ?? rule.DefaultMethod ?? "UNKNOWN";
                     var routeText = route?.Route ?? $"{typeSymbol.ToDisplayString()}.{methodName}";
 

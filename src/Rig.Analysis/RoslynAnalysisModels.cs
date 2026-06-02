@@ -18,7 +18,10 @@ internal sealed record SourceExtractionResult(
     IReadOnlyList<EffectInfo> Effects,
     IReadOnlyList<DiRegistrationInfo> DiRegistrations,
     IReadOnlyList<MethodObservationInfo> MethodObservations,
-    IReadOnlyList<InvocationObservationInfo> InvocationObservations
+    IReadOnlyList<InvocationObservationInfo> InvocationObservations,
+    IReadOnlyList<SymbolFact> Symbols,
+    IReadOnlyList<ReferenceFact> References,
+    IReadOnlyList<TypeRelationFact> TypeRelations
 );
 
 internal sealed record SourceModel(string ProjectName, string FilePath, SyntaxTree Tree, SyntaxNode Root, SemanticModel SemanticModel);

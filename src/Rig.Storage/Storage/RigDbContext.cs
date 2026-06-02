@@ -39,6 +39,12 @@ public sealed class RigDbContext(string databasePath) : DbContext
 
     public DbSet<SymbolIndexEntity> SymbolIndex => Set<SymbolIndexEntity>();
 
+    public DbSet<SymbolFactEntity> SymbolFacts => Set<SymbolFactEntity>();
+
+    public DbSet<ReferenceFactEntity> ReferenceFacts => Set<ReferenceFactEntity>();
+
+    public DbSet<TypeRelationFactEntity> TypeRelationFacts => Set<TypeRelationFactEntity>();
+
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
         optionsBuilder.UseSqlite($"Data Source={databasePath}");
@@ -169,6 +175,32 @@ public sealed class RigDbContext(string databasePath) : DbContext
                 call.BoundaryCallIndex,
             });
             entity.HasIndex(call => new { call.RunId, call.Kind });
+        });
+
+        modelBuilder.Entity<SymbolFactEntity>(entity =>
+        {
+            entity.ToTable("symbol_facts");
+            entity.HasKey(s => new { s.RunId, s.SymbolFactIndex });
+            entity.HasIndex(s => s.SymbolId);
+            entity.HasIndex(s => s.Name);
+            entity.HasIndex(s => new { s.RunId, s.SymbolId });
+        });
+
+        modelBuilder.Entity<ReferenceFactEntity>(entity =>
+        {
+            entity.ToTable("reference_facts");
+            entity.HasKey(r => new { r.RunId, r.ReferenceFactIndex });
+            entity.HasIndex(r => r.TargetSymbolId);
+            entity.HasIndex(r => r.EnclosingSymbolId);
+            entity.HasIndex(r => new { r.RunId, r.TargetSymbolId });
+        });
+
+        modelBuilder.Entity<TypeRelationFactEntity>(entity =>
+        {
+            entity.ToTable("type_relation_facts");
+            entity.HasKey(t => new { t.RunId, t.TypeRelationFactIndex });
+            entity.HasIndex(t => t.TypeSymbolId);
+            entity.HasIndex(t => t.RelatedSymbolId);
         });
 
         modelBuilder.Entity<CallGraphNodeEffectEntity>(entity =>
