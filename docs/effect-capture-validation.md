@@ -113,6 +113,20 @@ and its llblgen write purely via override dispatch. On the live DB, `rig reaches
 dispatch hops. (It captures 0 *effects* today because those overrides' effects are llblgen-entity
 ctor/receiver reads (G5) or live in projects outside the current mine scope (G8) — both still open.)
 
+## G4 (partial) — external-provider effect rules (Jun 2026)
+
+External providers (SOAP/HTTP/queue/LLM) are pure rule DATA — `FactEffectDeriver` matches them with
+no engine change. Proven in the fixture (`External_provider_effects_are_derived_from_rules`: a soap/
+http_print/queue/llm effect each, via stub providers + four rules). The real **Healthcode SOAP
+submission is now captured**: a `soap`/`submit` rule (methods submitBill/requestRegistration/etc.,
+gated on the `MedDBase.Application.Workflows.HealthcodeWebServices` proxy namespace) added to
+`meddbase-analysis/rig.rules.json` derives **2 submit effects** on the existing index — submitBill
+was invisible before. A companion `soap`/`query` rule covers the read operations.
+
+Still open in G4: HTTP/PDF print, background-queue dispatch, and OpenAI/LLM
+(`SmartLetter.GetSmartLetterResponse` — not in the current mine scope, 0 symbols). Their real rules
+need the actual client type names, so they wait on the broadened re-extraction (task #6).
+
 ## Distinction that matters
 Detector *logic* is largely sound; captured effects are real and cross-project stitching works.
 The dominant misses are **EP coverage** (G1) and **mine scope** (G8), then **rule additions**

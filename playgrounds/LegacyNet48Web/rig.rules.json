@@ -165,6 +165,46 @@
       "confidence": "high",
       "basis": "fact_derived",
       "reason": "clientpage_proxy_redirect_fact"
+    },
+    {
+      "provider": "soap",
+      "operation": "submit",
+      "methods": ["SubmitBill", "SubmitBillAsync"],
+      "declaringTypes": ["LegacyNet48Web.External"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "soap_web_service_call"
+    },
+    {
+      "provider": "http_print",
+      "operation": "render",
+      "methods": ["RenderPdf"],
+      "declaringTypes": ["LegacyNet48Web.External"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "http_pdf_print_service"
+    },
+    {
+      "provider": "queue",
+      "operation": "enqueue",
+      "methods": ["Enqueue"],
+      "declaringTypes": ["LegacyNet48Web.External"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "background_queue_dispatch"
+    },
+    {
+      "provider": "llm",
+      "operation": "complete",
+      "methods": ["GetSmartLetterResponse"],
+      "declaringTypes": ["LegacyNet48Web.External"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "llm_completion"
     }
   ]
 }

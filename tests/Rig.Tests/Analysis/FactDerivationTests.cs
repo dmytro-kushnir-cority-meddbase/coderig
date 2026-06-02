@@ -127,6 +127,35 @@ public sealed class FactDerivationTests
     }
 
     [Fact]
+    public async Task External_provider_effects_are_derived_from_rules()
+    {
+        using var playground = await TempPlayground.CreateLegacyNet48Async();
+        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+
+        var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
+        var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var effects = FactEffectDeriver.Derive(FactProjection.Invocations(result), rules, providerFilter: null,
+            baseEdges: FactProjection.EntryPointData(result).BaseEdges);
+
+        // G4: SOAP / HTTP-print / queue / LLM are pure rule data — the deriver matches them with no
+        // code change. OutboundGateway.SendEverything invokes one of each.
+        (string Provider, string Operation)[] expected =
+        {
+            ("soap", "submit"),
+            ("http_print", "render"),
+            ("queue", "enqueue"),
+            ("llm", "complete"),
+        };
+        foreach (var (provider, operation) in expected)
+        {
+            effects.ShouldContain(
+                e => e.Provider == provider && e.Operation == operation
+                    && e.EnclosingSymbolId!.Contains("OutboundGateway.SendEverything", StringComparison.Ordinal),
+                $"expected a {provider}/{operation} effect from OutboundGateway.SendEverything");
+        }
+    }
+
+    [Fact]
     public async Task Clientpage_proxy_effects_exclude_non_proxy_ShowDialog()
     {
         using var playground = await TempPlayground.CreateLegacyNet48Async();
