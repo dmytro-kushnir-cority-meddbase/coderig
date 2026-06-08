@@ -60,10 +60,10 @@ internal static class FactExtractor
             if (refKind is null)
                 continue;
 
+            var invocation = refKind == "invocation" ? InvocationOf(name) : null;
             var receiverType = refKind == "invocation" ? ReceiverTypeOf(name, model) : null;
-            var (firstArgTemplate, firstArgType) = refKind == "invocation"
-                ? FirstArgumentOf(name, model)
-                : (null, null);
+            var (firstArgTemplate, firstArgType) = FirstArgumentOf(invocation, model);
+            var structural = StructuralContextOf(invocation, model);
             AddReference(
                 references,
                 target,
@@ -73,7 +73,8 @@ internal static class FactExtractor
                 name,
                 receiverType,
                 firstArgTemplate,
-                firstArgType);
+                firstArgType,
+                structural);
         }
 
         // --- Object creations -> ctor refs ---
@@ -136,7 +137,8 @@ internal static class FactExtractor
         SyntaxNode node,
         string? receiverType = null,
         string? firstArgumentTemplate = null,
-        string? firstArgumentType = null)
+        string? firstArgumentType = null,
+        StructuralContext structural = default)
     {
         // For constructors, point the reference at the constructor's containing type's ctor DocID;
         // for everything else use the symbol's own DocID. Reduced extension methods resolve to the
@@ -163,7 +165,11 @@ internal static class FactExtractor
             Line: tree.GetLineSpan(node.Span).StartLinePosition.Line + 1,
             ReceiverType: receiverType,
             FirstArgumentTemplate: firstArgumentTemplate,
-            FirstArgumentType: firstArgumentType
+            FirstArgumentType: firstArgumentType,
+            EnclosingLoopKind: structural.LoopKind,
+            EnclosingLoopDetail: structural.LoopDetail,
+            EnclosingInvocations: structural.EnclosingInvocations,
+            EnclosingCatchTypes: structural.CatchTypes
         ));
     }
 
@@ -185,10 +191,10 @@ internal static class FactExtractor
     // First-argument facts for an invocation: the string template of the first argument (literal or
     // interpolated, via StringTemplateExtensions — the same helper the Roslyn EffectExtractor uses
     // for http_argument/string_argument) and its static type (open-generic FQN, for argument_type).
-    // Returns (null, null) for bare/method-group names with no invocation or an empty argument list.
-    private static (string? Template, string? Type) FirstArgumentOf(SimpleNameSyntax name, SemanticModel model)
+    // Returns (null, null) for a null invocation (non-invocation ref) or an empty argument list.
+    private static (string? Template, string? Type) FirstArgumentOf(InvocationExpressionSyntax? invocation, SemanticModel model)
     {
-        var argument = InvocationOf(name)?.ArgumentList.Arguments.FirstOrDefault()?.Expression;
+        var argument = invocation?.ArgumentList.Arguments.FirstOrDefault()?.Expression;
         if (argument is null)
             return (null, null);
 
@@ -196,6 +202,81 @@ internal static class FactExtractor
         var type = model.GetTypeInfo(argument).Type?.OriginalDefinition.ToDisplayString();
         return (template, type);
     }
+
+    // Structural-context facts for an invocation (P1c) — the rule-agnostic raw structure the Roslyn
+    // EffectObservationExtractor walks ancestors for. Mirrors its three ancestor scans exactly:
+    //   * nearest enclosing loop (foreach/for/while) -> looped_effect
+    //   * the chain of enclosing (ancestor) member-access invocations, innermost-first -> the
+    //     receiver-text/method match for parallel_fanout and the receiver-type/method match for
+    //     resilience_retry
+    //   * caught exception types of all enclosing try/catch clauses -> concurrency_handled
+    // Returns all-null for a null invocation (non-invocation ref).
+    private static StructuralContext StructuralContextOf(InvocationExpressionSyntax? invocation, SemanticModel model)
+    {
+        if (invocation is null)
+            return default;
+
+        string? loopKind = null;
+        string? loopDetail = null;
+        foreach (var ancestor in invocation.Ancestors())
+        {
+            switch (ancestor)
+            {
+                case ForEachStatementSyntax forEach:
+                    loopKind = "foreach";
+                    loopDetail = $"{forEach.Identifier.ValueText} in {forEach.Expression}";
+                    break;
+                case ForStatementSyntax:
+                    loopKind = "for";
+                    loopDetail = "for";
+                    break;
+                case WhileStatementSyntax:
+                    loopKind = "while";
+                    loopDetail = "while";
+                    break;
+            }
+
+            if (loopKind is not null)
+                break;
+        }
+
+        var enclosing = new List<FactStructuralContext.EnclosingInvocation>();
+        foreach (var ancestor in invocation.Ancestors().OfType<InvocationExpressionSyntax>())
+        {
+            if (ancestor.Expression is not MemberAccessExpressionSyntax memberAccess)
+                continue;
+
+            var receiverText = memberAccess.Expression.ToString();
+            var receiverType = model.GetTypeInfo(memberAccess.Expression).Type?.OriginalDefinition.ToDisplayString() ?? "";
+            enclosing.Add(
+                new FactStructuralContext.EnclosingInvocation(receiverText, receiverType, memberAccess.Name.Identifier.ValueText)
+            );
+        }
+
+        var catchTypes = new List<string>();
+        foreach (var tryStatement in invocation.Ancestors().OfType<TryStatementSyntax>())
+        {
+            foreach (var catchClause in tryStatement.Catches)
+            {
+                if (catchClause.Declaration is not null)
+                    catchTypes.Add(model.GetTypeInfo(catchClause.Declaration.Type).Type?.ToDisplayString() ?? "");
+            }
+        }
+
+        return new StructuralContext(
+            loopKind,
+            loopDetail,
+            FactStructuralContext.EncodeInvocations(enclosing),
+            FactStructuralContext.EncodeList(catchTypes)
+        );
+    }
+
+    private readonly record struct StructuralContext(
+        string? LoopKind,
+        string? LoopDetail,
+        string? EnclosingInvocations,
+        string? CatchTypes
+    );
 
     // The InvocationExpressionSyntax this name is the invoked method of: `Foo(..)`, `a.Foo(..)`, or
     // `a?.Foo(..)`. Null otherwise (mirrors IsInvoked's shapes, plus the conditional-access form).

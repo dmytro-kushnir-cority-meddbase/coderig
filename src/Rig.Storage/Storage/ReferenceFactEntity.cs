@@ -14,4 +14,8 @@ public sealed class ReferenceFactEntity
     public string? ReceiverType { get; set; }
     public string? FirstArgumentTemplate { get; set; }
     public string? FirstArgumentType { get; set; }
+    public string? EnclosingLoopKind { get; set; }
+    public string? EnclosingLoopDetail { get; set; }
+    public string? EnclosingInvocations { get; set; }
+    public string? EnclosingCatchTypes { get; set; }
 }

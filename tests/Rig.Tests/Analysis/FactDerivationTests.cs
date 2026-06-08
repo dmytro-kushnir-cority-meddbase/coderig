@@ -193,6 +193,38 @@ public sealed class FactDerivationTests
     }
 
     [Fact]
+    public async Task Invocation_reference_facts_carry_structural_context()
+    {
+        using var playground = await TempPlayground.CreateEntryPointEffectsAsync();
+        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+
+        var invocations = result.References.Where(r => r.RefKind == "invocation").ToArray();
+
+        // looped_effect: TeamWorkflow.LoadTeamSummaryAsync reads redis inside a `foreach` —
+        // `await _redis.StringGetAsync($"team:{relatedTeamId}")`. The fact must carry the nearest
+        // enclosing loop so the stage-2 observation deriver (P2b) can emit looped_effect/foreach.
+        invocations.ShouldContain(r =>
+            r.TargetSymbolId.Contains("StringGetAsync", StringComparison.Ordinal)
+            && r.EnclosingLoopKind == "foreach"
+            && r.EnclosingLoopDetail != null
+            && r.EnclosingLoopDetail.Contains("relatedTeamId", StringComparison.Ordinal)
+        );
+
+        // parallel_fanout (Parallel.ForEach): TeamWorkflow.ProcessBatchAsync reads redis inside a
+        // `Parallel.ForEach(teamIds, id => _redis.StringGet(...))`. The fact must carry the
+        // enclosing-invocation chain so P2b can match the fanout wrapper by receiver text + method.
+        // (StackExchange.Redis StringGet survives indexing; HttpClient/Task.WhenAll do not — System.*
+        // targets are dropped by the runtime-assembly filter, so the Task.WhenAll(http) fanout is
+        // blocked on framework-ref opt-in (decision Q2), orthogonal to this structural capture.)
+        invocations.ShouldContain(r =>
+            r.TargetSymbolId.Contains("StringGet", StringComparison.Ordinal)
+            && r.EnclosingInvocations != null
+            && r.EnclosingInvocations.Contains("Parallel", StringComparison.Ordinal)
+            && r.EnclosingInvocations.Contains("ForEach", StringComparison.Ordinal)
+        );
+    }
+
+    [Fact]
     public async Task External_provider_effects_are_derived_from_rules()
     {
         using var playground = await TempPlayground.CreateLegacyNet48Async();

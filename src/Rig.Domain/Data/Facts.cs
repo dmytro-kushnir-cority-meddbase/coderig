@@ -44,7 +44,23 @@ public sealed record ReferenceFact(
     // Static type of an invocation's first argument (open-generic FQN). Feeds the stage-2
     // `argument_type` resource resolution (P2a) — e.g. the message type passed to a queue dispatch.
     // Null when there is no first argument, and for non-invocation refs.
-    string? FirstArgumentType = null
+    string? FirstArgumentType = null,
+    // --- Structural-context facts for the stage-2 observation deriver (P1c → P2b). Rule-agnostic
+    //     raw structure mirroring the ancestor walks in the Roslyn EffectObservationExtractor;
+    //     captured for invocation refs only (observations attach to invocation effects). ---
+    // Nearest enclosing loop kind ("foreach"|"for"|"while") and its detail string (for foreach,
+    // "{identifier} in {expression}"). Feeds looped_effect. Null when not inside a loop.
+    string? EnclosingLoopKind = null,
+    string? EnclosingLoopDetail = null,
+    // The chain of enclosing invocations (ancestor InvocationExpressions, innermost-first), each
+    // encoded as receiverText/receiverType/methodName and joined into one string. Feeds
+    // parallel_fanout (receiverText "Task"/"Parallel" + method "WhenAll"/"ForEach..") and
+    // resilience_retry (receiver TYPE pattern + wrapper method). Null when not nested in any
+    // member-access invocation. Decode with FactStructuralContext.
+    string? EnclosingInvocations = null,
+    // Caught exception-type FQNs of all enclosing try/catch clauses, joined via FactStructuralContext.
+    // concurrency_handled (catch-type pattern at a commit site). Null when not inside a try/catch.
+    string? EnclosingCatchTypes = null
 );
 
 /// <summary>A base-type or implemented-interface edge between two types.</summary>

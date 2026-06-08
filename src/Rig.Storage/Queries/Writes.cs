@@ -337,6 +337,10 @@ public static class Writes
                 ReceiverType = r.ReceiverType,
                 FirstArgumentTemplate = r.FirstArgumentTemplate,
                 FirstArgumentType = r.FirstArgumentType,
+                EnclosingLoopKind = r.EnclosingLoopKind,
+                EnclosingLoopDetail = r.EnclosingLoopDetail,
+                EnclosingInvocations = r.EnclosingInvocations,
+                EnclosingCatchTypes = r.EnclosingCatchTypes,
             });
         }
 
@@ -424,6 +428,10 @@ public static class Writes
                 ReceiverType       TEXT,
                 FirstArgumentTemplate TEXT,
                 FirstArgumentType  TEXT,
+                EnclosingLoopKind  TEXT,
+                EnclosingLoopDetail TEXT,
+                EnclosingInvocations TEXT,
+                EnclosingCatchTypes TEXT,
                 PRIMARY KEY (RunId, ReferenceFactIndex)
             );
             """, cancellationToken);
