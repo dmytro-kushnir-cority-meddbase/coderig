@@ -8,6 +8,30 @@ namespace Rig.Tests.Analysis;
 public sealed class PlaygroundAnalysisTests
 {
     [Fact]
+    public async Task Llblgen_entity_constructor_fetch_is_extracted_at_index_time()
+    {
+        using var playground = await TempPlayground.CreateLegacyNet48Async();
+
+        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+
+        // G5: `new InvoiceEntity(pk)` and `new InvoiceEntity(pk, txn)` in EntityFetcher.Load are
+        // llblgen constructor fetches; the empty `new InvoiceEntity { InvoiceId = ... }` initializer
+        // is NOT. This guards the INDEX path (EffectExtractor -> result.Effects). The fact-layer
+        // FactDerivationTests assert the deriver directly and never exercised this path, which is
+        // why constructor fetches were silently absent from `rig effects`.
+        var fetches = result
+            .Effects.Where(effect =>
+                effect.Provider == "llblgen"
+                && effect.Operation == "fetch"
+                && effect.Resource.Contains("InvoiceEntity", StringComparison.Ordinal)
+                && effect.FilePath.Contains("EntityFetcher", StringComparison.Ordinal)
+            )
+            .ToArray();
+
+        fetches.Length.ShouldBe(2);
+    }
+
+    [Fact]
     public async Task Entry_point_effects_playground_tracks_entrypoints_and_effects()
     {
         using var playground = await TempPlayground.CreateEntryPointEffectsAsync();

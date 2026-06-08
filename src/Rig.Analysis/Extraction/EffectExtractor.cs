@@ -28,7 +28,7 @@ internal static class EffectExtractor
                 source.SemanticModel
             );
 
-            foreach (var rule in rules.Effects.Where(rule => !rule.TreatAsDispatch && Matches(rule, candidate)))
+            foreach (var rule in rules.Effects.Where(rule => !rule.TreatAsDispatch && !rule.MatchConstructor && Matches(rule, candidate)))
             {
                 var effect = TryCreateEffect(rule, methodName, invocation, receiverExpression, source.FilePath, line, source.SemanticModel);
                 if (effect is not null)
@@ -37,6 +37,101 @@ internal static class EffectExtractor
                 }
             }
         }
+
+        foreach (var effect in FindConstructorEffects(source, rules))
+        {
+            yield return effect;
+        }
+    }
+
+    // Constructor-matched effects (G5): `new XxxEntity(pk[, txn])` is an llblgen fetch — the read
+    // happens in the entity ctor, not via a method call, so the invocation walk above never sees it.
+    // The type gates (declaringTypes / declaringTypeBaseTypes / receiverTypes) are applied to the
+    // CONSTRUCTED type, and MinArguments separates the fetch ctor from the empty `new XxxEntity()` /
+    // object-initializer form, which must NOT be a read. Mirrors FactEffectDeriver's ctor path so
+    // `rig index` and the fact layer agree.
+    private static IEnumerable<EffectInfo> FindConstructorEffects(SourceModel source, AnalysisRuleSet rules)
+    {
+        var constructorRules = rules.Effects.Where(rule => rule.MatchConstructor && !rule.TreatAsDispatch).ToArray();
+        if (constructorRules.Length == 0)
+        {
+            yield break;
+        }
+
+        foreach (var creation in source.Root.DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>())
+        {
+            var argumentCount = creation.ArgumentList?.Arguments.Count ?? 0;
+            var constructedType =
+                source.SemanticModel.GetSymbolInfo(creation).Symbol is IMethodSymbol ctor
+                    ? ctor.ContainingType
+                    : source.SemanticModel.GetTypeInfo(creation).Type as INamedTypeSymbol;
+            if (constructedType is null)
+            {
+                continue;
+            }
+
+            var line = RoslynSymbolHelpers.GetLine(source.Tree, creation);
+            var resource = constructedType.OriginalDefinition.ToDisplayString();
+
+            foreach (var rule in constructorRules)
+            {
+                if (argumentCount < rule.MinArguments)
+                {
+                    continue;
+                }
+
+                if (!MatchesConstructorTypeGate(rule, constructedType))
+                {
+                    continue;
+                }
+
+                yield return new EffectInfo(
+                    rule.Provider,
+                    rule.Operation,
+                    resource,
+                    ".ctor",
+                    source.FilePath,
+                    line,
+                    rule.Confidence,
+                    rule.Basis,
+                    rule.Reason,
+                    []
+                );
+                break; // first matching constructor rule wins
+            }
+        }
+    }
+
+    // The constructed type stands in for both the declaring type and the receiver type: a ctor has
+    // no separate receiver, and the read targets the entity being constructed. declaringTypeBaseTypes
+    // walks the full base chain (RuleTypeMatcher), so generated `XxxEntity : XxxEntityBase :
+    // CommonEntityBase : EntityBase` hierarchies match the same base-type rule the one-level
+    // playground stubs do.
+    private static bool MatchesConstructorTypeGate(EffectRule rule, INamedTypeSymbol constructedType)
+    {
+        if (rule.DeclaringTypeBaseTypes is { Count: > 0 } baseTypes
+            && !baseTypes.Any(baseType => RuleTypeMatcher.MatchesTypeOrInterfaces(constructedType, baseType)))
+        {
+            return false;
+        }
+
+        if (!MatchesOptionalTypes(rule.DeclaringTypes, constructedType))
+        {
+            return false;
+        }
+
+        if (!MatchesOptionalTypes(rule.ReceiverTypes, constructedType))
+        {
+            return false;
+        }
+
+        if (rule.DeclaringTypeNameEndsWith is { Count: > 0 } suffixes
+            && !suffixes.Any(suffix => constructedType.Name.EndsWith(suffix, StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private static bool Matches(EffectRule rule, InvocationEffectCandidate candidate)

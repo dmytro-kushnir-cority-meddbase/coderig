@@ -71,3 +71,64 @@ the fact-extraction code or the fact *schema* does.
 4. Callgraph-from-facts + resolver audit.
 5. Stage-3 read index (FTS5 + reachability).
 6. Dual-mode stage 0 + per-project incremental hashing.
+
+## Current divergence status (review 2026-06-08)
+
+The cutover above has **not happened**, so two detection engines run live and have
+**drifted**. `rig index`/`mine` populate the user-facing tables via the Roslyn
+extractors (`EffectExtractor`, `EntryPointExtractor`, `EffectObservationExtractor`);
+`rig derive`/`reaches`/`path` re-derive via the fact engine (`FactEffectDeriver`,
+`FactEntryPointDeriver`). The *same* `rig.rules.json` produces different results
+depending on the command:
+
+| Rule field / capability | Roslyn (index) | Fact (derive) |
+|---|---|---|
+| `containingNamespaces/Types/Methods` | ✅ | ❌ |
+| MVC/MinAPI real routes, full `resource` resolution | ✅ | ❌ |
+| structural observations (`read_before_commit`, …) | ✅ | ❌ |
+| `declaringTypeNameEndsWith` | ❌ | ✅ |
+| `declaringTypeBaseTypes` (ProxyBase gate) | ❌ | ✅ |
+| `matchConstructor` / `minArguments` (G5 ctor-fetch) | ❌ → **now ✅ (stopgap)** | ✅ |
+| `receiverTypes` | ✅ true static type | ⚠️ approximated to declaring type |
+
+**Leakage to move to data during the port:** MVC `EndsWith("Controller")`+route
+literals (`EntryPointExtractor.cs`), `parallel_fanout` method list
+(`EffectObservationExtractor.cs`), DI registration-kind string branches
+(`DiRegistrationExtractor.cs`). The fact derivers are clean (all framework names in
+them are comments).
+
+### STOPGAP — constructor-fetch in EffectExtractor (THROWAWAY, delete at slice 3/P4)
+
+`EffectExtractor.FindConstructorEffects` / `MatchesConstructorTypeGate` were added
+2026-06-08 so `rig index` emits llblgen ctor-fetch effects (`new XxxEntity(pk)`) — it
+previously only walked `InvocationExpressionSyntax`, so `rig effects` silently showed
+**zero** fetches across a whole MedDBase mine while the green
+`Llblgen_entity_constructor_fetches_are_derived` test exercised only the fact path.
+This is a deliberate bolt-on to the engine we intend to delete; it exists purely to
+unblock real-mine effect output. **Remove it when slice 3 makes the fact engine the
+single source of truth.** Guarded by the index-level test
+`PlaygroundAnalysisTests.Llblgen_entity_constructor_fetch_is_extracted_at_index_time`
+(survives the deletion — it should then assert the unified output).
+
+### Unification target (keep the FACT engine, delete the Roslyn detectors)
+
+Order matters — the fact layer's rule-change-without-recompile + cross-project
+reachability are load-bearing, so the Roslyn detectors are the ones to retire:
+
+- **P0** — add index-level parity tests for the only-fact capabilities (ctor-fetch ✅
+  done, ProxyBase, `declaringTypeNameEndsWith`). They pin behaviour before the move.
+- **P1** — enrich stage-1 facts to cover the only-Roslyn capabilities: receiver
+  static type, literal/const args (kills the `receiverTypes` approximation + enables
+  `resource` resolution), enclosing loop/try/retry context (enables observations),
+  MinAPI/MVC facts.
+- **P2** — port the only-Roslyn detectors + the leakage above into the fact engine as
+  data.
+- **P3** — repoint `rig effects/entrypoints/callgraph/trace` to materialized
+  fact-derived tables; `index` and `derive` then agree by construction.
+- **P4** — delete `EffectExtractor`/`EntryPointExtractor`/`EffectObservationExtractor`
+  (incl. the stopgap) and the duplicate `EffectRule` fields. `mine` vs `index` differ
+  only in scope.
+
+Open risks: observations need AST context stage-1 facts don't yet carry; resource
+resolution fidelity from facts; two callgraph constructions (`CallGraphBuilder` vs
+`FactPathFinder`) need the slice-4 resolver audit before unifying.
