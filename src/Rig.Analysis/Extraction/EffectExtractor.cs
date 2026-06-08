@@ -138,10 +138,40 @@ internal static class EffectExtractor
     {
         return rule.Matches(candidate.MethodName)
             && MatchesDeclaringType(rule, candidate.MethodSymbol)
+            && MatchesDeclaringBaseType(rule, candidate.MethodSymbol)
+            && MatchesDeclaringTypeNameSuffix(rule, candidate.MethodSymbol)
             && MatchesReceiverType(rule, candidate)
             && MatchesContainingNamespace(rule, candidate.ContainingMethodSymbol)
             && MatchesContainingType(rule, candidate.ContainingMethodSymbol)
             && MatchesContainingMethod(rule, candidate.ContainingMethodSymbol);
+    }
+
+    // declaringTypeBaseTypes gate: the method's declaring type must derive (full base-chain walk via
+    // RuleTypeMatcher) one of the named base types. The faithful generated-proxy discriminator — a
+    // Show/ShowDialog/Redirect call is a clientpage_proxy effect iff its declaring type derives
+    // ProxyBase, not because the method name or the type's "Proxy" suffix matched. Mirrors the fact
+    // engine's authoritative base-type gate so `rig index` and the fact layer agree.
+    private static bool MatchesDeclaringBaseType(EffectRule rule, IMethodSymbol? methodSymbol)
+    {
+        if (rule.DeclaringTypeBaseTypes is not { Count: > 0 } baseTypes)
+        {
+            return true;
+        }
+
+        var declaringType = methodSymbol?.ContainingType;
+        return declaringType is not null
+            && baseTypes.Any(baseType => RuleTypeMatcher.MatchesTypeOrInterfaces(declaringType, baseType));
+    }
+
+    private static bool MatchesDeclaringTypeNameSuffix(EffectRule rule, IMethodSymbol? methodSymbol)
+    {
+        if (rule.DeclaringTypeNameEndsWith is not { Count: > 0 } suffixes)
+        {
+            return true;
+        }
+
+        var name = methodSymbol?.ContainingType.Name;
+        return name is not null && suffixes.Any(suffix => name.EndsWith(suffix, StringComparison.Ordinal));
     }
 
     private static bool MatchesDeclaringType(EffectRule rule, IMethodSymbol? methodSymbol)

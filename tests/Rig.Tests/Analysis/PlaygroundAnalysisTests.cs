@@ -32,6 +32,30 @@ public sealed class PlaygroundAnalysisTests
     }
 
     [Fact]
+    public async Task Clientpage_proxy_effects_are_base_type_gated_at_index_time()
+    {
+        using var playground = await TempPlayground.CreateLegacyNet48Async();
+
+        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+
+        var proxyEffects = result.Effects.Where(effect => effect.Provider == "clientpage_proxy").ToArray();
+
+        // InvoiceEditProxy derives ProxyBase, so `proxy.ShowDialog(...)` in InvoiceMain.SubmitInvoice
+        // IS a navigation effect.
+        proxyEffects.ShouldContain(effect =>
+            effect.Operation == "show" && effect.Resource.Contains("InvoiceEditProxy", StringComparison.Ordinal)
+        );
+
+        // InvoiceServiceProxy's name ends in "Proxy" but it does NOT derive ProxyBase. The rule's
+        // declaringTypeBaseTypes gate must exclude `notAProxy.ShowDialog(...)`. EffectExtractor
+        // previously ignored declaringTypeBaseTypes on invocations, so this false positive leaked
+        // into `rig effects` (while the fact path correctly excluded it).
+        proxyEffects.ShouldNotContain(effect =>
+            effect.Resource.Contains("InvoiceServiceProxy", StringComparison.Ordinal)
+        );
+    }
+
+    [Fact]
     public async Task Entry_point_effects_playground_tracks_entrypoints_and_effects()
     {
         using var playground = await TempPlayground.CreateEntryPointEffectsAsync();

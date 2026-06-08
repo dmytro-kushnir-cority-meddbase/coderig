@@ -86,8 +86,8 @@ depending on the command:
 | `containingNamespaces/Types/Methods` | ✅ | ❌ |
 | MVC/MinAPI real routes, full `resource` resolution | ✅ | ❌ |
 | structural observations (`read_before_commit`, …) | ✅ | ❌ |
-| `declaringTypeNameEndsWith` | ❌ | ✅ |
-| `declaringTypeBaseTypes` (ProxyBase gate) | ❌ | ✅ |
+| `declaringTypeNameEndsWith` | ❌ → **now ✅ (stopgap)** | ✅ |
+| `declaringTypeBaseTypes` (ProxyBase gate) | ❌ → **now ✅ (stopgap)** | ✅ |
 | `matchConstructor` / `minArguments` (G5 ctor-fetch) | ❌ → **now ✅ (stopgap)** | ✅ |
 | `receiverTypes` | ✅ true static type | ⚠️ approximated to declaring type |
 
@@ -97,7 +97,19 @@ literals (`EntryPointExtractor.cs`), `parallel_fanout` method list
 (`DiRegistrationExtractor.cs`). The fact derivers are clean (all framework names in
 them are comments).
 
-### STOPGAP — constructor-fetch in EffectExtractor (THROWAWAY, delete at slice 3/P4)
+### STOPGAP — EffectExtractor parity gates (THROWAWAY, delete at slice 3/P4)
+
+A second stopgap (2026-06-08) taught `EffectExtractor.Matches` to honor
+`declaringTypeBaseTypes` and `declaringTypeNameEndsWith` on the invocation path
+(`MatchesDeclaringBaseType` / `MatchesDeclaringTypeNameSuffix`, reusing
+`RuleTypeMatcher`'s base-chain walk). Previously the index path ignored both, so
+`clientpage_proxy` — gated only on deriving `ProxyBase` — matched *any* `Show`/
+`ShowDialog`/`Redirect` and over-fired (e.g. `InvoiceServiceProxy.ShowDialog`, a
+non-proxy whose name merely ends in "Proxy"). Guarded by
+`PlaygroundAnalysisTests.Clientpage_proxy_effects_are_base_type_gated_at_index_time`.
+Same throwaway disposition as the constructor stopgap below.
+
+
 
 `EffectExtractor.FindConstructorEffects` / `MatchesConstructorTypeGate` were added
 2026-06-08 so `rig index` emits llblgen ctor-fetch effects (`new XxxEntity(pk)`) — it
