@@ -335,6 +335,8 @@ public static class Writes
                 FilePath = r.FilePath,
                 Line = r.Line,
                 ReceiverType = r.ReceiverType,
+                FirstArgumentTemplate = r.FirstArgumentTemplate,
+                FirstArgumentType = r.FirstArgumentType,
             });
         }
 
@@ -420,6 +422,8 @@ public static class Writes
                 FilePath           TEXT NOT NULL,
                 Line               INTEGER NOT NULL,
                 ReceiverType       TEXT,
+                FirstArgumentTemplate TEXT,
+                FirstArgumentType  TEXT,
                 PRIMARY KEY (RunId, ReferenceFactIndex)
             );
             """, cancellationToken);

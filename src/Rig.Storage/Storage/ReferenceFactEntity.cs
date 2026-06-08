@@ -12,4 +12,6 @@ public sealed class ReferenceFactEntity
     public string FilePath { get; set; } = "";
     public int Line { get; set; }
     public string? ReceiverType { get; set; }
+    public string? FirstArgumentTemplate { get; set; }
+    public string? FirstArgumentType { get; set; }
 }

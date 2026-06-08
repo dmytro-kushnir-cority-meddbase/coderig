@@ -34,7 +34,17 @@ public sealed record ReferenceFact(
     // "StackExchange.Redis.IDatabase"), captured at member-access invocation sites. Lets the
     // stage-2 effect deriver gate `receiverTypes` on the real receiver instead of approximating
     // it with the target's declaring type. Null for bare/static calls and non-invocation refs.
-    string? ReceiverType = null
+    string? ReceiverType = null,
+    // First-argument string template of an invocation: a string literal verbatim, or an
+    // interpolated string reduced to its template (e.g. "https://billing.example/invoices/{teamId}").
+    // Feeds the stage-2 `http_argument` / `string_argument` resource resolution (P2a) so the fact
+    // engine resolves the same `resource` strings the Roslyn pass does. Null when the first argument
+    // is not a string-shaped literal/interpolation, and for non-invocation refs.
+    string? FirstArgumentTemplate = null,
+    // Static type of an invocation's first argument (open-generic FQN). Feeds the stage-2
+    // `argument_type` resource resolution (P2a) — e.g. the message type passed to a queue dispatch.
+    // Null when there is no first argument, and for non-invocation refs.
+    string? FirstArgumentType = null
 );
 
 /// <summary>A base-type or implemented-interface edge between two types.</summary>

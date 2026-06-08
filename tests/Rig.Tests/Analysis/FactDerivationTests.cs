@@ -170,6 +170,29 @@ public sealed class FactDerivationTests
     }
 
     [Fact]
+    public async Task Invocation_reference_facts_carry_first_argument_literal_and_type()
+    {
+        using var playground = await TempPlayground.CreateLegacyNet48Async();
+        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+
+        // OutboundGateway.SendEverything calls `new HealthcodeServiceProxy().SubmitBill("<bill/>")`.
+        // Stage-1 facts must now carry the first argument's string template (for http_argument /
+        // string_argument resource resolution) and its static type (for argument_type), so the
+        // stage-2 effect deriver can resolve the same `resource` strings the Roslyn pass does (P2a).
+        var submitBill = result
+            .References.Where(r =>
+                r.RefKind == "invocation" && r.TargetSymbolId.Contains("SubmitBill", StringComparison.Ordinal)
+            )
+            .ToArray();
+
+        submitBill.ShouldNotBeEmpty();
+        submitBill.ShouldContain(r => r.FirstArgumentTemplate == "<bill/>");
+        submitBill.ShouldContain(r =>
+            r.FirstArgumentType != null && r.FirstArgumentType.Contains("String", StringComparison.OrdinalIgnoreCase)
+        );
+    }
+
+    [Fact]
     public async Task External_provider_effects_are_derived_from_rules()
     {
         using var playground = await TempPlayground.CreateLegacyNet48Async();

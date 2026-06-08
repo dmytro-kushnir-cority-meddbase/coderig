@@ -1,5 +1,6 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Rig.Analysis;
 using Rig.Domain.Data;
 
 namespace Rig.Analysis.Extraction;
@@ -60,7 +61,19 @@ internal static class FactExtractor
                 continue;
 
             var receiverType = refKind == "invocation" ? ReceiverTypeOf(name, model) : null;
-            AddReference(references, target, refKind, EnclosingSymbolId(name, model), tree, name, receiverType);
+            var (firstArgTemplate, firstArgType) = refKind == "invocation"
+                ? FirstArgumentOf(name, model)
+                : (null, null);
+            AddReference(
+                references,
+                target,
+                refKind,
+                EnclosingSymbolId(name, model),
+                tree,
+                name,
+                receiverType,
+                firstArgTemplate,
+                firstArgType);
         }
 
         // --- Object creations -> ctor refs ---
@@ -121,7 +134,9 @@ internal static class FactExtractor
         string? enclosingId,
         SyntaxTree tree,
         SyntaxNode node,
-        string? receiverType = null)
+        string? receiverType = null,
+        string? firstArgumentTemplate = null,
+        string? firstArgumentType = null)
     {
         // For constructors, point the reference at the constructor's containing type's ctor DocID;
         // for everything else use the symbol's own DocID. Reduced extension methods resolve to the
@@ -146,7 +161,9 @@ internal static class FactExtractor
             TargetInSource: inSource,
             FilePath: tree.FilePath,
             Line: tree.GetLineSpan(node.Span).StartLinePosition.Line + 1,
-            ReceiverType: receiverType
+            ReceiverType: receiverType,
+            FirstArgumentTemplate: firstArgumentTemplate,
+            FirstArgumentType: firstArgumentType
         ));
     }
 
@@ -162,6 +179,38 @@ internal static class FactExtractor
             && binding.Parent is ConditionalAccessExpressionSyntax conditional)
             return model.GetTypeInfo(conditional.Expression).Type?.OriginalDefinition.ToDisplayString();
 
+        return null;
+    }
+
+    // First-argument facts for an invocation: the string template of the first argument (literal or
+    // interpolated, via StringTemplateExtensions — the same helper the Roslyn EffectExtractor uses
+    // for http_argument/string_argument) and its static type (open-generic FQN, for argument_type).
+    // Returns (null, null) for bare/method-group names with no invocation or an empty argument list.
+    private static (string? Template, string? Type) FirstArgumentOf(SimpleNameSyntax name, SemanticModel model)
+    {
+        var argument = InvocationOf(name)?.ArgumentList.Arguments.FirstOrDefault()?.Expression;
+        if (argument is null)
+            return (null, null);
+
+        var template = argument.GetStringTemplate();
+        var type = model.GetTypeInfo(argument).Type?.OriginalDefinition.ToDisplayString();
+        return (template, type);
+    }
+
+    // The InvocationExpressionSyntax this name is the invoked method of: `Foo(..)`, `a.Foo(..)`, or
+    // `a?.Foo(..)`. Null otherwise (mirrors IsInvoked's shapes, plus the conditional-access form).
+    private static InvocationExpressionSyntax? InvocationOf(SimpleNameSyntax name)
+    {
+        if (name.Parent is InvocationExpressionSyntax direct && direct.Expression == name)
+            return direct;
+        if (name.Parent is MemberAccessExpressionSyntax member
+            && member.Name == name
+            && member.Parent is InvocationExpressionSyntax memberInvocation
+            && memberInvocation.Expression == member)
+            return memberInvocation;
+        if (name.Parent is MemberBindingExpressionSyntax binding
+            && binding.Parent is InvocationExpressionSyntax conditionalInvocation)
+            return conditionalInvocation;
         return null;
     }
 
