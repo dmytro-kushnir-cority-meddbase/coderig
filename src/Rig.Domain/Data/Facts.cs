@@ -35,15 +35,16 @@ public sealed record ReferenceFact(
     // stage-2 effect deriver gate `receiverTypes` on the real receiver instead of approximating
     // it with the target's declaring type. Null for bare/static calls and non-invocation refs.
     string? ReceiverType = null,
-    // First-argument string template of an invocation: a string literal verbatim, or an
-    // interpolated string reduced to its template (e.g. "https://billing.example/invoices/{teamId}").
-    // Feeds the stage-2 `http_argument` / `string_argument` resource resolution (P2a) so the fact
-    // engine resolves the same `resource` strings the Roslyn pass does. Null when the first argument
-    // is not a string-shaped literal/interpolation, and for non-invocation refs.
+    // First-argument string template: a string literal verbatim, or an interpolated string reduced
+    // to its template (e.g. "https://billing.example/invoices/{teamId}"). Captured for invocations
+    // (feeds the stage-2 `http_argument` / `string_argument` resource resolution, P2a) and for
+    // attribute usages — recorded as "ctor" refs — whose first positional arg is the MVC route
+    // literal (`[Route("..")]`, `[HttpGet("..")]`, feeds the MVC entry-point route, P1d/P2). Null
+    // when the first argument is not a string-shaped literal/interpolation, or there is none.
     string? FirstArgumentTemplate = null,
-    // Static type of an invocation's first argument (open-generic FQN). Feeds the stage-2
-    // `argument_type` resource resolution (P2a) — e.g. the message type passed to a queue dispatch.
-    // Null when there is no first argument, and for non-invocation refs.
+    // Static type of the first argument (open-generic FQN). Feeds the stage-2 `argument_type`
+    // resource resolution (P2a) — e.g. the message type passed to a queue dispatch. Null when there
+    // is no first argument.
     string? FirstArgumentType = null,
     // --- Structural-context facts for the stage-2 observation deriver (P1c → P2b). Rule-agnostic
     //     raw structure mirroring the ancestor walks in the Roslyn EffectObservationExtractor;

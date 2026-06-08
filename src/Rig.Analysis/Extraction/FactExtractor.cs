@@ -62,7 +62,7 @@ internal static class FactExtractor
 
             var invocation = refKind == "invocation" ? InvocationOf(name) : null;
             var receiverType = refKind == "invocation" ? ReceiverTypeOf(name, model) : null;
-            var (firstArgTemplate, firstArgType) = FirstArgumentOf(invocation, model);
+            var (firstArgTemplate, firstArgType) = FirstArgumentOf(FirstArgumentExpressionOf(name, refKind, invocation), model);
             var structural = StructuralContextOf(invocation, model);
             AddReference(
                 references,
@@ -188,13 +188,28 @@ internal static class FactExtractor
         return null;
     }
 
-    // First-argument facts for an invocation: the string template of the first argument (literal or
+    // The first-argument expression whose literal/type becomes a fact: an invocation's first
+    // argument (http_argument/string_argument/argument_type, P1b) or — for an attribute usage,
+    // which resolves to the attribute constructor and is recorded as a "ctor" ref — the attribute's
+    // first positional argument, exposing MVC route literals ([Route("..")], [HttpGet("..")]) to the
+    // entry-point deriver (P1d). Null for any other ref shape.
+    private static ExpressionSyntax? FirstArgumentExpressionOf(SimpleNameSyntax name, string refKind, InvocationExpressionSyntax? invocation)
+    {
+        if (refKind == "invocation")
+            return invocation?.ArgumentList.Arguments.FirstOrDefault()?.Expression;
+
+        if (refKind == "ctor" && IsAttributeName(name))
+            return name.FirstAncestorOrSelf<AttributeSyntax>()?.ArgumentList?.Arguments.FirstOrDefault()?.Expression;
+
+        return null;
+    }
+
+    // First-argument facts for the given argument expression: its string template (literal or
     // interpolated, via StringTemplateExtensions — the same helper the Roslyn EffectExtractor uses
     // for http_argument/string_argument) and its static type (open-generic FQN, for argument_type).
-    // Returns (null, null) for a null invocation (non-invocation ref) or an empty argument list.
-    private static (string? Template, string? Type) FirstArgumentOf(InvocationExpressionSyntax? invocation, SemanticModel model)
+    // Returns (null, null) for a null argument.
+    private static (string? Template, string? Type) FirstArgumentOf(ExpressionSyntax? argument, SemanticModel model)
     {
-        var argument = invocation?.ArgumentList.Arguments.FirstOrDefault()?.Expression;
         if (argument is null)
             return (null, null);
 

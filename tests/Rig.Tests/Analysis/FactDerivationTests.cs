@@ -225,6 +225,39 @@ public sealed class FactDerivationTests
     }
 
     [Fact]
+    public async Task Mvc_and_minapi_entry_point_route_literals_are_captured()
+    {
+        using var playground = await TempPlayground.CreateEntryPointEffectsAsync();
+        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+
+        // MinAPI: `app.MapGet("/minapi/teams/{id}", ...)` — already an invocation ref (P1a) carrying
+        // its route literal (P1b). The fact-side MinAPI deriver (P2) reads method name + first-arg.
+        result.References.ShouldContain(r =>
+            r.RefKind == "invocation"
+            && r.TargetSymbolId.Contains("MapGet", StringComparison.Ordinal)
+            && r.FirstArgumentTemplate == "/minapi/teams/{id}"
+        );
+
+        // MVC: an attribute usage resolves to the attribute constructor and is recorded as a "ctor"
+        // ref. P1d captures the attribute's first positional arg, exposing the route literals.
+        // Controller-level `[Route("api/[controller]")]` enclosed by TeamsController:
+        result.References.ShouldContain(r =>
+            r.RefKind == "ctor"
+            && r.TargetSymbolId.Contains("RouteAttribute", StringComparison.Ordinal)
+            && r.FirstArgumentTemplate == "api/[controller]"
+            && r.EnclosingSymbolId != null
+            && r.EnclosingSymbolId.Contains("TeamsController", StringComparison.Ordinal)
+        );
+
+        // Method-level `[HttpGet("{id}")]`:
+        result.References.ShouldContain(r =>
+            r.RefKind == "ctor"
+            && r.TargetSymbolId.Contains("HttpGetAttribute", StringComparison.Ordinal)
+            && r.FirstArgumentTemplate == "{id}"
+        );
+    }
+
+    [Fact]
     public async Task External_provider_effects_are_derived_from_rules()
     {
         using var playground = await TempPlayground.CreateLegacyNet48Async();
