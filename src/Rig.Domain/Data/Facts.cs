@@ -122,10 +122,50 @@ public sealed record PathStep(string SymbolId, string Kind, string? FilePath, in
 // structural entry-point rules don't catch (e.g. RepeatingBackgroundProcessSchedule(.., Process)).
 public sealed record HandoffEntryPoint(string Target, string RegisteredIn, string FilePath, int Line);
 
+// An invocation reference fact, with the enrichment fed to the stage-2 effect/observation derivers
+// (P1a–P1c). Replaces the positional tuple that grew past readability. Receiver/FirstArgument feed
+// resource resolution (P2a); the Enclosing* fields feed the observation deriver (P2b).
+public sealed record FactInvocation(
+    string Target,
+    string? Enclosing,
+    string FilePath,
+    int Line,
+    string? Receiver = null,
+    string? FirstArgTemplate = null,
+    string? FirstArgType = null,
+    string? LoopKind = null,
+    string? LoopDetail = null,
+    string? EnclosingInvocations = null,
+    string? CatchTypes = null);
+
 // An effect re-derived from the reference index by matching an invocation target against the
-// encoded effect rules (stage 2 over facts).
+// encoded effect rules (stage 2 over facts). Observations are the fact-derived structural notes
+// (looped_effect / parallel_fanout / resilience_retry / concurrency_handled, P2b); empty for
+// constructor-fetch effects (mirrors the Roslyn path, which attaches observations to invocations).
 public sealed record DerivedEffect(
-    string Provider, string Operation, string ResourceType, string? EnclosingSymbolId, string FilePath, int Line);
+    string Provider, string Operation, string ResourceType, string? EnclosingSymbolId, string FilePath, int Line,
+    IReadOnlyList<EffectObservationInfo>? Observations = null);
+
+// Fact-side projections of the observation rules (the same AnalysisRuleSet.*Observations data the
+// Roslyn EffectObservationExtractor uses), carried into the Domain observation deriver (P2b) so
+// observation detection stays data-driven. read_before_commit is deferred (cross-invocation
+// ordering; EF-only — not the LLBLGen/MedDBase target). The parallel-fanout list is still supplied
+// by the Analysis provider (hardcoded there today, like the Roslyn pass) pending its move to rule
+// data in P2c.
+public sealed record FactResilienceRetryRule(
+    IReadOnlyList<string> WrapperMethods, IReadOnlyList<string> ReceiverTypePatterns);
+
+public sealed record FactConcurrencyHandledRule(
+    IReadOnlyList<string> CommitMethods, IReadOnlyList<string> CatchTypePatterns);
+
+// One fanout wrapper: receiver source text (e.g. "Task"/"Parallel") + the wrapping methods
+// (e.g. "WhenAll" / "ForEach"/"ForEachAsync"). Context = "{Receiver}.{method}".
+public sealed record FactParallelFanoutRule(string Receiver, IReadOnlyList<string> Methods);
+
+public sealed record FactObservationRules(
+    IReadOnlyList<FactResilienceRetryRule> ResilienceRetry,
+    IReadOnlyList<FactConcurrencyHandledRule> ConcurrencyHandled,
+    IReadOnlyList<FactParallelFanoutRule> ParallelFanout);
 
 // An entry point re-derived from facts (type_relation_facts BFS + symbol_facts + reference_facts).
 // Covers the two pageModel cases: constructor-per-overload (page kind) and

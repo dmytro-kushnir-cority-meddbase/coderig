@@ -736,14 +736,24 @@ public static class Reads
         return new FactEntryPointDeriver.FactEntryPointData(baseEdges, methods, types, ctorRefs!, interfaceEdges);
     }
 
-    // Loads invocation reference facts for fact-based effect derivation.
-    public static async Task<IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line, string? Receiver, string? FirstArgTemplate, string? FirstArgType)>>
+    // Loads invocation reference facts for fact-based effect + observation derivation.
+    public static async Task<IReadOnlyList<FactInvocation>>
         LoadInvocationRefsAsync(RigDbContext context, CancellationToken cancellationToken = default)
     {
         var rows = await context.ReferenceFacts
             .Where(r => r.RefKind == "invocation")
-            .Select(r => new { r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.ReceiverType, r.FirstArgumentTemplate, r.FirstArgumentType })
+            .Select(r => new
+            {
+                r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.ReceiverType,
+                r.FirstArgumentTemplate, r.FirstArgumentType,
+                r.EnclosingLoopKind, r.EnclosingLoopDetail, r.EnclosingInvocations, r.EnclosingCatchTypes,
+            })
             .ToArrayAsync(cancellationToken);
-        return rows.Select(r => (r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.ReceiverType, r.FirstArgumentTemplate, r.FirstArgumentType)).ToArray();
+        return rows
+            .Select(r => new FactInvocation(
+                r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.ReceiverType,
+                r.FirstArgumentTemplate, r.FirstArgumentType,
+                r.EnclosingLoopKind, r.EnclosingLoopDetail, r.EnclosingInvocations, r.EnclosingCatchTypes))
+            .ToArray();
     }
 }

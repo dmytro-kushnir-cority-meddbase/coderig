@@ -314,6 +314,36 @@ public sealed class FactDerivationTests
     }
 
     [Fact]
+    public async Task Derived_effects_carry_structural_observations()
+    {
+        using var playground = await TempPlayground.CreateEntryPointEffectsAsync();
+        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+
+        var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
+        var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var epData = FactProjection.EntryPointData(result);
+        var effects = FactEffectDeriver.Derive(
+            FactProjection.Invocations(result), effectRules, providerFilter: null,
+            baseEdges: epData.BaseEdges, ctorRefs: epData.CtorRefs, observationRules: observationRules);
+
+        // looped_effect (P1c facts -> P2b deriver): TeamWorkflow.LoadTeamSummaryAsync reads redis
+        // inside a `foreach`, so the redis read effect there carries a looped_effect/foreach note.
+        effects.ShouldContain(e =>
+            e.Provider == "redis"
+            && e.Observations != null
+            && e.Observations.Any(o => o.Type == "looped_effect" && o.Context == "foreach")
+        );
+
+        // parallel_fanout: TeamWorkflow.ProcessBatchAsync reads redis inside `Parallel.ForEach(...)`.
+        effects.ShouldContain(e =>
+            e.Provider == "redis"
+            && e.Observations != null
+            && e.Observations.Any(o => o.Type == "parallel_fanout" && o.Context == "Parallel.ForEach")
+        );
+    }
+
+    [Fact]
     public async Task Llblgen_entity_constructor_fetches_are_derived()
     {
         using var playground = await TempPlayground.CreateLegacyNet48Async();

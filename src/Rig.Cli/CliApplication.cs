@@ -670,7 +670,8 @@ public static class CliApplication
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var effects = FactEffectDeriver.Derive(invocations, effectRules, providerFilter: null, baseEdges: epData.BaseEdges, ctorRefs: epData.CtorRefs);
+        var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var effects = FactEffectDeriver.Derive(invocations, effectRules, providerFilter: null, baseEdges: epData.BaseEdges, ctorRefs: epData.CtorRefs, observationRules: observationRules);
 
         // Effects whose enclosing method is reachable from the entry point.
         var hits = effects
@@ -720,14 +721,15 @@ public static class CliApplication
         // --- Effects (data-driven over facts) ---
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var effects = FactEffectDeriver.Derive(invocations, effectRules, providerFilter: null, baseEdges: epData.BaseEdges, ctorRefs: epData.CtorRefs);
+        var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var effects = FactEffectDeriver.Derive(invocations, effectRules, providerFilter: null, baseEdges: epData.BaseEdges, ctorRefs: epData.CtorRefs, observationRules: observationRules);
 
         // Machine-readable mode: emit full-fidelity rows (full DocIDs/paths) for tooling that joins
         // effects/entry points against the call graph. `rig derive --format tsv`.
         if (string.Equals(GetOption(args, "--format"), "tsv", StringComparison.OrdinalIgnoreCase))
         {
             foreach (var e in effects)
-                output.WriteLine($"effect\t{e.Provider}\t{e.Operation}\t{e.ResourceType}\t{e.EnclosingSymbolId}\t{e.FilePath}\t{e.Line}");
+                output.WriteLine($"effect\t{e.Provider}\t{e.Operation}\t{e.ResourceType}\t{e.EnclosingSymbolId}\t{e.FilePath}\t{e.Line}\t{string.Join(",", (e.Observations ?? []).Select(o => o.Type))}");
             var tsvEpRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
             var tsvClassRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(workingDirectory, extraRules);
             foreach (var ep in FactEntryPointDeriver.Derive(epData, tsvEpRules, tsvClassRules))
@@ -743,6 +745,20 @@ public static class CliApplication
             output.WriteLine($"  {group.Key.Provider} {group.Key.Operation}: {group.Count()}");
             foreach (var e in group.Take(limit / 8 + 1))
                 output.WriteLine($"      {ShortName(e.ResourceType)}  <- {ShortName(e.EnclosingSymbolId)}  {ShortenPath(e.FilePath)}:{e.Line}");
+        }
+
+        // --- Observations attached to effects (looped_effect / parallel_fanout / …, P2b) ---
+        var observationGroups = effects
+            .SelectMany(e => e.Observations ?? [])
+            .GroupBy(o => o.Type)
+            .OrderByDescending(g => g.Count())
+            .ToArray();
+        if (observationGroups.Length > 0)
+        {
+            output.WriteLine();
+            output.WriteLine($"Observations on effects: {observationGroups.Sum(g => g.Count())}");
+            foreach (var group in observationGroups)
+                output.WriteLine($"  {group.Key}: {group.Count()}");
         }
 
         // --- Page + action entry points (fact-based BFS + attribute-ref detection) ---

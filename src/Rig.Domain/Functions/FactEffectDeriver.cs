@@ -21,11 +21,12 @@ public static class FactEffectDeriver
     private static readonly HashSet<string> EmptyClosure = new(StringComparer.Ordinal);
 
     public static IReadOnlyList<DerivedEffect> Derive(
-        IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line, string? Receiver, string? FirstArgTemplate, string? FirstArgType)> invocations,
+        IReadOnlyList<FactInvocation> invocations,
         IReadOnlyList<FactEffectRule> rules,
         string? providerFilter = null,
         IReadOnlyList<(string TypeId, string BaseId)>? baseEdges = null,
-        IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)>? ctorRefs = null)
+        IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)>? ctorRefs = null,
+        FactObservationRules? observationRules = null)
     {
         // Precompute a base-type closure per distinct DeclaringTypeBaseTypes set (e.g. ProxyBase).
         // Without base edges, base-gated rules match nothing (the generated proxies aren't indexed).
@@ -78,7 +79,17 @@ public static class FactEffectDeriver
                 if (string.IsNullOrWhiteSpace(resource))
                     continue; // matched, but the resource is unresolvable — no effect; let a later rule try
 
-                results.Add(new DerivedEffect(rule.Provider, rule.Operation, resource!, inv.Enclosing, inv.FilePath, inv.Line));
+                var observations = observationRules is null
+                    ? null
+                    : FactObservationDeriver.Derive(
+                        methodName,
+                        inv.LoopKind,
+                        inv.LoopDetail,
+                        FactStructuralContext.DecodeInvocations(inv.EnclosingInvocations),
+                        FactStructuralContext.DecodeList(inv.CatchTypes),
+                        observationRules);
+
+                results.Add(new DerivedEffect(rule.Provider, rule.Operation, resource!, inv.Enclosing, inv.FilePath, inv.Line, observations));
                 break; // first matching rule wins
             }
         }
