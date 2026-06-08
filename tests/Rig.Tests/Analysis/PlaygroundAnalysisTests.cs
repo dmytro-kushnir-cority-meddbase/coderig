@@ -5,14 +5,16 @@ using Shouldly;
 namespace Rig.Tests.Analysis;
 
 [Collection(RoslynIntegrationCollection.Name)]
-public sealed class PlaygroundAnalysisTests
+public sealed class PlaygroundAnalysisTests(AnalyzedPlaygrounds playgrounds)
 {
+    private readonly AnalyzedPlaygrounds _playgrounds = playgrounds;
+
     [Fact]
     public async Task Llblgen_entity_constructor_fetch_is_extracted_at_index_time()
     {
-        using var playground = await TempPlayground.CreateLegacyNet48Async();
+        var playground = await _playgrounds.LegacyNet48Async();
 
-        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+        var result = playground.Result;
 
         // G5: `new InvoiceEntity(pk)` and `new InvoiceEntity(pk, txn)` in EntityFetcher.Load are
         // llblgen constructor fetches; the empty `new InvoiceEntity { InvoiceId = ... }` initializer
@@ -34,9 +36,9 @@ public sealed class PlaygroundAnalysisTests
     [Fact]
     public async Task Clientpage_proxy_effects_are_base_type_gated_at_index_time()
     {
-        using var playground = await TempPlayground.CreateLegacyNet48Async();
+        var playground = await _playgrounds.LegacyNet48Async();
 
-        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+        var result = playground.Result;
 
         var proxyEffects = result.Effects.Where(effect => effect.Provider == "clientpage_proxy").ToArray();
 
@@ -58,9 +60,9 @@ public sealed class PlaygroundAnalysisTests
     [Fact]
     public async Task Entry_point_effects_playground_tracks_entrypoints_and_effects()
     {
-        using var playground = await TempPlayground.CreateEntryPointEffectsAsync();
+        var playground = await _playgrounds.EntryPointEffectsAsync();
 
-        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+        var result = playground.Result;
 
         result.SourceFiles.ShouldContain(sourceFile =>
             sourceFile.Status == "skipped"

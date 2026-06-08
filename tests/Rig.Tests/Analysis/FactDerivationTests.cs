@@ -11,13 +11,15 @@ namespace Rig.Tests.Analysis;
 // the EXACT derived set, including the negative cases that must be EXCLUDED. No SQLite: the
 // fixture is analyzed in-memory and its facts projected into the deriver inputs.
 [Collection(RoslynIntegrationCollection.Name)]
-public sealed class FactDerivationTests
+public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
 {
+    private readonly AnalyzedPlaygrounds _playgrounds = playgrounds;
+
     [Fact]
     public async Task Entry_points_are_gated_by_the_ClientPage_base_type()
     {
-        using var playground = await TempPlayground.CreateLegacyNet48Async();
-        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+        var playground = await _playgrounds.LegacyNet48Async();
+        var result = playground.Result;
 
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
         var rules = FactEntryPointRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
@@ -66,8 +68,8 @@ public sealed class FactDerivationTests
     [Fact]
     public async Task PageBase_reflection_pages_are_entry_points()
     {
-        using var playground = await TempPlayground.CreateLegacyNet48Async();
-        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+        var playground = await _playgrounds.LegacyNet48Async();
+        var result = playground.Result;
 
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
         var pageRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
@@ -84,8 +86,8 @@ public sealed class FactDerivationTests
     [Fact]
     public async Task Class_inheritance_backend_entry_points_are_derived()
     {
-        using var playground = await TempPlayground.CreateLegacyNet48Async();
-        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+        var playground = await _playgrounds.LegacyNet48Async();
+        var result = playground.Result;
 
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
         var pageRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
@@ -131,8 +133,8 @@ public sealed class FactDerivationTests
     [Fact]
     public async Task Call_graph_dispatches_base_virtual_to_override()
     {
-        using var playground = await TempPlayground.CreateLegacyNet48Async();
-        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+        var playground = await _playgrounds.LegacyNet48Async();
+        var result = playground.Result;
 
         var graph = FactProjection.GraphData(result);
 
@@ -151,8 +153,8 @@ public sealed class FactDerivationTests
     [Fact]
     public async Task Invocation_reference_facts_carry_receiver_type()
     {
-        using var playground = await TempPlayground.CreateLegacyNet48Async();
-        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+        var playground = await _playgrounds.LegacyNet48Async();
+        var result = playground.Result;
 
         // InvoiceController.GetAll calls `_db.GetMultiAsync(...)`, where `_db` is a DataAdapter.
         // Stage-1 facts must now carry the receiver's static type so the effect deriver can gate
@@ -172,8 +174,8 @@ public sealed class FactDerivationTests
     [Fact]
     public async Task Invocation_reference_facts_carry_first_argument_literal_and_type()
     {
-        using var playground = await TempPlayground.CreateLegacyNet48Async();
-        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+        var playground = await _playgrounds.LegacyNet48Async();
+        var result = playground.Result;
 
         // OutboundGateway.SendEverything calls `new HealthcodeServiceProxy().SubmitBill("<bill/>")`.
         // Stage-1 facts must now carry the first argument's string template (for http_argument /
@@ -195,8 +197,8 @@ public sealed class FactDerivationTests
     [Fact]
     public async Task Invocation_reference_facts_carry_structural_context()
     {
-        using var playground = await TempPlayground.CreateEntryPointEffectsAsync();
-        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+        var playground = await _playgrounds.EntryPointEffectsAsync();
+        var result = playground.Result;
 
         var invocations = result.References.Where(r => r.RefKind == "invocation").ToArray();
 
@@ -227,8 +229,8 @@ public sealed class FactDerivationTests
     [Fact]
     public async Task Mvc_and_minapi_entry_point_route_literals_are_captured()
     {
-        using var playground = await TempPlayground.CreateEntryPointEffectsAsync();
-        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+        var playground = await _playgrounds.EntryPointEffectsAsync();
+        var result = playground.Result;
 
         // MinAPI: `app.MapGet("/minapi/teams/{id}", ...)` — already an invocation ref (P1a) carrying
         // its route literal (P1b). The fact-side MinAPI deriver (P2) reads method name + first-arg.
@@ -260,8 +262,8 @@ public sealed class FactDerivationTests
     [Fact]
     public async Task External_provider_effects_are_derived_from_rules()
     {
-        using var playground = await TempPlayground.CreateLegacyNet48Async();
-        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+        var playground = await _playgrounds.LegacyNet48Async();
+        var result = playground.Result;
 
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
         var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
@@ -289,8 +291,8 @@ public sealed class FactDerivationTests
     [Fact]
     public async Task Derived_effect_resource_is_resolved_from_facts()
     {
-        using var playground = await TempPlayground.CreateLegacyNet48Async();
-        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+        var playground = await _playgrounds.LegacyNet48Async();
+        var result = playground.Result;
 
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
         var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
@@ -316,8 +318,8 @@ public sealed class FactDerivationTests
     [Fact]
     public async Task Derived_effects_carry_structural_observations()
     {
-        using var playground = await TempPlayground.CreateEntryPointEffectsAsync();
-        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+        var playground = await _playgrounds.EntryPointEffectsAsync();
+        var result = playground.Result;
 
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
         var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
@@ -346,8 +348,8 @@ public sealed class FactDerivationTests
     [Fact]
     public async Task Llblgen_entity_constructor_fetches_are_derived()
     {
-        using var playground = await TempPlayground.CreateLegacyNet48Async();
-        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+        var playground = await _playgrounds.LegacyNet48Async();
+        var result = playground.Result;
 
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
         var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
@@ -372,8 +374,8 @@ public sealed class FactDerivationTests
     [Fact]
     public async Task Clientpage_proxy_effects_exclude_non_proxy_ShowDialog()
     {
-        using var playground = await TempPlayground.CreateLegacyNet48Async();
-        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+        var playground = await _playgrounds.LegacyNet48Async();
+        var result = playground.Result;
 
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
         var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
