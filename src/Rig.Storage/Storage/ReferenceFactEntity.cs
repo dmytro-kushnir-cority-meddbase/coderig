@@ -11,4 +11,5 @@ public sealed class ReferenceFactEntity
     public bool TargetInSource { get; set; }
     public string FilePath { get; set; } = "";
     public int Line { get; set; }
+    public string? ReceiverType { get; set; }
 }

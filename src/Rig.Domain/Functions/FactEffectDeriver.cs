@@ -21,7 +21,7 @@ public static class FactEffectDeriver
     private static readonly HashSet<string> EmptyClosure = new(StringComparer.Ordinal);
 
     public static IReadOnlyList<DerivedEffect> Derive(
-        IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)> invocations,
+        IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line, string? Receiver)> invocations,
         IReadOnlyList<FactEffectRule> rules,
         string? providerFilter = null,
         IReadOnlyList<(string TypeId, string BaseId)>? baseEdges = null,
@@ -64,7 +64,7 @@ public static class FactEffectDeriver
                     continue;
                 if (!rule.Methods.Contains(methodName, StringComparer.Ordinal))
                     continue;
-                if (!TypeGateMatches(rule, declaringType, receiverType: null, ClosureFor(rule)))
+                if (!TypeGateMatches(rule, declaringType, receiverType: inv.Receiver, ClosureFor(rule)))
                     continue;
 
                 results.Add(new DerivedEffect(rule.Provider, rule.Operation, declaringType, inv.Enclosing, inv.FilePath, inv.Line));

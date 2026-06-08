@@ -737,13 +737,13 @@ public static class Reads
     }
 
     // Loads invocation reference facts for fact-based effect derivation.
-    public static async Task<IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)>>
+    public static async Task<IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line, string? Receiver)>>
         LoadInvocationRefsAsync(RigDbContext context, CancellationToken cancellationToken = default)
     {
         var rows = await context.ReferenceFacts
             .Where(r => r.RefKind == "invocation")
-            .Select(r => new { r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line })
+            .Select(r => new { r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.ReceiverType })
             .ToArrayAsync(cancellationToken);
-        return rows.Select(r => (r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line)).ToArray();
+        return rows.Select(r => (r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.ReceiverType)).ToArray();
     }
 }

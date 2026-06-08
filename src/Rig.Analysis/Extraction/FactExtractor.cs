@@ -59,7 +59,8 @@ internal static class FactExtractor
             if (refKind is null)
                 continue;
 
-            AddReference(references, target, refKind, EnclosingSymbolId(name, model), tree, name);
+            var receiverType = refKind == "invocation" ? ReceiverTypeOf(name, model) : null;
+            AddReference(references, target, refKind, EnclosingSymbolId(name, model), tree, name, receiverType);
         }
 
         // --- Object creations -> ctor refs ---
@@ -119,7 +120,8 @@ internal static class FactExtractor
         string refKind,
         string? enclosingId,
         SyntaxTree tree,
-        SyntaxNode node)
+        SyntaxNode node,
+        string? receiverType = null)
     {
         // For constructors, point the reference at the constructor's containing type's ctor DocID;
         // for everything else use the symbol's own DocID. Reduced extension methods resolve to the
@@ -143,8 +145,24 @@ internal static class FactExtractor
             TargetAssembly: assembly,
             TargetInSource: inSource,
             FilePath: tree.FilePath,
-            Line: tree.GetLineSpan(node.Span).StartLinePosition.Line + 1
+            Line: tree.GetLineSpan(node.Span).StartLinePosition.Line + 1,
+            ReceiverType: receiverType
         ));
+    }
+
+    // Static type of an invocation's receiver: `a.Foo()` -> type of `a` (open-generic FQN).
+    // Bare `Foo()` (implicit this) and other shapes return null — only explicit member-access
+    // receivers carry a receiver-type fact.
+    private static string? ReceiverTypeOf(SimpleNameSyntax name, SemanticModel model)
+    {
+        if (name.Parent is MemberAccessExpressionSyntax member && member.Name == name)
+            return model.GetTypeInfo(member.Expression).Type?.OriginalDefinition.ToDisplayString();
+
+        if (name.Parent is MemberBindingExpressionSyntax binding
+            && binding.Parent is ConditionalAccessExpressionSyntax conditional)
+            return model.GetTypeInfo(conditional.Expression).Type?.OriginalDefinition.ToDisplayString();
+
+        return null;
     }
 
     private static string? ClassifyReference(SimpleNameSyntax name, ISymbol target) =>

@@ -334,6 +334,7 @@ public static class Writes
                 TargetInSource = r.TargetInSource,
                 FilePath = r.FilePath,
                 Line = r.Line,
+                ReceiverType = r.ReceiverType,
             });
         }
 
@@ -418,6 +419,7 @@ public static class Writes
                 TargetInSource     INTEGER NOT NULL,
                 FilePath           TEXT NOT NULL,
                 Line               INTEGER NOT NULL,
+                ReceiverType       TEXT,
                 PRIMARY KEY (RunId, ReferenceFactIndex)
             );
             """, cancellationToken);

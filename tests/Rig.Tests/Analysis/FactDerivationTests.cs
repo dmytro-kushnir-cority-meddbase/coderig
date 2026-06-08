@@ -149,6 +149,27 @@ public sealed class FactDerivationTests
     }
 
     [Fact]
+    public async Task Invocation_reference_facts_carry_receiver_type()
+    {
+        using var playground = await TempPlayground.CreateLegacyNet48Async();
+        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+
+        // InvoiceController.GetAll calls `_db.GetMultiAsync(...)`, where `_db` is a DataAdapter.
+        // Stage-1 facts must now carry the receiver's static type so the effect deriver can gate
+        // receiverTypes on the real receiver instead of approximating it with the declaring type.
+        var getMulti = result
+            .References.Where(r =>
+                r.RefKind == "invocation" && r.TargetSymbolId.Contains("GetMultiAsync", StringComparison.Ordinal)
+            )
+            .ToArray();
+
+        getMulti.ShouldNotBeEmpty();
+        getMulti.ShouldContain(r =>
+            r.ReceiverType != null && r.ReceiverType.Contains("DataAdapter", StringComparison.Ordinal)
+        );
+    }
+
+    [Fact]
     public async Task External_provider_effects_are_derived_from_rules()
     {
         using var playground = await TempPlayground.CreateLegacyNet48Async();

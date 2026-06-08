@@ -29,7 +29,12 @@ public sealed record ReferenceFact(
     string TargetAssembly,
     bool TargetInSource, // true => target is first-party (declared in the indexed source set)
     string FilePath,
-    int Line
+    int Line,
+    // Static type of the invocation receiver (open-generic FQN, e.g.
+    // "StackExchange.Redis.IDatabase"), captured at member-access invocation sites. Lets the
+    // stage-2 effect deriver gate `receiverTypes` on the real receiver instead of approximating
+    // it with the target's declaring type. Null for bare/static calls and non-invocation refs.
+    string? ReceiverType = null
 );
 
 /// <summary>A base-type or implemented-interface edge between two types.</summary>
