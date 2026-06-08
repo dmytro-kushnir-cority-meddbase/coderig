@@ -83,13 +83,40 @@ depending on the command:
 
 | Rule field / capability | Roslyn (index) | Fact (derive) |
 |---|---|---|
-| `containingNamespaces/Types/Methods` | ✅ | ❌ |
-| MVC/MinAPI real routes, full `resource` resolution | ✅ | ❌ |
-| structural observations (`read_before_commit`, …) | ✅ | ❌ |
+| `containingNamespaces/Types/Methods` | ✅ | ✅ **(P2a)** — parsed from EnclosingSymbolId; no base-walk for containing type |
+| `resource` resolution (`receiver_type`/`argument_type`/`string_/http_argument`) | ✅ | ✅ **(P2a)** via P1a/P1b facts; `ef_*` deferred (EF-only) |
+| MVC/MinAPI route *facts* captured | ✅ | ✅ **(P1d)** captured; fact-side MVC/MinAPI *deriver* not built yet |
+| structural observations (`read_before_commit`, …) | ✅ | facts captured **(P1c)**; deriver = P2b |
 | `declaringTypeNameEndsWith` | ❌ → **now ✅ (stopgap)** | ✅ |
 | `declaringTypeBaseTypes` (ProxyBase gate) | ❌ → **now ✅ (stopgap)** | ✅ |
 | `matchConstructor` / `minArguments` (G5 ctor-fetch) | ❌ → **now ✅ (stopgap)** | ✅ |
-| `receiverTypes` | ✅ true static type | ⚠️ approximated to declaring type |
+| `receiverTypes` | ✅ true static type (base-walk) | ✅ **(P1a/P2a)** receiver OR declaring type, equality/prefix (no base-walk) |
+
+### P1 + P2a status (2026-06-08)
+
+**P1 (fact enrichment) complete** — ReferenceFact now carries ReceiverType (P1a),
+First{Argument}Template/Type incl. attribute route literals (P1b/P1d), and the
+structural-context columns (P1c). **P2a done** — `FactEffectRule` gained `Resource` +
+`containing*` + `treatAsDispatch`; `FactEffectDeriver` resolves the resource from facts
+(dropping the effect when unresolvable, like Roslyn) and skips dispatch rules. A P1a
+regression was fixed in passing: the `receiverTypes` gate had started probing *only* the
+precise receiver, silently dropping calls through a derived receiver (e.g.
+`ActionsHelper.RedirectUrl`, declared on the gated `Helper`); it now also matches the
+declaring type.
+
+**Real-data parity snapshot** (MedDBase.Pages: `rig derive` vs index `rig effects`=6968):
+fact effects 2042 → **4837** after P2a. By provider: `clientpage_nav` **2791 = 2791 exact**,
+`clientpage_event` **15 = 15 exact**. Remaining gaps are pre-existing *deriver-design*
+divergences, not P2a regressions, deferred to the P3 parity diff:
+- `clientpage_proxy` 1504 vs 2767 — Roslyn emits one effect **per matching rule**; the fact
+  deriver is **first-match-wins** (`break`). One `ShowDialog()` matching both the
+  `ProxyBase`-receiver rule and the `MedDBase.Pages`+`Proxy`-suffix rule = 2 effects in
+  Roslyn, 1 in facts.
+- `llblgen` vs 1390 — `declaringTypes` gate has no base-walk (e.g. `SaveEntity` resolved to
+  a `DataAccessAdapterBase` subtype won't match a `declaringTypes:[…Base]` gate).
+Also still open: the **framework-ref opt-in** gap (Q2 — http/efcore/redis effect targets in
+`System.*`/framework assemblies are dropped from facts; receiver base-walk also needs first-
+party base edges).
 
 **Leakage to move to data during the port:** MVC `EndsWith("Controller")`+route
 literals (`EntryPointExtractor.cs`), `parallel_fanout` method list

@@ -207,4 +207,23 @@ public sealed record FactEffectRule(
     // (declaringTypes namespace / declaringTypeBaseTypes EntityBase2) apply to the CONSTRUCTED type;
     // MinArguments distinguishes the fetch ctor (pk arg) from the empty `new XxxEntity()`.
     bool MatchConstructor = false,
-    int MinArguments = 0);
+    int MinArguments = 0,
+    // Enclosing-method gates (P2a) — mirror the Roslyn MatchesContainingNamespace/Type/Method. The
+    // effect counts only when the enclosing method's namespace / declaring type / name matches.
+    // Parsed from the reference's EnclosingSymbolId DocID; type/namespace matching is equality +
+    // prefix (no base-chain walk — the fact layer has no base edges for the *containing* type, so a
+    // containingTypes rule that relies on inheritance is a known fidelity gap).
+    IReadOnlyList<string>? ContainingNamespaces = null,
+    IReadOnlyList<string>? ContainingTypes = null,
+    IReadOnlyList<string>? ContainingMethods = null,
+    // Resource-resolution strategy (P2a), mirroring the Roslyn EffectExtractor.TryCreateEffect
+    // switch, resolved from facts: "receiver_type" -> the receiver's static type (P1a);
+    // "argument_type" -> the first argument's static type (P1b); "string_argument" -> the first
+    // argument's string template (P1b); "http_argument" -> that template, scheme/slash-normalized.
+    // The "ef_*" strategies are EF-specific and not resolvable from current facts (deferred — they
+    // resolve to null). When the strategy resolves to null/empty the effect is DROPPED, exactly as
+    // the Roslyn path drops a null resource — this is what aligns fact effects with index effects.
+    string Resource = "",
+    // When true the rule drives call-graph dispatch, not an effect; the Roslyn FindEffects skips it.
+    // The fact effect deriver skips it too so dispatch rules don't leak in as effects.
+    bool TreatAsDispatch = false);

@@ -82,10 +82,10 @@ public static class FactProjection
         return new FactGraphData(callEdges, implEdges, methods, baseEdges);
     }
 
-    public static IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line, string? Receiver)> Invocations(
+    public static IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line, string? Receiver, string? FirstArgTemplate, string? FirstArgType)> Invocations(
         AnalysisResult result) =>
         result
             .References.Where(r => r.RefKind == "invocation")
-            .Select(r => (r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.ReceiverType))
+            .Select(r => (r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.ReceiverType, r.FirstArgumentTemplate, r.FirstArgumentType))
             .ToArray();
 }

@@ -33,6 +33,11 @@ public static class FactEffectRuleProvider
             rule.DeclaringTypeNameEndsWith,
             rule.DeclaringTypeBaseTypes,
             rule.MatchConstructor,
-            rule.MinArguments);
+            rule.MinArguments,
+            rule.ContainingNamespaces,
+            rule.ContainingTypes,
+            rule.ContainingMethods,
+            rule.Resource,
+            rule.TreatAsDispatch);
     }
 }

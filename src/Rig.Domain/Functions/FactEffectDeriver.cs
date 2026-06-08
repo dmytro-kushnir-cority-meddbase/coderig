@@ -21,7 +21,7 @@ public static class FactEffectDeriver
     private static readonly HashSet<string> EmptyClosure = new(StringComparer.Ordinal);
 
     public static IReadOnlyList<DerivedEffect> Derive(
-        IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line, string? Receiver)> invocations,
+        IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line, string? Receiver, string? FirstArgTemplate, string? FirstArgType)> invocations,
         IReadOnlyList<FactEffectRule> rules,
         string? providerFilter = null,
         IReadOnlyList<(string TypeId, string BaseId)>? baseEdges = null,
@@ -46,9 +46,11 @@ public static class FactEffectDeriver
             return closure;
         }
 
+        // Dispatch rules drive the call graph, not effects — the Roslyn FindEffects skips them, so
+        // we do too (otherwise a dispatch rule with a resolvable resource would leak in as an effect).
         // Invocation rules are the default; constructor rules (MatchConstructor) match ctor refs.
-        var invocationRules = rules.Where(r => !r.MatchConstructor).ToArray();
-        var constructorRules = rules.Where(r => r.MatchConstructor).ToArray();
+        var invocationRules = rules.Where(r => !r.MatchConstructor && !r.TreatAsDispatch).ToArray();
+        var constructorRules = rules.Where(r => r.MatchConstructor && !r.TreatAsDispatch).ToArray();
 
         var results = new List<DerivedEffect>();
         foreach (var inv in invocations)
@@ -66,8 +68,17 @@ public static class FactEffectDeriver
                     continue;
                 if (!TypeGateMatches(rule, declaringType, receiverType: inv.Receiver, ClosureFor(rule)))
                     continue;
+                if (!ContainingGateMatches(rule, inv.Enclosing))
+                    continue;
 
-                results.Add(new DerivedEffect(rule.Provider, rule.Operation, declaringType, inv.Enclosing, inv.FilePath, inv.Line));
+                // Resolve the resource the same way the Roslyn path does; when it can't be resolved
+                // the effect is DROPPED (Roslyn returns null from TryCreateEffect), which is what
+                // aligns the fact effects with the index effects.
+                var resource = ResolveResource(rule.Resource, inv.Receiver, inv.FirstArgTemplate, inv.FirstArgType, declaringType);
+                if (string.IsNullOrWhiteSpace(resource))
+                    continue; // matched, but the resource is unresolvable — no effect; let a later rule try
+
+                results.Add(new DerivedEffect(rule.Provider, rule.Operation, resource!, inv.Enclosing, inv.FilePath, inv.Line));
                 break; // first matching rule wins
             }
         }
@@ -138,8 +149,19 @@ public static class FactEffectDeriver
 
         if (hasReceiver)
         {
-            var probe = receiverType ?? declaringType;
-            if (rule.ReceiverTypes.Any(gate => TypeNameMatches(probe, gate)))
+            // Match the receiverTypes gate against BOTH the receiver's static type (P1a — precise
+            // for interface-typed / covariant receivers and static-extension dispatch) AND the
+            // method's declaring type. The declaring type is a faithful proxy for the receiver's
+            // base chain: an instance method is only callable because the receiver derives the type
+            // that declares it, so when the declaring type satisfies the gate Roslyn's receiver
+            // base-walk would match too. Checking only the precise receiver (as P1a did) silently
+            // dropped calls through a derived receiver whose own type isn't the gate — e.g.
+            // `ActionsHelper.RedirectUrl(...)` where RedirectUrl is declared on the gated `Helper`
+            // (the dominant clientpage_nav family). The fact layer has no base edges for framework
+            // receiver types, so the declaring-type proxy is what recovers these.
+            if (rule.ReceiverTypes.Any(gate =>
+                TypeNameMatches(declaringType, gate)
+                || (receiverType is not null && TypeNameMatches(receiverType, gate))))
                 return true;
         }
 
@@ -167,6 +189,74 @@ public static class FactEffectDeriver
     {
         return string.Equals(actual, gate, StringComparison.Ordinal)
             || actual.StartsWith(gate + ".", StringComparison.Ordinal);
+    }
+
+    // Enclosing-method gates (P2a) — mirror the Roslyn MatchesContainingNamespace/Type/Method,
+    // parsed from the reference's EnclosingSymbolId DocID. No base-chain walk (the fact layer has no
+    // base edges for the containing type), so containingTypes matches by equality/prefix only.
+    private static bool ContainingGateMatches(FactEffectRule rule, string? enclosingDocId)
+    {
+        var hasNamespace = rule.ContainingNamespaces is { Count: > 0 };
+        var hasType = rule.ContainingTypes is { Count: > 0 };
+        var hasMethod = rule.ContainingMethods is { Count: > 0 };
+        if (!hasNamespace && !hasType && !hasMethod)
+            return true;
+
+        var parsed = enclosingDocId is null ? null : ParseMethod(enclosingDocId);
+        if (parsed is null)
+            return false; // a containing gate is set but there is no enclosing method to match
+        var (containingType, containingMethod) = parsed.Value;
+
+        if (hasMethod && !rule.ContainingMethods!.Contains(containingMethod, StringComparer.Ordinal))
+            return false;
+        if (hasType && !rule.ContainingTypes!.Any(gate => TypeNameMatches(containingType, gate)))
+            return false;
+        if (hasNamespace)
+        {
+            var ns = NamespaceOf(containingType);
+            if (!rule.ContainingNamespaces!.Any(gate =>
+                string.Equals(ns, gate, StringComparison.Ordinal) || ns.StartsWith(gate + ".", StringComparison.Ordinal)))
+                return false;
+        }
+
+        return true;
+    }
+
+    // Namespace = the containing type's FQN minus its simple name. (Nested types are
+    // indistinguishable from namespaces in a DocID, so a nested-type enclosing over-reports its
+    // namespace — a known fidelity gap, harmless for the prefix-style namespace gates in use.)
+    private static string NamespaceOf(string typeFqn)
+    {
+        var lastDot = typeFqn.LastIndexOf('.');
+        return lastDot >= 0 ? typeFqn.Substring(0, lastDot) : "";
+    }
+
+    // Resolve the effect resource from facts, mirroring EffectExtractor.TryCreateEffect. Returns
+    // null when the strategy can't be resolved (Roslyn drops the effect in that case).
+    private static string? ResolveResource(
+        string strategy, string? receiver, string? firstArgTemplate, string? firstArgType, string declaringType)
+    {
+        return strategy switch
+        {
+            "receiver_type" => receiver,
+            "argument_type" => firstArgType,
+            "string_argument" => firstArgTemplate,
+            "http_argument" => firstArgTemplate is null ? null : NormalizeHttpResource(firstArgTemplate),
+            // ef_dbset_receiver / ef_query_root / ef_context_receiver / ef_database_facade need EF
+            // receiver/DbSet shape facts the stage-1 layer doesn't carry (deferred — not used by the
+            // LLBLGen/MedDBase target). Unknown or empty strategy -> null (effect dropped).
+            _ => null,
+        };
+    }
+
+    // Strip the scheme and surrounding slashes from an HTTP resource (port of
+    // EffectExtractor.NormalizeHttpResource): "https://h/p/" -> "h/p", "/p" -> "p".
+    private static string NormalizeHttpResource(string url)
+    {
+        var schemeSeparator = url.IndexOf("://", StringComparison.Ordinal);
+        return schemeSeparator >= 0
+            ? url.Substring(schemeSeparator + 3).TrimEnd('/')
+            : url.TrimStart('/');
     }
 
     // "M:Ns.Type.Member(args)" -> ("Ns.Type", "Member").

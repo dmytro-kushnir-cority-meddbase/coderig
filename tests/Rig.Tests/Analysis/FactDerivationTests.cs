@@ -287,6 +287,33 @@ public sealed class FactDerivationTests
     }
 
     [Fact]
+    public async Task Derived_effect_resource_is_resolved_from_facts()
+    {
+        using var playground = await TempPlayground.CreateLegacyNet48Async();
+        var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+
+        var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
+        var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var effects = FactEffectDeriver.Derive(FactProjection.Invocations(result), rules, providerFilter: null,
+            baseEdges: FactProjection.EntryPointData(result).BaseEdges);
+
+        // receiver_type (P1a): `new HealthcodeServiceProxy().SubmitBill("<bill/>")` resolves the
+        // effect resource to the receiver's static type FQN.
+        effects.ShouldContain(e =>
+            e.Provider == "soap" && e.Operation == "submit"
+            && e.ResourceType == "LegacyNet48Web.External.HealthcodeServiceProxy"
+        );
+
+        // argument_type (P1b): `_db.StartTransaction(System.Data.IsolationLevel.ReadCommitted, ...)`
+        // resolves to the FIRST ARGUMENT's type — NOT the declaring DataAccessAdapterBase. This pins
+        // that the deriver resolves the resource from facts rather than using the declaring type.
+        effects.ShouldContain(e =>
+            e.Provider == "llblgen" && e.Operation == "tx_begin"
+            && e.ResourceType == "System.Data.IsolationLevel"
+        );
+    }
+
+    [Fact]
     public async Task Llblgen_entity_constructor_fetches_are_derived()
     {
         using var playground = await TempPlayground.CreateLegacyNet48Async();
