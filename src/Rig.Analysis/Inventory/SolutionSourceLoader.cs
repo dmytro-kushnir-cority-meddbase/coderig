@@ -194,6 +194,18 @@ internal static class SolutionSourceLoader
                 r => ProjectId.CreateNewId(r.ProjectFilePath),
                 StringComparer.OrdinalIgnoreCase);
 
+        // Direct in-set project references per project (normalised paths), for the transitive-closure
+        // computation below.
+        var directInSetRefsByPath = analyzerResults
+            .Where(r => r.ProjectFilePath is not null)
+            .ToDictionary(
+                r => Path.GetFullPath(r.ProjectFilePath!),
+                r => (r.ProjectReferences ?? [])
+                    .Select(Path.GetFullPath)
+                    .Where(projectIdByPath.ContainsKey)
+                    .ToArray(),
+                StringComparer.OrdinalIgnoreCase);
+
         // Pass 2 — build each project, converting dep project refs to Roslyn ProjectReferences
         // when the dependency is also in the indexed set.  This gives the semantic model a
         // connected type graph so HasBaseType can traverse across project boundaries.
@@ -253,11 +265,17 @@ internal static class SolutionSourceLoader
             // so the semantic model can cross project boundaries (e.g. Pages → MMS.Web.UI).
             // DLL references whose output path matches an indexed project are dropped — Roslyn
             // uses the live compilation of the referenced project instead.
-            var inWorkspaceProjectPaths = new HashSet<string>(
-                (result.ProjectReferences ?? [])
-                    .Select(p => Path.GetFullPath(p))
-                    .Where(p => projectIdByPath.ContainsKey(p)),
-                StringComparer.OrdinalIgnoreCase);
+            //
+            // The closure is TRANSITIVE, not just this project's direct refs: Roslyn project
+            // references do not flow transitively, so a project that USES a transitively-referenced
+            // project's types (e.g. Rig.Cli using Rig.Domain via Rig.Storage) would otherwise see
+            // those types only through the metadata DLL — a SECOND assembly identity alongside the live
+            // transitive compilation. That duplicate identity makes any call whose signature mentions
+            // such a type fail to bind, silently dropping the call edge (a recall gap that inflates
+            // dead-code/false-unreachable results). Pulling the whole in-set closure in as live
+            // ProjectReferences (and dropping their DLLs from metadata below) gives one identity.
+            var inWorkspaceProjectPaths = TransitiveInSetClosure(
+                result.ProjectFilePath, directInSetRefsByPath);
 
             var inWorkspaceAssemblyNames = new HashSet<string>(
                 analyzerResults
@@ -322,6 +340,32 @@ internal static class SolutionSourceLoader
 
         workspace.TryApplyChanges(solution);
         return workspace;
+    }
+
+    // Transitive closure of a project's in-set project references (excluding the project itself),
+    // over the direct-in-set-refs adjacency. Returned paths are normalised (Path.GetFullPath).
+    private static HashSet<string> TransitiveInSetClosure(
+        string? projectFilePath,
+        IReadOnlyDictionary<string, string[]> directInSetRefsByPath)
+    {
+        var closure = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (projectFilePath is null)
+            return closure;
+
+        var start = Path.GetFullPath(projectFilePath);
+        var stack = new Stack<string>();
+        stack.Push(start);
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            if (!directInSetRefsByPath.TryGetValue(current, out var refs))
+                continue;
+            foreach (var dep in refs)
+                if (closure.Add(dep)) // first time we've seen this dependency
+                    stack.Push(dep);
+        }
+        closure.Remove(start); // a self-cycle must not make a project reference itself
+        return closure;
     }
 
     private static async Task<ProjectSourceLoadResult> LoadProjectSourcesAsync(
