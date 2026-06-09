@@ -93,7 +93,7 @@ public static class CliApplication
         output.WriteLine("  rig tree <fromPattern> [--full|--summary] [--rules <path>...] [--maxdepth <n>]   (call tree from an entry point; default = paths that reach an effect)");
         output.WriteLine("  rig callers <toPattern> [--roots] [--maxdepth <n>]   (reverse reachability: who reaches this method; --roots = entry-point candidates)");
         output.WriteLine("  rig derive [--rules <path>...] [--limit <n>]   (stage-2 pass over facts: effects + handoffs)");
-        output.WriteLine("  rig dead [--rules <path>...] [--lib] [--include-dispatch] [--all] [--format tsv]   (unreachable first-party methods; report-only, compiler-confirm before removing)");
+        output.WriteLine("  rig dead [--rules <path>...] [--lib] [--include-dispatch] [--all] [--root <pattern>...] [--format tsv]   (unreachable first-party methods; report-only, compiler-confirm before removing)");
         output.WriteLine("  rig files --skipped");
         output.WriteLine("  rig profile validate");
     }
@@ -967,6 +967,9 @@ public static class CliApplication
     //                      (application mode) so unused public methods ARE flagged.
     //   --include-dispatch also flag unreached override/virtual members (dispatch targets); default off.
     //   --all              include Low-confidence (public/protected) candidates; default = High+Medium.
+    //   --root <pattern>   add every method whose SymbolId contains <pattern> to the root set
+    //                      (repeatable). For entry points facts can't see — e.g. a top-level-statement
+    //                      Program.Main (synthesized, no DocID) or a host that invokes by reflection.
     private static async Task<int> RunDeadAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
     {
         var limit = int.TryParse(GetOption(args, "--limit"), out var l) ? l : 80;
@@ -975,8 +978,12 @@ public static class CliApplication
         var showAll = args.Contains("--all");
         var tsv = string.Equals(GetOption(args, "--format"), "tsv", StringComparison.OrdinalIgnoreCase);
         var extraRules = new List<string>();
+        var rootPatterns = new List<string>();
         for (var i = 0; i < args.Length; i++)
+        {
             if (args[i] == "--rules" && i + 1 < args.Length) { extraRules.Add(Path.GetFullPath(args[i + 1])); i++; }
+            else if (args[i] == "--root" && i + 1 < args.Length) { rootPatterns.Add(args[i + 1]); i++; }
+        }
 
         await using var context = new RigDbContext(Path.Combine(workingDirectory, ".rig", "rig.db"));
 
@@ -1006,6 +1013,11 @@ public static class CliApplication
         foreach (var cr in epData.CtorRefs)
             if (cr.EnclosingSymbolId is not null && IsTestAttribute(cr.TargetSymbolId))
                 roots.Add(cr.EnclosingSymbolId);
+        // User-supplied roots (--root <pattern>): every method whose SymbolId contains the pattern.
+        if (rootPatterns.Count > 0)
+            foreach (var m in methods)
+                if (rootPatterns.Any(p => m.SymbolId.IndexOf(p, StringComparison.OrdinalIgnoreCase) >= 0))
+                    roots.Add(m.SymbolId);
 
         var candidates = DeadCodeFinder.Find(graph, roots, methods, libMode, includeDispatch);
         var shown = candidates.Where(c => showAll || c.Tier != DeadCodeFinder.Tier.Low).ToList();
