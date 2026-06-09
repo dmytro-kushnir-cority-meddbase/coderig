@@ -265,7 +265,7 @@ public static class FactPathFinder
         // Reverse impl-dispatch: callers invoke the interface method, which dispatches to this impl.
         if (interfacesByType.TryGetValue(typeId, out var ifaces))
             foreach (var iface in ifaces)
-                if (index.MethodsByType.TryGetValue(iface, out var im))
+                if (index.MethodsByStrippedType.TryGetValue(TypeClosure.StripGeneric(iface), out var im))
                     foreach (var m in im)
                         if (string.Equals(m.Name, name, StringComparison.Ordinal))
                             yield return m.SymbolId;
@@ -274,7 +274,7 @@ public static class FactPathFinder
         // base's same-named method reaches it. Gated on this being an override; walk all ancestors.
         if (isOverride.Contains(current))
             foreach (var baseType in Ancestors(typeId, basesByType))
-                if (index.MethodsByType.TryGetValue(baseType, out var bm))
+                if (index.MethodsByStrippedType.TryGetValue(TypeClosure.StripGeneric(baseType), out var bm))
                     foreach (var m in bm)
                         if (string.Equals(m.Name, name, StringComparison.Ordinal))
                             yield return m.SymbolId;
@@ -302,6 +302,12 @@ public static class FactPathFinder
     {
         public Dictionary<string, List<CallEdge>> Adjacency = new(StringComparer.Ordinal);
         public Dictionary<string, List<MethodRef>> MethodsByType = new(StringComparer.Ordinal);
+        // Methods keyed by the GENERIC-STRIPPED containing type (Foo`2 / Foo{A,B} -> Foo), so
+        // dispatch lookups land regardless of whether the base/impl/interface type DocID is the
+        // open-generic or an instantiated form. Generic base classes (EditPaneBase`2, the EditPane
+        // hierarchy, ...) otherwise break dispatch: the base EDGE stores Foo{A,B} while the METHODS
+        // are declared on Foo`2, so an exact-DocID MethodsByType lookup misses them.
+        public Dictionary<string, List<MethodRef>> MethodsByStrippedType = new(StringComparer.Ordinal);
         public Dictionary<string, List<string>> ImplsByInterface = new(StringComparer.Ordinal);
         // Implementers indexed by interface SIMPLE NAME, but ONLY for edges whose interface failed to
         // resolve to a real type (error-type "!:Name" DocID — pervasive under net48 partial binding
@@ -334,6 +340,10 @@ public static class FactPathFinder
             .Where(m => m.ContainingTypeId is not null)
             .GroupBy(m => m.ContainingTypeId!, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+        index.MethodsByStrippedType = graph.Methods
+            .Where(m => m.ContainingTypeId is not null)
+            .GroupBy(m => TypeClosure.StripGeneric(m.ContainingTypeId!), StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
         index.ImplsByInterface = graph.ImplementsEdges
             .GroupBy(e => e.InterfaceType, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.Select(e => e.ImplType).Distinct().ToList(), StringComparer.Ordinal);
@@ -365,7 +375,7 @@ public static class FactPathFinder
         {
             foreach (var impl in impls)
             {
-                if (!index.MethodsByType.TryGetValue(impl, out var implMethods))
+                if (!index.MethodsByStrippedType.TryGetValue(TypeClosure.StripGeneric(impl), out var implMethods))
                     continue;
                 foreach (var concrete in implMethods)
                 {
@@ -384,7 +394,7 @@ public static class FactPathFinder
         {
             foreach (var impl in nameImpls)
             {
-                if (!index.MethodsByType.TryGetValue(impl, out var implMethods))
+                if (!index.MethodsByStrippedType.TryGetValue(TypeClosure.StripGeneric(impl), out var implMethods))
                     continue;
                 foreach (var concrete in implMethods)
                 {
@@ -400,7 +410,7 @@ public static class FactPathFinder
         // override. Gated on IsOverride so it doesn't dispatch to unrelated same-named (hidden) methods.
         foreach (var sub in Descendants(parsed.Value.TypeId, index))
         {
-            if (!index.MethodsByType.TryGetValue(sub, out var subMethods))
+            if (!index.MethodsByStrippedType.TryGetValue(TypeClosure.StripGeneric(sub), out var subMethods))
                 continue;
             foreach (var m in subMethods)
             {

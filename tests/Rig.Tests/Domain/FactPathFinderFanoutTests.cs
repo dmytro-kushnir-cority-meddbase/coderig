@@ -157,6 +157,26 @@ public sealed class FactPathFinderFanoutTests
     }
 
     [Fact]
+    public void Dispatch_crosses_generic_base_classes_both_directions()
+    {
+        // Base`1 declares virtual M; Sub : Base{X} overrides M. The base EDGE stores the instantiated
+        // Base{X} while the METHODS are on the open Base`1 — exact-DocID lookup would miss. A call to
+        // Base`1.M must reach Sub.M (forward), and reverse from Sub.M must climb to EP.Run.
+        var edges = new[] { new CallEdge("M:EP.Run", "M:Ns.Base`1.M", "invocation", "f.cs", 1) };
+        var bases = new[] { new BaseEdge("T:Ns.Sub", "T:Ns.Base{T:Ns.X}") };
+        var methods = new[]
+        {
+            new MethodRef("M:EP.Run", "Run", "T:EP"),
+            new MethodRef("M:Ns.Base`1.M", "M", "T:Ns.Base`1"),
+            new MethodRef("M:Ns.Sub.M", "M", "T:Ns.Sub", IsOverride: true),
+        };
+        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+
+        FactPathFinder.Reaches(graph, "EP.Run").Keys.ShouldContain("M:Ns.Sub.M");        // forward base->override
+        FactPathFinder.EntryRootsReaching(graph, "Sub.M").ShouldContain("M:EP.Run");      // reverse climb
+    }
+
+    [Fact]
     public void Find_annotates_each_hop_with_its_call_site_loop()
     {
         var graph = Graph(
