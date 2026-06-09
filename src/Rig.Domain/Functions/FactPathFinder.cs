@@ -154,6 +154,33 @@ public static class FactPathFinder
 
     private static readonly IReadOnlyList<TraceNode> EmptyNodes = new TraceNode[0];
 
+    // Multi-source forward reachability: the union of everything reachable from ANY of the given root
+    // symbol IDs, using the same edge model as Reaches/Find/tree (direct calls + method-group/ctor
+    // edges + interface->impl and base->override dispatch). Roots are matched by EXACT SymbolId (not
+    // substring) — callers pass concrete entry-point DocIDs. Unknown root ids (not present as graph
+    // nodes) are skipped. Underpins the unreachable-symbol / dead-code finder: dead = first-party
+    // methods − this set − the roots themselves.
+    public static HashSet<string> ReachableFromAll(
+        FactGraphData graph, IEnumerable<string> roots, int maxNodes = 2_000_000)
+    {
+        var index = BuildIndex(graph);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var queue = new Queue<string>();
+        foreach (var root in roots)
+            if (index.Nodes.Contains(root) && seen.Add(root))
+                queue.Enqueue(root);
+
+        while (queue.Count > 0 && seen.Count < maxNodes)
+        {
+            var current = queue.Dequeue();
+            foreach (var s in Successors(current, index))
+                if (seen.Add(s.Node))
+                    queue.Enqueue(s.Node);
+        }
+
+        return seen;
+    }
+
     // Reverse reachability — every method that can REACH any node matching toPattern (transitive
     // callers), keyed to its shortest reverse hop count. Inverts Successors: direct caller edges,
     // plus the reverse of the dispatch hops — an impl method is reached via its interface's

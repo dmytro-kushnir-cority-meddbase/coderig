@@ -403,6 +403,11 @@ internal static class FactExtractor
     private static string ModifiersOf(ISymbol symbol)
     {
         var parts = new List<string>();
+        // Accessibility first (e.g. "public", "private", "internal", "protected internal"). Roslyn's
+        // Modifiers previously omitted this; the dead-code finder tiers candidates by visibility
+        // (private uncalled = high confidence; public = possible external API), so it's recorded here.
+        var access = AccessibilityOf(symbol.DeclaredAccessibility);
+        if (access is not null) parts.Add(access);
         if (symbol.IsStatic) parts.Add("static");
         if (symbol.IsAbstract) parts.Add("abstract");
         if (symbol.IsSealed) parts.Add("sealed");
@@ -412,6 +417,17 @@ internal static class FactExtractor
         if (symbol is IFieldSymbol { IsReadOnly: true } or IPropertySymbol { IsReadOnly: true }) parts.Add("readonly");
         return string.Join(' ', parts);
     }
+
+    private static string? AccessibilityOf(Accessibility accessibility) => accessibility switch
+    {
+        Accessibility.Public => "public",
+        Accessibility.Private => "private",
+        Accessibility.Internal => "internal",
+        Accessibility.Protected => "protected",
+        Accessibility.ProtectedOrInternal => "protected internal",
+        Accessibility.ProtectedAndInternal => "private protected",
+        _ => null,
+    };
 
     private static bool IsRuntimeAssembly(string assembly) =>
         assembly.StartsWith("System", StringComparison.Ordinal)

@@ -655,6 +655,39 @@ public static class Reads
         return new FactGraphData(callEdges, implEdges, methods, baseEdges);
     }
 
+    // Loads first-party method metadata for the dead-code finder: every declared method symbol with
+    // the accessibility/abstract/virtual modifiers, file/line, override flag, and a generated-file
+    // heuristic. SymbolFacts are source-declared (first-party) by construction, so this is exactly the
+    // universe the unreachable-symbol finder ranges over. Deduped by SymbolId.
+    public static async Task<IReadOnlyList<DeadCodeFinder.MethodMeta>> LoadDeadCodeMethodsAsync(
+        RigDbContext context, CancellationToken cancellationToken = default)
+    {
+        var rows = await context.SymbolFacts
+            .Where(s => s.Kind == "method")
+            .Select(s => new { s.SymbolId, s.Name, s.Modifiers, s.FilePath, s.Line, s.IsOverride })
+            .ToArrayAsync(cancellationToken);
+        return rows
+            .GroupBy(s => s.SymbolId, StringComparer.Ordinal)
+            .Select(g => g.First())
+            .Select(s => new DeadCodeFinder.MethodMeta(
+                s.SymbolId, s.Name, s.Modifiers, s.FilePath, s.Line, s.IsOverride, IsGeneratedPath(s.FilePath)))
+            .ToArray();
+    }
+
+    // Heuristic: a file is generated when it carries the conventional generated-source markers or the
+    // synthetic source-generator path the loader assigns. Such members are reached via the generator /
+    // build, not first-party calls, so the dead-code finder must not flag them.
+    private static bool IsGeneratedPath(string filePath)
+    {
+        if (string.IsNullOrEmpty(filePath)) return false;
+        var p = filePath.Replace('\\', '/');
+        return p.Contains("<generated>")
+            || p.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)
+            || p.EndsWith(".g.i.cs", StringComparison.OrdinalIgnoreCase)
+            || p.EndsWith(".designer.cs", StringComparison.OrdinalIgnoreCase)
+            || p.EndsWith(".generated.cs", StringComparison.OrdinalIgnoreCase);
+    }
+
     // Derives handoff (delegate / method-group) entry points from facts — a category the
     // structural entry-point rules miss. First-party targets only (TargetInSource). No re-index.
     public static async Task<IReadOnlyList<HandoffEntryPoint>> DeriveHandoffEntryPointsAsync(

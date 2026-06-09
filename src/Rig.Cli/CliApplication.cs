@@ -48,6 +48,7 @@ public static class CliApplication
             "callers" => await RunCallersAsync(args, output, error, workingDirectory),
             "reaches" => await RunReachesAsync(args, output, error, workingDirectory),
             "derive" => await RunDeriveAsync(args, output, error, workingDirectory),
+            "dead" => await RunDeadAsync(args, output, error, workingDirectory),
             "files" => await RunFilesAsync(args, output, error, workingDirectory),
             "profile" => await RunProfileAsync(args, output, error, workingDirectory),
             _ => UnknownCommand(args[0], error),
@@ -92,6 +93,7 @@ public static class CliApplication
         output.WriteLine("  rig tree <fromPattern> [--full|--summary] [--rules <path>...] [--maxdepth <n>]   (call tree from an entry point; default = paths that reach an effect)");
         output.WriteLine("  rig callers <toPattern> [--roots] [--maxdepth <n>]   (reverse reachability: who reaches this method; --roots = entry-point candidates)");
         output.WriteLine("  rig derive [--rules <path>...] [--limit <n>]   (stage-2 pass over facts: effects + handoffs)");
+        output.WriteLine("  rig dead [--rules <path>...] [--lib] [--include-dispatch] [--all] [--format tsv]   (unreachable first-party methods; report-only, compiler-confirm before removing)");
         output.WriteLine("  rig files --skipped");
         output.WriteLine("  rig profile validate");
     }
@@ -954,6 +956,94 @@ public static class CliApplication
             output.WriteLine($"  {h.Target}\n      registered in {h.RegisteredIn}  {ShortenPath(h.FilePath)}:{h.Line}");
         return 0;
     }
+
+    // rig dead [--rules <path>...] [--lib] [--include-dispatch] [--all] [--limit <n>] [--format tsv]
+    // Unreachable-symbol / dead-code finder over the fact graph (closes the deferred Task #7). Roots =
+    // the derived entry points (pages/actions/background/wcf) + delegate/method-group handoffs + every
+    // Main + every test method ([Fact]/[Theory]/[Test]). A first-party method NOT reachable from any
+    // root (forward, incl. dispatch) is a candidate. REPORT ONLY — confirm against the C# compiler
+    // (IDE0051/CS0169) or a human before removing; static facts miss reflection/DI/serialization.
+    //   --lib              treat public/protected members as roots (library API surface); default off
+    //                      (application mode) so unused public methods ARE flagged.
+    //   --include-dispatch also flag unreached override/virtual members (dispatch targets); default off.
+    //   --all              include Low-confidence (public/protected) candidates; default = High+Medium.
+    private static async Task<int> RunDeadAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
+    {
+        var limit = int.TryParse(GetOption(args, "--limit"), out var l) ? l : 80;
+        var libMode = args.Contains("--lib");
+        var includeDispatch = args.Contains("--include-dispatch");
+        var showAll = args.Contains("--all");
+        var tsv = string.Equals(GetOption(args, "--format"), "tsv", StringComparison.OrdinalIgnoreCase);
+        var extraRules = new List<string>();
+        for (var i = 0; i < args.Length; i++)
+            if (args[i] == "--rules" && i + 1 < args.Length) { extraRules.Add(Path.GetFullPath(args[i + 1])); i++; }
+
+        await using var context = new RigDbContext(Path.Combine(workingDirectory, ".rig", "rig.db"));
+
+        var graph = await Reads.LoadFactGraphAsync(context);
+        var methods = await Reads.LoadDeadCodeMethodsAsync(context);
+        if (methods.Count == 0)
+        {
+            output.WriteLine("No method symbols in the index — run `rig index`/`rig mine` first.");
+            return 1;
+        }
+
+        // --- Roots: derived entry points + handoffs + Main + test methods ---
+        var epData = await Reads.LoadFactEntryPointDataAsync(context);
+        var epRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var classRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(workingDirectory, extraRules);
+        var roots = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var ep in FactEntryPointDeriver.Derive(epData, epRules, classRules))
+            roots.Add(ep.Method);
+        foreach (var h in await Reads.DeriveHandoffEntryPointsAsync(context, int.MaxValue))
+            roots.Add(h.Target);
+        // Process entry points: any method named Main.
+        foreach (var m in methods)
+            if (m.Name == "Main")
+                roots.Add(m.SymbolId);
+        // Test methods are framework-invoked roots: a ctor ref to a test attribute marks its enclosing
+        // method ([Fact]/[Theory]/[Test]). Built in so `rig dead` works with no rules file.
+        foreach (var cr in epData.CtorRefs)
+            if (cr.EnclosingSymbolId is not null && IsTestAttribute(cr.TargetSymbolId))
+                roots.Add(cr.EnclosingSymbolId);
+
+        var candidates = DeadCodeFinder.Find(graph, roots, methods, libMode, includeDispatch);
+        var shown = candidates.Where(c => showAll || c.Tier != DeadCodeFinder.Tier.Low).ToList();
+
+        if (tsv)
+        {
+            foreach (var c in shown)
+                output.WriteLine($"{c.Tier}\t{c.Reason}\t{c.DirectCallers}\t{c.SymbolId}\t{c.FilePath}:{c.Line}");
+            return 0;
+        }
+
+        output.WriteLine($"Roots (entry points + handoffs + Main + tests): {roots.Count}");
+        output.WriteLine($"First-party methods examined: {methods.Count}");
+        output.WriteLine($"Dead-code candidates: {candidates.Count}  (High {candidates.Count(c => c.Tier == DeadCodeFinder.Tier.High)}, " +
+            $"Medium {candidates.Count(c => c.Tier == DeadCodeFinder.Tier.Medium)}, Low {candidates.Count(c => c.Tier == DeadCodeFinder.Tier.Low)})");
+        output.WriteLine(libMode ? "Mode: library (public/protected = roots)" : "Mode: application (public methods are flaggable)");
+        output.WriteLine("REPORT ONLY — confirm each against the C# compiler (IDE0051/CS0169) before removing.");
+        if (!showAll && candidates.Any(c => c.Tier == DeadCodeFinder.Tier.Low))
+            output.WriteLine("(Low-confidence public/protected candidates hidden; pass --all to include them.)");
+        output.WriteLine();
+        foreach (var tierGroup in shown.GroupBy(c => c.Tier).OrderBy(g => g.Key))
+        {
+            output.WriteLine($"=== {tierGroup.Key} confidence ({tierGroup.Count()}) ===");
+            foreach (var c in tierGroup.Take(limit))
+            {
+                var note = c.DirectCallers == 0 ? "" : $"  [reached only by {c.DirectCallers} dead caller(s)]";
+                output.WriteLine($"  {ShortName(c.SymbolId)}  {ShortenPath(c.FilePath)}:{c.Line}{note}");
+            }
+            if (tierGroup.Count() > limit)
+                output.WriteLine($"  … and {tierGroup.Count() - limit} more (raise --limit)");
+        }
+        return 0;
+    }
+
+    private static bool IsTestAttribute(string targetSymbolId) =>
+        targetSymbolId.IndexOf("FactAttribute", StringComparison.Ordinal) >= 0
+        || targetSymbolId.IndexOf("TheoryAttribute", StringComparison.Ordinal) >= 0
+        || targetSymbolId.IndexOf("TestAttribute", StringComparison.Ordinal) >= 0;
 
     private static string ShortName(string? symbolId)
     {
