@@ -303,6 +303,12 @@ public static class FactPathFinder
         public Dictionary<string, List<CallEdge>> Adjacency = new(StringComparer.Ordinal);
         public Dictionary<string, List<MethodRef>> MethodsByType = new(StringComparer.Ordinal);
         public Dictionary<string, List<string>> ImplsByInterface = new(StringComparer.Ordinal);
+        // Implementers indexed by interface SIMPLE NAME, but ONLY for edges whose interface failed to
+        // resolve to a real type (error-type "!:Name" DocID — pervasive under net48 partial binding
+        // when a project doesn't resolve a referenced assembly). Lets impl-dispatch still fire when
+        // the CALL's interface resolved (T:Ns.IFoo.M) but the IMPLEMENTER's edge didn't (!:IFoo) —
+        // the failure mode that silently kills dispatch and under-reports downstream effects.
+        public Dictionary<string, List<string>> ImplsByErrorInterfaceName = new(StringComparer.Ordinal);
         // Generic-stripped base-edge lookup (stripped base id -> subtype ids), for base-virtual/
         // abstract -> override dispatch. Stripped so a call on the open-generic base reaches overrides
         // on subtypes that store the instantiated base edge (see TypeClosure). Empty when no base edges.
@@ -331,6 +337,10 @@ public static class FactPathFinder
         index.ImplsByInterface = graph.ImplementsEdges
             .GroupBy(e => e.InterfaceType, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.Select(e => e.ImplType).Distinct().ToList(), StringComparer.Ordinal);
+        index.ImplsByErrorInterfaceName = graph.ImplementsEdges
+            .Where(e => e.InterfaceType.StartsWith("!:", StringComparison.Ordinal))
+            .GroupBy(e => SimpleTypeName(e.InterfaceType), StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Select(e => e.ImplType).Distinct().ToList(), StringComparer.Ordinal);
         index.StrippedBaseEdges = TypeClosure.BuildBaseEdgeLookup(
             (graph.BaseEdges ?? new List<BaseEdge>()).Select(e => (e.SubType, e.BaseType)));
         foreach (var method in graph.Methods)
@@ -354,6 +364,25 @@ public static class FactPathFinder
         if (index.ImplsByInterface.TryGetValue(parsed.Value.TypeId, out var impls))
         {
             foreach (var impl in impls)
+            {
+                if (!index.MethodsByType.TryGetValue(impl, out var implMethods))
+                    continue;
+                foreach (var concrete in implMethods)
+                {
+                    if (string.Equals(concrete.Name, parsed.Value.Name, StringComparison.Ordinal))
+                        yield return (concrete.SymbolId, "impl-dispatch", null, 0, null, null);
+                }
+            }
+        }
+
+        // Simple-name fallback: recover dispatch to implementers whose interface edge failed to
+        // resolve (!:IFoo) by matching the call's interface simple name. Method-name-gated; only
+        // consults error-type edges, so the blast radius is the partial-binding cases that would
+        // otherwise be invisible. (May slightly over-dispatch across same-named interfaces in
+        // different namespaces — a deliberate recall-over-precision trade for broken bindings.)
+        if (index.ImplsByErrorInterfaceName.TryGetValue(SimpleTypeName(parsed.Value.TypeId), out var nameImpls))
+        {
+            foreach (var impl in nameImpls)
             {
                 if (!index.MethodsByType.TryGetValue(impl, out var implMethods))
                     continue;
@@ -432,6 +461,22 @@ public static class FactPathFinder
         if (lastDot < 0)
             return null;
         return ("T:" + body.Substring(0, lastDot), body.Substring(lastDot + 1));
+    }
+
+    // Simple (un-namespaced, arity-stripped) name from a type DocID:
+    // "T:Ns.IFoo`1" / "!:IFoo" -> "IFoo".
+    private static string SimpleTypeName(string typeId)
+    {
+        var s = typeId;
+        if (s.Length >= 2 && s[1] == ':')
+            s = s.Substring(2);
+        var lastDot = s.LastIndexOf('.');
+        if (lastDot >= 0)
+            s = s.Substring(lastDot + 1);
+        var tick = s.IndexOf('`');
+        if (tick >= 0)
+            s = s.Substring(0, tick);
+        return s;
     }
 
     private static bool Contains(string value, string pattern) =>

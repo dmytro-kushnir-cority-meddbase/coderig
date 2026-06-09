@@ -136,6 +136,27 @@ public sealed class FactPathFinderFanoutTests
     }
 
     [Fact]
+    public void Dispatch_recovers_from_unresolved_interface_edges_by_simple_name()
+    {
+        // The call resolves to the real interface (T:Ns.IFoo.M), but the implementer's interface
+        // edge failed to bind during indexing and was recorded as an error type (!:IFoo) — the
+        // pervasive net48 partial-binding case. Dispatch must still reach the impl via simple name.
+        var edges = new[] { new CallEdge("M:EP.Run", "M:Ns.IFoo.M", "invocation", "f.cs", 1) };
+        var impls = new[] { new ImplementsEdge("T:Impl", "!:IFoo") };
+        var methods = new[]
+        {
+            new MethodRef("M:EP.Run", "Run", "T:EP"),
+            new MethodRef("M:Ns.IFoo.M", "M", "T:Ns.IFoo"),
+            new MethodRef("M:Impl.M", "M", "T:Impl"),
+        };
+        var graph = new FactGraphData(edges, impls, methods);
+
+        var reach = FactPathFinder.Reaches(graph, "EP.Run");
+
+        reach.Keys.ShouldContain("M:Impl.M"); // dispatched despite the unresolved (!:) interface edge
+    }
+
+    [Fact]
     public void Find_annotates_each_hop_with_its_call_site_loop()
     {
         var graph = Graph(
