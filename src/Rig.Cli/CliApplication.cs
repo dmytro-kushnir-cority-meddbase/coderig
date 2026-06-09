@@ -44,6 +44,7 @@ public static class CliApplication
             "symbols" => await RunSymbolsAsync(args, output, error, workingDirectory),
             "refs" => await RunRefsAsync(args, output, error, workingDirectory),
             "path" => await RunPathAsync(args, output, error, workingDirectory),
+            "tree" => await RunTreeAsync(args, output, error, workingDirectory),
             "reaches" => await RunReachesAsync(args, output, error, workingDirectory),
             "derive" => await RunDeriveAsync(args, output, error, workingDirectory),
             "files" => await RunFilesAsync(args, output, error, workingDirectory),
@@ -87,6 +88,7 @@ public static class CliApplication
         output.WriteLine("  rig refs <pattern> [--first-party] [--kind <refkind>] [--limit <n>]");
         output.WriteLine("  rig path <fromPattern> <toPattern>");
         output.WriteLine("  rig reaches <fromPattern> [--rules <path>...] [--maxdepth <n>] [--format tsv]   (effects reachable from an entry point)");
+        output.WriteLine("  rig tree <fromPattern> [--full|--summary] [--rules <path>...] [--maxdepth <n>]   (call tree from an entry point; default = paths that reach an effect)");
         output.WriteLine("  rig derive [--rules <path>...] [--limit <n>]   (stage-2 pass over facts: effects + handoffs)");
         output.WriteLine("  rig files --skipped");
         output.WriteLine("  rig profile validate");
@@ -638,7 +640,8 @@ public static class CliApplication
         for (var i = 0; i < path.Count; i++)
         {
             var step = path[i];
-            var via = i == 0 ? "" : $"  [{step.Kind}{(step.FilePath is null ? "" : $" @ {ShortenPath(step.FilePath)}:{step.Line}")}]";
+            var loop = step.LoopKind is null ? "" : $" | loop {step.LoopKind}: {ShortLoop(step.LoopDetail)}";
+            var via = i == 0 ? "" : $"  [{step.Kind}{loop}{(step.FilePath is null ? "" : $" @ {ShortenPath(step.FilePath)}:{step.Line}")}]";
             output.WriteLine($"  {new string(' ', i * 2)}{step.SymbolId}{via}");
         }
         return 0;
@@ -665,37 +668,154 @@ public static class CliApplication
         await using var context = new RigDbContext(Path.Combine(workingDirectory, ".rig", "rig.db"));
 
         var graph = await Reads.LoadFactGraphAsync(context);
-        var reachable = FactPathFinder.Reaches(graph, fromPattern, maxDepth);
+        var reachable = FactPathFinder.ReachesWithFanout(graph, fromPattern, maxDepth);
 
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var effects = FactEffectDeriver.Derive(invocations, effectRules, providerFilter: null, baseEdges: epData.BaseEdges, ctorRefs: epData.CtorRefs, observationRules: observationRules);
+        var throwRefs = await Reads.LoadThrowRefsAsync(context);
+        var effects = FactEffectDeriver.Derive(invocations, effectRules, providerFilter: null, baseEdges: epData.BaseEdges, ctorRefs: epData.CtorRefs, observationRules: observationRules, throwRefs: throwRefs);
 
-        // Effects whose enclosing method is reachable from the entry point.
+        // Effects whose enclosing method is reachable from the entry point. Fanout = looped call
+        // edges on the path to the enclosing method (ReachInfo.LoopNesting) + 1 if the effect's OWN
+        // call site is inside a loop (the looped_effect observation). >0 => the effect fires N-deep
+        // inside loops along this path; the loop detail shown is the innermost wrapping loop.
         var hits = effects
             .Where(e => e.EnclosingSymbolId is not null && reachable.ContainsKey(e.EnclosingSymbolId))
-            .Select(e => (Depth: reachable[e.EnclosingSymbolId!], Effect: e))
+            .Select(e =>
+            {
+                var ri = reachable[e.EnclosingSymbolId!];
+                var ownLoop = (e.Observations ?? []).Any(o => o.Type == "looped_effect");
+                var ownDetail = (e.Observations ?? []).Where(o => o.Type == "looped_effect").Select(o => o.Detail).FirstOrDefault();
+                var fanout = ri.LoopNesting + (ownLoop ? 1 : 0);
+                var loopDetail = ownLoop ? (string.IsNullOrEmpty(ownDetail) ? ri.NearestLoopDetail : ownDetail) : ri.NearestLoopDetail;
+                return (ri.Depth, Fanout: fanout, Loop: loopDetail, Effect: e);
+            })
             .OrderBy(h => h.Depth)
             .ToList();
 
         if (tsv)
         {
             foreach (var h in hits)
-                output.WriteLine($"{h.Depth}\t{h.Effect.Provider}\t{h.Effect.Operation}\t{h.Effect.ResourceType}\t{h.Effect.EnclosingSymbolId}\t{ShortenPath(h.Effect.FilePath)}:{h.Effect.Line}");
+                output.WriteLine($"{h.Depth}\t{h.Effect.Provider}\t{h.Effect.Operation}\t{h.Effect.ResourceType}\t{h.Effect.EnclosingSymbolId}\t{ShortenPath(h.Effect.FilePath)}:{h.Effect.Line}\t{h.Fanout}\t{ShortLoop(h.Loop)}");
             return 0;
         }
 
         output.WriteLine($"From: {fromPattern}");
         output.WriteLine($"Reachable methods (<= depth {maxDepth}): {reachable.Count}");
-        output.WriteLine($"Effects captured on reachable methods: {hits.Count}");
+        output.WriteLine($"Effects captured on reachable methods: {hits.Count}  (fanned out under a loop: {hits.Count(h => h.Fanout > 0)})");
         foreach (var g in hits.GroupBy(h => (h.Effect.Provider, h.Effect.Operation)).OrderByDescending(g => g.Count()))
             output.WriteLine($"  {g.Count(),4}  {g.Key.Provider} {g.Key.Operation}");
-        output.WriteLine("--- nearest effects (depth  provider op  resource  <- method) ---");
+        output.WriteLine("--- nearest effects (depth  provider op  resource  <- method  [fanout]) ---");
         foreach (var h in hits.Take(40))
-            output.WriteLine($"  d{h.Depth}  {h.Effect.Provider} {h.Effect.Operation}  {ShortName(h.Effect.ResourceType)}  <- {ShortName(h.Effect.EnclosingSymbolId)}");
+        {
+            var fan = h.Fanout > 0 ? $"  🔁x{h.Fanout} [loop: {ShortLoop(h.Loop)}]" : "";
+            output.WriteLine($"  d{h.Depth}  {h.Effect.Provider} {h.Effect.Operation}  {ShortName(h.Effect.ResourceType)}  <- {ShortName(h.Effect.EnclosingSymbolId)}{fan}");
+        }
         return 0;
+    }
+
+    // rig tree <fromPattern> [--full|--summary] [--rules <path>...] [--maxdepth <n>]
+    // The full first-party call TREE from an entry point over the fact graph (entrypoint-independent,
+    // same edges as reaches/path — incl. interface->impl + base->override dispatch + loop context).
+    // Modes mirror the legacy `callgraph`: default prunes to call paths that REACH an effect; --full
+    // prints every reachable method; --summary prints just the effect-count rollup. Effects are
+    // annotated inline ({provider:op resource}); looped edges get 🔁; cycle/shared-callee re-entry
+    // is shown as "↺seen" (that method's subtree is printed under its first occurrence).
+    private static async Task<int> RunTreeAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
+    {
+        if (args.Length < 2 || args[1].StartsWith("--", StringComparison.Ordinal))
+        {
+            error.WriteLine("Usage: rig tree <fromPattern> [--full|--summary] [--rules <path>...] [--maxdepth <n>]");
+            return 2;
+        }
+        var fromPattern = args[1];
+        var maxDepth = int.TryParse(GetOption(args, "--maxdepth"), out var d) ? d : 20;
+        var full = args.Contains("--full");
+        var summary = args.Contains("--summary");
+        var extraRules = new List<string>();
+        for (var i = 0; i < args.Length; i++)
+            if (args[i] == "--rules" && i + 1 < args.Length) { extraRules.Add(Path.GetFullPath(args[i + 1])); i++; }
+
+        await using var context = new RigDbContext(Path.Combine(workingDirectory, ".rig", "rig.db"));
+
+        var graph = await Reads.LoadFactGraphAsync(context);
+        var roots = FactPathFinder.BuildTree(graph, fromPattern, maxDepth);
+        if (roots.Count == 0)
+        {
+            output.WriteLine($"No symbol matches '{fromPattern}'.");
+            return 1;
+        }
+
+        // Effects per enclosing method — same derivation as `reaches` (incl. throws).
+        var epData = await Reads.LoadFactEntryPointDataAsync(context);
+        var invocations = await Reads.LoadInvocationRefsAsync(context);
+        var throwRefs = await Reads.LoadThrowRefsAsync(context);
+        var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var effects = FactEffectDeriver.Derive(invocations, effectRules, providerFilter: null, baseEdges: epData.BaseEdges, ctorRefs: epData.CtorRefs, observationRules: observationRules, throwRefs: throwRefs);
+
+        var effectsByMethod = effects
+            .Where(e => e.EnclosingSymbolId is not null)
+            .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Select(e => $"{e.Provider}:{e.Operation} {ShortName(e.ResourceType)}").ToList(), StringComparer.Ordinal);
+
+        if (summary)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var root in roots)
+                CollectTreeMethods(root, seen);
+            var hits = effects.Where(e => e.EnclosingSymbolId is not null && seen.Contains(e.EnclosingSymbolId)).ToList();
+            output.WriteLine($"From: {fromPattern}");
+            output.WriteLine($"Reachable methods: {seen.Count}");
+            output.WriteLine($"Effects on reachable methods: {hits.Count}");
+            foreach (var g in hits.GroupBy(h => (h.Provider, h.Operation)).OrderByDescending(g => g.Count()))
+                output.WriteLine($"  {g.Count(),4}  {g.Key.Provider} {g.Key.Operation}");
+            return 0;
+        }
+
+        foreach (var root in roots)
+            RenderTreeNode(root, 0, effectsByMethod, prune: !full, output);
+        return 0;
+    }
+
+    private static void CollectTreeMethods(TraceNode node, HashSet<string> seen)
+    {
+        seen.Add(node.SymbolId);
+        foreach (var c in node.Children)
+            CollectTreeMethods(c, seen);
+    }
+
+    // True when this node directly has an effect or any descendant does. A "↺seen" (Truncated) node
+    // has no children here, so only its own effect counts — that's sound: the effects under the
+    // method's real subtree are printed under its first (expanded) occurrence, so nothing is lost.
+    private static bool SubtreeHasEffect(TraceNode node, IReadOnlyDictionary<string, List<string>> effectsByMethod)
+    {
+        if (effectsByMethod.ContainsKey(node.SymbolId))
+            return true;
+        foreach (var c in node.Children)
+            if (SubtreeHasEffect(c, effectsByMethod))
+                return true;
+        return false;
+    }
+
+    private static void RenderTreeNode(
+        TraceNode node, int depth, IReadOnlyDictionary<string, List<string>> effectsByMethod, bool prune, TextWriter output)
+    {
+        if (prune && !SubtreeHasEffect(node, effectsByMethod))
+            return;
+
+        var dispatch = node.EdgeKind is "impl-dispatch" or "override-dispatch" ? $" «{node.EdgeKind}»" : "";
+        var loop = node.LoopKind is null ? "" : $" 🔁[{ShortLoop(node.LoopDetail)}]";
+        var seen = node.Truncated ? " ↺seen" : "";
+        var fx = effectsByMethod.TryGetValue(node.SymbolId, out var list)
+            ? "  " + string.Join(" ", list.Select(e => "{" + e + "}"))
+            : "";
+        output.WriteLine($"{new string(' ', depth * 2)}{ShortName(node.SymbolId)}{dispatch}{loop}{seen}{fx}");
+
+        foreach (var c in node.Children)
+            RenderTreeNode(c, depth + 1, effectsByMethod, prune, output);
     }
 
     // rig derive [--rules <path>...] [--limit <n>] — the stage-2 pass over facts (no Roslyn):
@@ -722,7 +842,8 @@ public static class CliApplication
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var effects = FactEffectDeriver.Derive(invocations, effectRules, providerFilter: null, baseEdges: epData.BaseEdges, ctorRefs: epData.CtorRefs, observationRules: observationRules);
+        var throwRefs = await Reads.LoadThrowRefsAsync(context);
+        var effects = FactEffectDeriver.Derive(invocations, effectRules, providerFilter: null, baseEdges: epData.BaseEdges, ctorRefs: epData.CtorRefs, observationRules: observationRules, throwRefs: throwRefs);
 
         // Machine-readable mode: emit full-fidelity rows (full DocIDs/paths) for tooling that joins
         // effects/entry points against the call graph. `rig derive --format tsv`.
@@ -798,6 +919,16 @@ public static class CliApplication
         var lastDot = s.LastIndexOf('.');
         var prevDot = lastDot > 0 ? s.LastIndexOf('.', lastDot - 1) : -1;
         return prevDot >= 0 ? s.Substring(prevDot + 1) : s;
+    }
+
+    // Loop detail (e.g. a foreach's "{ident} in {expr}") can be long/multi-line (LINQ predicates),
+    // so collapse whitespace and truncate for single-line trace output.
+    private static string ShortLoop(string? detail)
+    {
+        if (string.IsNullOrEmpty(detail))
+            return "?";
+        var s = string.Join(" ", detail!.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries));
+        return s.Length <= 60 ? s : s.Substring(0, 57) + "...";
     }
 
     private static string? GetOption(string[] args, string name)

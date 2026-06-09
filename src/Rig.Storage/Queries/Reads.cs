@@ -617,10 +617,10 @@ public static class Reads
         var callRows = await context.ReferenceFacts
             .Where(r => r.EnclosingSymbolId != null
                 && (r.RefKind == "invocation" || r.RefKind == "methodGroup" || r.RefKind == "ctor"))
-            .Select(r => new { r.EnclosingSymbolId, r.TargetSymbolId, r.RefKind, r.FilePath, r.Line })
+            .Select(r => new { r.EnclosingSymbolId, r.TargetSymbolId, r.RefKind, r.FilePath, r.Line, r.EnclosingLoopKind, r.EnclosingLoopDetail })
             .ToArrayAsync(cancellationToken);
         var callEdges = callRows
-            .Select(r => new CallEdge(r.EnclosingSymbolId!, r.TargetSymbolId, r.RefKind, r.FilePath, r.Line))
+            .Select(r => new CallEdge(r.EnclosingSymbolId!, r.TargetSymbolId, r.RefKind, r.FilePath, r.Line, r.EnclosingLoopKind, r.EnclosingLoopDetail))
             .Distinct()
             .ToArray();
 
@@ -754,6 +754,22 @@ public static class Reads
                 r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.ReceiverType,
                 r.FirstArgumentTemplate, r.FirstArgumentType,
                 r.EnclosingLoopKind, r.EnclosingLoopDetail, r.EnclosingInvocations, r.EnclosingCatchTypes))
+            .ToArray();
+    }
+
+    // Loads throw reference facts (RefKind="throw") for fact-based throw-effect derivation. Target is
+    // the thrown exception type DocID ("T:Ns.Exception"); the deriver gates it like a declaring type.
+    public static async Task<IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)>>
+        LoadThrowRefsAsync(RigDbContext context, CancellationToken cancellationToken = default)
+    {
+        var rows = await context.ReferenceFacts
+            .Where(r => r.RefKind == "throw" && r.EnclosingSymbolId != null)
+            .Select(r => new { r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line })
+            .ToArrayAsync(cancellationToken);
+        return rows
+            .GroupBy(r => (r.FilePath, r.Line, r.TargetSymbolId))
+            .Select(g => g.First())
+            .Select(r => (r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line))
             .ToArray();
     }
 }

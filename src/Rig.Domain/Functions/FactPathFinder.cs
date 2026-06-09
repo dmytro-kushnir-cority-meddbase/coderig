@@ -14,8 +14,9 @@ public static class FactPathFinder
     {
         var index = BuildIndex(graph);
 
-        // Parent links carry the edge that reached the node (for path + kind reconstruction).
-        var parent = new Dictionary<string, (string From, string Kind, string? File, int Line)?>(StringComparer.Ordinal);
+        // Parent links carry the edge that reached the node (for path + kind reconstruction),
+        // including its enclosing-loop context so the reconstructed path can mark looped hops.
+        var parent = new Dictionary<string, (string From, string Kind, string? File, int Line, string? LoopKind, string? LoopDetail)?>(StringComparer.Ordinal);
         var queue = new Queue<(string Node, int Depth)>();
         foreach (var start in index.Nodes.Where(n => Contains(n, fromPattern)))
         {
@@ -36,11 +37,20 @@ public static class FactPathFinder
                 continue;
 
             foreach (var s in Successors(current, index))
-                Enqueue(parent, queue, s.Node, current, s.Kind, s.File, s.Line, depth);
+                Enqueue(parent, queue, s.Node, current, s.Kind, s.File, s.Line, s.LoopKind, s.LoopDetail, depth);
         }
 
         return null;
     }
+
+    // What reaching a node cost: shortest BFS depth, plus the loop-fanout picked up along that
+    // shortest path. LoopNesting = how many looped call edges were traversed to first reach the
+    // node (0 = no loop on the path; >=1 = fanned out; >=2 = loop-within-loop / nested fanout).
+    // NearestLoop* = the enclosing-loop kind/detail of the looped edge closest to the node (the
+    // innermost loop wrapping its call chain), for display. BFS-shortest path is used, so the
+    // fanout reported is the one on the shortest route — a defensible single answer when a node is
+    // reachable several ways.
+    public sealed record ReachInfo(int Depth, int LoopNesting, string? NearestLoopKind, string? NearestLoopDetail);
 
     // Full reachability: BFS the call graph (incl. interface->impl dispatch) from every node
     // matching `fromPattern`, returning each reachable method DocID with its shortest depth.
@@ -48,34 +58,101 @@ public static class FactPathFinder
     public static IReadOnlyDictionary<string, int> Reaches(
         FactGraphData graph, string fromPattern, int maxDepth = 20, int maxNodes = 20000)
     {
-        var index = BuildIndex(graph);
+        var info = ReachesWithFanout(graph, fromPattern, maxDepth, maxNodes);
         var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var kv in info)
+            depthOf[kv.Key] = kv.Value.Depth;
+        return depthOf;
+    }
+
+    // Reachability enriched with loop-fanout: same BFS as Reaches, but each node also carries how
+    // many looped call edges were crossed to reach it (and the innermost such loop). Lets callers
+    // flag effects that fire inside a loop somewhere along the call chain — the static signal behind
+    // the "🔁/⇉ fanout" annotations (true runtime ×N is not statically known; this is the nesting).
+    public static IReadOnlyDictionary<string, ReachInfo> ReachesWithFanout(
+        FactGraphData graph, string fromPattern, int maxDepth = 20, int maxNodes = 20000)
+    {
+        var index = BuildIndex(graph);
+        var info = new Dictionary<string, ReachInfo>(StringComparer.Ordinal);
         var queue = new Queue<string>();
         foreach (var start in index.Nodes.Where(n => Contains(n, fromPattern)))
         {
-            if (depthOf.ContainsKey(start))
+            if (info.ContainsKey(start))
                 continue;
-            depthOf[start] = 0;
+            info[start] = new ReachInfo(0, 0, null, null);
             queue.Enqueue(start);
         }
 
-        while (queue.Count > 0 && depthOf.Count < maxNodes)
+        while (queue.Count > 0 && info.Count < maxNodes)
         {
             var current = queue.Dequeue();
-            var depth = depthOf[current];
-            if (depth >= maxDepth)
+            var cur = info[current];
+            if (cur.Depth >= maxDepth)
                 continue;
             foreach (var s in Successors(current, index))
             {
-                if (depthOf.ContainsKey(s.Node))
+                if (info.ContainsKey(s.Node))
                     continue;
-                depthOf[s.Node] = depth + 1;
+                var looped = s.LoopKind is not null;
+                var nesting = cur.LoopNesting + (looped ? 1 : 0);
+                var nearKind = looped ? s.LoopKind : cur.NearestLoopKind;
+                var nearDetail = looped ? s.LoopDetail : cur.NearestLoopDetail;
+                info[s.Node] = new ReachInfo(cur.Depth + 1, nesting, nearKind, nearDetail);
                 queue.Enqueue(s.Node);
             }
         }
 
-        return depthOf;
+        return info;
     }
+
+    // Builds the call TREE rooted at every node matching `fromPattern` (rig tree). Same edge model
+    // as Reaches/Find (direct calls + interface->impl + base->override dispatch, with loop context),
+    // but materialized as a tree for rendering. Each method is EXPANDED ONCE globally: the first time
+    // it's reached its children are built; later encounters become a Truncated leaf ("seen"), so a
+    // cycle or a heavily-shared callee can't blow the tree up. maxDepth bounds depth; maxNodes bounds
+    // total emitted nodes (a Truncated leaf is emitted at the cut). Returns one TraceNode per root.
+    public static IReadOnlyList<TraceNode> BuildTree(
+        FactGraphData graph, string fromPattern, int maxDepth = 20, int maxNodes = 20000)
+    {
+        var index = BuildIndex(graph);
+        var expanded = new HashSet<string>(StringComparer.Ordinal);
+        var budget = new int[] { maxNodes };
+
+        var roots = new List<TraceNode>();
+        foreach (var root in index.Nodes.Where(n => Contains(n, fromPattern)).OrderBy(n => n, StringComparer.Ordinal))
+        {
+            if (budget[0] <= 0)
+                break;
+            roots.Add(BuildNode(root, "entry", loopKind: null, loopDetail: null, depth: 0, maxDepth, index, expanded, budget));
+        }
+        return roots;
+    }
+
+    private static TraceNode BuildNode(
+        string symbol, string edgeKind, string? loopKind, string? loopDetail,
+        int depth, int maxDepth, GraphIndex index, HashSet<string> expanded, int[] budget)
+    {
+        budget[0]--;
+
+        // Already expanded elsewhere (cycle / shared callee), at the depth cap, or out of budget:
+        // emit a leaf and don't descend, so the tree stays finite and each method's subtree is
+        // printed once.
+        if (expanded.Contains(symbol) || depth >= maxDepth || budget[0] <= 0)
+            return new TraceNode(symbol, edgeKind, loopKind, loopDetail, EmptyNodes, Truncated: true);
+
+        expanded.Add(symbol);
+
+        var children = new List<TraceNode>();
+        foreach (var s in Successors(symbol, index))
+        {
+            if (budget[0] <= 0)
+                break;
+            children.Add(BuildNode(s.Node, s.Kind, s.LoopKind, s.LoopDetail, depth + 1, maxDepth, index, expanded, budget));
+        }
+        return new TraceNode(symbol, edgeKind, loopKind, loopDetail, children);
+    }
+
+    private static readonly IReadOnlyList<TraceNode> EmptyNodes = new TraceNode[0];
 
     private sealed class GraphIndex
     {
@@ -119,11 +196,11 @@ public static class FactPathFinder
 
     // Direct call edges + the interface->concrete DI dispatch hop (single shared definition so
     // Find and Reaches traverse identically).
-    private static IEnumerable<(string Node, string Kind, string? File, int Line)> Successors(string current, GraphIndex index)
+    private static IEnumerable<(string Node, string Kind, string? File, int Line, string? LoopKind, string? LoopDetail)> Successors(string current, GraphIndex index)
     {
         if (index.Adjacency.TryGetValue(current, out var edges))
             foreach (var edge in edges)
-                yield return (edge.Callee, edge.Kind, edge.FilePath, edge.Line);
+                yield return (edge.Callee, edge.Kind, edge.FilePath, edge.Line, edge.LoopKind, edge.LoopDetail);
 
         var parsed = ParseMethod(current);
         if (parsed is null)
@@ -139,7 +216,7 @@ public static class FactPathFinder
                 foreach (var concrete in implMethods)
                 {
                     if (string.Equals(concrete.Name, parsed.Value.Name, StringComparison.Ordinal))
-                        yield return (concrete.SymbolId, "impl-dispatch", null, 0);
+                        yield return (concrete.SymbolId, "impl-dispatch", null, 0, null, null);
                 }
             }
         }
@@ -155,7 +232,7 @@ public static class FactPathFinder
             foreach (var m in subMethods)
             {
                 if (m.IsOverride && string.Equals(m.Name, parsed.Value.Name, StringComparison.Ordinal))
-                    yield return (m.SymbolId, "override-dispatch", null, 0);
+                    yield return (m.SymbolId, "override-dispatch", null, 0, null, null);
             }
         }
     }
@@ -171,25 +248,25 @@ public static class FactPathFinder
     }
 
     private static void Enqueue(
-        Dictionary<string, (string From, string Kind, string? File, int Line)?> parent,
+        Dictionary<string, (string From, string Kind, string? File, int Line, string? LoopKind, string? LoopDetail)?> parent,
         Queue<(string, int)> queue,
-        string node, string from, string kind, string? file, int line, int depth)
+        string node, string from, string kind, string? file, int line, string? loopKind, string? loopDetail, int depth)
     {
         if (parent.ContainsKey(node))
             return;
-        parent[node] = (from, kind, file, line);
+        parent[node] = (from, kind, file, line, loopKind, loopDetail);
         queue.Enqueue((node, depth + 1));
     }
 
     private static IReadOnlyList<PathStep> Reconstruct(
-        Dictionary<string, (string From, string Kind, string? File, int Line)?> parent, string target)
+        Dictionary<string, (string From, string Kind, string? File, int Line, string? LoopKind, string? LoopDetail)?> parent, string target)
     {
         var steps = new List<PathStep>();
         var node = target;
         while (true)
         {
             var link = parent[node];
-            steps.Add(new PathStep(node, link?.Kind ?? "entry", link?.File, link?.Line ?? 0));
+            steps.Add(new PathStep(node, link?.Kind ?? "entry", link?.File, link?.Line ?? 0, link?.LoopKind, link?.LoopDetail));
             if (link is null)
                 break;
             node = link.Value.From;

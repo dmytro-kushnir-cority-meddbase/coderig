@@ -34,6 +34,7 @@ public static class FactEffectRuleProvider
             rule.DeclaringTypeBaseTypes,
             rule.MatchConstructor,
             rule.MinArguments,
+            rule.MatchThrow,
             rule.ContainingNamespaces,
             rule.ContainingTypes,
             rule.ContainingMethods,

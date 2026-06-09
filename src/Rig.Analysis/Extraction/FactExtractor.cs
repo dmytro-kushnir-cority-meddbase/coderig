@@ -88,6 +88,22 @@ internal static class FactExtractor
                 AddReference(references, ctor, "ctor", EnclosingSymbolId(creation, model), tree, creation);
         }
 
+        // --- Throw sites -> "throw" refs (the thrown exception TYPE) ---
+        // A `throw` is first-party control flow, so — unlike calls INTO the BCL — we keep throws of
+        // runtime exception types too (the throw SITE is ours); allowRuntime bypasses the runtime-
+        // assembly filter. The target is the exception TYPE (not its ctor) so error/permission effect
+        // rules can gate on the type name / base type. Bare `throw;` rethrows have no operand and are
+        // skipped. Structural context (enclosing try/catch + loop) rides along like invocation refs.
+        foreach (var thrown in ThrownExpressions(root))
+        {
+            var type = model.GetTypeInfo(thrown).Type;
+            if (type is null or IErrorTypeSymbol)
+                continue;
+            AddReference(
+                references, type, "throw", EnclosingSymbolId(thrown, model), tree, thrown,
+                structural: StructuralContextOf(thrown, model), allowRuntime: true);
+        }
+
         return new FactExtractionResult(symbols, references, relations);
     }
 
@@ -138,7 +154,8 @@ internal static class FactExtractor
         string? receiverType = null,
         string? firstArgumentTemplate = null,
         string? firstArgumentType = null,
-        StructuralContext structural = default)
+        StructuralContext structural = default,
+        bool allowRuntime = false)
     {
         // For constructors, point the reference at the constructor's containing type's ctor DocID;
         // for everything else use the symbol's own DocID. Reduced extension methods resolve to the
@@ -152,7 +169,9 @@ internal static class FactExtractor
         var assembly = resolved.ContainingAssembly?.Name ?? "";
 
         // First-party always indexed; drop the explosive BCL/runtime noise when not first-party.
-        if (!inSource && IsRuntimeAssembly(assembly))
+        // allowRuntime keeps runtime targets that ARE meaningful first-party control flow (throws of
+        // System exceptions — the throw site is ours).
+        if (!inSource && !allowRuntime && IsRuntimeAssembly(assembly))
             return;
 
         references.Add(new ReferenceFact(
@@ -225,8 +244,9 @@ internal static class FactExtractor
     //     receiver-text/method match for parallel_fanout and the receiver-type/method match for
     //     resilience_retry
     //   * caught exception types of all enclosing try/catch clauses -> concurrency_handled
-    // Returns all-null for a null invocation (non-invocation ref).
-    private static StructuralContext StructuralContextOf(InvocationExpressionSyntax? invocation, SemanticModel model)
+    // Returns all-null for a null node (non-invocation ref). Generalized to any node so throw
+    // operands carry the same loop/try-catch context as invocations.
+    private static StructuralContext StructuralContextOf(SyntaxNode? invocation, SemanticModel model)
     {
         if (invocation is null)
             return default;
@@ -292,6 +312,19 @@ internal static class FactExtractor
         string? EnclosingInvocations,
         string? CatchTypes
     );
+
+    // Operands of throw statements and throw expressions (the thrown value). `throw;` rethrows carry
+    // no operand and are skipped — there is no static type to record.
+    private static IEnumerable<ExpressionSyntax> ThrownExpressions(SyntaxNode root)
+    {
+        foreach (var node in root.DescendantNodes())
+        {
+            if (node is ThrowStatementSyntax { Expression: { } stmtOperand })
+                yield return stmtOperand;
+            else if (node is ThrowExpressionSyntax exprThrow)
+                yield return exprThrow.Expression;
+        }
+    }
 
     // The InvocationExpressionSyntax this name is the invoked method of: `Foo(..)`, `a.Foo(..)`, or
     // `a?.Foo(..)`. Null otherwise (mirrors IsInvoked's shapes, plus the conditional-access form).

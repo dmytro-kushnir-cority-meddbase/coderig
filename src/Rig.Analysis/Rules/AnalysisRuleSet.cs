@@ -251,7 +251,12 @@ internal sealed record EffectRule(
     // llblgen entity-ctor fetch (gap G5). Type gates apply to the constructed type; MinArguments
     // separates the fetch ctor from the empty `new XxxEntity()`.
     bool MatchConstructor = false,
-    int MinArguments = 0
+    int MinArguments = 0,
+    // When true, match THROW refs (`throw new XxxException(...)`) rather than invocations. The type
+    // gates (declaringTypes / declaringTypeNameEndsWith / declaringTypeBaseTypes) apply to the THROWN
+    // exception type, and the effect resource is that exception type. Surfaces guard/permission exits
+    // (e.g. AccessDeniedException) as effects so a read path that drops its check is visible.
+    bool MatchThrow = false
 )
 {
     public bool Matches(string methodName)

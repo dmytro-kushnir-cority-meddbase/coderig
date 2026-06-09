@@ -92,7 +92,14 @@ public sealed record ReferenceHit(
 );
 
 // A caller->callee edge derived from a reference fact (invocation/methodGroup/ctor).
-public sealed record CallEdge(string Caller, string Callee, string Kind, string FilePath, int Line);
+// LoopKind/LoopDetail carry the caller-side enclosing loop of the call SITE (from the reference
+// fact's EnclosingLoopKind/Detail): when set, this call happens inside a foreach/for/while in the
+// caller's body, so everything reachable through it is fanned out. Null for non-looped call sites
+// and for the synthetic dispatch hops (interface->impl, base->override). Optional so existing
+// constructions stay source-compatible.
+public sealed record CallEdge(
+    string Caller, string Callee, string Kind, string FilePath, int Line,
+    string? LoopKind = null, string? LoopDetail = null);
 
 // An "implType implements ifaceType" edge (from a type-relation fact).
 public sealed record ImplementsEdge(string ImplType, string InterfaceType);
@@ -115,8 +122,25 @@ public sealed record FactGraphData(
     IReadOnlyList<BaseEdge>? BaseEdges = null
 );
 
-// One hop in a found path.
-public sealed record PathStep(string SymbolId, string Kind, string? FilePath, int Line);
+// One hop in a found path. LoopKind/LoopDetail describe the enclosing loop of the call that
+// reached this step (i.e. the parent invoked it inside a foreach/for/while). Null for the entry
+// step, dispatch hops, and non-looped calls.
+public sealed record PathStep(
+    string SymbolId, string Kind, string? FilePath, int Line,
+    string? LoopKind = null, string? LoopDetail = null);
+
+// A node in a call TREE rooted at an entry point (rig tree). EdgeKind/LoopKind describe the call
+// that reached this node from its parent (EdgeKind="entry" for a root; "invocation"/"impl-dispatch"/
+// "override-dispatch"; LoopKind set when that call sits inside a loop). Truncated=true marks a node
+// whose subtree was NOT expanded because the method was already expanded elsewhere (cycle / shared
+// callee — shown as "seen") or a depth/budget cap was hit.
+public sealed record TraceNode(
+    string SymbolId,
+    string EdgeKind,
+    string? LoopKind,
+    string? LoopDetail,
+    IReadOnlyList<TraceNode> Children,
+    bool Truncated = false);
 
 // A method handed off as a delegate (method-group) — a deferred/background entry point the
 // structural entry-point rules don't catch (e.g. RepeatingBackgroundProcessSchedule(.., Process)).
@@ -248,6 +272,11 @@ public sealed record FactEffectRule(
     // MinArguments distinguishes the fetch ctor (pk arg) from the empty `new XxxEntity()`.
     bool MatchConstructor = false,
     int MinArguments = 0,
+    // When true, match THROW refs (RefKind="throw") — a `throw new XxxException(...)` site — instead
+    // of invocations. The type gates apply to the THROWN exception type (parsed from the throw ref's
+    // target type DocID); the resource is that exception type. Surfaces guard/permission exits (e.g.
+    // AccessDeniedException) as effects — a read path that drops its check is then visibly missing it.
+    bool MatchThrow = false,
     // Enclosing-method gates (P2a) — mirror the Roslyn MatchesContainingNamespace/Type/Method. The
     // effect counts only when the enclosing method's namespace / declaring type / name matches.
     // Parsed from the reference's EnclosingSymbolId DocID; type/namespace matching is equality +

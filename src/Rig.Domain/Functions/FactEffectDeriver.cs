@@ -26,7 +26,8 @@ public static class FactEffectDeriver
         string? providerFilter = null,
         IReadOnlyList<(string TypeId, string BaseId)>? baseEdges = null,
         IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)>? ctorRefs = null,
-        FactObservationRules? observationRules = null)
+        FactObservationRules? observationRules = null,
+        IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)>? throwRefs = null)
     {
         // Precompute a base-type closure per distinct DeclaringTypeBaseTypes set (e.g. ProxyBase).
         // Without base edges, base-gated rules match nothing (the generated proxies aren't indexed).
@@ -50,8 +51,9 @@ public static class FactEffectDeriver
         // Dispatch rules drive the call graph, not effects — the Roslyn FindEffects skips them, so
         // we do too (otherwise a dispatch rule with a resolvable resource would leak in as an effect).
         // Invocation rules are the default; constructor rules (MatchConstructor) match ctor refs.
-        var invocationRules = rules.Where(r => !r.MatchConstructor && !r.TreatAsDispatch).ToArray();
+        var invocationRules = rules.Where(r => !r.MatchConstructor && !r.MatchThrow && !r.TreatAsDispatch).ToArray();
         var constructorRules = rules.Where(r => r.MatchConstructor && !r.TreatAsDispatch).ToArray();
+        var throwRules = rules.Where(r => r.MatchThrow && !r.TreatAsDispatch).ToArray();
 
         var results = new List<DerivedEffect>();
         foreach (var inv in invocations)
@@ -116,6 +118,31 @@ public static class FactEffectDeriver
                         continue;
 
                     results.Add(new DerivedEffect(rule.Provider, rule.Operation, constructedType, ctor.Enclosing, ctor.FilePath, ctor.Line));
+                    break;
+                }
+            }
+        }
+
+        // Throw-matched effects: a `throw new XxxException(...)` site. The thrown exception TYPE
+        // (parsed from the throw ref's target type DocID) is gated like a declaring type — so a rule
+        // can scope to a namespace, a name suffix ("Exception"), or a base-exception closure — and
+        // the resource is that exception type. A throw rule with no type gate matches every throw.
+        if (throwRules.Length > 0 && throwRefs is not null)
+        {
+            foreach (var thrown in throwRefs)
+            {
+                var exceptionType = ParseType(thrown.Target);
+                if (exceptionType is null)
+                    continue;
+
+                foreach (var rule in throwRules)
+                {
+                    if (providerFilter is not null && !string.Equals(rule.Provider, providerFilter, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (!TypeGateMatches(rule, exceptionType, receiverType: null, ClosureFor(rule)))
+                        continue;
+
+                    results.Add(new DerivedEffect(rule.Provider, rule.Operation, exceptionType, thrown.Enclosing, thrown.FilePath, thrown.Line));
                     break;
                 }
             }
@@ -339,6 +366,14 @@ public static class FactEffectDeriver
             }
         }
         return (constructedType, argCount);
+    }
+
+    // "T:Ns.Type" -> "Ns.Type" (generic arity markers stripped). Null when not a type DocID.
+    private static string? ParseType(string docId)
+    {
+        if (!docId.StartsWith("T:", StringComparison.Ordinal))
+            return null;
+        return StripTypeArityMarkers(docId.Substring(2));
     }
 
     // Removes backtick-arity suffixes from each dot-separated segment of a type name.

@@ -56,7 +56,7 @@ public static class FactProjection
         var callEdges = result
             .References.Where(r => r.EnclosingSymbolId != null
                 && (r.RefKind == "invocation" || r.RefKind == "methodGroup" || r.RefKind == "ctor"))
-            .Select(r => new CallEdge(r.EnclosingSymbolId!, r.TargetSymbolId, r.RefKind, r.FilePath, r.Line))
+            .Select(r => new CallEdge(r.EnclosingSymbolId!, r.TargetSymbolId, r.RefKind, r.FilePath, r.Line, r.EnclosingLoopKind, r.EnclosingLoopDetail))
             .Distinct()
             .ToArray();
 
@@ -89,5 +89,14 @@ public static class FactProjection
                 r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.ReceiverType,
                 r.FirstArgumentTemplate, r.FirstArgumentType,
                 r.EnclosingLoopKind, r.EnclosingLoopDetail, r.EnclosingInvocations, r.EnclosingCatchTypes))
+            .ToArray();
+
+    // Mirrors Reads.LoadThrowRefsAsync: throw sites (RefKind="throw"), target = thrown exception type.
+    public static IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)> ThrowRefs(AnalysisResult result) =>
+        result
+            .References.Where(r => r.RefKind == "throw" && r.EnclosingSymbolId != null)
+            .GroupBy(r => (r.FilePath, r.Line, r.TargetSymbolId))
+            .Select(g => g.First())
+            .Select(r => (r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line))
             .ToArray();
 }

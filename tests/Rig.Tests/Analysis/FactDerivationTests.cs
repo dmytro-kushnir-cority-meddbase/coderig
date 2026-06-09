@@ -1,5 +1,6 @@
 using Rig.Analysis;
 using Rig.Analysis.Rules;
+using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Tests.Fixtures;
 using Shouldly;
@@ -148,6 +149,38 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         reachable.Keys.ShouldContain(k => k.Contains("ReferralPane.Save", StringComparison.Ordinal));
         // ...and through the override it reaches the llblgen write (SaveEntity).
         reachable.Keys.ShouldContain(k => k.Contains("SaveEntity", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Throw_sites_are_extracted_and_derived_as_effects()
+    {
+        var playground = await _playgrounds.LegacyNet48Async();
+        var result = playground.Result;
+
+        // Extraction: `throw new AccessDeniedException()` in PermissionGuard.AssertRight produces a
+        // throw ref whose target is the exception TYPE, enclosed by AssertRight. (The same site also
+        // yields a ctor ref, but that carries no "thrown" meaning — only the throw ref does.)
+        var throwRefs = FactProjection.ThrowRefs(result);
+        throwRefs.ShouldContain(t =>
+            t.Target.EndsWith("AccessDeniedException", StringComparison.Ordinal)
+            && t.Enclosing != null && t.Enclosing.Contains("AssertRight", StringComparison.Ordinal));
+
+        // Derivation: a MatchThrow rule gated on the exception's simple-name suffix yields an effect
+        // whose resource is the thrown type. No invocation/ctor rule could ever surface this guard.
+        var rule = new FactEffectRule(
+            "authz", "deny",
+            Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(),
+            DeclaringTypeNameEndsWith: new[] { "AccessDeniedException" },
+            MatchThrow: true,
+            Resource: "receiver_type");
+
+        var effects = FactEffectDeriver.Derive(
+            FactProjection.Invocations(result), new[] { rule }, throwRefs: throwRefs);
+
+        var authz = effects.Where(e => e.Provider == "authz").ToList();
+        authz.ShouldNotBeEmpty();
+        authz.ShouldAllBe(e => e.Operation == "deny");
+        authz.ShouldContain(e => e.ResourceType.EndsWith("AccessDeniedException", StringComparison.Ordinal));
     }
 
     [Fact]
