@@ -103,6 +103,39 @@ public sealed class FactPathFinderFanoutTests
     }
 
     [Fact]
+    public void ReachedBy_finds_transitive_callers_including_interface_dispatch()
+    {
+        // EP.Run -> I.M (interface call) ; T.M implements I.M ; T.M -> Leaf.Do
+        // Reverse from Leaf.Do must reach T.M (direct), I.M (reverse impl-dispatch), EP.Run (caller).
+        var edges = new[]
+        {
+            new CallEdge("M:EP.Run", "M:I.M", "invocation", "f.cs", 1),
+            new CallEdge("M:T.M", "M:Leaf.Do", "invocation", "f.cs", 2),
+        };
+        var impls = new[] { new ImplementsEdge("T:T", "T:I") };
+        var methods = new[]
+        {
+            new MethodRef("M:EP.Run", "Run", "T:EP"),
+            new MethodRef("M:I.M", "M", "T:I"),
+            new MethodRef("M:T.M", "M", "T:T"),
+            new MethodRef("M:Leaf.Do", "Do", "T:Leaf"),
+        };
+        var graph = new FactGraphData(edges, impls, methods);
+
+        var reached = FactPathFinder.ReachedBy(graph, "Leaf.Do");
+
+        reached.Keys.ShouldContain("M:T.M");     // direct caller
+        reached.Keys.ShouldContain("M:I.M");     // reverse impl-dispatch
+        reached.Keys.ShouldContain("M:EP.Run");  // caller of the interface method
+
+        // EP.Run is the only true entry-point root (T.M is reached via dispatch, I.M via a call).
+        var roots = FactPathFinder.EntryRootsReaching(graph, "Leaf.Do");
+        roots.ShouldContain("M:EP.Run");
+        roots.ShouldNotContain("M:T.M");
+        roots.ShouldNotContain("M:I.M");
+    }
+
+    [Fact]
     public void Find_annotates_each_hop_with_its_call_site_loop()
     {
         var graph = Graph(

@@ -45,6 +45,7 @@ public static class CliApplication
             "refs" => await RunRefsAsync(args, output, error, workingDirectory),
             "path" => await RunPathAsync(args, output, error, workingDirectory),
             "tree" => await RunTreeAsync(args, output, error, workingDirectory),
+            "callers" => await RunCallersAsync(args, output, error, workingDirectory),
             "reaches" => await RunReachesAsync(args, output, error, workingDirectory),
             "derive" => await RunDeriveAsync(args, output, error, workingDirectory),
             "files" => await RunFilesAsync(args, output, error, workingDirectory),
@@ -89,6 +90,7 @@ public static class CliApplication
         output.WriteLine("  rig path <fromPattern> <toPattern>");
         output.WriteLine("  rig reaches <fromPattern> [--rules <path>...] [--maxdepth <n>] [--format tsv]   (effects reachable from an entry point)");
         output.WriteLine("  rig tree <fromPattern> [--full|--summary] [--rules <path>...] [--maxdepth <n>]   (call tree from an entry point; default = paths that reach an effect)");
+        output.WriteLine("  rig callers <toPattern> [--roots] [--maxdepth <n>]   (reverse reachability: who reaches this method; --roots = entry-point candidates)");
         output.WriteLine("  rig derive [--rules <path>...] [--limit <n>]   (stage-2 pass over facts: effects + handoffs)");
         output.WriteLine("  rig files --skipped");
         output.WriteLine("  rig profile validate");
@@ -816,6 +818,51 @@ public static class CliApplication
 
         foreach (var c in node.Children)
             RenderTreeNode(c, depth + 1, effectsByMethod, prune, output);
+    }
+
+    // rig callers <toPattern> [--roots] [--maxdepth <n>]
+    // Reverse reachability over the fact graph: every method that can reach toPattern (transitive
+    // callers, incl. reverse interface/override dispatch). --roots filters to entry-point candidates
+    // (reachable methods with no predecessor — framework/DI/reflection-invoked tops). Answers
+    // "which entry points touch this method"; coverage is bounded by what's indexed.
+    private static async Task<int> RunCallersAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
+    {
+        if (args.Length < 2 || args[1].StartsWith("--", StringComparison.Ordinal))
+        {
+            error.WriteLine("Usage: rig callers <toPattern> [--roots] [--maxdepth <n>]");
+            return 2;
+        }
+        var toPattern = args[1];
+        var maxDepth = int.TryParse(GetOption(args, "--maxdepth"), out var d) ? d : 20;
+        var rootsOnly = args.Contains("--roots");
+
+        await using var context = new RigDbContext(Path.Combine(workingDirectory, ".rig", "rig.db"));
+        var graph = await Reads.LoadFactGraphAsync(context);
+
+        if (rootsOnly)
+        {
+            var roots = FactPathFinder.EntryRootsReaching(graph, toPattern, maxDepth);
+            if (roots.Count == 0)
+            {
+                output.WriteLine($"No entry-point candidates reach '{toPattern}' (or no symbol matches).");
+                return 1;
+            }
+            output.WriteLine($"Entry-point candidates reaching '{toPattern}': {roots.Count}");
+            foreach (var r in roots)
+                output.WriteLine($"  {r}");
+            return 0;
+        }
+
+        var reachable = FactPathFinder.ReachedBy(graph, toPattern, maxDepth);
+        if (reachable.Count == 0)
+        {
+            output.WriteLine($"No symbol matches '{toPattern}'.");
+            return 1;
+        }
+        output.WriteLine($"Methods that reach '{toPattern}': {reachable.Count}");
+        foreach (var kv in reachable.OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).Take(300))
+            output.WriteLine($"  d{kv.Value}  {ShortName(kv.Key)}");
+        return 0;
     }
 
     // rig derive [--rules <path>...] [--limit <n>] — the stage-2 pass over facts (no Roslyn):

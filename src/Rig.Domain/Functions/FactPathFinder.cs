@@ -154,6 +154,150 @@ public static class FactPathFinder
 
     private static readonly IReadOnlyList<TraceNode> EmptyNodes = new TraceNode[0];
 
+    // Reverse reachability — every method that can REACH any node matching toPattern (transitive
+    // callers), keyed to its shortest reverse hop count. Inverts Successors: direct caller edges,
+    // plus the reverse of the dispatch hops — an impl method is reached via its interface's
+    // same-named method, an override via its base's. Powers `rig callers` ("which entry points
+    // touch this method"), and underpins the planned unreachable-symbol (dead-code) finder.
+    public static IReadOnlyDictionary<string, int> ReachedBy(
+        FactGraphData graph, string toPattern, int maxDepth = 20, int maxNodes = 20000)
+    {
+        var index = BuildIndex(graph);
+        var rev = BuildReverseMaps(graph);
+
+        var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
+        var queue = new Queue<string>();
+        foreach (var start in index.Nodes.Where(n => Contains(n, toPattern)))
+        {
+            if (depthOf.ContainsKey(start))
+                continue;
+            depthOf[start] = 0;
+            queue.Enqueue(start);
+        }
+
+        while (queue.Count > 0 && depthOf.Count < maxNodes)
+        {
+            var current = queue.Dequeue();
+            var depth = depthOf[current];
+            if (depth >= maxDepth)
+                continue;
+            foreach (var pred in Predecessors(current, index, rev))
+            {
+                if (depthOf.ContainsKey(pred))
+                    continue;
+                depthOf[pred] = depth + 1;
+                queue.Enqueue(pred);
+            }
+        }
+
+        return depthOf;
+    }
+
+    // Entry-point CANDIDATES that reach toPattern: the reachable methods with NO predecessor at all
+    // (no caller, not an impl of a called interface, not an override of a called base) — the tops of
+    // the reverse closure, i.e. methods invoked only by the framework / DI / reflection / externally.
+    // The honest static approximation of "which entry points touch this method".
+    public static IReadOnlyList<string> EntryRootsReaching(
+        FactGraphData graph, string toPattern, int maxDepth = 20, int maxNodes = 20000)
+    {
+        var index = BuildIndex(graph);
+        var rev = BuildReverseMaps(graph);
+        var reachable = ReachedBy(graph, toPattern, maxDepth, maxNodes);
+        var roots = new List<string>();
+        foreach (var m in reachable.Keys)
+            if (!Predecessors(m, index, rev).Any())
+                roots.Add(m);
+        roots.Sort(StringComparer.Ordinal);
+        return roots;
+    }
+
+    private sealed class ReverseMaps
+    {
+        public Dictionary<string, List<string>> Callers = new(StringComparer.Ordinal);
+        public Dictionary<string, List<string>> InterfacesByType = new(StringComparer.Ordinal);
+        public Dictionary<string, List<string>> BasesByType = new(StringComparer.Ordinal);
+        public HashSet<string> IsOverride = new(StringComparer.Ordinal);
+    }
+
+    private static ReverseMaps BuildReverseMaps(FactGraphData graph)
+    {
+        var rev = new ReverseMaps();
+        foreach (var edge in graph.CallEdges)
+        {
+            if (!rev.Callers.TryGetValue(edge.Callee, out var list))
+                rev.Callers[edge.Callee] = list = new List<string>();
+            list.Add(edge.Caller);
+        }
+        foreach (var e in graph.ImplementsEdges)
+        {
+            if (!rev.InterfacesByType.TryGetValue(e.ImplType, out var list))
+                rev.InterfacesByType[e.ImplType] = list = new List<string>();
+            list.Add(e.InterfaceType);
+        }
+        foreach (var e in graph.BaseEdges ?? new List<BaseEdge>())
+        {
+            if (!rev.BasesByType.TryGetValue(e.SubType, out var list))
+                rev.BasesByType[e.SubType] = list = new List<string>();
+            list.Add(e.BaseType);
+        }
+        foreach (var m in graph.Methods)
+            if (m.IsOverride)
+                rev.IsOverride.Add(m.SymbolId);
+        return rev;
+    }
+
+    private static IEnumerable<string> Predecessors(string current, GraphIndex index, ReverseMaps rev)
+    {
+        var callers = rev.Callers;
+        var interfacesByType = rev.InterfacesByType;
+        var basesByType = rev.BasesByType;
+        var isOverride = rev.IsOverride;
+
+        if (callers.TryGetValue(current, out var direct))
+            foreach (var c in direct)
+                yield return c;
+
+        var parsed = ParseMethod(current);
+        if (parsed is null)
+            yield break;
+        var (typeId, name) = parsed.Value;
+
+        // Reverse impl-dispatch: callers invoke the interface method, which dispatches to this impl.
+        if (interfacesByType.TryGetValue(typeId, out var ifaces))
+            foreach (var iface in ifaces)
+                if (index.MethodsByType.TryGetValue(iface, out var im))
+                    foreach (var m in im)
+                        if (string.Equals(m.Name, name, StringComparison.Ordinal))
+                            yield return m.SymbolId;
+
+        // Reverse override-dispatch: a call to a base virtual dispatches to this override, so the
+        // base's same-named method reaches it. Gated on this being an override; walk all ancestors.
+        if (isOverride.Contains(current))
+            foreach (var baseType in Ancestors(typeId, basesByType))
+                if (index.MethodsByType.TryGetValue(baseType, out var bm))
+                    foreach (var m in bm)
+                        if (string.Equals(m.Name, name, StringComparison.Ordinal))
+                            yield return m.SymbolId;
+    }
+
+    private static IEnumerable<string> Ancestors(string typeId, Dictionary<string, List<string>> basesByType)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var stack = new Stack<string>();
+        stack.Push(typeId);
+        while (stack.Count > 0)
+        {
+            var t = stack.Pop();
+            if (basesByType.TryGetValue(t, out var bases))
+                foreach (var b in bases)
+                    if (seen.Add(b))
+                    {
+                        stack.Push(b);
+                        yield return b;
+                    }
+        }
+    }
+
     private sealed class GraphIndex
     {
         public Dictionary<string, List<CallEdge>> Adjacency = new(StringComparer.Ordinal);
