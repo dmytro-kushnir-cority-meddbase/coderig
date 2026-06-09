@@ -277,6 +277,10 @@ public static class FactEffectDeriver
         return strategy switch
         {
             "receiver_type" => receiver,
+            // The invocation target's declaring type — independent of how it's called. Needed for
+            // statically-imported helpers that have no receiver (e.g. `using static LanguageExt.Prelude;`
+            // then a bare `failwith(...)`), where receiver_type resolves to null and drops the effect.
+            "declaring_type" => declaringType,
             "argument_type" => firstArgType,
             "string_argument" => firstArgTemplate,
             "http_argument" => firstArgTemplate is null ? null : NormalizeHttpResource(firstArgTemplate),
