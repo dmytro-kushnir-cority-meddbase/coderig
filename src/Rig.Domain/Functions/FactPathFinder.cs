@@ -473,6 +473,29 @@ public static class FactPathFinder
         return targets;
     }
 
+    // Materialises EVERY synthetic dispatch edge in the graph — (sourceMethod -> targetMethod, kind)
+    // for interface->impl (incl. error-type simple-name recovery) and base-virtual/abstract->override,
+    // for all method nodes. This is the SAME per-node DispatchTargets the lazy traversal uses, just
+    // enumerated over the whole node set, so a precomputed `dispatch_edges` table built from this is
+    // identical to what Successors computes on the fly — the SQL reachability path traverses the same
+    // edges as this in-memory oracle. Deduped per source by DispatchTargets; sources are distinct.
+    public static IEnumerable<(string From, string To, string Kind)> AllDispatchEdges(FactGraphData graph)
+    {
+        var index = BuildIndex(graph);
+        foreach (var node in index.Nodes)
+            foreach (var target in DispatchTargets(node, index))
+                yield return (node, target.Node, target.Kind);
+    }
+
+    // The direct call edges as (caller -> callee, kind), deduped — the other half of the graph the
+    // SQL reachability path traverses. Mirrors graph.CallEdges (already filtered to first-party
+    // invocation/methodGroup/ctor at load), exposed here so the materialiser and the oracle agree.
+    public static IEnumerable<(string From, string To, string Kind, string? File, int Line, string? LoopKind, string? LoopDetail)> AllCallEdges(FactGraphData graph)
+    {
+        foreach (var edge in graph.CallEdges)
+            yield return (edge.Caller, edge.Callee, edge.Kind, edge.FilePath, edge.Line, edge.LoopKind, edge.LoopDetail);
+    }
+
     // Transitive strict descendants of a type, memoised. Keyed on the generic-stripped id so the
     // instantiated/open-generic forms share one cache entry.
     private static HashSet<string> Descendants(string typeId, GraphIndex index)

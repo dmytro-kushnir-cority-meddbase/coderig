@@ -30,6 +30,18 @@ public static class CliApplication
             return 0;
         }
 
+        if (args[0] == "batch")
+            return await RunBatchAsync(output, error, workingDirectory);
+
+        return await DispatchAsync(args, output, error, workingDirectory);
+    }
+
+    // The command switch, factored out so `rig batch` can run many subcommands in ONE warm process —
+    // amortising the fixed per-invocation tax (CLR start + JIT + EF model build + connection open,
+    // ~0.5-0.6s) across the batch instead of paying it per query. This is also the dispatch an MCP
+    // server would call once-per-request against a long-lived process.
+    private static async Task<int> DispatchAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
+    {
         return args[0] switch
         {
             "index" => await RunIndexAsync(args, output, error, workingDirectory),
@@ -43,6 +55,7 @@ public static class CliApplication
             "callers" => await RunCallersAsync(args, output, error, workingDirectory),
             "reaches" => await RunReachesAsync(args, output, error, workingDirectory),
             "derive" => await RunDeriveAsync(args, output, error, workingDirectory),
+            "graph" => await RunGraphAsync(output, error, workingDirectory),
             "dead" => await RunDeadAsync(args, output, error, workingDirectory),
             "files" => await RunFilesAsync(args, output, error, workingDirectory),
             "profile" => await RunProfileAsync(args, output, error, workingDirectory),
@@ -82,6 +95,8 @@ public static class CliApplication
         output.WriteLine("  rig tree <fromPattern> [--full|--summary] [--rules <path>...] [--maxdepth <n>]   (call tree from an entry point; default = paths that reach an effect)");
         output.WriteLine("  rig callers <toPattern> [--roots] [--maxdepth <n>]   (reverse reachability: who reaches this method; --roots = entry-point candidates)");
         output.WriteLine("  rig derive [--rules <path>...] [--limit <n>]   (stage-2 pass over facts: effects + handoffs)");
+        output.WriteLine("  rig graph   (rebuild the derived call-graph views (call_edges + dispatch_edges) from facts; idempotent, no rescan — speeds up reaches/callers/tree/dead)");
+        output.WriteLine("  rig batch   (read subcommands from stdin, one per line, and run them in one warm process — amortises startup across many queries)");
         output.WriteLine("  rig dead [--rules <path>...] [--lib] [--include-dispatch] [--all] [--root <pattern>...] [--format tsv]   (unreachable first-party methods; report-only, compiler-confirm before removing)");
         output.WriteLine("  rig files --skipped");
         output.WriteLine("  rig profile validate");
@@ -299,6 +314,71 @@ public static class CliApplication
         return 0;
     }
 
+    // Rebuilds the derived call-graph views (call_edges + dispatch_edges) from facts already in the
+    // store. Decoupled from index/mine and idempotent — no Roslyn, no rescan; rerun any time. These
+    // views back the SQL recursive-CTE reachability path (reaches/callers/tree/dead).
+    private static async Task<int> RunGraphAsync(TextWriter output, TextWriter error, string workingDirectory)
+    {
+        var dbPath = Path.Combine(workingDirectory, ".rig", "rig.db");
+        if (!File.Exists(dbPath))
+            return NoRunError(error);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        await using var context = new RigDbContext(dbPath);
+        var stats = await GraphMaterializer.BuildAsync(context, message => output.WriteLine($"Progress: {message}"));
+        output.WriteLine(
+            $"Graph: {stats.CallEdges} call edge(s), {stats.DispatchEdges} dispatch edge(s) in {FormatElapsed(stopwatch.Elapsed)}");
+        return 0;
+    }
+
+    // rig batch  — read subcommands from stdin (one per line; blank / '#' lines skipped) and run them
+    // all in THIS warm process, so the fixed per-invocation cost (CLR start + JIT + EF model build +
+    // connection open) is paid once for the whole batch instead of once per query. Pipelining for the
+    // CLI; also the shape an MCP server would take (one long-lived process, many requests).
+    private static async Task<int> RunBatchAsync(TextWriter output, TextWriter error, string workingDirectory)
+    {
+        var input = await Console.In.ReadToEndAsync();
+        var any = false;
+        foreach (var raw in input.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal))
+                continue;
+            var tokens = Tokenize(line);
+            if (tokens.Length == 0)
+                continue;
+            any = true;
+            output.WriteLine($"### {line}");
+            try { await DispatchAsync(tokens, output, error, workingDirectory); }
+            catch (Exception exception) { error.WriteLine($"batch error on '{line}': {exception.Message}"); }
+            output.WriteLine();
+        }
+        if (!any)
+            error.WriteLine("batch: no commands on stdin (one rig subcommand per line).");
+        return 0;
+    }
+
+    // Whitespace tokeniser that honours double quotes, so `reaches "Ns.Type.M(args)"` stays one token.
+    private static string[] Tokenize(string line)
+    {
+        var tokens = new List<string>();
+        var current = new System.Text.StringBuilder();
+        var inQuote = false;
+        foreach (var c in line)
+        {
+            if (c == '"') { inQuote = !inQuote; continue; }
+            if (char.IsWhiteSpace(c) && !inQuote)
+            {
+                if (current.Length > 0) { tokens.Add(current.ToString()); current.Clear(); }
+                continue;
+            }
+            current.Append(c);
+        }
+        if (current.Length > 0)
+            tokens.Add(current.ToString());
+        return tokens.ToArray();
+    }
+
     private static async Task<int> RunDiAsync(TextWriter output, TextWriter error, string workingDirectory)
     {
         await using var context = OpenContext(workingDirectory);
@@ -359,6 +439,40 @@ public static class CliApplication
         var storeDirectory = Path.Combine(workingDirectory, ".rig");
         return new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
     }
+
+    // The call graph for a traversal command (reaches/tree/callers). When the derived edge views exist
+    // (`rig graph` has been run) it returns the BOUNDED subgraph for `pattern` in the given direction —
+    // loaded on disk via recursive CTE, sized to the result, not the 1.6GB store. Otherwise it falls
+    // back to the full in-memory EF graph (the reference path). The SAME FactPathFinder then runs over
+    // whichever graph, so the output is identical — only the load cost differs.
+    private static async Task<FactGraphData> LoadTraversalGraphAsync(
+        RigDbContext context, string pattern, SqlReachability.Direction direction)
+    {
+        if (await SqlReachability.HasGraphAsync(context))
+            return await SqlReachability.LoadBoundedGraphAsync(context, pattern, direction);
+        return await Reads.LoadFactGraphAsync(context);
+    }
+
+    // Like LoadTraversalGraphAsync, but also returns the effect-derivation inputs (invocations / ctor
+    // refs / throw refs) bounded to the SAME closure — so reaches/tree don't scan every invocation in
+    // the codebase. SQL path: one reach_set drives the graph + bounded inputs. EF fallback: the full
+    // reference loads (the original path), so output is identical when no derived views exist.
+    private static async Task<SqlReachability.ReachInputs> LoadEffectReachInputsAsync(
+        RigDbContext context, string pattern, SqlReachability.Direction direction)
+    {
+        if (await SqlReachability.HasGraphAsync(context))
+            return await SqlReachability.LoadReachInputsAsync(context, pattern, direction);
+
+        var graph = await Reads.LoadFactGraphAsync(context);
+        var invocations = await Reads.LoadInvocationRefsAsync(context);
+        var throwRefs = await Reads.LoadThrowRefsAsync(context);
+        var epData = await Reads.LoadFactEntryPointDataAsync(context);
+        return new SqlReachability.ReachInputs(graph, invocations, epData.CtorRefs, throwRefs);
+    }
+
+    // Base edges in the (TypeId, BaseId) shape FactEffectDeriver.Derive expects, from a graph's edges.
+    private static (string, string)[] BaseEdgeTuples(FactGraphData graph) =>
+        (graph.BaseEdges ?? []).Select(e => (e.SubType, e.BaseType)).ToArray();
 
     private static int NoRunError(TextWriter error)
     {
@@ -614,15 +728,13 @@ public static class CliApplication
 
         await using var context = new RigDbContext(Path.Combine(workingDirectory, ".rig", "rig.db"));
 
-        var graph = await Reads.LoadFactGraphAsync(context);
+        var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward);
+        var graph = inputs.Graph;
         var reachable = FactPathFinder.ReachesWithFanout(graph, fromPattern, maxDepth);
 
-        var epData = await Reads.LoadFactEntryPointDataAsync(context);
-        var invocations = await Reads.LoadInvocationRefsAsync(context);
         var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var throwRefs = await Reads.LoadThrowRefsAsync(context);
-        var effects = FactEffectDeriver.Derive(invocations, effectRules, providerFilter: null, baseEdges: epData.BaseEdges, ctorRefs: epData.CtorRefs, observationRules: observationRules, throwRefs: throwRefs);
+        var effects = FactEffectDeriver.Derive(inputs.Invocations, effectRules, providerFilter: null, baseEdges: BaseEdgeTuples(graph), ctorRefs: inputs.CtorRefs, observationRules: observationRules, throwRefs: inputs.ThrowRefs);
 
         // Effects whose enclosing method is reachable from the entry point. Fanout = looped call
         // edges on the path to the enclosing method (ReachInfo.LoopNesting) + 1 if the effect's OWN
@@ -708,7 +820,8 @@ public static class CliApplication
 
         await using var context = new RigDbContext(Path.Combine(workingDirectory, ".rig", "rig.db"));
 
-        var graph = await Reads.LoadFactGraphAsync(context);
+        var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward);
+        var graph = inputs.Graph;
         var roots = FactPathFinder.BuildTree(graph, fromPattern, maxDepth);
         if (roots.Count == 0)
         {
@@ -717,12 +830,9 @@ public static class CliApplication
         }
 
         // Effects per enclosing method — same derivation as `reaches` (incl. throws).
-        var epData = await Reads.LoadFactEntryPointDataAsync(context);
-        var invocations = await Reads.LoadInvocationRefsAsync(context);
-        var throwRefs = await Reads.LoadThrowRefsAsync(context);
         var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var effects = FactEffectDeriver.Derive(invocations, effectRules, providerFilter: null, baseEdges: epData.BaseEdges, ctorRefs: epData.CtorRefs, observationRules: observationRules, throwRefs: throwRefs);
+        var effects = FactEffectDeriver.Derive(inputs.Invocations, effectRules, providerFilter: null, baseEdges: BaseEdgeTuples(graph), ctorRefs: inputs.CtorRefs, observationRules: observationRules, throwRefs: inputs.ThrowRefs);
 
         var effectsByMethod = effects
             .Where(e => e.EnclosingSymbolId is not null)
@@ -805,7 +915,7 @@ public static class CliApplication
         var rootsOnly = args.Contains("--roots");
 
         await using var context = new RigDbContext(Path.Combine(workingDirectory, ".rig", "rig.db"));
-        var graph = await Reads.LoadFactGraphAsync(context);
+        var graph = await LoadTraversalGraphAsync(context, toPattern, SqlReachability.Direction.Reverse);
 
         if (rootsOnly)
         {
