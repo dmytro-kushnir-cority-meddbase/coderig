@@ -6,6 +6,19 @@ namespace MMS.Web.UI
         protected virtual void OnLoad() { }
     }
 
+    // Base of every SOURCE-GENERATED navigation proxy (RequestResponseProxyGenerator emits
+    // `<Page>Proxy : ProxyBase`). The generated nav methods (Show/ShowDialog/Redirect) call protected
+    // helpers declared here; their bodies don't need to fully bind for rig to index the proxy TYPE +
+    // base edge + public method declarations. The clientpage_proxy rule gates on this base type.
+    public abstract class ProxyBase
+    {
+        protected ProxyBase(System.Type pageType) { }
+        protected void AddWorkflow(object url) { }
+        protected void LoadChildDialog(string className, string containerId, string url, string title) { }
+        protected void ProcessEventDelegate(string id, System.Delegate handler, string name) { }
+        protected static string ToStringForLink(object value) => value?.ToString();
+    }
+
     // A non-ClientPage UI base. Components/widgets inherit this, NOT ClientPage.
     // Methods on these can still carry [ClientAction], but they must NOT be treated
     // as page action entry points (the real over-match: ~1083 such methods in MedDBase).

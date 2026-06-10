@@ -435,4 +435,22 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         proxyEffects.ShouldNotContain(e =>
             e.ResourceType.Contains("InvoiceServiceProxy", StringComparison.Ordinal));
     }
+
+    // The ClientPage navigation proxies (<Page>Proxy : ProxyBase) are emitted by the
+    // RequestResponseProxyGenerator source generator (a real copy lives in playgrounds/.../
+    // ProxyGenerator, wired as an Analyzer exactly like MedDBase.Pages references it). They exist in
+    // the compilation ONLY if the generator RUNS during indexing — the gap that made every generated
+    // proxy nav call invisible on real data. `Login : ClientPage` is concrete, so the generator emits
+    // `LoginProxy`; there is no hand-written LoginProxy, so its presence proves the generator ran.
+    [Fact]
+    public async Task Source_generated_clientpage_proxies_are_indexed()
+    {
+        var playground = await _playgrounds.LegacyNet48Async();
+        var typeNames = (playground.Result.Symbols ?? [])
+            .Where(s => s.Kind == "type")
+            .Select(s => s.Name)
+            .ToArray();
+
+        typeNames.ShouldContain("LoginProxy");
+    }
 }

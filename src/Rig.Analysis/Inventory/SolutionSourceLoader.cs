@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reflection;
+using System.Xml.Linq;
 using Buildalyzer;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -41,6 +42,12 @@ internal static class SolutionSourceLoader
         ReportProgress(progress, "Loading solution");
         var workspace = await Task.Run(() => BuildWorkspace(solutionPath, progress, scopeProjectPaths, maxParallelism), cancellationToken)
             .ConfigureAwait(false);
+
+        // Wire OutputItemType="Analyzer" ProjectReferences (source generators like the ClientPage
+        // proxy generator) that Buildalyzer drops: emit each generator project's compilation to a temp
+        // DLL and add it as an analyzer reference on the referencing project, so RunSourceGenerators
+        // can execute it and the generated types get indexed.
+        await WireGeneratorAnalyzersAsync(workspace, progress, cancellationToken).ConfigureAwait(false);
 
         var csharpProjects = workspace.CurrentSolution.Projects
             .Where(p => p.Language == LanguageNames.CSharp)
@@ -326,9 +333,14 @@ internal static class SolutionSourceLoader
             // Wire up Roslyn source generators/analyzers (e.g. proxy code-gen for ClientPage
             // subclasses).  Without these the compilation is missing generated types and semantic
             // analysis fails for files that reference them.
+            // Buildalyzer-reported analyzer refs (package analyzers/generators). The project's
+            // OutputItemType="Analyzer" ProjectReferences (e.g. the ClientPage proxy generator) are NOT
+            // reported here — Buildalyzer drops them — so they're wired separately AFTER the workspace
+            // is built (WireGeneratorAnalyzers), by emitting each generator project's compilation.
             var analyzerRefs = (result.AnalyzerReferences ?? [])
                 .Where(File.Exists)
-                .Select(path => (AnalyzerReference)new AnalyzerFileReference(path, SimpleAnalyzerLoader.Instance))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(path => (AnalyzerReference)new AnalyzerFileReference(path, HostRedirectingAnalyzerLoader.Instance))
                 .ToArray();
 
             var documents = (result.SourceFiles ?? [])
@@ -364,6 +376,29 @@ internal static class SolutionSourceLoader
 
         workspace.TryApplyChanges(solution);
         return workspace;
+    }
+
+    // Normalised full paths of a project's OutputItemType="Analyzer" ProjectReferences (source
+    // generators / analyzers wired the way MedDBase.Pages references RequestResponseProxyGenerator).
+    // Parsed from the csproj XML — Buildalyzer's design-time build omits these from AnalyzerReferences.
+    private static IEnumerable<string> AnalyzerProjectReferencePaths(string projectFilePath)
+    {
+        var projectDir = Path.GetDirectoryName(projectFilePath) ?? "";
+        XDocument document;
+        try { document = XDocument.Load(projectFilePath); }
+        catch { yield break; }
+
+        foreach (var reference in document.Descendants().Where(e => e.Name.LocalName == "ProjectReference"))
+        {
+            var outputItemType = reference.Elements().FirstOrDefault(c => c.Name.LocalName == "OutputItemType")?.Value
+                ?? reference.Attribute("OutputItemType")?.Value;
+            if (!string.Equals(outputItemType, "Analyzer", StringComparison.OrdinalIgnoreCase))
+                continue;
+            var include = reference.Attribute("Include")?.Value;
+            if (string.IsNullOrEmpty(include))
+                continue;
+            yield return Path.GetFullPath(Path.Combine(projectDir, include.Replace('\\', Path.DirectorySeparatorChar)));
+        }
     }
 
     // Transitive closure of a project's in-set project references (excluding the project itself),
@@ -442,6 +477,77 @@ internal static class SolutionSourceLoader
         return new ProjectSourceLoadResult(sourceFiles, sources);
     }
 
+    // Wires source-generator ProjectReferences (OutputItemType="Analyzer") onto each referencing
+    // project. Buildalyzer's design-time build omits these from AnalyzerReferences, and design-time
+    // builds emit no DLL, so we EMIT each generator project's own (in-workspace) compilation to a temp
+    // assembly and add it as an analyzer reference via the host-redirecting loader. Idempotent emit per
+    // generator project; only references that actually expose generators are added. Best-effort: a
+    // generator project that can't emit or load is skipped (it just won't contribute generated types).
+    private static async Task WireGeneratorAnalyzersAsync(
+        AdhocWorkspace workspace, Action<string>? progress, CancellationToken cancellationToken)
+    {
+        var solution = workspace.CurrentSolution;
+        var projectByPath = solution.Projects
+            .Where(p => p.FilePath is not null)
+            .GroupBy(p => Path.GetFullPath(p.FilePath!), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.OrdinalIgnoreCase);
+
+        var emittedDllByGeneratorPath = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        var changed = false;
+
+        foreach (var project in solution.Projects.ToArray())
+        {
+            if (project.FilePath is null)
+                continue;
+
+            foreach (var generatorProjectPath in AnalyzerProjectReferencePaths(project.FilePath))
+            {
+                if (!emittedDllByGeneratorPath.TryGetValue(generatorProjectPath, out var dllPath))
+                {
+                    dllPath = projectByPath.TryGetValue(generatorProjectPath, out var generatorId)
+                        ? await EmitCompilationToTempAsync(solution.GetProject(generatorId)!, cancellationToken).ConfigureAwait(false)
+                        : null;
+                    emittedDllByGeneratorPath[generatorProjectPath] = dllPath;
+                }
+
+                if (dllPath is null)
+                    continue;
+
+                var reference = new AnalyzerFileReference(dllPath, HostRedirectingAnalyzerLoader.Instance);
+                if (!reference.GetGenerators(LanguageNames.CSharp).Any())
+                    continue;
+
+                solution = solution.AddAnalyzerReference(project.Id, reference);
+                changed = true;
+                ReportProgress(progress, $"Wired source generator {Path.GetFileNameWithoutExtension(generatorProjectPath)} -> {project.Name}");
+            }
+        }
+
+        if (changed)
+            workspace.TryApplyChanges(solution);
+    }
+
+    // Emits a project's compilation to a temp DLL so its source generators can be loaded as an analyzer
+    // reference. Returns null when the compilation is unavailable or fails to emit (then the generator
+    // is simply not wired). The temp file is left for the process lifetime (OS temp cleanup).
+    private static async Task<string?> EmitCompilationToTempAsync(Project project, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var compilation = await project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
+            if (compilation is null)
+                return null;
+            var tempDll = Path.Combine(Path.GetTempPath(), $"rig-gen-{project.AssemblyName}-{Guid.NewGuid():N}.dll");
+            using var stream = File.Create(tempDll);
+            var emitResult = compilation.Emit(stream, cancellationToken: cancellationToken);
+            return emitResult.Success ? tempDll : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     // Executes the project's Roslyn source generators (from its analyzer references) against its
     // compilation and returns a SourceModel per generated syntax tree, with a semantic model bound to
     // the generator-updated compilation. Projects with no generators (the common case) return empty
@@ -506,13 +612,41 @@ internal static class SolutionSourceLoader
 
     private sealed record ProjectSourceLoadResult(IReadOnlyList<SourceFileInfo> SourceFiles, IReadOnlyList<SourceModel> Sources);
 
-    // Minimal IAnalyzerAssemblyLoader implementation for loading source-generator DLLs into
-    // the Roslyn compilation.  AnalyzerAssemblyLoader has no public constructor in Roslyn 5.x.
-    private sealed class SimpleAnalyzerLoader : IAnalyzerAssemblyLoader
+    // Loads source-generator/analyzer DLLs and — crucially — REDIRECTS their Microsoft.CodeAnalysis*
+    // (+ Immutable/Metadata) references to the HOST's already-loaded copies. A generator compiled
+    // against an older Roslyn (e.g. 4.8) otherwise implements that version's ISourceGenerator, which
+    // our 5.x host's GetGenerators() won't recognize (different assembly identity) → 0 generators.
+    // Redirecting to the host's assemblies unifies the identity so the generator binds to OUR Roslyn —
+    // the same thing Roslyn's own analyzer assembly loader does (see dotnet/roslyn#60702).
+    private sealed class HostRedirectingAnalyzerLoader : IAnalyzerAssemblyLoader
     {
-        internal static readonly SimpleAnalyzerLoader Instance = new();
+        internal static readonly HostRedirectingAnalyzerLoader Instance = new();
+        private static int _hooked;
+
         public void AddDependencyLocation(string fullPath) { }
-        public Assembly LoadFromPath(string fullPath) => Assembly.LoadFrom(fullPath);
+
+        public Assembly LoadFromPath(string fullPath)
+        {
+            EnsureRedirectHook();
+            return Assembly.LoadFrom(fullPath);
+        }
+
+        private static void EnsureRedirectHook()
+        {
+            if (Interlocked.Exchange(ref _hooked, 1) != 0)
+                return;
+            System.Runtime.Loader.AssemblyLoadContext.Default.Resolving += (_, name) =>
+            {
+                if (name.Name is null)
+                    return null;
+                var redirect = name.Name.StartsWith("Microsoft.CodeAnalysis", StringComparison.Ordinal)
+                    || name.Name is "System.Collections.Immutable" or "System.Reflection.Metadata";
+                if (!redirect)
+                    return null;
+                return AppDomain.CurrentDomain.GetAssemblies()
+                    .FirstOrDefault(a => string.Equals(a.GetName().Name, name.Name, StringComparison.Ordinal));
+            };
+        }
     }
 
     private sealed class ProgressLogWriter(Action<string> progress) : TextWriter
