@@ -168,10 +168,16 @@ internal static class FactExtractor
         var inSource = resolved.Locations.Any(loc => loc.IsInSource);
         var assembly = resolved.ContainingAssembly?.Name ?? "";
 
-        // First-party always indexed; drop the explosive BCL/runtime noise when not first-party.
-        // allowRuntime keeps runtime targets that ARE meaningful first-party control flow (throws of
-        // System exceptions — the throw site is ours).
-        if (!inSource && !allowRuntime && IsRuntimeAssembly(assembly))
+        // Keep ALL method-call facts (invocation/ctor) regardless of assembly — they are the complete
+        // set any future effect rule (incl. BCL: HttpClient, System.IO, sockets, locks, caches, …) can
+        // match WITHOUT a re-mine. Storage is cheap; re-extraction is the expensive thing, so capture
+        // once and filter at query time (the call graph keeps only first-party callees — see
+        // Reads.LoadFactGraphAsync — so reaches/tree stay clean; derive matches over the full set).
+        // For the NON-effect ref kinds (typeUse/read/write/methodGroup) the runtime/BCL drop still
+        // applies: those are pervasive pure noise (every `string`, `.Count`, `.ToString` group) with no
+        // effect consumer. allowRuntime additionally keeps runtime throws (the throw site is ours).
+        var isCallFact = refKind is "invocation" or "ctor";
+        if (!inSource && !allowRuntime && !isCallFact && IsRuntimeAssembly(assembly))
             return;
 
         references.Add(new ReferenceFact(

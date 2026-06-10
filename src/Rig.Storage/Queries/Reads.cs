@@ -129,8 +129,15 @@ public static class Reads
     // No Roslyn, no entry-point anchoring — every method's call edges, across all runs.
     public static async Task<FactGraphData> LoadFactGraphAsync(RigDbContext context, CancellationToken cancellationToken = default)
     {
+        // First-party callees only. The fact store now keeps ALL method-call refs (incl. BCL/runtime)
+        // so any effect rule can match them at derive time without a re-mine — but the call GRAPH
+        // (reaches/tree/callers/dead) must stay first-party, or it floods with BCL leaves (every
+        // .ToString()/.Add()/LINQ call). BCL targets have no source/symbol anyway, so they are leaves
+        // that add width, not reach. TargetInSource filters them out of the graph; effects on those
+        // calls still surface because the effect deriver keys them to their first-party ENCLOSING
+        // method (see LoadInvocationRefsAsync, which intentionally does NOT filter).
         var callRows = await context.ReferenceFacts
-            .Where(r => r.EnclosingSymbolId != null
+            .Where(r => r.EnclosingSymbolId != null && r.TargetInSource
                 && (r.RefKind == "invocation" || r.RefKind == "methodGroup" || r.RefKind == "ctor"))
             .Select(r => new { r.EnclosingSymbolId, r.TargetSymbolId, r.RefKind, r.FilePath, r.Line, r.EnclosingLoopKind, r.EnclosingLoopDetail })
             .ToArrayAsync(cancellationToken);
