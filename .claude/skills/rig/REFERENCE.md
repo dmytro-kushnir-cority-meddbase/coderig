@@ -6,7 +6,7 @@
 |---|---|
 | `rig index <sln\|csproj> [--rules p…] [--identity id]` | Extract facts. Solution = all projects' source in one run (callgraph crosses boundaries in-process). Single `.csproj` = that project's source only (refs become metadata DLLs). |
 | `rig mine <sln> --from <csproj> [--rules p…] [--identity id] [--parallelism n]` | BFS DOWN the dep graph from `--from` (toward what it references). Each project indexed as its own run under one `--identity`, stitched at query time. Direction matters: `--from Pages` reaches Workflows; `--from Workflows` does NOT reach Pages. |
-| `rig runs` | List runs + entrypoint/effect/symbol counts (health check). |
+| `rig runs` | List runs + symbol/reference/di counts (provenance / health check). |
 | `rig derive [--rules p…] [--limit n] [--format tsv]` | Stage-2 over facts: re-derive effects + page/action/background/wcf entry points + delegate/method-group handoffs. One DB open, one rule load. |
 | `rig reaches <pat> [--maxdepth n] [--format tsv]` | Effects reachable forward from an entry point. Annotates loop-fanout (`🔁xN`). |
 | `rig tree <pat> [--full\|--summary] [--maxdepth n]` | Full first-party call TREE. Default prunes to effect-bearing paths; `--full` = all; `--summary` = effect rollup. `↺seen` marks cycle/shared-callee re-entry. |
@@ -15,7 +15,14 @@
 | `rig dead [--lib] [--include-dispatch] [--all] [--root pat…] [--rules p…] [--format tsv]` | Unreachable first-party methods. Report-only. See SKILL.md. |
 | `rig refs <pat> [--first-party] [--kind <refkind>] [--limit n]` | Reference facts to a symbol (invocation/methodGroup/ctor/typeUse/throw/attributeUse). |
 | `rig symbols <pat> [--kind <k>] [--limit n]` | Declared symbols (method/type/property/field/event). |
-| legacy: `entrypoints`, `effects`, `trace`, `callgraph(s)`, `di`, `files --skipped`, `profile validate` | Superseded by the fact-layer commands; kept for the Roslyn-pass-stored tables. |
+| `rig di` | DI registrations (code + XML service descriptors + static rule mappings), run-agnostic. |
+| `rig files --skipped` | Source files skipped during indexing + why (diagnostic). |
+| `rig profile validate` | Validate the rules config for the working solution. |
+
+There is no longer a separate "legacy" command model: everything is computed from the fact tables
+(`symbol_facts`/`reference_facts`/`type_relation_facts` + run-agnostic `di_registrations`/`source_files`),
+DocID-joined, with no per-run stitching. The old `entrypoints`/`effects`/`trace`/`callgraph(s)` commands
+were removed — use `derive` (effects + entry points), `reaches`/`tree`/`callers`/`path` (call graph).
 
 DocID shapes: `M:Ns.Type.Method(ArgTypes)`, `T:Ns.Type`, `!:Name` (error type — a reference that
 failed to bind). Generic: open form `Foo\`1`, instantiated `Foo{T:Ns.X}`.
