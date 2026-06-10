@@ -6,12 +6,36 @@ namespace Rig.Storage.Queries;
 
 public static class Writes
 {
-    public static async Task<string> SaveAsync(RigDbContext context, AnalysisResult result, CancellationToken cancellationToken = default)
+    // fastBulkWrite trades crash durability for speed (journal/fsync off). It is the DEFAULT, because
+    // it is safe for a single exclusive writer producing a throwaway-until-published DB (rig index,
+    // which writes to a temp file and atomically renames on success — a corrupt temp is never
+    // published). Callers OPT OUT (set false) for consistency: mine's in-place PARALLEL appends, or a
+    // user-requested `--durable` in-place index. progress, when set, reports batched save throughput.
+    public static async Task<string> SaveAsync(
+        RigDbContext context, AnalysisResult result, CancellationToken cancellationToken = default,
+        bool fastBulkWrite = true, Action<string>? progress = null)
     {
         var runId = Guid.NewGuid().ToString("n");
 
         await context.Database.EnsureCreatedAsync(cancellationToken);
         await MigrateAsync(context, cancellationToken);
+
+        if (fastBulkWrite)
+        {
+            // No rollback journal, no fsync, in-memory temp, 64 MB page cache, single-writer lock.
+            // A crash mid-write corrupts this file — acceptable because the caller publishes via
+            // atomic rename, so the live store is never the one being written.
+            foreach (var pragma in new[]
+            {
+                "PRAGMA journal_mode=OFF;", "PRAGMA synchronous=OFF;",
+                "PRAGMA temp_store=MEMORY;", "PRAGMA cache_size=-65536;", "PRAGMA locking_mode=EXCLUSIVE;",
+            })
+                await context.Database.ExecuteSqlRawAsync(pragma, cancellationToken);
+        }
+
+        // Bulk insert: skip per-Add change detection (we never mutate tracked entities) and flush in
+        // batches, clearing the tracker each time so memory stays flat over millions of fact rows.
+        context.ChangeTracker.AutoDetectChangesEnabled = false;
 
         var run = new RunEntity
         {
@@ -27,13 +51,108 @@ public static class Writes
             DiRegistrationCount = result.DiRegistrations.Count,
         };
 
+        // Header rows first (small) — flushed and detached before the fact batches start clearing
+        // the tracker, so they aren't dropped by a later ChangeTracker.Clear().
         context.Runs.Add(run);
         AddSourceFiles(context, runId, result);
         AddDiRegistrations(context, runId, result);
-        AddFacts(context, runId, result);
-
         await context.SaveChangesAsync(cancellationToken);
+        context.ChangeTracker.Clear();
+
+        await SaveFactsBatchedAsync(context, runId, result, progress, cancellationToken);
         return runId;
+    }
+
+    private const int FactBatchSize = 20_000;
+
+    // Inserts the symbol/reference/type-relation facts in fixed-size batches, flushing + clearing the
+    // change tracker per batch and reporting cumulative progress. One SaveChanges over millions of
+    // tracked entities is both slow and memory-heavy; batching keeps both bounded.
+    private static async Task SaveFactsBatchedAsync(
+        RigDbContext context, string runId, AnalysisResult result,
+        Action<string>? progress, CancellationToken cancellationToken)
+    {
+        var symbols = result.Symbols ?? [];
+        var references = result.References ?? [];
+        var relations = result.TypeRelations ?? [];
+        long total = symbols.Count + references.Count + relations.Count;
+        long saved = 0;
+        var pending = 0;
+
+        async Task FlushAsync()
+        {
+            await context.SaveChangesAsync(cancellationToken);
+            context.ChangeTracker.Clear();
+            pending = 0;
+            progress?.Invoke($"Saved {saved}/{total} fact rows");
+        }
+
+        for (var i = 0; i < symbols.Count; i++)
+        {
+            var s = symbols[i];
+            context.SymbolFacts.Add(new SymbolFactEntity
+            {
+                RunId = runId,
+                SymbolFactIndex = i,
+                SymbolId = s.SymbolId,
+                Kind = s.Kind,
+                Name = s.Name,
+                Namespace = s.Namespace,
+                ContainingSymbolId = s.ContainingSymbolId,
+                Modifiers = s.Modifiers,
+                TypeKind = s.TypeKind,
+                Signature = s.Signature,
+                FilePath = s.FilePath,
+                Line = s.Line,
+                DefiningAssembly = s.DefiningAssembly,
+                IsOverride = s.IsOverride,
+            });
+            saved++;
+            if (++pending >= FactBatchSize) await FlushAsync();
+        }
+
+        for (var i = 0; i < references.Count; i++)
+        {
+            var r = references[i];
+            context.ReferenceFacts.Add(new ReferenceFactEntity
+            {
+                RunId = runId,
+                ReferenceFactIndex = i,
+                TargetSymbolId = r.TargetSymbolId,
+                RefKind = r.RefKind,
+                EnclosingSymbolId = r.EnclosingSymbolId,
+                TargetAssembly = r.TargetAssembly,
+                TargetInSource = r.TargetInSource,
+                FilePath = r.FilePath,
+                Line = r.Line,
+                ReceiverType = r.ReceiverType,
+                FirstArgumentTemplate = r.FirstArgumentTemplate,
+                FirstArgumentType = r.FirstArgumentType,
+                EnclosingLoopKind = r.EnclosingLoopKind,
+                EnclosingLoopDetail = r.EnclosingLoopDetail,
+                EnclosingInvocations = r.EnclosingInvocations,
+                EnclosingCatchTypes = r.EnclosingCatchTypes,
+            });
+            saved++;
+            if (++pending >= FactBatchSize) await FlushAsync();
+        }
+
+        for (var i = 0; i < relations.Count; i++)
+        {
+            var t = relations[i];
+            context.TypeRelationFacts.Add(new TypeRelationFactEntity
+            {
+                RunId = runId,
+                TypeRelationFactIndex = i,
+                TypeSymbolId = t.TypeSymbolId,
+                RelatedSymbolId = t.RelatedSymbolId,
+                RelationKind = t.RelationKind,
+            });
+            saved++;
+            if (++pending >= FactBatchSize) await FlushAsync();
+        }
+
+        if (pending > 0) await FlushAsync();
     }
 
     private static void AddSourceFiles(RigDbContext context, string runId, AnalysisResult result)
@@ -80,71 +199,6 @@ public static class Writes
                     Evidence = registration.Evidence,
                 }
             );
-        }
-    }
-
-    private static void AddFacts(RigDbContext context, string runId, AnalysisResult result)
-    {
-        var symbols = result.Symbols ?? [];
-        for (var i = 0; i < symbols.Count; i++)
-        {
-            var s = symbols[i];
-            context.SymbolFacts.Add(new SymbolFactEntity
-            {
-                RunId = runId,
-                SymbolFactIndex = i,
-                SymbolId = s.SymbolId,
-                Kind = s.Kind,
-                Name = s.Name,
-                Namespace = s.Namespace,
-                ContainingSymbolId = s.ContainingSymbolId,
-                Modifiers = s.Modifiers,
-                TypeKind = s.TypeKind,
-                Signature = s.Signature,
-                FilePath = s.FilePath,
-                Line = s.Line,
-                DefiningAssembly = s.DefiningAssembly,
-                IsOverride = s.IsOverride,
-            });
-        }
-
-        var references = result.References ?? [];
-        for (var i = 0; i < references.Count; i++)
-        {
-            var r = references[i];
-            context.ReferenceFacts.Add(new ReferenceFactEntity
-            {
-                RunId = runId,
-                ReferenceFactIndex = i,
-                TargetSymbolId = r.TargetSymbolId,
-                RefKind = r.RefKind,
-                EnclosingSymbolId = r.EnclosingSymbolId,
-                TargetAssembly = r.TargetAssembly,
-                TargetInSource = r.TargetInSource,
-                FilePath = r.FilePath,
-                Line = r.Line,
-                ReceiverType = r.ReceiverType,
-                FirstArgumentTemplate = r.FirstArgumentTemplate,
-                FirstArgumentType = r.FirstArgumentType,
-                EnclosingLoopKind = r.EnclosingLoopKind,
-                EnclosingLoopDetail = r.EnclosingLoopDetail,
-                EnclosingInvocations = r.EnclosingInvocations,
-                EnclosingCatchTypes = r.EnclosingCatchTypes,
-            });
-        }
-
-        var relations = result.TypeRelations ?? [];
-        for (var i = 0; i < relations.Count; i++)
-        {
-            var t = relations[i];
-            context.TypeRelationFacts.Add(new TypeRelationFactEntity
-            {
-                RunId = runId,
-                TypeRelationFactIndex = i,
-                TypeSymbolId = t.TypeSymbolId,
-                RelatedSymbolId = t.RelatedSymbolId,
-                RelationKind = t.RelationKind,
-            });
         }
     }
 

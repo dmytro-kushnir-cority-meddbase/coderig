@@ -9,7 +9,10 @@ public sealed class RigDbContextDesignTimeFactory : IDesignTimeDbContextFactory<
     public RigDbContext CreateDbContext(string[] args) => new("design-time.db");
 }
 
-public sealed class RigDbContext(string databasePath) : DbContext
+// pooling: when false the connection is opened with Pooling=False, so disposing the context releases
+// the underlying file handle immediately. The write-to-temp-then-rename publish (rig index) needs
+// this — a pooled handle can keep rig.db.tmp open past Dispose and make the atomic File.Move fail.
+public sealed class RigDbContext(string databasePath, bool pooling = true) : DbContext
 {
     public DbSet<RunEntity> Runs => Set<RunEntity>();
 
@@ -25,7 +28,8 @@ public sealed class RigDbContext(string databasePath) : DbContext
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
-        optionsBuilder.UseSqlite($"Data Source={databasePath}");
+        var connectionString = pooling ? $"Data Source={databasePath}" : $"Data Source={databasePath};Pooling=False";
+        optionsBuilder.UseSqlite(connectionString);
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

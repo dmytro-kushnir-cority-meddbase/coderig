@@ -71,7 +71,7 @@ public static class CliApplication
         output.WriteLine("Runtime Intelligence Graph");
         output.WriteLine();
         output.WriteLine("Usage:");
-        output.WriteLine("  rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>]   (--from = index only the entry project's non-test closure, one workspace)");
+        output.WriteLine("  rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable]   (--from = index only the entry project's non-test closure, one workspace; --durable = journaled write, default is fast atomic-publish)");
         output.WriteLine("  rig mine <solution> --from <project.csproj> [--rules <path>...] [--identity <id>] [--parallelism <n>]");
         output.WriteLine("  rig runs");
         output.WriteLine("  rig di   (DI registrations: service -> implementation, lifetime, source)");
@@ -92,7 +92,7 @@ public static class CliApplication
         if (args.Length < 2)
         {
             error.WriteLine("Missing solution or project path.");
-            error.WriteLine("Usage: rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>]");
+            error.WriteLine("Usage: rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable]");
             return 2;
         }
 
@@ -120,7 +120,9 @@ public static class CliApplication
                 return 2;
         }
 
+        var totalWatch = System.Diagnostics.Stopwatch.StartNew();
         AnalysisResult result;
+        var analyzeWatch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             output.WriteLine($"Indexing: {Path.GetFullPath(args[1])}");
@@ -146,14 +148,47 @@ public static class CliApplication
             error.WriteLine($"  dotnet build {args[1]}");
             return 2;
         }
+        analyzeWatch.Stop();
+        output.WriteLine($"Progress: Analysis phase done in {FormatElapsed(analyzeWatch.Elapsed)}");
+
+        // Publish model. A standalone `index` is a full REPLACE published via write-to-temp +
+        // atomic rename, so a crash can't tear the live store (and the previous index survives a
+        // failed re-index). Fast/durability-off pragmas are the DEFAULT here — a corrupt temp is
+        // never published, so there's nothing to protect with a journal. Two opt-outs to the safe,
+        // durable, journaled path:
+        //   --durable      — user asks for a consistent in-the-clear write (still atomic-published).
+        //   --identity set — `mine` APPENDS many per-project runs into the live DB from PARALLEL
+        //                    writers, so it writes in place and MUST keep the journal (no fast pragmas).
+        var durable = args.Contains("--durable");
+        var appendMode = identity is not null;          // mine
+        var fastBulkWrite = !durable && !appendMode;     // optimisations on by default; opt out above
+        var atomicPublish = !appendMode;                 // replace-via-rename for a standalone index
 
         var storeDirectory = Path.Combine(workingDirectory, ".rig");
         Directory.CreateDirectory(storeDirectory);
-        await using var context = new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
-        await context.Database.EnsureCreatedAsync();
+        var finalDbPath = Path.Combine(storeDirectory, "rig.db");
+        var dbPath = atomicPublish ? finalDbPath + ".tmp" : finalDbPath;
+        if (atomicPublish) DeleteDbFiles(dbPath); // clear any leftover temp from a previous aborted run
 
-        output.WriteLine("Progress: Saving run");
-        var runId = await Writes.SaveAsync(context, result);
+        output.WriteLine($"Progress: Saving run ({(fastBulkWrite ? "fast" : "durable")}{(atomicPublish ? ", atomic-publish" : ", in-place")})");
+        var saveWatch = System.Diagnostics.Stopwatch.StartNew();
+        string runId;
+        await using (var context = new RigDbContext(dbPath, pooling: !atomicPublish))
+        {
+            await context.Database.EnsureCreatedAsync();
+            runId = await Writes.SaveAsync(context, result,
+                fastBulkWrite: fastBulkWrite,
+                progress: message => output.WriteLine($"Progress: {message}"));
+        }
+
+        if (atomicPublish)
+        {
+            DeleteDbFiles(finalDbPath);          // drop the old published store + any sidecars
+            File.Move(dbPath, finalDbPath, overwrite: true);
+        }
+        saveWatch.Stop();
+        totalWatch.Stop();
+        output.WriteLine($"Progress: Save phase done in {FormatElapsed(saveWatch.Elapsed)}  (analysis {FormatElapsed(analyzeWatch.Elapsed)}, total {FormatElapsed(totalWatch.Elapsed)})");
 
         output.WriteLine($"Indexed: {Path.GetFullPath(result.SolutionPath)}");
         output.WriteLine($"Run: {runId}");
@@ -228,6 +263,21 @@ public static class CliApplication
             || name.EndsWith("IntegrationTests", StringComparison.OrdinalIgnoreCase)
             || name.Contains(".Tests.", StringComparison.OrdinalIgnoreCase);
     }
+
+    // Delete a SQLite DB file and its WAL/SHM/rollback-journal sidecars, ignoring missing files.
+    private static void DeleteDbFiles(string dbPath)
+    {
+        foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
+        {
+            var p = dbPath + suffix;
+            if (File.Exists(p)) File.Delete(p);
+        }
+    }
+
+    private static string FormatElapsed(TimeSpan elapsed) =>
+        elapsed.TotalMinutes >= 1
+            ? $"{(int)elapsed.TotalMinutes}m{elapsed.Seconds:00}s"
+            : $"{elapsed.TotalSeconds:0.0}s";
 
     private static async Task<int> RunRunsAsync(TextWriter output, string workingDirectory)
     {
