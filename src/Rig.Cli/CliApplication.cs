@@ -71,7 +71,7 @@ public static class CliApplication
         output.WriteLine("Runtime Intelligence Graph");
         output.WriteLine();
         output.WriteLine("Usage:");
-        output.WriteLine("  rig index <solution|project> [--rules <path>...] [--identity <id>]");
+        output.WriteLine("  rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>]   (--from = index only the entry project's non-test closure, one workspace)");
         output.WriteLine("  rig mine <solution> --from <project.csproj> [--rules <path>...] [--identity <id>] [--parallelism <n>]");
         output.WriteLine("  rig runs");
         output.WriteLine("  rig di   (DI registrations: service -> implementation, lifetime, source)");
@@ -92,16 +92,32 @@ public static class CliApplication
         if (args.Length < 2)
         {
             error.WriteLine("Missing solution or project path.");
-            error.WriteLine("Usage: rig index <solution|project> [--rules <path>...]");
+            error.WriteLine("Usage: rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>]");
             return 2;
         }
 
         var extraRules = new List<string>();
         string? identity = null;
-        for (var i = 2; i < args.Length - 1; i++)
+        string? fromProject = null;
+        int? parallelism = null;
+        for (var i = 2; i < args.Length; i++)
         {
-            if (args[i] == "--rules") { extraRules.Add(Path.GetFullPath(args[i + 1])); i++; }
-            else if (args[i] == "--identity") { identity = args[i + 1]; i++; }
+            if (args[i] == "--rules" && i + 1 < args.Length) { extraRules.Add(Path.GetFullPath(args[i + 1])); i++; }
+            else if (args[i] == "--identity" && i + 1 < args.Length) { identity = args[i + 1]; i++; }
+            else if (args[i] == "--from" && i + 1 < args.Length) { fromProject = Path.GetFullPath(args[i + 1]); i++; }
+            else if (args[i] == "--parallelism" && i + 1 < args.Length && int.TryParse(args[i + 1], out var p)) { parallelism = p; i++; }
+        }
+
+        // --from <csproj>: index only the transitive ProjectReference closure of the entry project
+        // (minus test projects) in ONE cross-project Roslyn workspace — skips every out-of-closure
+        // test/tool project before its design-time build runs. The closure is written to
+        // relevant-projects.json next to the .rig store.
+        IReadOnlySet<string>? scopeProjectPaths = null;
+        if (fromProject is not null)
+        {
+            scopeProjectPaths = await BuildEntryClosureAsync(args[1], fromProject, workingDirectory, output, error);
+            if (scopeProjectPaths is null)
+                return 2;
         }
 
         AnalysisResult result;
@@ -110,11 +126,15 @@ public static class CliApplication
             output.WriteLine($"Indexing: {Path.GetFullPath(args[1])}");
             if (extraRules.Count > 0) output.WriteLine($"Rules: {string.Join(", ", extraRules)}");
             if (identity is not null) output.WriteLine($"Identity: {identity}");
+            if (fromProject is not null) output.WriteLine($"From (closure): {fromProject}  ->  {scopeProjectPaths!.Count} project(s)");
+            if (parallelism is not null) output.WriteLine($"Parallelism: {parallelism}");
             result = await SolutionAnalyzer.AnalyzeAsync(
                 args[1],
                 progress: message => output.WriteLine($"Progress: {message}"),
                 extraRulesPaths: extraRules.Count > 0 ? extraRules : null,
-                projectIdentity: identity
+                projectIdentity: identity,
+                scopeProjectPaths: scopeProjectPaths,
+                parallelism: parallelism
             );
         }
         catch (InvalidOperationException exception)
@@ -142,6 +162,71 @@ public static class CliApplication
         output.WriteLine($"DiRegistrations: {result.DiRegistrations.Count}");
 
         return 0;
+    }
+
+    // Transitive ProjectReference closure of an entry project, minus test projects — the build scope
+    // for `rig index --from`. Parses the dependency graph (XML only, no MSBuild), BFS from the entry,
+    // drops test projects by name, and writes the closure to relevant-projects.json next to the .rig
+    // store. Returns the normalised full project paths to build, or null on a usage error.
+    private static async Task<IReadOnlySet<string>?> BuildEntryClosureAsync(
+        string solutionPath, string fromProject, string workingDirectory, TextWriter output, TextWriter error)
+    {
+        var solutionFull = Path.GetFullPath(solutionPath);
+        if (solutionFull.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+        {
+            error.WriteLine("--from is only valid when indexing a solution (.slnx/.sln), not a single project.");
+            return null;
+        }
+
+        var depGraph = await DependencyGraph.BuildAsync(solutionFull, output);
+        var entry = Path.GetFullPath(fromProject);
+        if (!depGraph.ContainsKey(entry))
+        {
+            error.WriteLine($"--from project not found in solution: {entry}");
+            return null;
+        }
+
+        // BFS the dependency graph from the entry project (paths are already normalised full paths).
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var queue = new Queue<string>();
+        queue.Enqueue(entry);
+        while (queue.Count > 0)
+        {
+            var p = queue.Dequeue();
+            if (!visited.Add(p)) continue;
+            if (depGraph.TryGetValue(p, out var deps))
+                foreach (var d in deps)
+                    if (!visited.Contains(d)) queue.Enqueue(d);
+        }
+
+        // Drop test projects. Production projects don't reference them, so the closure is normally
+        // test-free already; this honours --from's "without tests" contract defensively.
+        var excludedTests = visited.Where(IsTestProjectPath).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray();
+        foreach (var t in excludedTests) visited.Remove(t);
+
+        var listPath = Path.Combine(workingDirectory, "relevant-projects.json");
+        var listData = new
+        {
+            solutionPath = solutionFull,
+            entryProject = entry,
+            projectCount = visited.Count,
+            excludedTestProjects = excludedTests,
+            projects = visited.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray(),
+        };
+        File.WriteAllText(listPath, System.Text.Json.JsonSerializer.Serialize(listData,
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        output.WriteLine($"Entry closure: {visited.Count} project(s), {excludedTests.Length} test project(s) excluded -> {listPath}");
+
+        return visited;
+    }
+
+    private static bool IsTestProjectPath(string projectPath)
+    {
+        var name = Path.GetFileNameWithoutExtension(projectPath);
+        return name.EndsWith("Tests", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith("UnitTests", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith("IntegrationTests", StringComparison.OrdinalIgnoreCase)
+            || name.Contains(".Tests.", StringComparison.OrdinalIgnoreCase);
     }
 
     private static async Task<int> RunRunsAsync(TextWriter output, string workingDirectory)

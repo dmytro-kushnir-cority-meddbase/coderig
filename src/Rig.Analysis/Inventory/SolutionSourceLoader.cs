@@ -12,16 +12,25 @@ namespace Rig.Analysis.Inventory;
 
 internal static class SolutionSourceLoader
 {
-    private static readonly object ProgressLock = new();
-    private static readonly int MaxParallelism = Math.Max(1, Math.Min(4, Environment.ProcessorCount / 2));
+    private static readonly int DefaultParallelism = Math.Max(1, Math.Min(4, Environment.ProcessorCount / 2));
 
     public static async Task<SolutionSourceSet> LoadAsync(
         string solutionPath,
         AnalysisRuleSet rules,
         CancellationToken cancellationToken,
-        Action<string>? progress = null
+        Action<string>? progress = null,
+        // When non-null, only projects whose normalised full path is in this set are built and
+        // indexed — the transitive ProjectReference closure of an entry project (rig index --from).
+        // Everything else in the solution (test projects, unrelated tools) is skipped before its
+        // expensive design-time build runs. Null = whole solution (the historical behaviour).
+        IReadOnlySet<string>? scopeProjectPaths = null,
+        // Max concurrent MSBuild design-time builds / Roslyn compilations. Null = a conservative
+        // default (<= 4). The design-time builds run out-of-process with UseSharedCompilation=false
+        // and emit no binaries, so concurrency is safe — this is the dominant indexing cost.
+        int? parallelism = null
     )
     {
+        var maxParallelism = Math.Max(1, parallelism ?? DefaultParallelism);
 
         // Buildalyzer invokes MSBuild.exe out-of-process, completely avoiding the
         // System.Collections.Immutable assembly conflict in Roslyn's BuildHost-net472 that
@@ -30,7 +39,7 @@ internal static class SolutionSourceLoader
         // as of May 2026.)  addProjectReferences:false loads project-to-project references
         // from their compiled DLLs rather than re-evaluating the source .csproj files.
         ReportProgress(progress, "Loading solution");
-        var workspace = await Task.Run(() => BuildWorkspace(solutionPath, progress), cancellationToken)
+        var workspace = await Task.Run(() => BuildWorkspace(solutionPath, progress, scopeProjectPaths, maxParallelism), cancellationToken)
             .ConfigureAwait(false);
 
         var csharpProjects = workspace.CurrentSolution.Projects
@@ -42,7 +51,7 @@ internal static class SolutionSourceLoader
 
         var compilationErrors = new ConcurrentBag<string>();
         var compiledProjects = 0;
-        var compileSemaphore = new SemaphoreSlim(MaxParallelism);
+        var compileSemaphore = new SemaphoreSlim(maxParallelism);
         await Task.WhenAll(csharpProjects.Select(async project =>
         {
             await compileSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -88,7 +97,7 @@ internal static class SolutionSourceLoader
 
         var projectResults = new ConcurrentBag<ProjectSourceLoadResult>();
         var readProjects = 0;
-        var readSemaphore = new SemaphoreSlim(MaxParallelism);
+        var readSemaphore = new SemaphoreSlim(maxParallelism);
         await Task.WhenAll(csharpProjects.Select(async project =>
         {
             await readSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -121,7 +130,8 @@ internal static class SolutionSourceLoader
         );
     }
 
-    private static AdhocWorkspace BuildWorkspace(string solutionPath, Action<string>? progress)
+    private static AdhocWorkspace BuildWorkspace(
+        string solutionPath, Action<string>? progress, IReadOnlySet<string>? scopeProjectPaths, int parallelism)
     {
         var logWriter = progress is null ? null : new ProgressLogWriter(progress);
         var options = new AnalyzerManagerOptions { LogWriter = logWriter };
@@ -149,32 +159,46 @@ internal static class SolutionSourceLoader
 #pragma warning disable CS0618
             var manager = new AnalyzerManager(solutionPath, options);
 #pragma warning restore CS0618
-            results = [];
-            foreach (var projectAnalyzer in manager.Projects.Values)
+            // Select the C# projects to build: skip non-C# projects (sqlproj/fsproj fail to parse)
+            // and, when an entry-closure scope is given, everything outside it (test projects,
+            // unrelated tools) — BEFORE paying for their design-time builds.
+            var toBuild = manager.Projects.Values
+                .Where(pa => string.Equals(
+                    Path.GetExtension(pa.ProjectFile.Path.ToString()), ".csproj", StringComparison.OrdinalIgnoreCase))
+                .Where(pa => scopeProjectPaths is null
+                    || scopeProjectPaths.Contains(Path.GetFullPath(pa.ProjectFile.Path.ToString())))
+                .ToArray();
+
+            if (scopeProjectPaths is not null)
+                progress?.Invoke($"Scoped to {toBuild.Length} project(s) in the entry closure "
+                    + $"(skipping {manager.Projects.Count - toBuild.Length} out-of-scope / non-C# project(s))");
+
+            // Design-time builds run out-of-process (MSBuild.exe) with UseSharedCompilation=false and
+            // emit no binaries, so they parallelise safely — and this is the dominant indexing cost,
+            // historically run serially. Parallel.ForEach bounds the concurrent MSBuild processes.
+            var resultsBag = new ConcurrentBag<IAnalyzerResult>();
+            var done = 0;
+            var total = toBuild.Length;
+            Parallel.ForEach(toBuild, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, parallelism) }, projectAnalyzer =>
             {
                 var projectName = projectAnalyzer.ProjectFile.Name;
-                // Skip non-C# projects up front — sqlproj, fsproj etc. will fail to parse
-                var ext = Path.GetExtension(projectAnalyzer.ProjectFile.Path.ToString());
-                if (!string.Equals(ext, ".csproj", StringComparison.OrdinalIgnoreCase))
-                {
-                    progress?.Invoke($"MSBuild: skipping non-C# project {projectName}");
-                    continue;
-                }
-
-                progress?.Invoke($"MSBuild: running design-time build for {projectName}");
+                var current = Interlocked.Increment(ref done);
+                if (current == 1 || current == total || current % 10 == 0)
+                    ReportProgress(progress, $"MSBuild: design-time build {current}/{total}: {projectName}");
                 projectAnalyzer.SetGlobalProperty("DesignTimeBuild", "true");
                 projectAnalyzer.SetGlobalProperty("UseSharedCompilation", "false");
                 projectAnalyzer.SetGlobalProperty("BuildingInsideVisualStudio", "true");
                 try
                 {
                     var built = projectAnalyzer.Build().FirstOrDefault();
-                    if (built is not null) results.Add(built);
+                    if (built is not null) resultsBag.Add(built);
                 }
                 catch (Exception ex)
                 {
-                    progress?.Invoke($"MSBuild: skipping {projectName} — build failed: {ex.Message.Split('\n')[0].Trim()}");
+                    ReportProgress(progress, $"MSBuild: skipping {projectName} — build failed: {ex.Message.Split('\n')[0].Trim()}");
                 }
-            }
+            });
+            results = resultsBag.ToList();
         }
 
         return BuildWorkspaceFromResults(results, progress);
@@ -469,11 +493,12 @@ internal static class SolutionSourceLoader
     private static bool ShouldReportProgress(int current, int total)
         => current == 1 || current == total || current % 10 == 0;
 
+    // Progress is reported concurrently from the parallel build/compile/read loops. The contract is
+    // that a non-null sink is itself thread-safe: the CLI passes Console.Out (a synchronized
+    // SyncTextWriter, atomic per WriteLine), and tests pass no sink at all (null). So no app-level
+    // lock is needed — each Invoke writes one whole line without interleaving.
     private static void ReportProgress(Action<string>? progress, string message)
-    {
-        if (progress is null) return;
-        lock (ProgressLock) { progress(message); }
-    }
+        => progress?.Invoke(message);
 
     private static bool IsProjectFile(string path)
         => path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)

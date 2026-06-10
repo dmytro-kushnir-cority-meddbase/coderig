@@ -12,14 +12,20 @@ public static class SolutionAnalyzer
         CancellationToken cancellationToken = default,
         Action<string>? progress = null,
         IReadOnlyList<string>? extraRulesPaths = null,
-        string? projectIdentity = null
+        string? projectIdentity = null,
+        // When non-null, restrict the solution index to this set of project paths (the entry-project
+        // closure from `rig index --from`); still ONE cross-project Roslyn workspace / run.
+        IReadOnlySet<string>? scopeProjectPaths = null,
+        // Max concurrent design-time builds / compilations (null = conservative default).
+        int? parallelism = null
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
         progress?.Invoke("Loading rules");
         var rules = AnalysisRuleSet.LoadForSolution(solutionFullPath, extraRulesPaths);
         progress?.Invoke("Loading solution");
-        var sourceSet = await SolutionSourceLoader.LoadAsync(solutionFullPath, rules, cancellationToken, progress);
+        var sourceSet = await SolutionSourceLoader.LoadAsync(
+            solutionFullPath, rules, cancellationToken, progress, scopeProjectPaths, parallelism);
         progress?.Invoke("Merging project rules");
         rules = rules.MergeWithProjectDirectories(sourceSet.ProjectDirectories);
         var sources = sourceSet.IndexedSources;
