@@ -57,7 +57,52 @@ public sealed class CliApplicationTests
         error.ToString().ShouldContain("Usage: rig files --skipped");
     }
 
-    // NOTE: the index -> query CLI roundtrip integration test is re-added fact-centric
-    // (index -> derive/reaches/dead/di) at the end of the legacy-removal work, once the
-    // index output + fact command surface are stable.
+    [Fact]
+    public async Task Index_then_fact_commands_roundtrip_over_the_playground()
+    {
+        using var playground = await TempPlayground.CreateEntryPointEffectsAsync();
+        var workingDirectory = Path.Combine(playground.RootDirectory, "workspace");
+        var solutionPath = playground.SolutionPath;
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        // index -> facts + DI (no entrypoints/effects/callgraph computation anymore)
+        (await CliApplication.RunAsync(["index", solutionPath], output, error, workingDirectory)).ShouldBe(0);
+        error.ToString().ShouldBeEmpty();
+        output.ToString().ShouldContain("Run:");
+        output.ToString().ShouldContain("Symbols:");
+        output.ToString().ShouldContain("References:");
+        output.ToString().ShouldContain("DiRegistrations:");
+        File.Exists(Path.Combine(workingDirectory, ".rig", "rig.db")).ShouldBeTrue();
+
+        // runs (fact counts)
+        output.GetStringBuilder().Clear();
+        (await CliApplication.RunAsync(["runs"], output, error, workingDirectory)).ShouldBe(0);
+        output.ToString().ShouldContain("Runs");
+        output.ToString().ShouldContain("symbols=");
+        output.ToString().ShouldContain("references=");
+        output.ToString().ShouldContain("di=");
+
+        // derive: effects + entry points re-derived from facts (no Roslyn re-run)
+        output.GetStringBuilder().Clear();
+        (await CliApplication.RunAsync(["derive"], output, error, workingDirectory)).ShouldBe(0);
+        output.ToString().ShouldContain("Effects re-derived from facts:");
+        output.ToString().ShouldContain("Entry points re-derived from facts:");
+
+        // di: ported to a run-agnostic fact read
+        output.GetStringBuilder().Clear();
+        (await CliApplication.RunAsync(["di"], output, error, workingDirectory)).ShouldBe(0);
+        output.ToString().ShouldContain("DI Registrations");
+        output.ToString().ShouldContain("ITeamRepository");
+
+        // files --skipped (run-agnostic diagnostic)
+        output.GetStringBuilder().Clear();
+        (await CliApplication.RunAsync(["files", "--skipped"], output, error, workingDirectory)).ShouldBe(0);
+        output.ToString().ShouldContain("GeneratedEndpoint.g.cs");
+
+        // dead: report-only unreachable-symbol finder runs cleanly
+        output.GetStringBuilder().Clear();
+        (await CliApplication.RunAsync(["dead"], output, error, workingDirectory)).ShouldBe(0);
+        output.ToString().ShouldContain("Dead-code candidates:");
+    }
 }
