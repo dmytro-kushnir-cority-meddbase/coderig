@@ -15,8 +15,9 @@ public static class FactPathFinder
         var index = BuildIndex(graph);
 
         // Parent links carry the edge that reached the node (for path + kind reconstruction),
-        // including its enclosing-loop context so the reconstructed path can mark looped hops.
-        var parent = new Dictionary<string, (string From, string Kind, string? File, int Line, string? LoopKind, string? LoopDetail)?>(StringComparer.Ordinal);
+        // including its enclosing-loop context so the reconstructed path can mark looped hops, and
+        // the dispatch fan-out degree so a path that traverses a base-virtual fan-out shows it.
+        var parent = new Dictionary<string, (string From, string Kind, string? File, int Line, string? LoopKind, string? LoopDetail, int Fanout)?>(StringComparer.Ordinal);
         var queue = new Queue<(string Node, int Depth)>();
         foreach (var start in index.Nodes.Where(n => Contains(n, fromPattern)))
         {
@@ -37,7 +38,7 @@ public static class FactPathFinder
                 continue;
 
             foreach (var s in Successors(current, index))
-                Enqueue(parent, queue, s.Node, current, s.Kind, s.File, s.Line, s.LoopKind, s.LoopDetail, depth);
+                Enqueue(parent, queue, s.Node, current, s.Kind, s.File, s.Line, s.LoopKind, s.LoopDetail, s.Fanout, depth);
         }
 
         return null;
@@ -50,7 +51,15 @@ public static class FactPathFinder
     // innermost loop wrapping its call chain), for display. BFS-shortest path is used, so the
     // fanout reported is the one on the shortest route — a defensible single answer when a node is
     // reachable several ways.
-    public sealed record ReachInfo(int Depth, int LoopNesting, string? NearestLoopKind, string? NearestLoopDetail);
+    // DispatchVia/DispatchDegree (A1/D3/D7): when the shortest path to this node crossed a base->
+    // override (or interface->impl) dispatch that fanned ONE source method out to N(>1) targets,
+    // DispatchVia = that source method's DocID (e.g. EntityBase.Save) and DispatchDegree = N. The tag
+    // is inherited forward through the fanned-out subtree (like NearestLoop), and is null/0 when the
+    // node is reachable directly (a real call) or only through single-target dispatch. Lets `reaches`
+    // separate genuine per-entry reach from base-virtual dispatch fan-out instead of over-counting it.
+    public sealed record ReachInfo(
+        int Depth, int LoopNesting, string? NearestLoopKind, string? NearestLoopDetail,
+        string? DispatchVia = null, int DispatchDegree = 0);
 
     // Full reachability: BFS the call graph (incl. interface->impl dispatch) from every node
     // matching `fromPattern`, returning each reachable method DocID with its shortest depth.
@@ -97,7 +106,15 @@ public static class FactPathFinder
                 var nesting = cur.LoopNesting + (looped ? 1 : 0);
                 var nearKind = looped ? s.LoopKind : cur.NearestLoopKind;
                 var nearDetail = looped ? s.LoopDetail : cur.NearestLoopDetail;
-                info[s.Node] = new ReachInfo(cur.Depth + 1, nesting, nearKind, nearDetail);
+                // Dispatch fan-out (A1/D3): when the reaching edge fanned `current` out to >1 targets,
+                // this node is reached via that fan-out, not a real call — tag it with the source
+                // (current) and degree. A single-target dispatch (degree 1) is deterministic, so it's
+                // treated like a real call. Otherwise inherit the tag, so the whole fanned-out subtree
+                // (BFS-shortest) carries it — unless reached more directly elsewhere.
+                var fannedOut = s.Fanout > 1;
+                var via = fannedOut ? current : cur.DispatchVia;
+                var degree = fannedOut ? s.Fanout : cur.DispatchDegree;
+                info[s.Node] = new ReachInfo(cur.Depth + 1, nesting, nearKind, nearDetail, via, degree);
                 queue.Enqueue(s.Node);
             }
         }
@@ -123,13 +140,13 @@ public static class FactPathFinder
         {
             if (budget[0] <= 0)
                 break;
-            roots.Add(BuildNode(root, "entry", loopKind: null, loopDetail: null, depth: 0, maxDepth, index, expanded, budget));
+            roots.Add(BuildNode(root, "entry", loopKind: null, loopDetail: null, fanout: 0, depth: 0, maxDepth, index, expanded, budget));
         }
         return roots;
     }
 
     private static TraceNode BuildNode(
-        string symbol, string edgeKind, string? loopKind, string? loopDetail,
+        string symbol, string edgeKind, string? loopKind, string? loopDetail, int fanout,
         int depth, int maxDepth, GraphIndex index, HashSet<string> expanded, int[] budget)
     {
         budget[0]--;
@@ -138,7 +155,7 @@ public static class FactPathFinder
         // emit a leaf and don't descend, so the tree stays finite and each method's subtree is
         // printed once.
         if (expanded.Contains(symbol) || depth >= maxDepth || budget[0] <= 0)
-            return new TraceNode(symbol, edgeKind, loopKind, loopDetail, EmptyNodes, Truncated: true);
+            return new TraceNode(symbol, edgeKind, loopKind, loopDetail, EmptyNodes, Truncated: true, Fanout: fanout);
 
         expanded.Add(symbol);
 
@@ -147,9 +164,9 @@ public static class FactPathFinder
         {
             if (budget[0] <= 0)
                 break;
-            children.Add(BuildNode(s.Node, s.Kind, s.LoopKind, s.LoopDetail, depth + 1, maxDepth, index, expanded, budget));
+            children.Add(BuildNode(s.Node, s.Kind, s.LoopKind, s.LoopDetail, s.Fanout, depth + 1, maxDepth, index, expanded, budget));
         }
-        return new TraceNode(symbol, edgeKind, loopKind, loopDetail, children);
+        return new TraceNode(symbol, edgeKind, loopKind, loopDetail, children, Fanout: fanout);
     }
 
     private static readonly IReadOnlyList<TraceNode> EmptyNodes = new TraceNode[0];
@@ -386,31 +403,51 @@ public static class FactPathFinder
     }
 
     // Direct call edges + the interface->concrete DI dispatch hop (single shared definition so
-    // Find and Reaches traverse identically).
-    private static IEnumerable<(string Node, string Kind, string? File, int Line, string? LoopKind, string? LoopDetail)> Successors(string current, GraphIndex index)
+    // Find and Reaches traverse identically). Each dispatch edge carries the FAN-OUT DEGREE of its
+    // source method — the total number of dispatch targets `current` resolves to (impl-dispatch +
+    // override-dispatch) — so a `base.M()` that explodes to all N overrides is distinguishable from a
+    // single concrete dispatch (degree 1) and from a real call (degree 0). Direct call edges are
+    // degree 0. (A1/D3.)
+    private static IEnumerable<(string Node, string Kind, string? File, int Line, string? LoopKind, string? LoopDetail, int Fanout)> Successors(string current, GraphIndex index)
     {
         if (index.Adjacency.TryGetValue(current, out var edges))
             foreach (var edge in edges)
-                yield return (edge.Callee, edge.Kind, edge.FilePath, edge.Line, edge.LoopKind, edge.LoopDetail);
+                yield return (edge.Callee, edge.Kind, edge.FilePath, edge.Line, edge.LoopKind, edge.LoopDetail, 0);
 
+        // Dispatch targets are collected first so each can be tagged with the group's degree (N).
+        var dispatch = DispatchTargets(current, index);
+        var degree = dispatch.Count;
+        foreach (var d in dispatch)
+            yield return (d.Node, d.Kind, null, 0, null, null, degree);
+    }
+
+    // All synthetic dispatch successors of `current`: interface->impl (incl. the error-type simple-
+    // name recovery) and base-virtual/abstract->override. Materialized (not lazily yielded) so the
+    // caller knows the fan-out degree before emitting any edge. Deduped by target so a method reached
+    // via two mechanisms isn't double-counted in the degree.
+    private static List<(string Node, string Kind)> DispatchTargets(string current, GraphIndex index)
+    {
+        var targets = new List<(string Node, string Kind)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         var parsed = ParseMethod(current);
         if (parsed is null)
-            yield break;
+            return targets;
 
-        // Interface -> concrete DI dispatch (single-impl hop).
-        if (index.ImplsByInterface.TryGetValue(parsed.Value.TypeId, out var impls))
+        void AddImplMethods(IEnumerable<string> impls)
         {
             foreach (var impl in impls)
             {
                 if (!index.MethodsByStrippedType.TryGetValue(TypeClosure.StripGeneric(impl), out var implMethods))
                     continue;
                 foreach (var concrete in implMethods)
-                {
-                    if (string.Equals(concrete.Name, parsed.Value.Name, StringComparison.Ordinal))
-                        yield return (concrete.SymbolId, "impl-dispatch", null, 0, null, null);
-                }
+                    if (string.Equals(concrete.Name, parsed.Value.Name, StringComparison.Ordinal) && seen.Add(concrete.SymbolId))
+                        targets.Add((concrete.SymbolId, "impl-dispatch"));
             }
         }
+
+        // Interface -> concrete DI dispatch.
+        if (index.ImplsByInterface.TryGetValue(parsed.Value.TypeId, out var impls))
+            AddImplMethods(impls);
 
         // Simple-name fallback: recover dispatch to implementers whose interface edge failed to
         // resolve (!:IFoo) by matching the call's interface simple name. Method-name-gated; only
@@ -418,18 +455,7 @@ public static class FactPathFinder
         // otherwise be invisible. (May slightly over-dispatch across same-named interfaces in
         // different namespaces — a deliberate recall-over-precision trade for broken bindings.)
         if (index.ImplsByErrorInterfaceName.TryGetValue(SimpleTypeName(parsed.Value.TypeId), out var nameImpls))
-        {
-            foreach (var impl in nameImpls)
-            {
-                if (!index.MethodsByStrippedType.TryGetValue(TypeClosure.StripGeneric(impl), out var implMethods))
-                    continue;
-                foreach (var concrete in implMethods)
-                {
-                    if (string.Equals(concrete.Name, parsed.Value.Name, StringComparison.Ordinal))
-                        yield return (concrete.SymbolId, "impl-dispatch", null, 0, null, null);
-                }
-            }
-        }
+            AddImplMethods(nameImpls);
 
         // Base-virtual/abstract -> override dispatch (G6/G3): a call resolved to a base-type method
         // also reaches the SAME-named OVERRIDE on every (transitive) subtype. This is what makes an
@@ -440,11 +466,11 @@ public static class FactPathFinder
             if (!index.MethodsByStrippedType.TryGetValue(TypeClosure.StripGeneric(sub), out var subMethods))
                 continue;
             foreach (var m in subMethods)
-            {
-                if (m.IsOverride && string.Equals(m.Name, parsed.Value.Name, StringComparison.Ordinal))
-                    yield return (m.SymbolId, "override-dispatch", null, 0, null, null);
-            }
+                if (m.IsOverride && string.Equals(m.Name, parsed.Value.Name, StringComparison.Ordinal) && seen.Add(m.SymbolId))
+                    targets.Add((m.SymbolId, "override-dispatch"));
         }
+
+        return targets;
     }
 
     // Transitive strict descendants of a type, memoised. Keyed on the generic-stripped id so the
@@ -458,25 +484,25 @@ public static class FactPathFinder
     }
 
     private static void Enqueue(
-        Dictionary<string, (string From, string Kind, string? File, int Line, string? LoopKind, string? LoopDetail)?> parent,
+        Dictionary<string, (string From, string Kind, string? File, int Line, string? LoopKind, string? LoopDetail, int Fanout)?> parent,
         Queue<(string, int)> queue,
-        string node, string from, string kind, string? file, int line, string? loopKind, string? loopDetail, int depth)
+        string node, string from, string kind, string? file, int line, string? loopKind, string? loopDetail, int fanout, int depth)
     {
         if (parent.ContainsKey(node))
             return;
-        parent[node] = (from, kind, file, line, loopKind, loopDetail);
+        parent[node] = (from, kind, file, line, loopKind, loopDetail, fanout);
         queue.Enqueue((node, depth + 1));
     }
 
     private static IReadOnlyList<PathStep> Reconstruct(
-        Dictionary<string, (string From, string Kind, string? File, int Line, string? LoopKind, string? LoopDetail)?> parent, string target)
+        Dictionary<string, (string From, string Kind, string? File, int Line, string? LoopKind, string? LoopDetail, int Fanout)?> parent, string target)
     {
         var steps = new List<PathStep>();
         var node = target;
         while (true)
         {
             var link = parent[node];
-            steps.Add(new PathStep(node, link?.Kind ?? "entry", link?.File, link?.Line ?? 0, link?.LoopKind, link?.LoopDetail));
+            steps.Add(new PathStep(node, link?.Kind ?? "entry", link?.File, link?.Line ?? 0, link?.LoopKind, link?.LoopDetail, link?.Fanout ?? 0));
             if (link is null)
                 break;
             node = link.Value.From;

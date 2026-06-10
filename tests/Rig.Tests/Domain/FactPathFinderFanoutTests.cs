@@ -177,6 +177,91 @@ public sealed class FactPathFinderFanoutTests
     }
 
     [Fact]
+    public void Reaches_tags_base_override_dispatch_fanout_and_propagates_through_the_subtree()
+    {
+        // SiteEntity.Save calls base.Save() -> EntityBase.Save (a REAL call edge). EntityBase.Save is
+        // virtual with TWO overrides (Site, Company), so base->override dispatch fans EntityBase.Save
+        // out to BOTH — but that reach is dispatch fan-out, not a real call. CompanyEntity.Save (and
+        // anything it transitively calls) must be tagged as reached VIA the EntityBase.Save fan-out;
+        // EntityBase.Save itself, reached by the real base.Save() call, must NOT be tagged. This is
+        // the A1 over-count: without the tag, every *Entity.Save and its effects read as real reach.
+        var edges = new[]
+        {
+            new CallEdge("M:N.SiteEntity.Save", "M:N.EntityBase.Save", "invocation", "f.cs", 10),
+            new CallEdge("M:N.CompanyEntity.Save", "M:N.CompanyHelper.Touch", "invocation", "f.cs", 20),
+        };
+        var bases = new[]
+        {
+            new BaseEdge("T:N.SiteEntity", "T:N.EntityBase"),
+            new BaseEdge("T:N.CompanyEntity", "T:N.EntityBase"),
+        };
+        var methods = new[]
+        {
+            new MethodRef("M:N.EntityBase.Save", "Save", "T:N.EntityBase"),
+            new MethodRef("M:N.SiteEntity.Save", "Save", "T:N.SiteEntity", IsOverride: true),
+            new MethodRef("M:N.CompanyEntity.Save", "Save", "T:N.CompanyEntity", IsOverride: true),
+            new MethodRef("M:N.CompanyHelper.Touch", "Touch", "T:N.CompanyHelper"),
+        };
+        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+
+        var info = FactPathFinder.ReachesWithFanout(graph, "M:N.SiteEntity.Save");
+
+        info["M:N.EntityBase.Save"].DispatchVia.ShouldBeNull();              // reached by the real base.Save() call
+        info["M:N.CompanyEntity.Save"].DispatchVia.ShouldBe("M:N.EntityBase.Save");
+        info["M:N.CompanyEntity.Save"].DispatchDegree.ShouldBe(2);
+        info["M:N.CompanyHelper.Touch"].DispatchVia.ShouldBe("M:N.EntityBase.Save"); // propagated into the subtree
+        info["M:N.CompanyHelper.Touch"].DispatchDegree.ShouldBe(2);
+    }
+
+    [Fact]
+    public void Single_target_dispatch_is_not_treated_as_fanout()
+    {
+        // One base, ONE override. Calling the base virtual dispatches to exactly one override —
+        // deterministic, not ambiguous fan-out — so it must NOT be tagged (degree 1, DispatchVia null).
+        var edges = new[] { new CallEdge("M:N.Caller.Go", "M:N.Base.M", "invocation", "f.cs", 1) };
+        var bases = new[] { new BaseEdge("T:N.Sub", "T:N.Base") };
+        var methods = new[]
+        {
+            new MethodRef("M:N.Caller.Go", "Go", "T:N.Caller"),
+            new MethodRef("M:N.Base.M", "M", "T:N.Base"),
+            new MethodRef("M:N.Sub.M", "M", "T:N.Sub", IsOverride: true),
+        };
+        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+
+        var info = FactPathFinder.ReachesWithFanout(graph, "M:N.Caller.Go");
+
+        info.ContainsKey("M:N.Sub.M").ShouldBeTrue();
+        info["M:N.Sub.M"].DispatchVia.ShouldBeNull();
+        info["M:N.Sub.M"].DispatchDegree.ShouldBe(0);
+    }
+
+    [Fact]
+    public void BuildTree_carries_dispatch_fanout_degree_on_the_reaching_edge()
+    {
+        var edges = new[] { new CallEdge("M:N.SiteEntity.Save", "M:N.EntityBase.Save", "invocation", "f.cs", 10) };
+        var bases = new[]
+        {
+            new BaseEdge("T:N.SiteEntity", "T:N.EntityBase"),
+            new BaseEdge("T:N.CompanyEntity", "T:N.EntityBase"),
+        };
+        var methods = new[]
+        {
+            new MethodRef("M:N.EntityBase.Save", "Save", "T:N.EntityBase"),
+            new MethodRef("M:N.SiteEntity.Save", "Save", "T:N.SiteEntity", IsOverride: true),
+            new MethodRef("M:N.CompanyEntity.Save", "Save", "T:N.CompanyEntity", IsOverride: true),
+        };
+        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+
+        var root = FactPathFinder.BuildTree(graph, "M:N.SiteEntity.Save").Single();
+        var entityBase = root.Children.Single(c => c.SymbolId == "M:N.EntityBase.Save");
+        var company = entityBase.Children.Single(c => c.SymbolId == "M:N.CompanyEntity.Save");
+
+        company.EdgeKind.ShouldBe("override-dispatch");
+        company.Fanout.ShouldBe(2);
+        entityBase.Fanout.ShouldBe(0); // reached by a real call, not a dispatch fan-out
+    }
+
+    [Fact]
     public void Find_annotates_each_hop_with_its_call_site_loop()
     {
         var graph = Graph(

@@ -124,10 +124,14 @@ public sealed record FactGraphData(
 
 // One hop in a found path. LoopKind/LoopDetail describe the enclosing loop of the call that
 // reached this step (i.e. the parent invoked it inside a foreach/for/while). Null for the entry
-// step, dispatch hops, and non-looped calls.
+// step, dispatch hops, and non-looped calls. Fanout = the dispatch fan-out degree of the edge that
+// reached this step: when the reaching edge is an impl-/override-dispatch that fanned the source
+// method out to N(>1) targets, Fanout=N (the step is one of N siblings, not a single concrete call);
+// 0 for direct calls and single-target dispatch. Surfaces edge provenance (D3) so a `base.M()` hop
+// that explodes to all overrides is visibly a fan-out, not a real call.
 public sealed record PathStep(
     string SymbolId, string Kind, string? FilePath, int Line,
-    string? LoopKind = null, string? LoopDetail = null);
+    string? LoopKind = null, string? LoopDetail = null, int Fanout = 0);
 
 // A node in a call TREE rooted at an entry point (rig tree). EdgeKind/LoopKind describe the call
 // that reached this node from its parent (EdgeKind="entry" for a root; "invocation"/"impl-dispatch"/
@@ -140,7 +144,12 @@ public sealed record TraceNode(
     string? LoopKind,
     string? LoopDetail,
     IReadOnlyList<TraceNode> Children,
-    bool Truncated = false);
+    bool Truncated = false,
+    // Dispatch fan-out degree of the edge that reached this node from its parent: N(>1) when that
+    // edge is an impl-/override-dispatch that fanned its source method out to N targets (this node
+    // is one of N siblings — D3 edge provenance), else 0. Lets the renderer mark a fan-out hop
+    // (e.g. base.Save() -> all *Entity.Save) distinctly from a real call.
+    int Fanout = 0);
 
 // A method handed off as a delegate (method-group) — a deferred/background entry point the
 // structural entry-point rules don't catch (e.g. RepeatingBackgroundProcessSchedule(.., Process)).

@@ -452,7 +452,8 @@ public static class CliApplication
         {
             var step = path[i];
             var loop = step.LoopKind is null ? "" : $" | loop {step.LoopKind}: {ShortLoop(step.LoopDetail)}";
-            var via = i == 0 ? "" : $"  [{step.Kind}{loop}{(step.FilePath is null ? "" : $" @ {ShortenPath(step.FilePath)}:{step.Line}")}]";
+            var kind = step.Fanout > 1 ? $"{step.Kind} ×{step.Fanout} fan-out" : step.Kind;
+            var via = i == 0 ? "" : $"  [{kind}{loop}{(step.FilePath is null ? "" : $" @ {ShortenPath(step.FilePath)}:{step.Line}")}]";
             output.WriteLine($"  {new string(' ', i * 2)}{step.SymbolId}{via}");
         }
         return 0;
@@ -501,28 +502,49 @@ public static class CliApplication
                 var ownDetail = (e.Observations ?? []).Where(o => o.Type == "looped_effect").Select(o => o.Detail).FirstOrDefault();
                 var fanout = ri.LoopNesting + (ownLoop ? 1 : 0);
                 var loopDetail = ownLoop ? (string.IsNullOrEmpty(ownDetail) ? ri.NearestLoopDetail : ownDetail) : ri.NearestLoopDetail;
-                return (ri.Depth, Fanout: fanout, Loop: loopDetail, Effect: e);
+                return (ri.Depth, Fanout: fanout, Loop: loopDetail, Via: ri.DispatchVia, ViaDegree: ri.DispatchDegree, Effect: e);
             })
             .OrderBy(h => h.Depth)
             .ToList();
 
         if (tsv)
         {
+            // dispatchVia/dispatchDegree (last two cols) flag effects whose ONLY reach is a base-
+            // virtual/interface dispatch fan-out from that source method — not a real call (D3/D7).
             foreach (var h in hits)
-                output.WriteLine($"{h.Depth}\t{h.Effect.Provider}\t{h.Effect.Operation}\t{h.Effect.ResourceType}\t{h.Effect.EnclosingSymbolId}\t{ShortenPath(h.Effect.FilePath)}:{h.Effect.Line}\t{h.Fanout}\t{ShortLoop(h.Loop)}");
+                output.WriteLine($"{h.Depth}\t{h.Effect.Provider}\t{h.Effect.Operation}\t{h.Effect.ResourceType}\t{h.Effect.EnclosingSymbolId}\t{ShortenPath(h.Effect.FilePath)}:{h.Effect.Line}\t{h.Fanout}\t{ShortLoop(h.Loop)}\t{h.Via}\t{(h.Via is null ? 0 : h.ViaDegree)}");
             return 0;
         }
 
+        // Split real reach from dispatch fan-out: an effect tagged with a DispatchVia is reachable
+        // ONLY by fanning a base-virtual/interface method out to all its overrides/impls (A1) — its
+        // count is dispatch noise, not per-entry behaviour, so it's rolled up by source rather than
+        // listed alongside genuinely-reached effects.
+        var direct = hits.Where(h => h.Via is null).ToList();
+        var fanned = hits.Where(h => h.Via is not null).ToList();
+
         output.WriteLine($"From: {fromPattern}");
         output.WriteLine($"Reachable methods (<= depth {maxDepth}): {reachable.Count}");
-        output.WriteLine($"Effects captured on reachable methods: {hits.Count}  (fanned out under a loop: {hits.Count(h => h.Fanout > 0)})");
-        foreach (var g in hits.GroupBy(h => (h.Effect.Provider, h.Effect.Operation)).OrderByDescending(g => g.Count()))
+        output.WriteLine($"Direct effects (real call paths): {direct.Count}  (fanned out under a loop: {direct.Count(h => h.Fanout > 0)})");
+        foreach (var g in direct.GroupBy(h => (h.Effect.Provider, h.Effect.Operation)).OrderByDescending(g => g.Count()))
             output.WriteLine($"  {g.Count(),4}  {g.Key.Provider} {g.Key.Operation}");
-        output.WriteLine("--- nearest effects (depth  provider op  resource  <- method  [fanout]) ---");
-        foreach (var h in hits.Take(40))
+        output.WriteLine("--- nearest direct effects (depth  provider op  resource  <- method  [loop]) ---");
+        foreach (var h in direct.Take(40))
         {
             var fan = h.Fanout > 0 ? $"  🔁x{h.Fanout} [loop: {ShortLoop(h.Loop)}]" : "";
             output.WriteLine($"  d{h.Depth}  {h.Effect.Provider} {h.Effect.Operation}  {ShortName(h.Effect.ResourceType)}  <- {ShortName(h.Effect.EnclosingSymbolId)}{fan}");
+        }
+
+        if (fanned.Count > 0)
+        {
+            output.WriteLine($"--- dispatch fan-out ({fanned.Count} effects; reach is base-virtual/interface dispatch, NOT a real call — see A1) ---");
+            foreach (var g in fanned
+                .GroupBy(h => (h.Via!, h.Effect.Provider, h.Effect.Operation))
+                .OrderByDescending(g => g.Count()))
+            {
+                var degree = g.Max(h => h.ViaDegree);
+                output.WriteLine($"  x{g.Count(),-5} {g.Key.Provider} {g.Key.Operation}  via {ShortName(g.Key.Item1)} dispatch [fan-out of {degree}]");
+            }
         }
         return 0;
     }
@@ -617,7 +639,9 @@ public static class CliApplication
         if (prune && !SubtreeHasEffect(node, effectsByMethod))
             return;
 
-        var dispatch = node.EdgeKind is "impl-dispatch" or "override-dispatch" ? $" «{node.EdgeKind}»" : "";
+        var dispatch = node.EdgeKind is "impl-dispatch" or "override-dispatch"
+            ? (node.Fanout > 1 ? $" «{node.EdgeKind} ×{node.Fanout} fan-out»" : $" «{node.EdgeKind}»")
+            : "";
         var loop = node.LoopKind is null ? "" : $" 🔁[{ShortLoop(node.LoopDetail)}]";
         var seen = node.Truncated ? " ↺seen" : "";
         var fx = effectsByMethod.TryGetValue(node.SymbolId, out var list)
