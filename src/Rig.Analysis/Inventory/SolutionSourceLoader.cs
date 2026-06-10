@@ -402,25 +402,68 @@ internal static class SolutionSourceLoader
         }
 
         // Also index SOURCE-GENERATED documents (Roslyn source generators wired as analyzer refs,
-        // e.g. RequestResponseProxyGenerator emitting <Page>Proxy : ProxyBase). These are not in
-        // project.Documents, so without this their types (and the proxy base-type facts the
-        // clientpage_proxy effect gate relies on) would be missing.
-        foreach (var generated in await project.GetSourceGeneratedDocumentsAsync(cancellationToken))
+        // e.g. RequestResponseProxyGenerator emitting <Page>Proxy : ProxyBase). These are NOT in
+        // project.Documents, and AdhocWorkspace.GetSourceGeneratedDocumentsAsync does not execute
+        // generators in this design-time-build setup (it returns nothing). So drive the generators
+        // explicitly with a CSharpGeneratorDriver over the project compilation and index the trees it
+        // produces — that's what makes the generated proxy base-type facts (the clientpage_proxy
+        // effect gate's discriminator) exist.
+        foreach (var generated in await RunSourceGeneratorsAsync(project, cancellationToken).ConfigureAwait(false))
         {
-            var tree = await generated.GetSyntaxTreeAsync(cancellationToken);
-            var root = tree is null ? null : await tree.GetRootAsync(cancellationToken);
-            var semanticModel = await generated.GetSemanticModelAsync(cancellationToken);
-            if (tree is null || root is null || semanticModel is null) continue;
-
-            // Synthetic, stable path for the generated document (HintName); used only as the fact
-            // FilePath. Marked as a generated, indexed source file for provenance.
-            var generatedPath = generated.FilePath ?? $"<generated>/{project.Name}/{generated.HintName}";
             sourceFiles.Add(new SourceFileInfo(
-                project.Name, generatedPath, "indexed", "high", "generated", "source_generator", ""));
-            sources.Add(new SourceModel(project.Name, generatedPath, tree, root, semanticModel));
+                project.Name, generated.FilePath, "indexed", "high", "generated", "source_generator", ""));
+            sources.Add(generated);
         }
 
         return new ProjectSourceLoadResult(sourceFiles, sources);
+    }
+
+    // Executes the project's Roslyn source generators (from its analyzer references) against its
+    // compilation and returns a SourceModel per generated syntax tree, with a semantic model bound to
+    // the generator-updated compilation. Projects with no generators (the common case) return empty
+    // after a cheap check. Generator failures are swallowed (best-effort) so one bad generator can't
+    // fail the whole index.
+    private static async Task<IReadOnlyList<SourceModel>> RunSourceGeneratorsAsync(
+        Project project, CancellationToken cancellationToken)
+    {
+        var generators = project.AnalyzerReferences
+            .SelectMany(ar => ar.GetGenerators(LanguageNames.CSharp))
+            .ToArray();
+        if (generators.Length == 0)
+            return [];
+
+        try
+        {
+            var compilation = await project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
+            if (compilation is null)
+                return [];
+
+            var parseOptions = project.ParseOptions as CSharpParseOptions;
+            GeneratorDriver driver = CSharpGeneratorDriver.Create(generators, parseOptions: parseOptions);
+            driver = driver.RunGeneratorsAndUpdateCompilation(
+                compilation, out var generatedCompilation, out _, cancellationToken);
+
+            var originalTrees = new HashSet<SyntaxTree>(compilation.SyntaxTrees);
+            var results = new List<SourceModel>();
+            foreach (var tree in generatedCompilation.SyntaxTrees)
+            {
+                if (originalTrees.Contains(tree))
+                    continue;
+                var root = await tree.GetRootAsync(cancellationToken).ConfigureAwait(false);
+                var semanticModel = generatedCompilation.GetSemanticModel(tree);
+                // Generated trees carry a generator hint-name path; fall back to a synthetic one.
+                var generatedPath = string.IsNullOrEmpty(tree.FilePath)
+                    ? $"<generated>/{project.Name}/{results.Count}.g.cs"
+                    : tree.FilePath;
+                results.Add(new SourceModel(project.Name, generatedPath, tree, root, semanticModel));
+            }
+            return results;
+        }
+        catch (Exception)
+        {
+            // Best-effort: a misbehaving generator must not abort indexing of the real source.
+            return [];
+        }
     }
 
     private static bool ShouldReportProgress(int current, int total)
