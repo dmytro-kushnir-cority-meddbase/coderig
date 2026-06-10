@@ -257,13 +257,7 @@ internal sealed record EffectRule(
     // exception type, and the effect resource is that exception type. Surfaces guard/permission exits
     // (e.g. AccessDeniedException) as effects so a read path that drops its check is visible.
     bool MatchThrow = false
-)
-{
-    public bool Matches(string methodName)
-    {
-        return Methods.Contains(methodName, StringComparer.Ordinal);
-    }
-}
+);
 
 internal sealed record DiRegistrationRule(IReadOnlyList<string> Methods, string Lifetime, string RegistrationKind, string Reason)
 {
