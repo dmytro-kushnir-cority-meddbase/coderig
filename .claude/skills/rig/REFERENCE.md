@@ -4,7 +4,7 @@
 
 | Command | Purpose |
 |---|---|
-| `rig index <sln\|csproj> [--rules p…] [--identity id]` | Extract facts. Solution = all projects' source in one run (callgraph crosses boundaries in-process). Single `.csproj` = that project's source only (refs become metadata DLLs). |
+| `rig index <sln\|csproj> [--rules p…] [--identity id] [--from entry.csproj] [--parallelism n] [--durable]` | Extract facts. Solution = all projects' source in one run (callgraph crosses boundaries in-process). Single `.csproj` = that project's source only (refs become metadata DLLs). **`--from entry.csproj`** = index only the entry project's transitive ProjectReference closure (minus test projects) — still ONE cross-project workspace; writes the closure to `relevant-projects.json`. Skips all out-of-closure test/tool projects before their design-time build. **`--parallelism n`** parallelises the (independent, no-binary) design-time builds. **Save is fast + crash-safe by default**: durability-off pragmas + write-to-temp + atomic rename over `rig.db` (so a fresh `index` cleanly REPLACES — the old "index APPENDS" footgun is gone; that now only applies to `mine`/`--identity`). **`--durable`** opts into a journaled write. |
 | `rig mine <sln> --from <csproj> [--rules p…] [--identity id] [--parallelism n]` | BFS DOWN the dep graph from `--from` (toward what it references). Each project indexed as its own run under one `--identity`, stitched at query time. Direction matters: `--from Pages` reaches Workflows; `--from Workflows` does NOT reach Pages. |
 | `rig runs` | List runs + symbol/reference/di counts (provenance / health check). |
 | `rig derive [--rules p…] [--limit n] [--format tsv]` | Stage-2 over facts: re-derive effects + page/action/background/wcf entry points + delegate/method-group handoffs. One DB open, one rule load. |
@@ -78,7 +78,8 @@ Recall recoveries already built in:
   projects use a FLAT `bin/`, not `bin/Debug/net48`.
 - **`mine` at `--parallelism 1`**; never run two mines at once; a large mine depletes shared net48 DLLs —
   rebuild the `--from` project before any subsequent single-project index, or it binds against a near-empty bin.
-- **`rig index` APPENDS** — delete `.rig` (or use a fresh cwd) before re-indexing the same project.
+- **`rig index` now REPLACES atomically** (temp + rename) — re-running a standalone `index` cleanly overwrites; no need to delete `.rig` first. `mine` (and `index --identity`) still APPENDS in place — delete `.rig` before re-mining the same target.
+- **Rules load at INDEX time vs QUERY time are asymmetric** — `rig index` resolves rules relative to the SOLUTION dir (+ builtin/global), NOT the analysis cwd. **DI registrations + the XML DI miner (`xmlDiFiles`) are captured at INDEX time**, so if your ruleset lives in the analysis cwd you MUST pass `--rules <that>.json` to `rig index` or `rig di` comes back empty (effects/entry points are derived at QUERY time from cwd rules, so they look fine — the asymmetry is silent). Symptom: `DiRegistrations: 0` despite XML service descriptors existing.
 - **Index with the published/global `rig`**; the plain Debug bin throws `System.Composition.TypedParts`
   not found from `AdhocWorkspace` (missing MEF deps). Read-only queries work from any build.
 - **Generated/source-gen types**: only indexed if generators actually run during the build (Buildalyzer
