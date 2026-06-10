@@ -12,8 +12,12 @@ public static class Writes
     // published). Callers OPT OUT (set false) for consistency: mine's in-place PARALLEL appends, or a
     // user-requested `--durable` in-place index. progress, when set, reports batched save throughput.
     public static async Task<string> SaveAsync(
-        RigDbContext context, AnalysisResult result, CancellationToken cancellationToken = default,
-        bool fastBulkWrite = true, Action<string>? progress = null)
+        RigDbContext context,
+        AnalysisResult result,
+        CancellationToken cancellationToken = default,
+        bool fastBulkWrite = true,
+        Action<string>? progress = null
+    )
     {
         var runId = Guid.NewGuid().ToString("n");
 
@@ -25,11 +29,16 @@ public static class Writes
             // No rollback journal, no fsync, in-memory temp, 64 MB page cache, single-writer lock.
             // A crash mid-write corrupts this file — acceptable because the caller publishes via
             // atomic rename, so the live store is never the one being written.
-            foreach (var pragma in new[]
-            {
-                "PRAGMA journal_mode=OFF;", "PRAGMA synchronous=OFF;",
-                "PRAGMA temp_store=MEMORY;", "PRAGMA cache_size=-65536;", "PRAGMA locking_mode=EXCLUSIVE;",
-            })
+            foreach (
+                var pragma in new[]
+                {
+                    "PRAGMA journal_mode=OFF;",
+                    "PRAGMA synchronous=OFF;",
+                    "PRAGMA temp_store=MEMORY;",
+                    "PRAGMA cache_size=-65536;",
+                    "PRAGMA locking_mode=EXCLUSIVE;",
+                }
+            )
                 await context.Database.ExecuteSqlRawAsync(pragma, cancellationToken);
         }
 
@@ -43,9 +52,7 @@ public static class Writes
             CreatedAtUtcText = DateTimeOffset.UtcNow.ToString("O"),
             SolutionPath = Path.GetFullPath(result.SolutionPath),
             ProjectIdentity = result.ProjectIdentity,
-            SourceProjectPath = result.SourceProjectPath is not null
-                ? Path.GetFullPath(result.SourceProjectPath)
-                : null,
+            SourceProjectPath = result.SourceProjectPath is not null ? Path.GetFullPath(result.SourceProjectPath) : null,
             SymbolCount = result.Symbols?.Count ?? 0,
             ReferenceCount = result.References?.Count ?? 0,
             DiRegistrationCount = result.DiRegistrations.Count,
@@ -69,8 +76,12 @@ public static class Writes
     // change tracker per batch and reporting cumulative progress. One SaveChanges over millions of
     // tracked entities is both slow and memory-heavy; batching keeps both bounded.
     private static async Task SaveFactsBatchedAsync(
-        RigDbContext context, string runId, AnalysisResult result,
-        Action<string>? progress, CancellationToken cancellationToken)
+        RigDbContext context,
+        string runId,
+        AnalysisResult result,
+        Action<string>? progress,
+        CancellationToken cancellationToken
+    )
     {
         var symbols = result.Symbols ?? [];
         var references = result.References ?? [];
@@ -90,69 +101,79 @@ public static class Writes
         for (var i = 0; i < symbols.Count; i++)
         {
             var s = symbols[i];
-            context.SymbolFacts.Add(new SymbolFactEntity
-            {
-                RunId = runId,
-                SymbolFactIndex = i,
-                SymbolId = s.SymbolId,
-                Kind = s.Kind,
-                Name = s.Name,
-                Namespace = s.Namespace,
-                ContainingSymbolId = s.ContainingSymbolId,
-                Modifiers = s.Modifiers,
-                TypeKind = s.TypeKind,
-                Signature = s.Signature,
-                FilePath = s.FilePath,
-                Line = s.Line,
-                DefiningAssembly = s.DefiningAssembly,
-                IsOverride = s.IsOverride,
-            });
+            context.SymbolFacts.Add(
+                new SymbolFactEntity
+                {
+                    RunId = runId,
+                    SymbolFactIndex = i,
+                    SymbolId = s.SymbolId,
+                    Kind = s.Kind,
+                    Name = s.Name,
+                    Namespace = s.Namespace,
+                    ContainingSymbolId = s.ContainingSymbolId,
+                    Modifiers = s.Modifiers,
+                    TypeKind = s.TypeKind,
+                    Signature = s.Signature,
+                    FilePath = s.FilePath,
+                    Line = s.Line,
+                    DefiningAssembly = s.DefiningAssembly,
+                    IsOverride = s.IsOverride,
+                }
+            );
             saved++;
-            if (++pending >= FactBatchSize) await FlushAsync();
+            if (++pending >= FactBatchSize)
+                await FlushAsync();
         }
 
         for (var i = 0; i < references.Count; i++)
         {
             var r = references[i];
-            context.ReferenceFacts.Add(new ReferenceFactEntity
-            {
-                RunId = runId,
-                ReferenceFactIndex = i,
-                TargetSymbolId = r.TargetSymbolId,
-                RefKind = r.RefKind,
-                EnclosingSymbolId = r.EnclosingSymbolId,
-                TargetAssembly = r.TargetAssembly,
-                TargetInSource = r.TargetInSource,
-                FilePath = r.FilePath,
-                Line = r.Line,
-                ReceiverType = r.ReceiverType,
-                FirstArgumentTemplate = r.FirstArgumentTemplate,
-                FirstArgumentType = r.FirstArgumentType,
-                EnclosingLoopKind = r.EnclosingLoopKind,
-                EnclosingLoopDetail = r.EnclosingLoopDetail,
-                EnclosingInvocations = r.EnclosingInvocations,
-                EnclosingCatchTypes = r.EnclosingCatchTypes,
-            });
+            context.ReferenceFacts.Add(
+                new ReferenceFactEntity
+                {
+                    RunId = runId,
+                    ReferenceFactIndex = i,
+                    TargetSymbolId = r.TargetSymbolId,
+                    RefKind = r.RefKind,
+                    EnclosingSymbolId = r.EnclosingSymbolId,
+                    TargetAssembly = r.TargetAssembly,
+                    TargetInSource = r.TargetInSource,
+                    FilePath = r.FilePath,
+                    Line = r.Line,
+                    ReceiverType = r.ReceiverType,
+                    FirstArgumentTemplate = r.FirstArgumentTemplate,
+                    FirstArgumentType = r.FirstArgumentType,
+                    EnclosingLoopKind = r.EnclosingLoopKind,
+                    EnclosingLoopDetail = r.EnclosingLoopDetail,
+                    EnclosingInvocations = r.EnclosingInvocations,
+                    EnclosingCatchTypes = r.EnclosingCatchTypes,
+                }
+            );
             saved++;
-            if (++pending >= FactBatchSize) await FlushAsync();
+            if (++pending >= FactBatchSize)
+                await FlushAsync();
         }
 
         for (var i = 0; i < relations.Count; i++)
         {
             var t = relations[i];
-            context.TypeRelationFacts.Add(new TypeRelationFactEntity
-            {
-                RunId = runId,
-                TypeRelationFactIndex = i,
-                TypeSymbolId = t.TypeSymbolId,
-                RelatedSymbolId = t.RelatedSymbolId,
-                RelationKind = t.RelationKind,
-            });
+            context.TypeRelationFacts.Add(
+                new TypeRelationFactEntity
+                {
+                    RunId = runId,
+                    TypeRelationFactIndex = i,
+                    TypeSymbolId = t.TypeSymbolId,
+                    RelatedSymbolId = t.RelatedSymbolId,
+                    RelationKind = t.RelationKind,
+                }
+            );
             saved++;
-            if (++pending >= FactBatchSize) await FlushAsync();
+            if (++pending >= FactBatchSize)
+                await FlushAsync();
         }
 
-        if (pending > 0) await FlushAsync();
+        if (pending > 0)
+            await FlushAsync();
     }
 
     private static void AddSourceFiles(RigDbContext context, string runId, AnalysisResult result)
@@ -206,19 +227,35 @@ public static class Writes
     // EnsureCreatedAsync only creates tables in a brand-new DB — it never alters existing ones.
     private static async Task MigrateAsync(RigDbContext context, CancellationToken cancellationToken)
     {
-        await context.Database.ExecuteSqlRawAsync("""
-            ALTER TABLE runs ADD COLUMN IF NOT EXISTS ProjectIdentity TEXT;
-            """, cancellationToken).ContinueWith(_ => { }, cancellationToken); // ignore if already exists
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
+                ALTER TABLE runs ADD COLUMN IF NOT EXISTS ProjectIdentity TEXT;
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken); // ignore if already exists
 
-        await context.Database.ExecuteSqlRawAsync("""
-            ALTER TABLE runs ADD COLUMN IF NOT EXISTS SourceProjectPath TEXT;
-            """, cancellationToken).ContinueWith(_ => { }, cancellationToken);
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
+                ALTER TABLE runs ADD COLUMN IF NOT EXISTS SourceProjectPath TEXT;
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken);
 
-        await context.Database.ExecuteSqlRawAsync("""
-            CREATE INDEX IF NOT EXISTS IX_runs_ProjectIdentity ON runs(ProjectIdentity);
-            """, cancellationToken).ContinueWith(_ => { }, cancellationToken);
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
+                CREATE INDEX IF NOT EXISTS IX_runs_ProjectIdentity ON runs(ProjectIdentity);
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken);
 
-        await context.Database.ExecuteSqlRawAsync("""
+        await context.Database.ExecuteSqlRawAsync(
+            """
             CREATE TABLE IF NOT EXISTS symbol_facts (
                 RunId              TEXT NOT NULL,
                 SymbolFactIndex    INTEGER NOT NULL,
@@ -236,13 +273,20 @@ public static class Writes
                 IsOverride         INTEGER NOT NULL,
                 PRIMARY KEY (RunId, SymbolFactIndex)
             );
-            """, cancellationToken);
+            """,
+            cancellationToken
+        );
         await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_symbol_facts_SymbolId ON symbol_facts(SymbolId);", cancellationToken);
+            "CREATE INDEX IF NOT EXISTS IX_symbol_facts_SymbolId ON symbol_facts(SymbolId);",
+            cancellationToken
+        );
         await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_symbol_facts_Name ON symbol_facts(Name);", cancellationToken);
+            "CREATE INDEX IF NOT EXISTS IX_symbol_facts_Name ON symbol_facts(Name);",
+            cancellationToken
+        );
 
-        await context.Database.ExecuteSqlRawAsync("""
+        await context.Database.ExecuteSqlRawAsync(
+            """
             CREATE TABLE IF NOT EXISTS reference_facts (
                 RunId              TEXT NOT NULL,
                 ReferenceFactIndex INTEGER NOT NULL,
@@ -262,13 +306,20 @@ public static class Writes
                 EnclosingCatchTypes TEXT,
                 PRIMARY KEY (RunId, ReferenceFactIndex)
             );
-            """, cancellationToken);
+            """,
+            cancellationToken
+        );
         await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_reference_facts_TargetSymbolId ON reference_facts(TargetSymbolId);", cancellationToken);
+            "CREATE INDEX IF NOT EXISTS IX_reference_facts_TargetSymbolId ON reference_facts(TargetSymbolId);",
+            cancellationToken
+        );
         await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_reference_facts_EnclosingSymbolId ON reference_facts(EnclosingSymbolId);", cancellationToken);
+            "CREATE INDEX IF NOT EXISTS IX_reference_facts_EnclosingSymbolId ON reference_facts(EnclosingSymbolId);",
+            cancellationToken
+        );
 
-        await context.Database.ExecuteSqlRawAsync("""
+        await context.Database.ExecuteSqlRawAsync(
+            """
             CREATE TABLE IF NOT EXISTS type_relation_facts (
                 RunId                 TEXT NOT NULL,
                 TypeRelationFactIndex INTEGER NOT NULL,
@@ -277,10 +328,16 @@ public static class Writes
                 RelationKind          TEXT NOT NULL,
                 PRIMARY KEY (RunId, TypeRelationFactIndex)
             );
-            """, cancellationToken);
+            """,
+            cancellationToken
+        );
         await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_type_relation_facts_TypeSymbolId ON type_relation_facts(TypeSymbolId);", cancellationToken);
+            "CREATE INDEX IF NOT EXISTS IX_type_relation_facts_TypeSymbolId ON type_relation_facts(TypeSymbolId);",
+            cancellationToken
+        );
         await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_type_relation_facts_RelatedSymbolId ON type_relation_facts(RelatedSymbolId);", cancellationToken);
+            "CREATE INDEX IF NOT EXISTS IX_type_relation_facts_RelatedSymbolId ON type_relation_facts(RelatedSymbolId);",
+            cancellationToken
+        );
     }
 }

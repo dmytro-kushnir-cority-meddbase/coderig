@@ -1,5 +1,5 @@
-using MMS.Web.UI;
 using LegacyNet48Web.Entities;
+using MMS.Web.UI;
 
 namespace LegacyNet48Web.Pages.Admin
 {
@@ -7,7 +7,10 @@ namespace LegacyNet48Web.Pages.Admin
     {
         private readonly DataAdapter _db;
 
-        public UserManagement(DataAdapter db) { _db = db; }
+        public UserManagement(DataAdapter db)
+        {
+            _db = db;
+        }
 
         protected override void OnLoad()
         {

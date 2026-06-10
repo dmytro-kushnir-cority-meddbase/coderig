@@ -73,14 +73,7 @@ public sealed record TypeRelationFact(
 
 // --- Stage-3 (read) query projections ---
 
-public sealed record SymbolSearchHit(
-    string SymbolId,
-    string Kind,
-    string Signature,
-    string FilePath,
-    int Line,
-    string DefiningAssembly
-);
+public sealed record SymbolSearchHit(string SymbolId, string Kind, string Signature, string FilePath, int Line, string DefiningAssembly);
 
 public sealed record ReferenceHit(
     string TargetSymbolId,
@@ -98,8 +91,21 @@ public sealed record ReferenceHit(
 // and for the synthetic dispatch hops (interface->impl, base->override). Optional so existing
 // constructions stay source-compatible.
 public sealed record CallEdge(
-    string Caller, string Callee, string Kind, string FilePath, int Line,
-    string? LoopKind = null, string? LoopDetail = null);
+    string Caller,
+    string Callee,
+    string Kind,
+    string FilePath,
+    int Line,
+    string? LoopKind = null,
+    string? LoopDetail = null,
+    // Static type of the invocation receiver at this call site (open-generic FQN, e.g.
+    // "T:MedDBase.CompanyEntity"), mined into ReferenceFactEntity.ReceiverType. Lets virtual/
+    // base/interface dispatch be resolved EDGE-AWARE: an `entity.Save()` whose receiver is
+    // CompanyEntity dispatches only to CompanyEntity's Save override (+ its subtypes), not to
+    // all 114 CommonEntityBase.Save overrides (CHA over-approximation). Null for bare/static
+    // calls and non-invocation refs; falls back to full CHA when null/interface/error-type/base.
+    string? ReceiverType = null
+);
 
 // An "implType implements ifaceType" edge (from a type-relation fact).
 public sealed record ImplementsEdge(string ImplType, string InterfaceType);
@@ -130,8 +136,14 @@ public sealed record FactGraphData(
 // 0 for direct calls and single-target dispatch. Surfaces edge provenance (D3) so a `base.M()` hop
 // that explodes to all overrides is visibly a fan-out, not a real call.
 public sealed record PathStep(
-    string SymbolId, string Kind, string? FilePath, int Line,
-    string? LoopKind = null, string? LoopDetail = null, int Fanout = 0);
+    string SymbolId,
+    string Kind,
+    string? FilePath,
+    int Line,
+    string? LoopKind = null,
+    string? LoopDetail = null,
+    int Fanout = 0
+);
 
 // A node in a call TREE rooted at an entry point (rig tree). EdgeKind/LoopKind describe the call
 // that reached this node from its parent (EdgeKind="entry" for a root; "invocation"/"impl-dispatch"/
@@ -149,7 +161,8 @@ public sealed record TraceNode(
     // edge is an impl-/override-dispatch that fanned its source method out to N targets (this node
     // is one of N siblings — D3 edge provenance), else 0. Lets the renderer mark a fan-out hop
     // (e.g. base.Save() -> all *Entity.Save) distinctly from a real call.
-    int Fanout = 0);
+    int Fanout = 0
+);
 
 // A method handed off as a delegate (method-group) — a deferred/background entry point the
 // structural entry-point rules don't catch (e.g. RepeatingBackgroundProcessSchedule(.., Process)).
@@ -169,15 +182,22 @@ public sealed record FactInvocation(
     string? LoopKind = null,
     string? LoopDetail = null,
     string? EnclosingInvocations = null,
-    string? CatchTypes = null);
+    string? CatchTypes = null
+);
 
 // An effect re-derived from the reference index by matching an invocation target against the
 // encoded effect rules (stage 2 over facts). Observations are the fact-derived structural notes
 // (looped_effect / parallel_fanout / resilience_retry / concurrency_handled, P2b); empty for
 // constructor-fetch effects (mirrors the Roslyn path, which attaches observations to invocations).
 public sealed record DerivedEffect(
-    string Provider, string Operation, string ResourceType, string? EnclosingSymbolId, string FilePath, int Line,
-    IReadOnlyList<EffectObservationInfo>? Observations = null);
+    string Provider,
+    string Operation,
+    string ResourceType,
+    string? EnclosingSymbolId,
+    string FilePath,
+    int Line,
+    IReadOnlyList<EffectObservationInfo>? Observations = null
+);
 
 // Fact-side projections of the observation rules (the same AnalysisRuleSet.*Observations data the
 // Roslyn EffectObservationExtractor uses), carried into the Domain observation deriver (P2b) so
@@ -185,11 +205,9 @@ public sealed record DerivedEffect(
 // ordering; EF-only — not the LLBLGen/MedDBase target). The parallel-fanout list is still supplied
 // by the Analysis provider (hardcoded there today, like the Roslyn pass) pending its move to rule
 // data in P2c.
-public sealed record FactResilienceRetryRule(
-    IReadOnlyList<string> WrapperMethods, IReadOnlyList<string> ReceiverTypePatterns);
+public sealed record FactResilienceRetryRule(IReadOnlyList<string> WrapperMethods, IReadOnlyList<string> ReceiverTypePatterns);
 
-public sealed record FactConcurrencyHandledRule(
-    IReadOnlyList<string> CommitMethods, IReadOnlyList<string> CatchTypePatterns);
+public sealed record FactConcurrencyHandledRule(IReadOnlyList<string> CommitMethods, IReadOnlyList<string> CatchTypePatterns);
 
 // One fanout wrapper: receiver source text (e.g. "Task"/"Parallel") + the wrapping methods
 // (e.g. "WhenAll" / "ForEach"/"ForEachAsync"). Context = "{Receiver}.{method}".
@@ -198,15 +216,16 @@ public sealed record FactParallelFanoutRule(string Receiver, IReadOnlyList<strin
 public sealed record FactObservationRules(
     IReadOnlyList<FactResilienceRetryRule> ResilienceRetry,
     IReadOnlyList<FactConcurrencyHandledRule> ConcurrencyHandled,
-    IReadOnlyList<FactParallelFanoutRule> ParallelFanout);
+    IReadOnlyList<FactParallelFanoutRule> ParallelFanout
+);
 
 // An entry point re-derived from facts (type_relation_facts BFS + symbol_facts + reference_facts).
 // Covers the two pageModel cases: constructor-per-overload (page kind) and
 // attribute-decorated methods (action kind).
 public sealed record DerivedEntryPoint(
-    string Kind,   // e.g. "page" or "action"
+    string Kind, // e.g. "page" or "action"
     string Method, // e.g. "PAGE" or "ACTION"
-    string Route,  // e.g. "Accounts/MakePaymentComponents/Create2"
+    string Route, // e.g. "Accounts/MakePaymentComponents/Create2"
     string DisplayName, // e.g. "page PAGE Accounts/MakePaymentComponents/Create2(pkInvoice)"
     string FilePath,
     int Line
@@ -216,9 +235,9 @@ public sealed record DerivedEntryPoint(
 // The generic BFS deriver (FactEntryPointDeriver) consumes these — no hardcoded type lists.
 public sealed record FactEntryPointRule(
     string Id,
-    string Kind,       // "page" or "action"
+    string Kind, // "page" or "action"
     string DefaultMethod, // "PAGE" or "ACTION"
-    IReadOnlyList<string> BaseTypes,  // BFS roots (e.g. "MMS.Web.UI.ClientPage")
+    IReadOnlyList<string> BaseTypes, // BFS roots (e.g. "MMS.Web.UI.ClientPage")
     string NamespacePrefix, // strip prefix from namespace to build route (e.g. "MedDBase.Pages.")
     // When set: methods decorated with any of these attribute DocID prefixes are action entry points.
     // When null/empty: the rule emits constructor-overload page entry points instead.
@@ -239,11 +258,11 @@ public sealed record FactEntryPointRule(
 // WCF rule gated on a third-party attribute matches in the fixture but not yet in the real index.
 public sealed record FactClassInheritanceRule(
     string Id,
-    string Kind,          // "background" | "wcf" | "http" | "echoactor" | "startup" ...
+    string Kind, // "background" | "wcf" | "http" | "echoactor" | "startup" ...
     string DefaultMethod, // "RUN" | "INVOKE" | "POST" ...
-    IReadOnlyList<string> BaseTypes,      // BFS roots; ["*"] disables the base-type gate
+    IReadOnlyList<string> BaseTypes, // BFS roots; ["*"] disables the base-type gate
     IReadOnlyList<string> HandlerMethods, // exact method names; ["*"] matches any name
-    bool RequireOverride,                 // when true, only override methods qualify
+    bool RequireOverride, // when true, only override methods qualify
     // Attribute DocID prefixes (e.g. "M:System.ServiceModel.OperationContractAttribute."); when set,
     // a matched method must additionally carry one of these attributes.
     IReadOnlyList<string> HandlerMethodAttributePrefixes,
@@ -304,4 +323,5 @@ public sealed record FactEffectRule(
     string Resource = "",
     // When true the rule drives call-graph dispatch, not an effect; the Roslyn FindEffects skips it.
     // The fact effect deriver skips it too so dispatch rules don't leak in as effects.
-    bool TreatAsDispatch = false);
+    bool TreatAsDispatch = false
+);

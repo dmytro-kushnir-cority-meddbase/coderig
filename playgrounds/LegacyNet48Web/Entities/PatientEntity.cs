@@ -1,6 +1,6 @@
 using System;
-using SD.LLBLGen.Pro.ORMSupportClasses;
 using MedDBase.Messages;
+using SD.LLBLGen.Pro.ORMSupportClasses;
 
 namespace LegacyNet48Web.Entities
 {

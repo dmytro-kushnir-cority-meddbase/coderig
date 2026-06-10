@@ -25,7 +25,13 @@ public static class SolutionAnalyzer
         var rules = AnalysisRuleSet.LoadForSolution(solutionFullPath, extraRulesPaths);
         progress?.Invoke("Loading solution");
         var sourceSet = await SolutionSourceLoader.LoadAsync(
-            solutionFullPath, rules, cancellationToken, progress, scopeProjectPaths, parallelism);
+            solutionFullPath,
+            rules,
+            cancellationToken,
+            progress,
+            scopeProjectPaths,
+            parallelism
+        );
         progress?.Invoke("Merging project rules");
         rules = rules.MergeWithProjectDirectories(sourceSet.ProjectDirectories);
         var sources = sourceSet.IndexedSources;
@@ -57,22 +63,32 @@ public static class SolutionAnalyzer
         // any inline static mappings, then merge with code-detected DI registrations.
         var xmlRegistrations = XmlDiMiner.Mine(rules);
         var staticRegistrations = rules.StaticDiMappings.Select(m => new DiRegistrationInfo(
-            m.ServiceType, m.ImplementationType, m.Lifetime, m.RegistrationKind,
-            string.Empty, 0, "high", "rules", "static_di_mapping", string.Empty));
-        var allDiRegistrations = diRegistrations
-            .Concat(xmlRegistrations)
-            .Concat(staticRegistrations)
-            .ToArray();
+            m.ServiceType,
+            m.ImplementationType,
+            m.Lifetime,
+            m.RegistrationKind,
+            string.Empty,
+            0,
+            "high",
+            "rules",
+            "static_di_mapping",
+            string.Empty
+        ));
+        var allDiRegistrations = diRegistrations.Concat(xmlRegistrations).Concat(staticRegistrations).ToArray();
         if (xmlRegistrations.Count > 0)
             progress?.Invoke($"XML DI miner: {xmlRegistrations.Count} mappings from {rules.XmlDiFiles.Count} path(s)");
 
-        progress?.Invoke($"Analysis complete: {symbolFacts.Length} symbols, "
-            + $"{referenceFacts.Length} references, {allDiRegistrations.Length} di registrations");
+        progress?.Invoke(
+            $"Analysis complete: {symbolFacts.Length} symbols, "
+                + $"{referenceFacts.Length} references, {allDiRegistrations.Length} di registrations"
+        );
 
         // For project-level indexing, record the specific project path
-        var sourceProjectPath = solutionFullPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
-                             || solutionFullPath.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase)
-            ? solutionFullPath : null;
+        var sourceProjectPath =
+            solutionFullPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+            || solutionFullPath.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase)
+                ? solutionFullPath
+                : null;
 
         return new AnalysisResult(
             solutionPath,

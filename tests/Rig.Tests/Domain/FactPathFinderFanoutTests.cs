@@ -15,11 +15,7 @@ public sealed class FactPathFinderFanoutTests
 
     private static FactGraphData Graph(params CallEdge[] edges)
     {
-        var nodes = edges
-            .SelectMany(e => new[] { e.Caller, e.Callee })
-            .Distinct()
-            .Select(M)
-            .ToArray();
+        var nodes = edges.SelectMany(e => new[] { e.Caller, e.Callee }).Distinct().Select(M).ToArray();
         return new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), nodes);
     }
 
@@ -30,15 +26,16 @@ public sealed class FactPathFinderFanoutTests
         var graph = Graph(
             new CallEdge("M:A", "M:B", "invocation", "f.cs", 10, "foreach", "x in xs"),
             new CallEdge("M:B", "M:C", "invocation", "f.cs", 20),
-            new CallEdge("M:A", "M:D", "invocation", "f.cs", 30));
+            new CallEdge("M:A", "M:D", "invocation", "f.cs", 30)
+        );
 
         var info = FactPathFinder.ReachesWithFanout(graph, "M:A");
 
         info["M:B"].LoopNesting.ShouldBe(1);
         info["M:B"].NearestLoopDetail.ShouldBe("x in xs");
-        info["M:C"].LoopNesting.ShouldBe(1);          // inherited through the unlooped B->C edge
+        info["M:C"].LoopNesting.ShouldBe(1); // inherited through the unlooped B->C edge
         info["M:C"].NearestLoopDetail.ShouldBe("x in xs");
-        info["M:D"].LoopNesting.ShouldBe(0);          // sibling reached without crossing a loop
+        info["M:D"].LoopNesting.ShouldBe(0); // sibling reached without crossing a loop
     }
 
     [Fact]
@@ -46,12 +43,13 @@ public sealed class FactPathFinderFanoutTests
     {
         var graph = Graph(
             new CallEdge("M:A", "M:B", "invocation", "f.cs", 10, "foreach", "a in aa"),
-            new CallEdge("M:B", "M:C", "invocation", "f.cs", 20, "for", "i"));
+            new CallEdge("M:B", "M:C", "invocation", "f.cs", 20, "for", "i")
+        );
 
         var info = FactPathFinder.ReachesWithFanout(graph, "M:A");
 
         info["M:C"].LoopNesting.ShouldBe(2);
-        info["M:C"].NearestLoopKind.ShouldBe("for");  // innermost loop wrapping the call chain
+        info["M:C"].NearestLoopKind.ShouldBe("for"); // innermost loop wrapping the call chain
     }
 
     [Fact]
@@ -61,7 +59,8 @@ public sealed class FactPathFinderFanoutTests
         var graph = Graph(
             new CallEdge("M:A", "M:B", "invocation", "f.cs", 10, "foreach", "x in xs"),
             new CallEdge("M:B", "M:C", "invocation", "f.cs", 20),
-            new CallEdge("M:C", "M:A", "invocation", "f.cs", 30));
+            new CallEdge("M:C", "M:A", "invocation", "f.cs", 30)
+        );
 
         var roots = FactPathFinder.BuildTree(graph, "M:A");
 
@@ -71,7 +70,7 @@ public sealed class FactPathFinderFanoutTests
         a.EdgeKind.ShouldBe("entry");
 
         var b = a.Children.Single(c => c.SymbolId == "M:B");
-        b.LoopKind.ShouldBe("foreach");          // A->B call site is in a loop
+        b.LoopKind.ShouldBe("foreach"); // A->B call site is in a loop
         b.LoopDetail.ShouldBe("x in xs");
 
         var cNode = b.Children.Single(c => c.SymbolId == "M:C");
@@ -90,15 +89,16 @@ public sealed class FactPathFinderFanoutTests
             new CallEdge("M:A", "M:C", "invocation", "f.cs", 11),
             new CallEdge("M:B", "M:D", "invocation", "f.cs", 20),
             new CallEdge("M:C", "M:D", "invocation", "f.cs", 30),
-            new CallEdge("M:D", "M:E", "invocation", "f.cs", 40));
+            new CallEdge("M:D", "M:E", "invocation", "f.cs", 40)
+        );
 
         var a = FactPathFinder.BuildTree(graph, "M:A").Single();
         var underB = a.Children.Single(c => c.SymbolId == "M:B").Children.Single(c => c.SymbolId == "M:D");
         var underC = a.Children.Single(c => c.SymbolId == "M:C").Children.Single(c => c.SymbolId == "M:D");
 
         underB.Truncated.ShouldBeFalse();
-        underB.Children.ShouldContain(c => c.SymbolId == "M:E");   // expanded once, here
-        underC.Truncated.ShouldBeTrue();                           // second encounter = seen leaf
+        underB.Children.ShouldContain(c => c.SymbolId == "M:E"); // expanded once, here
+        underC.Truncated.ShouldBeTrue(); // second encounter = seen leaf
         underC.Children.ShouldBeEmpty();
     }
 
@@ -124,9 +124,9 @@ public sealed class FactPathFinderFanoutTests
 
         var reached = FactPathFinder.ReachedBy(graph, "Leaf.Do");
 
-        reached.Keys.ShouldContain("M:T.M");     // direct caller
-        reached.Keys.ShouldContain("M:I.M");     // reverse impl-dispatch
-        reached.Keys.ShouldContain("M:EP.Run");  // caller of the interface method
+        reached.Keys.ShouldContain("M:T.M"); // direct caller
+        reached.Keys.ShouldContain("M:I.M"); // reverse impl-dispatch
+        reached.Keys.ShouldContain("M:EP.Run"); // caller of the interface method
 
         // EP.Run is the only true entry-point root (T.M is reached via dispatch, I.M via a call).
         var roots = FactPathFinder.EntryRootsReaching(graph, "Leaf.Do");
@@ -172,8 +172,8 @@ public sealed class FactPathFinderFanoutTests
         };
         var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
 
-        FactPathFinder.Reaches(graph, "EP.Run").Keys.ShouldContain("M:Ns.Sub.M");        // forward base->override
-        FactPathFinder.EntryRootsReaching(graph, "Sub.M").ShouldContain("M:EP.Run");      // reverse climb
+        FactPathFinder.Reaches(graph, "EP.Run").Keys.ShouldContain("M:Ns.Sub.M"); // forward base->override
+        FactPathFinder.EntryRootsReaching(graph, "Sub.M").ShouldContain("M:EP.Run"); // reverse climb
     }
 
     [Fact]
@@ -190,11 +190,7 @@ public sealed class FactPathFinderFanoutTests
             new CallEdge("M:N.SiteEntity.Save", "M:N.EntityBase.Save", "invocation", "f.cs", 10),
             new CallEdge("M:N.CompanyEntity.Save", "M:N.CompanyHelper.Touch", "invocation", "f.cs", 20),
         };
-        var bases = new[]
-        {
-            new BaseEdge("T:N.SiteEntity", "T:N.EntityBase"),
-            new BaseEdge("T:N.CompanyEntity", "T:N.EntityBase"),
-        };
+        var bases = new[] { new BaseEdge("T:N.SiteEntity", "T:N.EntityBase"), new BaseEdge("T:N.CompanyEntity", "T:N.EntityBase") };
         var methods = new[]
         {
             new MethodRef("M:N.EntityBase.Save", "Save", "T:N.EntityBase"),
@@ -206,7 +202,7 @@ public sealed class FactPathFinderFanoutTests
 
         var info = FactPathFinder.ReachesWithFanout(graph, "M:N.SiteEntity.Save");
 
-        info["M:N.EntityBase.Save"].DispatchVia.ShouldBeNull();              // reached by the real base.Save() call
+        info["M:N.EntityBase.Save"].DispatchVia.ShouldBeNull(); // reached by the real base.Save() call
         info["M:N.CompanyEntity.Save"].DispatchVia.ShouldBe("M:N.EntityBase.Save");
         info["M:N.CompanyEntity.Save"].DispatchDegree.ShouldBe(2);
         info["M:N.CompanyHelper.Touch"].DispatchVia.ShouldBe("M:N.EntityBase.Save"); // propagated into the subtree
@@ -239,11 +235,7 @@ public sealed class FactPathFinderFanoutTests
     public void BuildTree_carries_dispatch_fanout_degree_on_the_reaching_edge()
     {
         var edges = new[] { new CallEdge("M:N.SiteEntity.Save", "M:N.EntityBase.Save", "invocation", "f.cs", 10) };
-        var bases = new[]
-        {
-            new BaseEdge("T:N.SiteEntity", "T:N.EntityBase"),
-            new BaseEdge("T:N.CompanyEntity", "T:N.EntityBase"),
-        };
+        var bases = new[] { new BaseEdge("T:N.SiteEntity", "T:N.EntityBase"), new BaseEdge("T:N.CompanyEntity", "T:N.EntityBase") };
         var methods = new[]
         {
             new MethodRef("M:N.EntityBase.Save", "Save", "T:N.EntityBase"),
@@ -261,20 +253,232 @@ public sealed class FactPathFinderFanoutTests
         entityBase.Fanout.ShouldBe(0); // reached by a real call, not a dispatch fan-out
     }
 
+    // --- Receiver-type dispatch narrowing (the signal/noise fix) ---
+
+    // A base virtual Save with TWO overrides. A call site whose receiver is statically CompanyEntity
+    // must dispatch ONLY to CompanyEntity.Save — not to SiteEntity.Save (the CHA over-approximation).
+    [Fact]
+    public void Concrete_receiver_narrows_override_dispatch_to_that_receivers_override()
+    {
+        var edges = new[]
+        {
+            // caller.Go() does company.Save() — receiver is CompanyEntity.
+            new CallEdge("M:N.Caller.Go", "M:N.EntityBase.Save", "invocation", "f.cs", 10, ReceiverType: "N.CompanyEntity"),
+        };
+        var bases = new[] { new BaseEdge("T:N.SiteEntity", "T:N.EntityBase"), new BaseEdge("T:N.CompanyEntity", "T:N.EntityBase") };
+        var methods = new[]
+        {
+            new MethodRef("M:N.Caller.Go", "Go", "T:N.Caller"),
+            new MethodRef("M:N.EntityBase.Save", "Save", "T:N.EntityBase"),
+            new MethodRef("M:N.SiteEntity.Save", "Save", "T:N.SiteEntity", IsOverride: true),
+            new MethodRef("M:N.CompanyEntity.Save", "Save", "T:N.CompanyEntity", IsOverride: true),
+        };
+        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+
+        var reach = FactPathFinder.Reaches(graph, "M:N.Caller.Go");
+
+        reach.Keys.ShouldContain("M:N.EntityBase.Save"); // the real call
+        reach.Keys.ShouldContain("M:N.CompanyEntity.Save"); // the receiver's override
+        reach.Keys.ShouldNotContain("M:N.SiteEntity.Save"); // narrowed away — wrong receiver type
+    }
+
+    // A descendant receiver also pulls in the receiver's OWN subtype overrides (the CLR could dispatch
+    // to a subtype's override), but still excludes siblings outside the receiver's subtree.
+    [Fact]
+    public void Concrete_receiver_includes_its_subtypes_but_not_siblings()
+    {
+        var edges = new[]
+        {
+            new CallEdge("M:N.Caller.Go", "M:N.EntityBase.Save", "invocation", "f.cs", 10, ReceiverType: "N.CompanyEntity"),
+        };
+        var bases = new[]
+        {
+            new BaseEdge("T:N.SiteEntity", "T:N.EntityBase"),
+            new BaseEdge("T:N.CompanyEntity", "T:N.EntityBase"),
+            new BaseEdge("T:N.SubCompanyEntity", "T:N.CompanyEntity"),
+        };
+        var methods = new[]
+        {
+            new MethodRef("M:N.Caller.Go", "Go", "T:N.Caller"),
+            new MethodRef("M:N.EntityBase.Save", "Save", "T:N.EntityBase"),
+            new MethodRef("M:N.SiteEntity.Save", "Save", "T:N.SiteEntity", IsOverride: true),
+            new MethodRef("M:N.CompanyEntity.Save", "Save", "T:N.CompanyEntity", IsOverride: true),
+            new MethodRef("M:N.SubCompanyEntity.Save", "Save", "T:N.SubCompanyEntity", IsOverride: true),
+        };
+        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+
+        var reach = FactPathFinder.Reaches(graph, "M:N.Caller.Go");
+
+        reach.Keys.ShouldContain("M:N.CompanyEntity.Save");
+        reach.Keys.ShouldContain("M:N.SubCompanyEntity.Save"); // a subtype of the receiver
+        reach.Keys.ShouldNotContain("M:N.SiteEntity.Save"); // sibling — excluded
+    }
+
+    // Base-typed receiver (the declaring base itself) can dispatch to ANY override at runtime, so it
+    // must fall back to full CHA — no narrowing, both overrides reached.
+    [Fact]
+    public void Base_typed_receiver_falls_back_to_full_cha()
+    {
+        var edges = new[] { new CallEdge("M:N.Caller.Go", "M:N.EntityBase.Save", "invocation", "f.cs", 10, ReceiverType: "N.EntityBase") };
+        var bases = new[] { new BaseEdge("T:N.SiteEntity", "T:N.EntityBase"), new BaseEdge("T:N.CompanyEntity", "T:N.EntityBase") };
+        var methods = new[]
+        {
+            new MethodRef("M:N.Caller.Go", "Go", "T:N.Caller"),
+            new MethodRef("M:N.EntityBase.Save", "Save", "T:N.EntityBase"),
+            new MethodRef("M:N.SiteEntity.Save", "Save", "T:N.SiteEntity", IsOverride: true),
+            new MethodRef("M:N.CompanyEntity.Save", "Save", "T:N.CompanyEntity", IsOverride: true),
+        };
+        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+
+        var reach = FactPathFinder.Reaches(graph, "M:N.Caller.Go");
+
+        reach.Keys.ShouldContain("M:N.SiteEntity.Save"); // CHA fallback — both overrides reached
+        reach.Keys.ShouldContain("M:N.CompanyEntity.Save");
+    }
+
+    // Null receiver (a bare/static-shaped call edge) also falls back to CHA.
+    [Fact]
+    public void Null_receiver_falls_back_to_full_cha()
+    {
+        var edges = new[] { new CallEdge("M:N.Caller.Go", "M:N.EntityBase.Save", "invocation", "f.cs", 10) };
+        var bases = new[] { new BaseEdge("T:N.SiteEntity", "T:N.EntityBase"), new BaseEdge("T:N.CompanyEntity", "T:N.EntityBase") };
+        var methods = new[]
+        {
+            new MethodRef("M:N.Caller.Go", "Go", "T:N.Caller"),
+            new MethodRef("M:N.EntityBase.Save", "Save", "T:N.EntityBase"),
+            new MethodRef("M:N.SiteEntity.Save", "Save", "T:N.SiteEntity", IsOverride: true),
+            new MethodRef("M:N.CompanyEntity.Save", "Save", "T:N.CompanyEntity", IsOverride: true),
+        };
+        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+
+        var reach = FactPathFinder.Reaches(graph, "M:N.Caller.Go");
+
+        reach.Keys.ShouldContain("M:N.SiteEntity.Save");
+        reach.Keys.ShouldContain("M:N.CompanyEntity.Save");
+    }
+
+    // An unknown receiver type (not a first-party method-bearing type in the index) is untrustworthy
+    // and falls back to CHA rather than dropping a real override.
+    [Fact]
+    public void Unknown_receiver_type_falls_back_to_full_cha()
+    {
+        var edges = new[]
+        {
+            new CallEdge("M:N.Caller.Go", "M:N.EntityBase.Save", "invocation", "f.cs", 10, ReceiverType: "Some.Unindexed.Type"),
+        };
+        var bases = new[] { new BaseEdge("T:N.SiteEntity", "T:N.EntityBase"), new BaseEdge("T:N.CompanyEntity", "T:N.EntityBase") };
+        var methods = new[]
+        {
+            new MethodRef("M:N.Caller.Go", "Go", "T:N.Caller"),
+            new MethodRef("M:N.EntityBase.Save", "Save", "T:N.EntityBase"),
+            new MethodRef("M:N.SiteEntity.Save", "Save", "T:N.SiteEntity", IsOverride: true),
+            new MethodRef("M:N.CompanyEntity.Save", "Save", "T:N.CompanyEntity", IsOverride: true),
+        };
+        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+
+        var reach = FactPathFinder.Reaches(graph, "M:N.Caller.Go");
+
+        reach.Keys.ShouldContain("M:N.SiteEntity.Save");
+        reach.Keys.ShouldContain("M:N.CompanyEntity.Save");
+    }
+
+    // Interface impl-dispatch narrows to a concrete receiver too: i.Do() where the receiver is
+    // statically FooImpl reaches FooImpl.Do, not BarImpl.Do.
+    [Fact]
+    public void Concrete_receiver_narrows_interface_dispatch()
+    {
+        var edges = new[] { new CallEdge("M:N.Caller.Go", "M:N.IService.Do", "invocation", "f.cs", 10, ReceiverType: "N.FooImpl") };
+        var impls = new[] { new ImplementsEdge("T:N.FooImpl", "T:N.IService"), new ImplementsEdge("T:N.BarImpl", "T:N.IService") };
+        var methods = new[]
+        {
+            new MethodRef("M:N.Caller.Go", "Go", "T:N.Caller"),
+            new MethodRef("M:N.IService.Do", "Do", "T:N.IService"),
+            new MethodRef("M:N.FooImpl.Do", "Do", "T:N.FooImpl"),
+            new MethodRef("M:N.BarImpl.Do", "Do", "T:N.BarImpl"),
+        };
+        var graph = new FactGraphData(edges, impls, methods);
+
+        var reach = FactPathFinder.Reaches(graph, "M:N.Caller.Go");
+
+        reach.Keys.ShouldContain("M:N.FooImpl.Do"); // the receiver's impl
+        reach.Keys.ShouldNotContain("M:N.BarImpl.Do"); // narrowed away
+    }
+
+    // Interface-typed receiver (the interface itself, not a concrete impl) falls back to CHA — any impl
+    // could be the runtime target.
+    [Fact]
+    public void Interface_typed_receiver_falls_back_to_full_cha()
+    {
+        var edges = new[] { new CallEdge("M:N.Caller.Go", "M:N.IService.Do", "invocation", "f.cs", 10, ReceiverType: "N.IService") };
+        var impls = new[] { new ImplementsEdge("T:N.FooImpl", "T:N.IService"), new ImplementsEdge("T:N.BarImpl", "T:N.IService") };
+        var methods = new[]
+        {
+            new MethodRef("M:N.Caller.Go", "Go", "T:N.Caller"),
+            new MethodRef("M:N.IService.Do", "Do", "T:N.IService"),
+            new MethodRef("M:N.FooImpl.Do", "Do", "T:N.FooImpl"),
+            new MethodRef("M:N.BarImpl.Do", "Do", "T:N.BarImpl"),
+        };
+        var graph = new FactGraphData(edges, impls, methods);
+
+        var reach = FactPathFinder.Reaches(graph, "M:N.Caller.Go");
+
+        reach.Keys.ShouldContain("M:N.FooImpl.Do"); // CHA fallback — both impls reached
+        reach.Keys.ShouldContain("M:N.BarImpl.Do");
+    }
+
+    // Reverse narrows symmetrically at the DISPATCH hop: when every call site of the base method has a
+    // concrete receiver that excludes a given override, that base method does NOT reverse-reach the
+    // override. Here EntityBase.Save is only ever called with a CompanyEntity receiver, so the reverse
+    // closure of SiteEntity.Save must NOT pick up EntityBase.Save (nor its caller) — the CHA fan-out
+    // that would otherwise make every *Caller reach every *Entity.Save.
+    [Fact]
+    public void Reverse_dispatch_narrows_by_receiver_at_the_dispatch_hop()
+    {
+        var edges = new[]
+        {
+            new CallEdge("M:N.CompanyCaller.Go", "M:N.EntityBase.Save", "invocation", "f.cs", 10, ReceiverType: "N.CompanyEntity"),
+        };
+        var bases = new[] { new BaseEdge("T:N.SiteEntity", "T:N.EntityBase"), new BaseEdge("T:N.CompanyEntity", "T:N.EntityBase") };
+        var methods = new[]
+        {
+            new MethodRef("M:N.CompanyCaller.Go", "Go", "T:N.CompanyCaller"),
+            new MethodRef("M:N.EntityBase.Save", "Save", "T:N.EntityBase"),
+            new MethodRef("M:N.SiteEntity.Save", "Save", "T:N.SiteEntity", IsOverride: true),
+            new MethodRef("M:N.CompanyEntity.Save", "Save", "T:N.CompanyEntity", IsOverride: true),
+        };
+        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+
+        // Forward from the company caller reaches CompanyEntity.Save but NOT SiteEntity.Save.
+        var fwd = FactPathFinder.Reaches(graph, "M:N.CompanyCaller.Go");
+        fwd.Keys.ShouldContain("M:N.CompanyEntity.Save");
+        fwd.Keys.ShouldNotContain("M:N.SiteEntity.Save");
+
+        // Reverse from CompanyEntity.Save climbs through the base seam to the caller.
+        var reachedByCompany = FactPathFinder.ReachedBy(graph, "M:N.CompanyEntity.Save");
+        reachedByCompany.Keys.ShouldContain("M:N.EntityBase.Save");
+        reachedByCompany.Keys.ShouldContain("M:N.CompanyCaller.Go");
+
+        // Reverse from SiteEntity.Save must NOT reach the base seam — no call site dispatches to Site.
+        var reachedBySite = FactPathFinder.ReachedBy(graph, "M:N.SiteEntity.Save");
+        reachedBySite.Keys.ShouldNotContain("M:N.EntityBase.Save");
+        reachedBySite.Keys.ShouldNotContain("M:N.CompanyCaller.Go");
+    }
+
     [Fact]
     public void Find_annotates_each_hop_with_its_call_site_loop()
     {
         var graph = Graph(
             new CallEdge("M:A", "M:B", "invocation", "f.cs", 10, "foreach", "x in xs"),
-            new CallEdge("M:B", "M:C", "invocation", "f.cs", 20));
+            new CallEdge("M:B", "M:C", "invocation", "f.cs", 20)
+        );
 
         var path = FactPathFinder.Find(graph, "M:A", "M:C");
 
         path.ShouldNotBeNull();
         path!.Count.ShouldBe(3);
-        path[0].LoopKind.ShouldBeNull();              // entry node
-        path[1].LoopKind.ShouldBe("foreach");          // A->B call site is in a loop
+        path[0].LoopKind.ShouldBeNull(); // entry node
+        path[1].LoopKind.ShouldBe("foreach"); // A->B call site is in a loop
         path[1].LoopDetail.ShouldBe("x in xs");
-        path[2].LoopKind.ShouldBeNull();               // B->C call site is not
+        path[2].LoopKind.ShouldBeNull(); // B->C call site is not
     }
 }

@@ -30,9 +30,9 @@ public static class TypeClosure
         {
             var current = frontier.Dequeue();
             foreach (var child in strippedBaseEdges[StripGeneric(current)])
-                foreach (var expanded in ExpandGeneric(child))
-                    if (visited.Add(expanded))
-                        frontier.Enqueue(expanded);
+            foreach (var expanded in ExpandGeneric(child))
+                if (visited.Add(expanded))
+                    frontier.Enqueue(expanded);
         }
 
         return visited;
@@ -62,20 +62,19 @@ public static class TypeClosure
         {
             var current = frontier.Dequeue();
             foreach (var child in strippedBaseEdges[StripGeneric(current)])
-                foreach (var expanded in ExpandGeneric(child))
-                {
-                    strict.Add(expanded); // reached via an edge => a strict descendant of some root
-                    if (visited.Add(expanded))
-                        frontier.Enqueue(expanded);
-                }
+            foreach (var expanded in ExpandGeneric(child))
+            {
+                strict.Add(expanded); // reached via an edge => a strict descendant of some root
+                if (visited.Add(expanded))
+                    frontier.Enqueue(expanded);
+            }
         }
 
         return strict;
     }
 
     // True when the type (or its generic-stripped form) is in the closure.
-    public static bool Contains(HashSet<string> closure, string typeId) =>
-        ExpandGeneric(typeId).Any(closure.Contains);
+    public static bool Contains(HashSet<string> closure, string typeId) => ExpandGeneric(typeId).Any(closure.Contains);
 
     // Reduces a type DocID to its bare (non-generic) form: strips an instantiated argument list
     // (T:Foo`1{T:Bar} -> T:Foo`1 -> T:Foo) and the open-generic arity (T:Foo`1 -> T:Foo).

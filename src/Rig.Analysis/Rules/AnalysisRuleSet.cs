@@ -38,7 +38,8 @@ internal sealed record AnalysisRuleSet(
         var solutionDirectory = Path.GetDirectoryName(solutionPath) ?? Directory.GetCurrentDirectory();
         // For project files (.csproj/.fsproj), walk up to find rig.rules.json at repo/solution root.
         // For solution files (.sln/.slnx), the rules file is expected right next to the solution.
-        var isProjectFile = solutionPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+        var isProjectFile =
+            solutionPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
             || solutionPath.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase);
         if (isProjectFile)
         {
@@ -122,7 +123,9 @@ internal sealed record AnalysisRuleSet(
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray(),
             ReadBeforeCommitObservations = ReadBeforeCommitObservations.Concat(document.Observations?.ReadBeforeCommit ?? []).ToArray(),
-            ConcurrencyHandledObservations = ConcurrencyHandledObservations.Concat(document.Observations?.ConcurrencyHandled ?? []).ToArray(),
+            ConcurrencyHandledObservations = ConcurrencyHandledObservations
+                .Concat(document.Observations?.ConcurrencyHandled ?? [])
+                .ToArray(),
             ResilienceRetryObservations = ResilienceRetryObservations.Concat(document.Observations?.ResilienceRetry ?? []).ToArray(),
         };
     }
@@ -273,15 +276,9 @@ internal sealed record ReadBeforeCommitObservationRule(
     IReadOnlyList<string> ReadReceiverTypePatterns
 );
 
-internal sealed record ConcurrencyHandledObservationRule(
-    IReadOnlyList<string> CommitMethods,
-    IReadOnlyList<string> CatchTypePatterns
-);
+internal sealed record ConcurrencyHandledObservationRule(IReadOnlyList<string> CommitMethods, IReadOnlyList<string> CatchTypePatterns);
 
-internal sealed record ResilienceRetryObservationRule(
-    IReadOnlyList<string> WrapperMethods,
-    IReadOnlyList<string> ReceiverTypePatterns
-);
+internal sealed record ResilienceRetryObservationRule(IReadOnlyList<string> WrapperMethods, IReadOnlyList<string> ReceiverTypePatterns);
 
 // Pre-declared interface→implementation mapping sourced from external DI descriptors
 // (e.g. XML service files, web.config appSettings) rather than from code patterns.

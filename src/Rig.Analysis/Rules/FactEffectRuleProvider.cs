@@ -15,7 +15,8 @@ public static class FactEffectRuleProvider
     // rig.rules.json on top of the global (~/.rig) + built-in cascade; --rules paths are appended.
     public static IReadOnlyList<FactEffectRule> LoadForWorkingDirectory(
         string workingDirectory,
-        IReadOnlyList<string>? extraRulesPaths = null)
+        IReadOnlyList<string>? extraRulesPaths = null
+    )
     {
         var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
         var rules = AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths);
@@ -39,6 +40,7 @@ public static class FactEffectRuleProvider
             rule.ContainingTypes,
             rule.ContainingMethods,
             rule.Resource,
-            rule.TreatAsDispatch);
+            rule.TreatAsDispatch
+        );
     }
 }

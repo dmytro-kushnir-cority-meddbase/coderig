@@ -9,7 +9,10 @@ namespace LegacyNet48Web.Controllers
     {
         private readonly DataAdapter _db;
 
-        public InvoiceController(DataAdapter db) { _db = db; }
+        public InvoiceController(DataAdapter db)
+        {
+            _db = db;
+        }
 
         [HttpGet, Route("")]
         public async Task<IHttpActionResult> GetAll()

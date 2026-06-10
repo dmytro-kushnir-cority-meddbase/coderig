@@ -8,7 +8,7 @@ namespace LegacyNet48Web.Entities
     {
         public void Load(int pkInvoice, ITransaction transaction)
         {
-            var byPk = new InvoiceEntity(pkInvoice);                 // fetch (1 arg)
+            var byPk = new InvoiceEntity(pkInvoice); // fetch (1 arg)
             var byPkTxn = new InvoiceEntity(pkInvoice, transaction); // fetch (2 args)
             var blank = new InvoiceEntity { InvoiceId = pkInvoice }; // NOT a fetch (empty ctor)
         }

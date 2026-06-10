@@ -27,7 +27,8 @@ public static class FactEffectDeriver
         IReadOnlyList<(string TypeId, string BaseId)>? baseEdges = null,
         IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)>? ctorRefs = null,
         FactObservationRules? observationRules = null,
-        IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)>? throwRefs = null)
+        IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)>? throwRefs = null
+    )
     {
         // Precompute a base-type closure per distinct DeclaringTypeBaseTypes set (e.g. ProxyBase).
         // Without base edges, base-gated rules match nothing (the generated proxies aren't indexed).
@@ -89,9 +90,12 @@ public static class FactEffectDeriver
                         inv.LoopDetail,
                         FactStructuralContext.DecodeInvocations(inv.EnclosingInvocations),
                         FactStructuralContext.DecodeList(inv.CatchTypes),
-                        observationRules);
+                        observationRules
+                    );
 
-                results.Add(new DerivedEffect(rule.Provider, rule.Operation, resource!, inv.Enclosing, inv.FilePath, inv.Line, observations));
+                results.Add(
+                    new DerivedEffect(rule.Provider, rule.Operation, resource!, inv.Enclosing, inv.FilePath, inv.Line, observations)
+                );
                 break; // first matching rule wins
             }
         }
@@ -117,7 +121,9 @@ public static class FactEffectDeriver
                     if (!TypeGateMatches(rule, constructedType, receiverType: null, ClosureFor(rule)))
                         continue;
 
-                    results.Add(new DerivedEffect(rule.Provider, rule.Operation, constructedType, ctor.Enclosing, ctor.FilePath, ctor.Line));
+                    results.Add(
+                        new DerivedEffect(rule.Provider, rule.Operation, constructedType, ctor.Enclosing, ctor.FilePath, ctor.Line)
+                    );
                     break;
                 }
             }
@@ -142,7 +148,9 @@ public static class FactEffectDeriver
                     if (!TypeGateMatches(rule, exceptionType, receiverType: null, ClosureFor(rule)))
                         continue;
 
-                    results.Add(new DerivedEffect(rule.Provider, rule.Operation, exceptionType, thrown.Enclosing, thrown.FilePath, thrown.Line));
+                    results.Add(
+                        new DerivedEffect(rule.Provider, rule.Operation, exceptionType, thrown.Enclosing, thrown.FilePath, thrown.Line)
+                    );
                     break;
                 }
             }
@@ -157,14 +165,17 @@ public static class FactEffectDeriver
     // type's simple name (last segment) must additionally end with one of the given suffixes —
     // this narrows a broad namespace-prefix gate without hardcoding a type list.
     private static bool TypeGateMatches(
-        FactEffectRule rule, string declaringType, string? receiverType, HashSet<string>? declaringBaseClosure)
+        FactEffectRule rule,
+        string declaringType,
+        string? receiverType,
+        HashSet<string>? declaringBaseClosure
+    )
     {
         // Base-type gate (e.g. ProxyBase): when set it is authoritative — the declaring type must
         // be in the base-type closure, AND any simple-name suffix gate must also hold.
         if (rule.DeclaringTypeBaseTypes is { Count: > 0 })
         {
-            if (declaringBaseClosure is null
-                || !TypeClosure.Contains(declaringBaseClosure, "T:" + declaringType))
+            if (declaringBaseClosure is null || !TypeClosure.Contains(declaringBaseClosure, "T:" + declaringType))
                 return false;
             return DeclaringTypeNameSuffixMatches(rule, declaringType);
         }
@@ -197,9 +208,11 @@ public static class FactEffectDeriver
             // `ActionsHelper.RedirectUrl(...)` where RedirectUrl is declared on the gated `Helper`
             // (the dominant clientpage_nav family). The fact layer has no base edges for framework
             // receiver types, so the declaring-type proxy is what recovers these.
-            if (rule.ReceiverTypes.Any(gate =>
-                TypeNameMatches(declaringType, gate)
-                || (receiverType is not null && TypeNameMatches(receiverType, gate))))
+            if (
+                rule.ReceiverTypes.Any(gate =>
+                    TypeNameMatches(declaringType, gate) || (receiverType is not null && TypeNameMatches(receiverType, gate))
+                )
+            )
                 return true;
         }
 
@@ -225,8 +238,7 @@ public static class FactEffectDeriver
     // type under the "MedDBase.DataAccessTier.EntityClasses" namespace gate).
     private static bool TypeNameMatches(string actual, string gate)
     {
-        return string.Equals(actual, gate, StringComparison.Ordinal)
-            || actual.StartsWith(gate + ".", StringComparison.Ordinal);
+        return string.Equals(actual, gate, StringComparison.Ordinal) || actual.StartsWith(gate + ".", StringComparison.Ordinal);
     }
 
     // Enclosing-method gates (P2a) — mirror the Roslyn MatchesContainingNamespace/Type/Method,
@@ -252,8 +264,11 @@ public static class FactEffectDeriver
         if (hasNamespace)
         {
             var ns = NamespaceOf(containingType);
-            if (!rule.ContainingNamespaces!.Any(gate =>
-                string.Equals(ns, gate, StringComparison.Ordinal) || ns.StartsWith(gate + ".", StringComparison.Ordinal)))
+            if (
+                !rule.ContainingNamespaces!.Any(gate =>
+                    string.Equals(ns, gate, StringComparison.Ordinal) || ns.StartsWith(gate + ".", StringComparison.Ordinal)
+                )
+            )
                 return false;
         }
 
@@ -272,7 +287,12 @@ public static class FactEffectDeriver
     // Resolve the effect resource from facts, mirroring EffectExtractor.TryCreateEffect. Returns
     // null when the strategy can't be resolved (Roslyn drops the effect in that case).
     private static string? ResolveResource(
-        string strategy, string? receiver, string? firstArgTemplate, string? firstArgType, string declaringType)
+        string strategy,
+        string? receiver,
+        string? firstArgTemplate,
+        string? firstArgType,
+        string declaringType
+    )
     {
         return strategy switch
         {
@@ -296,9 +316,7 @@ public static class FactEffectDeriver
     private static string NormalizeHttpResource(string url)
     {
         var schemeSeparator = url.IndexOf("://", StringComparison.Ordinal);
-        return schemeSeparator >= 0
-            ? url.Substring(schemeSeparator + 3).TrimEnd('/')
-            : url.TrimStart('/');
+        return schemeSeparator >= 0 ? url.Substring(schemeSeparator + 3).TrimEnd('/') : url.TrimStart('/');
     }
 
     // "M:Ns.Type.Member(args)" -> ("Ns.Type", "Member").
@@ -362,9 +380,12 @@ public static class FactEffectDeriver
                     var depth = 0;
                     foreach (var c in inner)
                     {
-                        if (c == '{' || c == '<' || c == '(') depth++;
-                        else if (c == '}' || c == '>' || c == ')') depth--;
-                        else if (c == ',' && depth == 0) argCount++;
+                        if (c == '{' || c == '<' || c == '(')
+                            depth++;
+                        else if (c == '}' || c == '>' || c == ')')
+                            depth--;
+                        else if (c == ',' && depth == 0)
+                            argCount++;
                     }
                 }
             }

@@ -19,18 +19,16 @@ public static class FactObservationRuleProvider
         new FactParallelFanoutRule("Parallel", ["ForEach", "ForEachAsync"]),
     ];
 
-    public static FactObservationRules LoadForWorkingDirectory(
-        string workingDirectory,
-        IReadOnlyList<string>? extraRulesPaths = null)
+    public static FactObservationRules LoadForWorkingDirectory(string workingDirectory, IReadOnlyList<string>? extraRulesPaths = null)
     {
         var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
         var rules = AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths);
 
-        var resilience = rules.ResilienceRetryObservations
-            .Select(r => new FactResilienceRetryRule(r.WrapperMethods, r.ReceiverTypePatterns))
+        var resilience = rules
+            .ResilienceRetryObservations.Select(r => new FactResilienceRetryRule(r.WrapperMethods, r.ReceiverTypePatterns))
             .ToArray();
-        var concurrency = rules.ConcurrencyHandledObservations
-            .Select(r => new FactConcurrencyHandledRule(r.CommitMethods, r.CatchTypePatterns))
+        var concurrency = rules
+            .ConcurrencyHandledObservations.Select(r => new FactConcurrencyHandledRule(r.CommitMethods, r.CatchTypePatterns))
             .ToArray();
 
         return new FactObservationRules(resilience, concurrency, ParallelFanout);

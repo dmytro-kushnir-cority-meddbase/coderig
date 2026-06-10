@@ -12,7 +12,13 @@ public sealed class RigDbContextDesignTimeFactory : IDesignTimeDbContextFactory<
 // pooling: when false the connection is opened with Pooling=False, so disposing the context releases
 // the underlying file handle immediately. The write-to-temp-then-rename publish (rig index) needs
 // this — a pooled handle can keep rig.db.tmp open past Dispose and make the atomic File.Move fail.
-public sealed class RigDbContext(string databasePath, bool pooling = true) : DbContext
+//
+// readOnly: opens the main DB with Mode=ReadOnly so SQLite physically rejects any write to it — the
+// query commands (callers/reaches/tree/path/dead/symbols/refs/di/runs/files) pass readOnly:true, making
+// the read/write split an engine-enforced invariant rather than a convention. SqlReachability's TEMP
+// tables (reach_set/reach_depth) still work: SQLite's temp database is separate and stays writable on a
+// read-only main connection. Only the writers (index, mine, graph) open read-write.
+public sealed class RigDbContext(string databasePath, bool pooling = true, bool readOnly = false) : DbContext
 {
     public DbSet<RunEntity> Runs => Set<RunEntity>();
 
@@ -28,7 +34,11 @@ public sealed class RigDbContext(string databasePath, bool pooling = true) : DbC
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
-        var connectionString = pooling ? $"Data Source={databasePath}" : $"Data Source={databasePath};Pooling=False";
+        var connectionString = $"Data Source={databasePath}";
+        if (!pooling)
+            connectionString += ";Pooling=False";
+        if (readOnly)
+            connectionString += ";Mode=ReadOnly";
         optionsBuilder.UseSqlite(connectionString);
     }
 

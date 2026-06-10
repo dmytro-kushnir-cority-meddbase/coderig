@@ -26,24 +26,35 @@ namespace Rig.Domain.Functions;
 // by other dead code and falls out when its cluster goes.
 public static class DeadCodeFinder
 {
-    public enum Tier { High, Medium, Low }
+    public enum Tier
+    {
+        High,
+        Medium,
+        Low,
+    }
 
     // Per-method facts the classifier needs beyond the call graph. Modifiers carries accessibility +
     // abstract/virtual/static (see FactExtractor.ModifiersOf); IsGenerated suppresses generated members;
     // Name discriminates ctors/accessors/operators reached off-graph.
     public sealed record MethodMeta(
-        string SymbolId, string Name, string Modifiers,
-        string FilePath, int Line, bool IsOverride, bool IsGenerated);
+        string SymbolId,
+        string Name,
+        string Modifiers,
+        string FilePath,
+        int Line,
+        bool IsOverride,
+        bool IsGenerated
+    );
 
-    public sealed record Candidate(
-        string SymbolId, string FilePath, int Line, Tier Tier, string Reason, int DirectCallers);
+    public sealed record Candidate(string SymbolId, string FilePath, int Line, Tier Tier, string Reason, int DirectCallers);
 
     public static IReadOnlyList<Candidate> Find(
         FactGraphData graph,
         IEnumerable<string> roots,
         IReadOnlyList<MethodMeta> methods,
         bool treatExternallyVisibleAsRoots,
-        bool includeDispatchMembers = false)
+        bool includeDispatchMembers = false
+    )
     {
         var rootList = new List<string>(roots);
         // Library mode: fold externally-visible members into the roots so the BFS marks them — and
@@ -69,24 +80,29 @@ public static class DeadCodeFinder
         {
             if (reachable.Contains(m.SymbolId) || rootSet.Contains(m.SymbolId))
                 continue;
-            if (m.IsGenerated) continue;
-            if (IsExcludedKind(m.Name)) continue;
-            if (IsAbstract(m.Modifiers)) continue;
-            if (!includeDispatchMembers && (m.IsOverride || IsVirtual(m.Modifiers))) continue;
+            if (m.IsGenerated)
+                continue;
+            if (IsExcludedKind(m.Name))
+                continue;
+            if (IsAbstract(m.Modifiers))
+                continue;
+            if (!includeDispatchMembers && (m.IsOverride || IsVirtual(m.Modifiers)))
+                continue;
 
             directCallers.TryGetValue(m.SymbolId, out var callers);
-            candidates.Add(new Candidate(
-                m.SymbolId, m.FilePath, m.Line,
-                ClassifyTier(m.Modifiers, callers),
-                callers == 0 ? "uncalled" : "only reached by dead code",
-                callers));
+            candidates.Add(
+                new Candidate(
+                    m.SymbolId,
+                    m.FilePath,
+                    m.Line,
+                    ClassifyTier(m.Modifiers, callers),
+                    callers == 0 ? "uncalled" : "only reached by dead code",
+                    callers
+                )
+            );
         }
 
-        return candidates
-            .OrderBy(c => c.Tier)
-            .ThenBy(c => c.FilePath, StringComparer.Ordinal)
-            .ThenBy(c => c.Line)
-            .ToList();
+        return candidates.OrderBy(c => c.Tier).ThenBy(c => c.FilePath, StringComparer.Ordinal).ThenBy(c => c.Line).ToList();
     }
 
     // private uncalled = strongest (only reflection could reach a private member, rare); internal =
@@ -101,8 +117,7 @@ public static class DeadCodeFinder
         return Tier.Medium; // internal / unspecified
     }
 
-    private static bool IsExternallyVisible(string modifiers) =>
-        HasToken(modifiers, "public") || HasToken(modifiers, "protected");
+    private static bool IsExternallyVisible(string modifiers) => HasToken(modifiers, "public") || HasToken(modifiers, "protected");
 
     private static bool IsAbstract(string modifiers) => HasToken(modifiers, "abstract");
 

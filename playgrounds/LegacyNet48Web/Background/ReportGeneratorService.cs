@@ -1,5 +1,5 @@
-using MedDBase.Nucleus.Interfaces.Services;
 using LegacyNet48Web.Entities;
+using MedDBase.Nucleus.Interfaces.Services;
 
 namespace LegacyNet48Web.Background
 {
@@ -7,7 +7,10 @@ namespace LegacyNet48Web.Background
     {
         private readonly DataAdapter _db;
 
-        public ReportGeneratorService(DataAdapter db) { _db = db; }
+        public ReportGeneratorService(DataAdapter db)
+        {
+            _db = db;
+        }
 
         public override void Startup()
         {

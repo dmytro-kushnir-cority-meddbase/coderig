@@ -76,7 +76,8 @@ public static class CliApplication
     private static string GetVersion()
     {
         return typeof(CliApplication).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
-            ?? typeof(CliApplication).Assembly.GetName().Version?.ToString() ?? "unknown";
+            ?? typeof(CliApplication).Assembly.GetName().Version?.ToString()
+            ?? "unknown";
     }
 
     private static void WriteCommandSummary(TextWriter output)
@@ -84,20 +85,36 @@ public static class CliApplication
         output.WriteLine("Runtime Intelligence Graph");
         output.WriteLine();
         output.WriteLine("Usage:");
-        output.WriteLine("  rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable]   (--from = index only the entry project's non-test closure, one workspace; --durable = journaled write, default is fast atomic-publish)");
+        output.WriteLine(
+            "  rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable]   (--from = index only the entry project's non-test closure, one workspace; --durable = journaled write, default is fast atomic-publish)"
+        );
         output.WriteLine("  rig mine <solution> --from <project.csproj> [--rules <path>...] [--identity <id>] [--parallelism <n>]");
         output.WriteLine("  rig runs");
         output.WriteLine("  rig di   (DI registrations: service -> implementation, lifetime, source)");
         output.WriteLine("  rig symbols <pattern> [--kind <k>] [--limit <n>]");
         output.WriteLine("  rig refs <pattern> [--first-party] [--kind <refkind>] [--limit <n>]");
         output.WriteLine("  rig path <fromPattern> <toPattern>");
-        output.WriteLine("  rig reaches <fromPattern> [--rules <path>...] [--maxdepth <n>] [--format tsv]   (effects reachable from an entry point)");
-        output.WriteLine("  rig tree <fromPattern> [--full|--summary] [--rules <path>...] [--maxdepth <n>]   (call tree from an entry point; default = paths that reach an effect)");
-        output.WriteLine("  rig callers <toPattern> [--roots] [--maxdepth <n>]   (reverse reachability: who reaches this method; --roots = entry-point candidates)");
-        output.WriteLine("  rig derive [--rules <path>...] [--limit <n>]   (stage-2 pass over facts: effects + handoffs)");
-        output.WriteLine("  rig graph   (rebuild the derived call-graph views (call_edges + dispatch_edges) from facts; idempotent, no rescan — speeds up reaches/callers/tree/dead)");
-        output.WriteLine("  rig batch   (read subcommands from stdin, one per line, and run them in one warm process — amortises startup across many queries)");
-        output.WriteLine("  rig dead [--rules <path>...] [--lib] [--include-dispatch] [--all] [--root <pattern>...] [--format tsv]   (unreachable first-party methods; report-only, compiler-confirm before removing)");
+        output.WriteLine(
+            "  rig reaches <fromPattern> [--rules <path>...] [--maxdepth <n>] [--only <p,..>] [--exclude <p,..>] [--format tsv]   (effects reachable from an entry point; --exclude throw to drop exceptions)"
+        );
+        output.WriteLine(
+            "  rig tree <fromPattern> [--full|--summary|--effects] [--only <p,..>] [--exclude <p,..>] [--rules <path>...] [--maxdepth <n>]   (call tree from an entry point; default = paths that reach an effect; --effects = only effectful methods, no skeleton; --exclude throw to drop exceptions)"
+        );
+        output.WriteLine(
+            "  rig callers <toPattern> [--roots] [--maxdepth <n>]   (reverse reachability: who reaches this method; --roots = entry-point candidates)"
+        );
+        output.WriteLine(
+            "  rig derive [--rules <path>...] [--limit <n>] [--only <p,..>] [--exclude <p,..>]   (stage-2 pass over facts: effects + handoffs; --exclude throw to drop exceptions)"
+        );
+        output.WriteLine(
+            "  rig graph   (rebuild the derived call-graph views (call_edges + dispatch_edges) from facts; idempotent, no rescan — speeds up reaches/callers/tree/dead)"
+        );
+        output.WriteLine(
+            "  rig batch   (read subcommands from stdin, one per line, and run them in one warm process — amortises startup across many queries)"
+        );
+        output.WriteLine(
+            "  rig dead [--rules <path>...] [--lib] [--include-dispatch] [--all] [--root <pattern>...] [--format tsv]   (unreachable first-party methods; report-only, compiler-confirm before removing)"
+        );
         output.WriteLine("  rig files --skipped");
         output.WriteLine("  rig profile validate");
     }
@@ -107,7 +124,9 @@ public static class CliApplication
         if (args.Length < 2)
         {
             error.WriteLine("Missing solution or project path.");
-            error.WriteLine("Usage: rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable]");
+            error.WriteLine(
+                "Usage: rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable]"
+            );
             return 2;
         }
 
@@ -117,10 +136,26 @@ public static class CliApplication
         int? parallelism = null;
         for (var i = 2; i < args.Length; i++)
         {
-            if (args[i] == "--rules" && i + 1 < args.Length) { extraRules.Add(Path.GetFullPath(args[i + 1])); i++; }
-            else if (args[i] == "--identity" && i + 1 < args.Length) { identity = args[i + 1]; i++; }
-            else if (args[i] == "--from" && i + 1 < args.Length) { fromProject = Path.GetFullPath(args[i + 1]); i++; }
-            else if (args[i] == "--parallelism" && i + 1 < args.Length && int.TryParse(args[i + 1], out var p)) { parallelism = p; i++; }
+            if (args[i] == "--rules" && i + 1 < args.Length)
+            {
+                extraRules.Add(Path.GetFullPath(args[i + 1]));
+                i++;
+            }
+            else if (args[i] == "--identity" && i + 1 < args.Length)
+            {
+                identity = args[i + 1];
+                i++;
+            }
+            else if (args[i] == "--from" && i + 1 < args.Length)
+            {
+                fromProject = Path.GetFullPath(args[i + 1]);
+                i++;
+            }
+            else if (args[i] == "--parallelism" && i + 1 < args.Length && int.TryParse(args[i + 1], out var p))
+            {
+                parallelism = p;
+                i++;
+            }
         }
 
         // --from <csproj>: index only the transitive ProjectReference closure of the entry project
@@ -141,10 +176,14 @@ public static class CliApplication
         try
         {
             output.WriteLine($"Indexing: {Path.GetFullPath(args[1])}");
-            if (extraRules.Count > 0) output.WriteLine($"Rules: {string.Join(", ", extraRules)}");
-            if (identity is not null) output.WriteLine($"Identity: {identity}");
-            if (fromProject is not null) output.WriteLine($"From (closure): {fromProject}  ->  {scopeProjectPaths!.Count} project(s)");
-            if (parallelism is not null) output.WriteLine($"Parallelism: {parallelism}");
+            if (extraRules.Count > 0)
+                output.WriteLine($"Rules: {string.Join(", ", extraRules)}");
+            if (identity is not null)
+                output.WriteLine($"Identity: {identity}");
+            if (fromProject is not null)
+                output.WriteLine($"From (closure): {fromProject}  ->  {scopeProjectPaths!.Count} project(s)");
+            if (parallelism is not null)
+                output.WriteLine($"Parallelism: {parallelism}");
             result = await SolutionAnalyzer.AnalyzeAsync(
                 args[1],
                 progress: message => output.WriteLine($"Progress: {message}"),
@@ -175,35 +214,43 @@ public static class CliApplication
         //   --identity set — `mine` APPENDS many per-project runs into the live DB from PARALLEL
         //                    writers, so it writes in place and MUST keep the journal (no fast pragmas).
         var durable = args.Contains("--durable");
-        var appendMode = identity is not null;          // mine
-        var fastBulkWrite = !durable && !appendMode;     // optimisations on by default; opt out above
-        var atomicPublish = !appendMode;                 // replace-via-rename for a standalone index
+        var appendMode = identity is not null; // mine
+        var fastBulkWrite = !durable && !appendMode; // optimisations on by default; opt out above
+        var atomicPublish = !appendMode; // replace-via-rename for a standalone index
 
         var storeDirectory = Path.Combine(workingDirectory, ".rig");
         Directory.CreateDirectory(storeDirectory);
         var finalDbPath = Path.Combine(storeDirectory, "rig.db");
         var dbPath = atomicPublish ? finalDbPath + ".tmp" : finalDbPath;
-        if (atomicPublish) DeleteDbFiles(dbPath); // clear any leftover temp from a previous aborted run
+        if (atomicPublish)
+            DeleteDbFiles(dbPath); // clear any leftover temp from a previous aborted run
 
-        output.WriteLine($"Progress: Saving run ({(fastBulkWrite ? "fast" : "durable")}{(atomicPublish ? ", atomic-publish" : ", in-place")})");
+        output.WriteLine(
+            $"Progress: Saving run ({(fastBulkWrite ? "fast" : "durable")}{(atomicPublish ? ", atomic-publish" : ", in-place")})"
+        );
         var saveWatch = System.Diagnostics.Stopwatch.StartNew();
         string runId;
         await using (var context = new RigDbContext(dbPath, pooling: !atomicPublish))
         {
             await context.Database.EnsureCreatedAsync();
-            runId = await Writes.SaveAsync(context, result,
+            runId = await Writes.SaveAsync(
+                context,
+                result,
                 fastBulkWrite: fastBulkWrite,
-                progress: message => output.WriteLine($"Progress: {message}"));
+                progress: message => output.WriteLine($"Progress: {message}")
+            );
         }
 
         if (atomicPublish)
         {
-            DeleteDbFiles(finalDbPath);          // drop the old published store + any sidecars
+            DeleteDbFiles(finalDbPath); // drop the old published store + any sidecars
             File.Move(dbPath, finalDbPath, overwrite: true);
         }
         saveWatch.Stop();
         totalWatch.Stop();
-        output.WriteLine($"Progress: Save phase done in {FormatElapsed(saveWatch.Elapsed)}  (analysis {FormatElapsed(analyzeWatch.Elapsed)}, total {FormatElapsed(totalWatch.Elapsed)})");
+        output.WriteLine(
+            $"Progress: Save phase done in {FormatElapsed(saveWatch.Elapsed)}  (analysis {FormatElapsed(analyzeWatch.Elapsed)}, total {FormatElapsed(totalWatch.Elapsed)})"
+        );
 
         output.WriteLine($"Indexed: {Path.GetFullPath(result.SolutionPath)}");
         output.WriteLine($"Run: {runId}");
@@ -219,7 +266,12 @@ public static class CliApplication
     // drops test projects by name, and writes the closure to relevant-projects.json next to the .rig
     // store. Returns the normalised full project paths to build, or null on a usage error.
     private static async Task<IReadOnlySet<string>?> BuildEntryClosureAsync(
-        string solutionPath, string fromProject, string workingDirectory, TextWriter output, TextWriter error)
+        string solutionPath,
+        string fromProject,
+        string workingDirectory,
+        TextWriter output,
+        TextWriter error
+    )
     {
         var solutionFull = Path.GetFullPath(solutionPath);
         if (solutionFull.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
@@ -243,16 +295,19 @@ public static class CliApplication
         while (queue.Count > 0)
         {
             var p = queue.Dequeue();
-            if (!visited.Add(p)) continue;
+            if (!visited.Add(p))
+                continue;
             if (depGraph.TryGetValue(p, out var deps))
                 foreach (var d in deps)
-                    if (!visited.Contains(d)) queue.Enqueue(d);
+                    if (!visited.Contains(d))
+                        queue.Enqueue(d);
         }
 
         // Drop test projects. Production projects don't reference them, so the closure is normally
         // test-free already; this honours --from's "without tests" contract defensively.
         var excludedTests = visited.Where(IsTestProjectPath).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray();
-        foreach (var t in excludedTests) visited.Remove(t);
+        foreach (var t in excludedTests)
+            visited.Remove(t);
 
         var listPath = Path.Combine(workingDirectory, "relevant-projects.json");
         var listData = new
@@ -263,8 +318,10 @@ public static class CliApplication
             excludedTestProjects = excludedTests,
             projects = visited.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray(),
         };
-        File.WriteAllText(listPath, System.Text.Json.JsonSerializer.Serialize(listData,
-            new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        File.WriteAllText(
+            listPath,
+            System.Text.Json.JsonSerializer.Serialize(listData, new System.Text.Json.JsonSerializerOptions { WriteIndented = true })
+        );
         output.WriteLine($"Entry closure: {visited.Count} project(s), {excludedTests.Length} test project(s) excluded -> {listPath}");
 
         return visited;
@@ -285,19 +342,17 @@ public static class CliApplication
         foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
         {
             var p = dbPath + suffix;
-            if (File.Exists(p)) File.Delete(p);
+            if (File.Exists(p))
+                File.Delete(p);
         }
     }
 
     private static string FormatElapsed(TimeSpan elapsed) =>
-        elapsed.TotalMinutes >= 1
-            ? $"{(int)elapsed.TotalMinutes}m{elapsed.Seconds:00}s"
-            : $"{elapsed.TotalSeconds:0.0}s";
+        elapsed.TotalMinutes >= 1 ? $"{(int)elapsed.TotalMinutes}m{elapsed.Seconds:00}s" : $"{elapsed.TotalSeconds:0.0}s";
 
     private static async Task<int> RunRunsAsync(TextWriter output, string workingDirectory)
     {
-        var storeDirectory = Path.Combine(workingDirectory, ".rig");
-        await using var context = new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
+        await using var context = OpenReadContext(workingDirectory);
         var runs = await Reads.ListRunsAsync(context);
 
         output.WriteLine("Runs");
@@ -306,9 +361,7 @@ public static class CliApplication
             output.WriteLine($"  {run.Id}");
             output.WriteLine($"    indexed={run.CreatedAtUtc:u}");
             output.WriteLine($"    solution={run.SolutionPath}");
-            output.WriteLine(
-                $"    symbols={run.SymbolCount} references={run.ReferenceCount} di={run.DiRegistrationCount}"
-            );
+            output.WriteLine($"    symbols={run.SymbolCount} references={run.ReferenceCount} di={run.DiRegistrationCount}");
         }
 
         return 0;
@@ -327,7 +380,8 @@ public static class CliApplication
         await using var context = new RigDbContext(dbPath);
         var stats = await GraphMaterializer.BuildAsync(context, message => output.WriteLine($"Progress: {message}"));
         output.WriteLine(
-            $"Graph: {stats.CallEdges} call edge(s), {stats.DispatchEdges} dispatch edge(s) in {FormatElapsed(stopwatch.Elapsed)}");
+            $"Graph: {stats.CallEdges} call edge(s), {stats.DispatchEdges} dispatch edge(s), {stats.Nodes} node(s) in {FormatElapsed(stopwatch.Elapsed)}"
+        );
         return 0;
     }
 
@@ -349,8 +403,14 @@ public static class CliApplication
                 continue;
             any = true;
             output.WriteLine($"### {line}");
-            try { await DispatchAsync(tokens, output, error, workingDirectory); }
-            catch (Exception exception) { error.WriteLine($"batch error on '{line}': {exception.Message}"); }
+            try
+            {
+                await DispatchAsync(tokens, output, error, workingDirectory);
+            }
+            catch (Exception exception)
+            {
+                error.WriteLine($"batch error on '{line}': {exception.Message}");
+            }
             output.WriteLine();
         }
         if (!any)
@@ -366,10 +426,18 @@ public static class CliApplication
         var inQuote = false;
         foreach (var c in line)
         {
-            if (c == '"') { inQuote = !inQuote; continue; }
+            if (c == '"')
+            {
+                inQuote = !inQuote;
+                continue;
+            }
             if (char.IsWhiteSpace(c) && !inQuote)
             {
-                if (current.Length > 0) { tokens.Add(current.ToString()); current.Clear(); }
+                if (current.Length > 0)
+                {
+                    tokens.Add(current.ToString());
+                    current.Clear();
+                }
                 continue;
             }
             current.Append(c);
@@ -381,7 +449,7 @@ public static class CliApplication
 
     private static async Task<int> RunDiAsync(TextWriter output, TextWriter error, string workingDirectory)
     {
-        await using var context = OpenContext(workingDirectory);
+        await using var context = OpenReadContext(workingDirectory);
         var registrations = await Reads.LoadDiRegistrationsAsync(context);
         if (registrations is null)
         {
@@ -422,7 +490,7 @@ public static class CliApplication
             return 2;
         }
 
-        await using var context = OpenContext(workingDirectory);
+        await using var context = OpenReadContext(workingDirectory);
         var sourceFiles = await Reads.LoadSkippedSourceFilesAsync(context);
         if (sourceFiles is null)
         {
@@ -434,11 +502,11 @@ public static class CliApplication
         return 0;
     }
 
-    private static RigDbContext OpenContext(string workingDirectory)
-    {
-        var storeDirectory = Path.Combine(workingDirectory, ".rig");
-        return new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
-    }
+    // Every query command opens the store READ-ONLY (see RigDbContext.readOnly): the engine rejects any
+    // write to the main DB, so a read command can never mutate the index. Writers (index/mine/graph) use
+    // the default read-write constructor.
+    private static RigDbContext OpenReadContext(string workingDirectory) =>
+        new(Path.Combine(workingDirectory, ".rig", "rig.db"), readOnly: true);
 
     // The call graph for a traversal command (reaches/tree/callers). When the derived edge views exist
     // (`rig graph` has been run) it returns the BOUNDED subgraph for `pattern` in the given direction —
@@ -446,7 +514,10 @@ public static class CliApplication
     // back to the full in-memory EF graph (the reference path). The SAME FactPathFinder then runs over
     // whichever graph, so the output is identical — only the load cost differs.
     private static async Task<FactGraphData> LoadTraversalGraphAsync(
-        RigDbContext context, string pattern, SqlReachability.Direction direction)
+        RigDbContext context,
+        string pattern,
+        SqlReachability.Direction direction
+    )
     {
         if (await SqlReachability.HasGraphAsync(context))
             return await SqlReachability.LoadBoundedGraphAsync(context, pattern, direction);
@@ -458,7 +529,10 @@ public static class CliApplication
     // the codebase. SQL path: one reach_set drives the graph + bounded inputs. EF fallback: the full
     // reference loads (the original path), so output is identical when no derived views exist.
     private static async Task<SqlReachability.ReachInputs> LoadEffectReachInputsAsync(
-        RigDbContext context, string pattern, SqlReachability.Direction direction)
+        RigDbContext context,
+        string pattern,
+        SqlReachability.Direction direction
+    )
     {
         if (await SqlReachability.HasGraphAsync(context))
             return await SqlReachability.LoadReachInputsAsync(context, pattern, direction);
@@ -506,10 +580,26 @@ public static class CliApplication
 
         for (var i = 2; i < args.Length - 1; i++)
         {
-            if (args[i] == "--from") { fromProject = Path.GetFullPath(args[i + 1]); i++; }
-            else if (args[i] == "--rules") { extraRules.Add(Path.GetFullPath(args[i + 1])); i++; }
-            else if (args[i] == "--identity") { identity = args[i + 1]; i++; }
-            else if (args[i] == "--parallelism" && int.TryParse(args[i + 1], out var p)) { parallelism = p; i++; }
+            if (args[i] == "--from")
+            {
+                fromProject = Path.GetFullPath(args[i + 1]);
+                i++;
+            }
+            else if (args[i] == "--rules")
+            {
+                extraRules.Add(Path.GetFullPath(args[i + 1]));
+                i++;
+            }
+            else if (args[i] == "--identity")
+            {
+                identity = args[i + 1];
+                i++;
+            }
+            else if (args[i] == "--parallelism" && int.TryParse(args[i + 1], out var p))
+            {
+                parallelism = p;
+                i++;
+            }
         }
 
         if (fromProject is null)
@@ -546,7 +636,8 @@ public static class CliApplication
                     batch.Add(proj);
             }
 
-            if (batch.Count == 0) break;
+            if (batch.Count == 0)
+                break;
 
             output.WriteLine($"\n[mine] Batch: {batch.Count} project(s)");
 
@@ -561,10 +652,7 @@ public static class CliApplication
                     output.WriteLine($"  [mine] Indexing: {projName}");
 
                     var rulesArgs = extraRules.SelectMany(r => new[] { "--rules", r }).ToArray();
-                    var indexArgs = new[] { "index", proj }
-                        .Concat(rulesArgs)
-                        .Concat(new[] { "--identity", identity! })
-                        .ToArray();
+                    var indexArgs = new[] { "index", proj }.Concat(rulesArgs).Concat(new[] { "--identity", identity! }).ToArray();
 
                     var exitCode = await RunIndexAsync(indexArgs, output, error, workingDirectory);
                     if (exitCode == 0)
@@ -578,7 +666,10 @@ public static class CliApplication
                         output.WriteLine($"  [mine] Failed: {projName} (exit {exitCode})");
                     }
                 }
-                finally { semaphore.Release(); }
+                finally
+                {
+                    semaphore.Release();
+                }
             });
 
             await Task.WhenAll(batchTasks);
@@ -607,16 +698,19 @@ public static class CliApplication
             indexedAt = DateTimeOffset.UtcNow.ToString("O"),
             projects = visited.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray(),
         };
-        File.WriteAllText(indexPath, System.Text.Json.JsonSerializer.Serialize(indexData,
-            new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        File.WriteAllText(
+            indexPath,
+            System.Text.Json.JsonSerializer.Serialize(indexData, new System.Text.Json.JsonSerializerOptions { WriteIndented = true })
+        );
         output.WriteLine($"[mine] Reachable projects index written: {indexPath}");
 
         return totalFailed > 0 ? 1 : 0;
     }
 
     private static string ComputeIdentity(string solutionPath) =>
-        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
-            System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(solutionPath))))[..16];
+        Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(solutionPath)))
+        )[..16];
 
     // rig symbols <pattern> [--kind <k>] [--limit <n>]
     private static async Task<int> RunSymbolsAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
@@ -631,13 +725,12 @@ public static class CliApplication
         var kind = GetOption(args, "--kind");
         var limit = int.TryParse(GetOption(args, "--limit"), out var l) ? l : 50;
 
-        var storeDirectory = Path.Combine(workingDirectory, ".rig");
-        await using var context = new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
+        await using var context = OpenReadContext(workingDirectory);
         var hits = await Reads.SearchSymbolsAsync(context, pattern, kind, limit);
 
         output.WriteLine($"Symbols matching '{pattern}'{(kind is null ? "" : $" kind={kind}")}");
         foreach (var hit in hits)
-            output.WriteLine($"  {hit.Kind,-8} {hit.SymbolId}  {ShortenPath(hit.FilePath)}:{hit.Line}");
+            output.WriteLine($"  {hit.Kind, -8} {hit.SymbolId}  {ShortenPath(hit.FilePath)}:{hit.Line}");
         output.WriteLine($"  ({hits.Count} shown)");
         return 0;
     }
@@ -656,8 +749,7 @@ public static class CliApplication
         var refKind = GetOption(args, "--kind");
         var limit = int.TryParse(GetOption(args, "--limit"), out var l) ? l : 200;
 
-        var storeDirectory = Path.Combine(workingDirectory, ".rig");
-        await using var context = new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
+        await using var context = OpenReadContext(workingDirectory);
         var hits = await Reads.FindReferencesAsync(context, pattern, firstParty, refKind, limit);
 
         output.WriteLine($"References to '{pattern}'{(firstParty ? " (first-party)" : "")}{(refKind is null ? "" : $" kind={refKind}")}");
@@ -665,7 +757,9 @@ public static class CliApplication
         {
             output.WriteLine($"  {group.Key}");
             foreach (var hit in group)
-                output.WriteLine($"    {hit.RefKind,-11} {hit.EnclosingSymbolId ?? "(top-level)"}  {ShortenPath(hit.FilePath)}:{hit.Line}");
+                output.WriteLine(
+                    $"    {hit.RefKind, -11} {hit.EnclosingSymbolId ?? "(top-level)"}  {ShortenPath(hit.FilePath)}:{hit.Line}"
+                );
         }
         output.WriteLine($"  ({hits.Count} reference(s) shown)");
         return 0;
@@ -684,10 +778,15 @@ public static class CliApplication
         var fromPattern = args[1];
         var toPattern = args[2];
 
-        var storeDirectory = Path.Combine(workingDirectory, ".rig");
-        await using var context = new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
-        var graph = await Reads.LoadFactGraphAsync(context);
-        output.WriteLine($"Fact graph: {graph.CallEdges.Count} call edges, {graph.ImplementsEdges.Count} implements edges, {graph.Methods.Count} methods");
+        await using var context = OpenReadContext(workingDirectory);
+        // Any path from a `from` node lies entirely within that node's forward closure, so the BOUNDED
+        // forward subgraph (loaded on disk via the derived edge views, sized to the result) finds the
+        // same first path as the full graph — without the 1.4M-row in-memory load. Falls back to the
+        // full EF graph when `rig graph` hasn't been run. (Same pattern as reaches/tree/callers.)
+        var graph = await LoadTraversalGraphAsync(context, fromPattern, SqlReachability.Direction.Forward);
+        output.WriteLine(
+            $"Fact graph: {graph.CallEdges.Count} call edges, {graph.ImplementsEdges.Count} implements edges, {graph.Methods.Count} methods"
+        );
 
         var path = FactPathFinder.Find(graph, fromPattern, toPattern);
         if (path is null)
@@ -724,9 +823,13 @@ public static class CliApplication
         var tsv = string.Equals(GetOption(args, "--format"), "tsv", StringComparison.OrdinalIgnoreCase);
         var extraRules = new List<string>();
         for (var i = 0; i < args.Length; i++)
-            if (args[i] == "--rules" && i + 1 < args.Length) { extraRules.Add(Path.GetFullPath(args[i + 1])); i++; }
+            if (args[i] == "--rules" && i + 1 < args.Length)
+            {
+                extraRules.Add(Path.GetFullPath(args[i + 1]));
+                i++;
+            }
 
-        await using var context = new RigDbContext(Path.Combine(workingDirectory, ".rig", "rig.db"));
+        await using var context = OpenReadContext(workingDirectory);
 
         var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward);
         var graph = inputs.Graph;
@@ -734,7 +837,16 @@ public static class CliApplication
 
         var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var effects = FactEffectDeriver.Derive(inputs.Invocations, effectRules, providerFilter: null, baseEdges: BaseEdgeTuples(graph), ctorRefs: inputs.CtorRefs, observationRules: observationRules, throwRefs: inputs.ThrowRefs);
+        var effects = FactEffectDeriver.Derive(
+            inputs.Invocations,
+            effectRules,
+            providerFilter: null,
+            baseEdges: BaseEdgeTuples(graph),
+            ctorRefs: inputs.CtorRefs,
+            observationRules: observationRules,
+            throwRefs: inputs.ThrowRefs
+        );
+        effects = ApplyEffectFilters(effects, args); // --only / --exclude (e.g. --exclude throw)
 
         // Effects whose enclosing method is reachable from the entry point. Fanout = looped call
         // edges on the path to the enclosing method (ReachInfo.LoopNesting) + 1 if the effect's OWN
@@ -759,7 +871,9 @@ public static class CliApplication
             // dispatchVia/dispatchDegree (last two cols) flag effects whose ONLY reach is a base-
             // virtual/interface dispatch fan-out from that source method — not a real call (D3/D7).
             foreach (var h in hits)
-                output.WriteLine($"{h.Depth}\t{h.Effect.Provider}\t{h.Effect.Operation}\t{h.Effect.ResourceType}\t{h.Effect.EnclosingSymbolId}\t{ShortenPath(h.Effect.FilePath)}:{h.Effect.Line}\t{h.Fanout}\t{ShortLoop(h.Loop)}\t{h.Via}\t{(h.Via is null ? 0 : h.ViaDegree)}");
+                output.WriteLine(
+                    $"{h.Depth}\t{h.Effect.Provider}\t{h.Effect.Operation}\t{h.Effect.ResourceType}\t{h.Effect.EnclosingSymbolId}\t{ShortenPath(h.Effect.FilePath)}:{h.Effect.Line}\t{h.Fanout}\t{ShortLoop(h.Loop)}\t{h.Via}\t{(h.Via is null ? 0 : h.ViaDegree)}"
+                );
             return 0;
         }
 
@@ -774,23 +888,27 @@ public static class CliApplication
         output.WriteLine($"Reachable methods (<= depth {maxDepth}): {reachable.Count}");
         output.WriteLine($"Direct effects (real call paths): {direct.Count}  (fanned out under a loop: {direct.Count(h => h.Fanout > 0)})");
         foreach (var g in direct.GroupBy(h => (h.Effect.Provider, h.Effect.Operation)).OrderByDescending(g => g.Count()))
-            output.WriteLine($"  {g.Count(),4}  {g.Key.Provider} {g.Key.Operation}");
+            output.WriteLine($"  {g.Count(), 4}  {g.Key.Provider} {g.Key.Operation}");
         output.WriteLine("--- nearest direct effects (depth  provider op  resource  <- method  [loop]) ---");
         foreach (var h in direct.Take(40))
         {
             var fan = h.Fanout > 0 ? $"  🔁x{h.Fanout} [loop: {ShortLoop(h.Loop)}]" : "";
-            output.WriteLine($"  d{h.Depth}  {h.Effect.Provider} {h.Effect.Operation}  {ShortName(h.Effect.ResourceType)}  <- {ShortName(h.Effect.EnclosingSymbolId)}{fan}");
+            output.WriteLine(
+                $"  d{h.Depth}  {h.Effect.Provider} {h.Effect.Operation}  {ShortName(h.Effect.ResourceType)}  <- {ShortName(h.Effect.EnclosingSymbolId)}{fan}"
+            );
         }
 
         if (fanned.Count > 0)
         {
-            output.WriteLine($"--- dispatch fan-out ({fanned.Count} effects; reach is base-virtual/interface dispatch, NOT a real call — see A1) ---");
-            foreach (var g in fanned
-                .GroupBy(h => (h.Via!, h.Effect.Provider, h.Effect.Operation))
-                .OrderByDescending(g => g.Count()))
+            output.WriteLine(
+                $"--- dispatch fan-out ({fanned.Count} effects; reach is base-virtual/interface dispatch, NOT a real call — see A1) ---"
+            );
+            foreach (var g in fanned.GroupBy(h => (h.Via!, h.Effect.Provider, h.Effect.Operation)).OrderByDescending(g => g.Count()))
             {
                 var degree = g.Max(h => h.ViaDegree);
-                output.WriteLine($"  x{g.Count(),-5} {g.Key.Provider} {g.Key.Operation}  via {ShortName(g.Key.Item1)} dispatch [fan-out of {degree}]");
+                output.WriteLine(
+                    $"  x{g.Count(), -5} {g.Key.Provider} {g.Key.Operation}  via {ShortName(g.Key.Item1)} dispatch [fan-out of {degree}]"
+                );
             }
         }
         return 0;
@@ -807,18 +925,23 @@ public static class CliApplication
     {
         if (args.Length < 2 || args[1].StartsWith("--", StringComparison.Ordinal))
         {
-            error.WriteLine("Usage: rig tree <fromPattern> [--full|--summary] [--rules <path>...] [--maxdepth <n>]");
+            error.WriteLine("Usage: rig tree <fromPattern> [--full|--summary|--effects] [--rules <path>...] [--maxdepth <n>]");
             return 2;
         }
         var fromPattern = args[1];
         var maxDepth = int.TryParse(GetOption(args, "--maxdepth"), out var d) ? d : 20;
         var full = args.Contains("--full");
         var summary = args.Contains("--summary");
+        var effectsOnly = args.Contains("--effects");
         var extraRules = new List<string>();
         for (var i = 0; i < args.Length; i++)
-            if (args[i] == "--rules" && i + 1 < args.Length) { extraRules.Add(Path.GetFullPath(args[i + 1])); i++; }
+            if (args[i] == "--rules" && i + 1 < args.Length)
+            {
+                extraRules.Add(Path.GetFullPath(args[i + 1]));
+                i++;
+            }
 
-        await using var context = new RigDbContext(Path.Combine(workingDirectory, ".rig", "rig.db"));
+        await using var context = OpenReadContext(workingDirectory);
 
         var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward);
         var graph = inputs.Graph;
@@ -832,12 +955,30 @@ public static class CliApplication
         // Effects per enclosing method — same derivation as `reaches` (incl. throws).
         var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var effects = FactEffectDeriver.Derive(inputs.Invocations, effectRules, providerFilter: null, baseEdges: BaseEdgeTuples(graph), ctorRefs: inputs.CtorRefs, observationRules: observationRules, throwRefs: inputs.ThrowRefs);
+        var effects = FactEffectDeriver.Derive(
+            inputs.Invocations,
+            effectRules,
+            providerFilter: null,
+            baseEdges: BaseEdgeTuples(graph),
+            ctorRefs: inputs.CtorRefs,
+            observationRules: observationRules,
+            throwRefs: inputs.ThrowRefs
+        );
+        effects = ApplyEffectFilters(effects, args); // --only / --exclude (e.g. --exclude throw)
 
+        var emoji = EffectEmoji.Load(workingDirectory);
         var effectsByMethod = effects
             .Where(e => e.EnclosingSymbolId is not null)
             .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.Select(e => $"{e.Provider}:{e.Operation} {ShortName(e.ResourceType)}").ToList(), StringComparer.Ordinal);
+            .ToDictionary(
+                g => g.Key,
+                g =>
+                    g.Select(e =>
+                            $"{EffectEmoji.For(emoji, e.Provider, e.Operation)} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}"
+                        )
+                        .ToList(),
+                StringComparer.Ordinal
+            );
 
         if (summary)
         {
@@ -849,13 +990,46 @@ public static class CliApplication
             output.WriteLine($"Reachable methods: {seen.Count}");
             output.WriteLine($"Effects on reachable methods: {hits.Count}");
             foreach (var g in hits.GroupBy(h => (h.Provider, h.Operation)).OrderByDescending(g => g.Count()))
-                output.WriteLine($"  {g.Count(),4}  {g.Key.Provider} {g.Key.Operation}");
+                output.WriteLine($"  {g.Count(), 4}  {g.Key.Provider} {g.Key.Operation}");
+            return 0;
+        }
+
+        // --effects: the compact view — ONLY the methods that carry an effect, listed in source/DFS order
+        // (deduped), each with its effect glyphs. Drops the entire call skeleton, so a 10-screen tree
+        // collapses to one line per effectful method — "what does this entry point actually DO".
+        if (effectsOnly)
+        {
+            var ordered = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var root in roots)
+                CollectEffectful(root, effectsByMethod, ordered, seen);
+            output.WriteLine($"From: {fromPattern}  ({ordered.Count} effectful method(s), source order)");
+            foreach (var sym in ordered)
+                output.WriteLine($"  {ShortName(sym)}\n      {string.Join("  ", effectsByMethod[sym])}");
             return 0;
         }
 
         foreach (var root in roots)
-            RenderTreeNode(root, 0, effectsByMethod, prune: !full, output);
+        {
+            if (!full && !SubtreeHasEffect(root, effectsByMethod))
+                continue;
+            RenderTreeNode(root, prefix: "", isLast: true, isRoot: true, effectsByMethod, prune: !full, output);
+        }
         return 0;
+    }
+
+    // Collects effect-bearing methods in DFS (source) order, deduped — the backing of `tree --effects`.
+    private static void CollectEffectful(
+        TraceNode node,
+        IReadOnlyDictionary<string, List<string>> effectsByMethod,
+        List<string> ordered,
+        HashSet<string> seen
+    )
+    {
+        if (effectsByMethod.ContainsKey(node.SymbolId) && seen.Add(node.SymbolId))
+            ordered.Add(node.SymbolId);
+        foreach (var c in node.Children)
+            CollectEffectful(c, effectsByMethod, ordered, seen);
     }
 
     private static void CollectTreeMethods(TraceNode node, HashSet<string> seen)
@@ -878,24 +1052,31 @@ public static class CliApplication
         return false;
     }
 
+    // Renders the call tree with box-drawing connectors (├─ └─ │). When pruning, a node's VISIBLE
+    // children are filtered first so the last visible child gets └─ correctly. The root prints flush-left.
     private static void RenderTreeNode(
-        TraceNode node, int depth, IReadOnlyDictionary<string, List<string>> effectsByMethod, bool prune, TextWriter output)
+        TraceNode node,
+        string prefix,
+        bool isLast,
+        bool isRoot,
+        IReadOnlyDictionary<string, List<string>> effectsByMethod,
+        bool prune,
+        TextWriter output
+    )
     {
-        if (prune && !SubtreeHasEffect(node, effectsByMethod))
-            return;
-
         var dispatch = node.EdgeKind is "impl-dispatch" or "override-dispatch"
             ? (node.Fanout > 1 ? $" «{node.EdgeKind} ×{node.Fanout} fan-out»" : $" «{node.EdgeKind}»")
             : "";
         var loop = node.LoopKind is null ? "" : $" 🔁[{ShortLoop(node.LoopDetail)}]";
         var seen = node.Truncated ? " ↺seen" : "";
-        var fx = effectsByMethod.TryGetValue(node.SymbolId, out var list)
-            ? "  " + string.Join(" ", list.Select(e => "{" + e + "}"))
-            : "";
-        output.WriteLine($"{new string(' ', depth * 2)}{ShortName(node.SymbolId)}{dispatch}{loop}{seen}{fx}");
+        var fx = effectsByMethod.TryGetValue(node.SymbolId, out var list) ? "  " + string.Join(" ", list.Select(e => "{" + e + "}")) : "";
+        var label = $"{ShortName(node.SymbolId)}{dispatch}{loop}{seen}{fx}";
+        output.WriteLine(isRoot ? label : $"{prefix}{(isLast ? "└─ " : "├─ ")}{label}");
 
-        foreach (var c in node.Children)
-            RenderTreeNode(c, depth + 1, effectsByMethod, prune, output);
+        var children = prune ? node.Children.Where(c => SubtreeHasEffect(c, effectsByMethod)).ToList() : node.Children.ToList();
+        var childPrefix = isRoot ? "" : prefix + (isLast ? "   " : "│  ");
+        for (var i = 0; i < children.Count; i++)
+            RenderTreeNode(children[i], childPrefix, i == children.Count - 1, isRoot: false, effectsByMethod, prune, output);
     }
 
     // rig callers <toPattern> [--roots] [--maxdepth <n>]
@@ -914,12 +1095,20 @@ public static class CliApplication
         var maxDepth = int.TryParse(GetOption(args, "--maxdepth"), out var d) ? d : 20;
         var rootsOnly = args.Contains("--roots");
 
-        await using var context = new RigDbContext(Path.Combine(workingDirectory, ".rig", "rig.db"));
-        var graph = await LoadTraversalGraphAsync(context, toPattern, SqlReachability.Direction.Reverse);
+        await using var context = OpenReadContext(workingDirectory);
+
+        // SQL-native traversal when the derived edge views exist: the reverse closure (+ shortest depth,
+        // + no-predecessor roots) is computed entirely in SQLite over call_edges ∪ dispatch_edges, so we
+        // skip loading the bounded subgraph into memory and running FactPathFinder.ReachedBy. Same edges,
+        // same maxDepth, same seed universe (the `nodes` table) → identical keyset. Falls back to the EF
+        // graph + in-memory ReachedBy when `rig graph` hasn't been run.
+        var useSql = await SqlReachability.HasGraphAsync(context);
 
         if (rootsOnly)
         {
-            var roots = FactPathFinder.EntryRootsReaching(graph, toPattern, maxDepth);
+            var roots = useSql
+                ? await SqlReachability.EntryRootsReachingAsync(context, toPattern, maxDepth)
+                : FactPathFinder.EntryRootsReaching(await Reads.LoadFactGraphAsync(context), toPattern, maxDepth);
             if (roots.Count == 0)
             {
                 output.WriteLine($"No entry-point candidates reach '{toPattern}' (or no symbol matches).");
@@ -931,7 +1120,9 @@ public static class CliApplication
             return 0;
         }
 
-        var reachable = FactPathFinder.ReachedBy(graph, toPattern, maxDepth);
+        var reachable = useSql
+            ? await SqlReachability.ReachedWithDepthAsync(context, toPattern, SqlReachability.Direction.Reverse, maxDepth)
+            : FactPathFinder.ReachedBy(await Reads.LoadFactGraphAsync(context), toPattern, maxDepth);
         if (reachable.Count == 0)
         {
             output.WriteLine($"No symbol matches '{toPattern}'.");
@@ -954,10 +1145,13 @@ public static class CliApplication
         var extraRules = new List<string>();
         for (var i = 0; i < args.Length; i++)
         {
-            if (args[i] == "--rules" && i + 1 < args.Length) { extraRules.Add(Path.GetFullPath(args[i + 1])); i++; }
+            if (args[i] == "--rules" && i + 1 < args.Length)
+            {
+                extraRules.Add(Path.GetFullPath(args[i + 1]));
+                i++;
+            }
         }
-        var storeDirectory = Path.Combine(workingDirectory, ".rig");
-        await using var context = new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
+        await using var context = OpenReadContext(workingDirectory);
 
         // Entry-point fact data is loaded up front: its base edges also feed the effect deriver's
         // base-type gates (e.g. clientpage_proxy = declaring type derives MedDBase.Pages.ProxyBase).
@@ -968,14 +1162,25 @@ public static class CliApplication
         var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
-        var effects = FactEffectDeriver.Derive(invocations, effectRules, providerFilter: null, baseEdges: epData.BaseEdges, ctorRefs: epData.CtorRefs, observationRules: observationRules, throwRefs: throwRefs);
+        var effects = FactEffectDeriver.Derive(
+            invocations,
+            effectRules,
+            providerFilter: null,
+            baseEdges: epData.BaseEdges,
+            ctorRefs: epData.CtorRefs,
+            observationRules: observationRules,
+            throwRefs: throwRefs
+        );
+        effects = ApplyEffectFilters(effects, args); // --only / --exclude (e.g. --exclude throw)
 
         // Machine-readable mode: emit full-fidelity rows (full DocIDs/paths) for tooling that joins
         // effects/entry points against the call graph. `rig derive --format tsv`.
         if (string.Equals(GetOption(args, "--format"), "tsv", StringComparison.OrdinalIgnoreCase))
         {
             foreach (var e in effects)
-                output.WriteLine($"effect\t{e.Provider}\t{e.Operation}\t{e.ResourceType}\t{e.EnclosingSymbolId}\t{e.FilePath}\t{e.Line}\t{string.Join(",", (e.Observations ?? []).Select(o => o.Type))}");
+                output.WriteLine(
+                    $"effect\t{e.Provider}\t{e.Operation}\t{e.ResourceType}\t{e.EnclosingSymbolId}\t{e.FilePath}\t{e.Line}\t{string.Join(",", (e.Observations ?? []).Select(o => o.Type))}"
+                );
             var tsvEpRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
             var tsvClassRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(workingDirectory, extraRules);
             foreach (var ep in FactEntryPointDeriver.Derive(epData, tsvEpRules, tsvClassRules))
@@ -984,13 +1189,13 @@ public static class CliApplication
         }
 
         output.WriteLine($"Effects re-derived from facts: {effects.Count}");
-        foreach (var group in effects
-            .GroupBy(e => (e.Provider, e.Operation))
-            .OrderByDescending(g => g.Count()))
+        foreach (var group in effects.GroupBy(e => (e.Provider, e.Operation)).OrderByDescending(g => g.Count()))
         {
             output.WriteLine($"  {group.Key.Provider} {group.Key.Operation}: {group.Count()}");
             foreach (var e in group.Take(limit / 8 + 1))
-                output.WriteLine($"      {ShortName(e.ResourceType)}  <- {ShortName(e.EnclosingSymbolId)}  {ShortenPath(e.FilePath)}:{e.Line}");
+                output.WriteLine(
+                    $"      {ShortName(e.ResourceType)}  <- {ShortName(e.EnclosingSymbolId)}  {ShortenPath(e.FilePath)}:{e.Line}"
+                );
         }
 
         // --- Observations attached to effects (looped_effect / parallel_fanout / …, P2b) ---
@@ -1015,9 +1220,7 @@ public static class CliApplication
 
         output.WriteLine();
         output.WriteLine($"Entry points re-derived from facts: {derivedEps.Count}");
-        foreach (var kindGroup in derivedEps
-            .GroupBy(e => e.Kind)
-            .OrderByDescending(g => g.Count()))
+        foreach (var kindGroup in derivedEps.GroupBy(e => e.Kind).OrderByDescending(g => g.Count()))
         {
             output.WriteLine($"  {kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup.Take(limit / 4 + 1))
@@ -1057,12 +1260,25 @@ public static class CliApplication
         var rootPatterns = new List<string>();
         for (var i = 0; i < args.Length; i++)
         {
-            if (args[i] == "--rules" && i + 1 < args.Length) { extraRules.Add(Path.GetFullPath(args[i + 1])); i++; }
-            else if (args[i] == "--root" && i + 1 < args.Length) { rootPatterns.Add(args[i + 1]); i++; }
+            if (args[i] == "--rules" && i + 1 < args.Length)
+            {
+                extraRules.Add(Path.GetFullPath(args[i + 1]));
+                i++;
+            }
+            else if (args[i] == "--root" && i + 1 < args.Length)
+            {
+                rootPatterns.Add(args[i + 1]);
+                i++;
+            }
         }
 
-        await using var context = new RigDbContext(Path.Combine(workingDirectory, ".rig", "rig.db"));
+        await using var context = OpenReadContext(workingDirectory);
 
+        // TODO(perf): `dead` still loads the full ~1.4M-row call graph into memory (LoadFactGraphAsync)
+        // and runs ReachableFromAll(roots) in process. This is the last read command doing a full-graph
+        // load. It maps directly onto the SQL primitive: reachable = SqlReachability.ReachableSetAsync(
+        // roots, Forward); dead = methods − reachable − roots. Left as-is intentionally — `dead` is a
+        // cold/occasional audit path, not a hot query, so the in-memory load is acceptable for now.
         var graph = await Reads.LoadFactGraphAsync(context);
         var methods = await Reads.LoadDeadCodeMethodsAsync(context);
         if (methods.Count == 0)
@@ -1107,8 +1323,10 @@ public static class CliApplication
 
         output.WriteLine($"Roots (entry points + handoffs + Main + tests): {roots.Count}");
         output.WriteLine($"First-party methods examined: {methods.Count}");
-        output.WriteLine($"Dead-code candidates: {candidates.Count}  (High {candidates.Count(c => c.Tier == DeadCodeFinder.Tier.High)}, " +
-            $"Medium {candidates.Count(c => c.Tier == DeadCodeFinder.Tier.Medium)}, Low {candidates.Count(c => c.Tier == DeadCodeFinder.Tier.Low)})");
+        output.WriteLine(
+            $"Dead-code candidates: {candidates.Count}  (High {candidates.Count(c => c.Tier == DeadCodeFinder.Tier.High)}, "
+                + $"Medium {candidates.Count(c => c.Tier == DeadCodeFinder.Tier.Medium)}, Low {candidates.Count(c => c.Tier == DeadCodeFinder.Tier.Low)})"
+        );
         output.WriteLine(libMode ? "Mode: library (public/protected = roots)" : "Mode: application (public methods are flaggable)");
         output.WriteLine("REPORT ONLY — confirm each against the C# compiler (IDE0051/CS0169) before removing.");
         if (!showAll && candidates.Any(c => c.Tier == DeadCodeFinder.Tier.Low))
@@ -1160,6 +1378,36 @@ public static class CliApplication
     {
         var index = Array.IndexOf(args, name);
         return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
+    }
+
+    // Effect selection for reaches/tree/derive: --only keeps just the listed effects, --exclude drops
+    // them (exclude wins on overlap). Tokens match an effect's `provider` (e.g. "throw") or the precise
+    // `provider:operation` (e.g. "llblgen:read"). Returns the input unchanged when neither flag is given.
+    private static IReadOnlyList<DerivedEffect> ApplyEffectFilters(IReadOnlyList<DerivedEffect> effects, string[] args)
+    {
+        var only = ParseList(args, "--only");
+        var exclude = ParseList(args, "--exclude");
+        if (only.Count == 0 && exclude.Count == 0)
+            return effects;
+        return effects.Where(e => (only.Count == 0 || InSet(e, only)) && !InSet(e, exclude)).ToList();
+
+        static bool InSet(DerivedEffect e, HashSet<string> set) => set.Contains(e.Provider) || set.Contains($"{e.Provider}:{e.Operation}");
+    }
+
+    // A repeatable list option whose value is split on commas OR whitespace (also ';' / tab), with
+    // empties trimmed — so `--exclude throw`, `--exclude throw,llblgen:read`, `--exclude "throw cache"`,
+    // and repeated `--exclude` flags all parse identically. Case-insensitive.
+    private static HashSet<string> ParseList(string[] args, string name)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i + 1 < args.Length; i++)
+            if (args[i] == name)
+                foreach (
+                    var token in args[i + 1]
+                        .Split(new[] { ',', ' ', '\t', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                )
+                    set.Add(token);
+        return set;
     }
 
     private static string ShortenPath(string path)

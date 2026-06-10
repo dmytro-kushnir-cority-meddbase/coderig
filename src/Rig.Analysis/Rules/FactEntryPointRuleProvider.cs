@@ -13,7 +13,8 @@ public static class FactEntryPointRuleProvider
     // rig.rules.json + extraRulesPaths).
     public static IReadOnlyList<FactEntryPointRule> LoadForWorkingDirectory(
         string workingDirectory,
-        IReadOnlyList<string>? extraRulesPaths = null)
+        IReadOnlyList<string>? extraRulesPaths = null
+    )
     {
         var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
         var ruleSet = AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths);
@@ -24,7 +25,8 @@ public static class FactEntryPointRuleProvider
     // background/service/WCF/HTTP/actor handlers). Same rule-cascade as LoadForWorkingDirectory.
     public static IReadOnlyList<FactClassInheritanceRule> LoadClassInheritanceForWorkingDirectory(
         string workingDirectory,
-        IReadOnlyList<string>? extraRulesPaths = null)
+        IReadOnlyList<string>? extraRulesPaths = null
+    )
     {
         var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
         var ruleSet = AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths);
@@ -36,18 +38,12 @@ public static class FactEntryPointRuleProvider
         // Same attribute-prefix projection as the action rules: FQN attribute type names become
         // "M:<FQN>." DocID prefixes. Short names can't be matched without a receiver type, so we
         // only emit prefixes for entries containing a '.'.
-        var attributePrefixes = (rule.HandlerMethodAttributes ?? [])
-            .Where(a => a.Contains('.'))
-            .Select(a => $"M:{a}.")
-            .ToArray();
+        var attributePrefixes = (rule.HandlerMethodAttributes ?? []).Where(a => a.Contains('.')).Select(a => $"M:{a}.").ToArray();
 
         // Reduce each expected parameter type to its simple name (last '.'-segment, generics stripped)
         // — fact signatures show minimally-qualified type names, so simple-name matching is what the
         // deriver can faithfully check (e.g. "Grpc.Core.ServerCallContext" -> "ServerCallContext").
-        var paramTypeSimpleNames = (rule.HandlerParameterTypes ?? [])
-            .Select(SimpleTypeName)
-            .Where(n => n.Length > 0)
-            .ToArray();
+        var paramTypeSimpleNames = (rule.HandlerParameterTypes ?? []).Select(SimpleTypeName).Where(n => n.Length > 0).ToArray();
 
         return new FactClassInheritanceRule(
             rule.Id,
@@ -71,10 +67,7 @@ public static class FactEntryPointRuleProvider
         //   "M:MMS.Web.UI.Attributes.ClientActionAttribute."
         // Short names (e.g. "ClientAction") can't be reliably matched without a receiver type,
         // so we only emit prefix matchers for FQN entries that contain a '.'.
-        var attributePrefixes = (rule.HandlerMethodAttributes ?? [])
-            .Where(a => a.Contains('.'))
-            .Select(a => $"M:{a}.")
-            .ToArray();
+        var attributePrefixes = (rule.HandlerMethodAttributes ?? []).Where(a => a.Contains('.')).Select(a => $"M:{a}.").ToArray();
 
         return new FactEntryPointRule(
             rule.Id,

@@ -43,7 +43,15 @@ public static class FactEntryPointDeriver
         IReadOnlyList<(string TypeId, string BaseId)> BaseEdges,
         // method symbols (kind="method") — ALL methods. Page EPs use only the .ctor rows;
         // class-inheritance EPs use the named handler rows (IsOverride gates RequireOverride rules).
-        IReadOnlyList<(string SymbolId, string Name, string? ContainingSymbolId, string Signature, string FilePath, int Line, bool IsOverride)> Methods,
+        IReadOnlyList<(
+            string SymbolId,
+            string Name,
+            string? ContainingSymbolId,
+            string Signature,
+            string FilePath,
+            int Line,
+            bool IsOverride
+        )> Methods,
         // type symbols (kind="type") — for page EPs where the class has no explicit ctor.
         // IsAbstract gates out base/abstract pages, which are never navigable entry points.
         IReadOnlyList<(string SymbolId, string Namespace, string FilePath, int Line, bool IsAbstract)> Types,
@@ -58,13 +66,14 @@ public static class FactEntryPointDeriver
     public static IReadOnlyList<DerivedEntryPoint> Derive(
         FactEntryPointData data,
         IReadOnlyList<FactEntryPointRule> rules,
-        IReadOnlyList<FactClassInheritanceRule>? classInheritanceRules = null)
+        IReadOnlyList<FactClassInheritanceRule>? classInheritanceRules = null
+    )
     {
         // Pre-index for performance. The base-edge lookup is keyed by the generic-stripped base so
         // the BFS can cross generic bases (see TypeClosure).
         var baseEdges = TypeClosure.BuildBaseEdgeLookup(data.BaseEdges);
-        var ctorsByContaining = data.Methods
-            .Where(m => m.Name == ".ctor")
+        var ctorsByContaining = data
+            .Methods.Where(m => m.Name == ".ctor")
             .ToLookup(m => m.ContainingSymbolId ?? "", StringComparer.Ordinal);
         var typeById = data.Types.ToDictionary(t => t.SymbolId, StringComparer.Ordinal);
 
@@ -88,10 +97,9 @@ public static class FactEntryPointDeriver
         if (classInheritanceRules is { Count: > 0 })
         {
             // Pattern C closure spans base + interface edges (interface-rooted backend rules).
-            var inheritanceEdges = TypeClosure.BuildBaseEdgeLookup(
-                data.BaseEdges.Concat(data.InterfaceEdges ?? []));
-            var attributeRefsByMethod = data.CtorRefs
-                .Where(r => r.EnclosingSymbolId is not null)
+            var inheritanceEdges = TypeClosure.BuildBaseEdgeLookup(data.BaseEdges.Concat(data.InterfaceEdges ?? []));
+            var attributeRefsByMethod = data
+                .CtorRefs.Where(r => r.EnclosingSymbolId is not null)
                 .ToLookup(r => r.EnclosingSymbolId!, r => r.TargetSymbolId, StringComparer.Ordinal);
             var handlers = data.Methods.Where(m => m.Name != ".ctor").ToArray();
 
@@ -106,11 +114,15 @@ public static class FactEntryPointDeriver
 
     private static void DerivePages(
         ILookup<string, string> baseEdges,
-        ILookup<string, (string SymbolId, string Name, string? ContainingSymbolId, string Signature, string FilePath, int Line, bool IsOverride)> ctorsByContaining,
+        ILookup<
+            string,
+            (string SymbolId, string Name, string? ContainingSymbolId, string Signature, string FilePath, int Line, bool IsOverride)
+        > ctorsByContaining,
         Dictionary<string, (string SymbolId, string Namespace, string FilePath, int Line, bool IsAbstract)> typeById,
         FactEntryPointRule rule,
         List<DerivedEntryPoint> results,
-        HashSet<(string, int)> seen)
+        HashSet<(string, int)> seen
+    )
     {
         var closure = TypeClosure.Compute(baseEdges, rule.BaseTypes);
 
@@ -206,7 +218,8 @@ public static class FactEntryPointDeriver
         ILookup<string, string> baseEdges,
         FactEntryPointRule rule,
         List<DerivedEntryPoint> results,
-        HashSet<(string, int)> seen)
+        HashSet<(string, int)> seen
+    )
     {
         // An attribute-decorated method is an action entry point ONLY when its declaring type is a
         // subtype of one of the rule's base types (e.g. ClientPage). Components/widgets that carry
@@ -218,8 +231,7 @@ public static class FactEntryPointDeriver
         {
             if (r.EnclosingSymbolId is null)
                 continue;
-            if (!rule.HandlerMethodAttributePrefixes.Any(prefix =>
-                    r.TargetSymbolId.StartsWith(prefix, StringComparison.Ordinal)))
+            if (!rule.HandlerMethodAttributePrefixes.Any(prefix => r.TargetSymbolId.StartsWith(prefix, StringComparison.Ordinal)))
                 continue;
 
             var declaringTypeId = DeclaringTypeId(r.EnclosingSymbolId);
@@ -241,12 +253,21 @@ public static class FactEntryPointDeriver
     // --- Pattern C: class-inheritance entry points (background / service / WCF / HTTP / actor) ---
 
     private static void DeriveClassInheritance(
-        IReadOnlyList<(string SymbolId, string Name, string? ContainingSymbolId, string Signature, string FilePath, int Line, bool IsOverride)> handlers,
+        IReadOnlyList<(
+            string SymbolId,
+            string Name,
+            string? ContainingSymbolId,
+            string Signature,
+            string FilePath,
+            int Line,
+            bool IsOverride
+        )> handlers,
         ILookup<string, string> inheritanceEdges,
         ILookup<string, string> attributeRefsByMethod,
         FactClassInheritanceRule rule,
         List<DerivedEntryPoint> results,
-        HashSet<(string, int)> seen)
+        HashSet<(string, int)> seen
+    )
     {
         // baseTypes:["*"] means "no base-type gate" (the WCF rule, narrowed instead by its attribute).
         // Otherwise gate on STRICT descendants — a handler declared on the root base itself (e.g. the
@@ -267,12 +288,13 @@ public static class FactEntryPointDeriver
                 continue;
             if (rule.RequireOverride && !m.IsOverride)
                 continue;
-            if (rule.HandlerMethodAttributePrefixes.Count > 0
-                && !attributeRefsByMethod[m.SymbolId].Any(target =>
-                    rule.HandlerMethodAttributePrefixes.Any(p => target.StartsWith(p, StringComparison.Ordinal))))
+            if (
+                rule.HandlerMethodAttributePrefixes.Count > 0
+                && !attributeRefsByMethod[m.SymbolId]
+                    .Any(target => rule.HandlerMethodAttributePrefixes.Any(p => target.StartsWith(p, StringComparison.Ordinal)))
+            )
                 continue;
-            if (rule.HandlerParameterTypeSimpleNames.Count > 0
-                && !HasAllParameterTypes(m.Signature, rule.HandlerParameterTypeSimpleNames))
+            if (rule.HandlerParameterTypeSimpleNames.Count > 0 && !HasAllParameterTypes(m.Signature, rule.HandlerParameterTypeSimpleNames))
                 continue;
 
             if (!seen.Add((m.FilePath, m.Line)))
@@ -303,7 +325,8 @@ public static class FactEntryPointDeriver
                 .Select(t => t.Trim())
                 .Where(t => t.Length > 0)
                 .Select(SimpleTypeToken),
-            StringComparer.Ordinal);
+            StringComparer.Ordinal
+        );
         return requiredSimpleNames.All(paramSimpleNames.Contains);
     }
 

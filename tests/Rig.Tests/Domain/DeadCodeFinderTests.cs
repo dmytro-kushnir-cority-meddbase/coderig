@@ -12,8 +12,12 @@ namespace Rig.Tests.Domain;
 public sealed class DeadCodeFinderTests
 {
     private static DeadCodeFinder.MethodMeta Meta(
-        string id, string name, string modifiers, bool isOverride = false, bool generated = false) =>
-        new(id, name, modifiers, "f.cs", 1, isOverride, generated);
+        string id,
+        string name,
+        string modifiers,
+        bool isOverride = false,
+        bool generated = false
+    ) => new(id, name, modifiers, "f.cs", 1, isOverride, generated);
 
     private static FactGraphData Graph(MethodRef[] methods, params CallEdge[] edges) =>
         new(edges, System.Array.Empty<ImplementsEdge>(), methods);
@@ -25,9 +29,11 @@ public sealed class DeadCodeFinderTests
     {
         // Root -> Used -> AlsoUsed ; Orphan is reached by nobody.
         var methods = new[] { M("M:Root.Run", "Run"), M("M:A.Used", "Used"), M("M:A.AlsoUsed", "AlsoUsed"), M("M:A.Orphan", "Orphan") };
-        var graph = Graph(methods,
+        var graph = Graph(
+            methods,
             new CallEdge("M:Root.Run", "M:A.Used", "invocation", "f.cs", 1),
-            new CallEdge("M:A.Used", "M:A.AlsoUsed", "invocation", "f.cs", 2));
+            new CallEdge("M:A.Used", "M:A.AlsoUsed", "invocation", "f.cs", 2)
+        );
         var meta = new[]
         {
             Meta("M:Root.Run", "Run", "public"),
@@ -39,7 +45,7 @@ public sealed class DeadCodeFinderTests
         var dead = DeadCodeFinder.Find(graph, new[] { "M:Root.Run" }, meta, treatExternallyVisibleAsRoots: false);
 
         dead.Select(d => d.SymbolId).ShouldBe(new[] { "M:A.Orphan" });
-        dead[0].Tier.ShouldBe(DeadCodeFinder.Tier.High);   // private + uncalled
+        dead[0].Tier.ShouldBe(DeadCodeFinder.Tier.High); // private + uncalled
         dead[0].Reason.ShouldBe("uncalled");
     }
 
@@ -48,8 +54,7 @@ public sealed class DeadCodeFinderTests
     {
         // DeadHead (uncalled) -> DeadTail. Neither is reachable from the root, but DeadTail HAS a caller.
         var methods = new[] { M("M:Root.Run", "Run"), M("M:D.DeadHead", "DeadHead"), M("M:D.DeadTail", "DeadTail") };
-        var graph = Graph(methods,
-            new CallEdge("M:D.DeadHead", "M:D.DeadTail", "invocation", "f.cs", 1));
+        var graph = Graph(methods, new CallEdge("M:D.DeadHead", "M:D.DeadTail", "invocation", "f.cs", 1));
         var meta = new[]
         {
             Meta("M:Root.Run", "Run", "public"),
@@ -61,7 +66,7 @@ public sealed class DeadCodeFinderTests
 
         var head = dead.Single(d => d.SymbolId == "M:D.DeadHead");
         var tail = dead.Single(d => d.SymbolId == "M:D.DeadTail");
-        head.DirectCallers.ShouldBe(0);                       // cluster root — the actionable head
+        head.DirectCallers.ShouldBe(0); // cluster root — the actionable head
         head.Reason.ShouldBe("uncalled");
         tail.DirectCallers.ShouldBe(1);
         tail.Reason.ShouldBe("only reached by dead code");
@@ -75,10 +80,10 @@ public sealed class DeadCodeFinderTests
         var meta = new[] { Meta("M:Api.Exported", "Exported", "public") };
 
         var asApp = DeadCodeFinder.Find(graph, System.Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: false);
-        asApp.Single().Tier.ShouldBe(DeadCodeFinder.Tier.Low);   // possible external API -> low confidence
+        asApp.Single().Tier.ShouldBe(DeadCodeFinder.Tier.Low); // possible external API -> low confidence
 
         var asLib = DeadCodeFinder.Find(graph, System.Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: true);
-        asLib.ShouldBeEmpty();                                    // public = root, not flagged
+        asLib.ShouldBeEmpty(); // public = root, not flagged
     }
 
     [Fact]
@@ -99,8 +104,12 @@ public sealed class DeadCodeFinderTests
         // None reachable from any root, but each must be skipped for a structural reason.
         var methods = new[]
         {
-            M("M:T.#ctor", ".ctor"), M("M:T.get_X", "get_X"), M("M:T.op_Addition", "op_Addition"),
-            M("M:T.Contract", "Contract"), M("M:T.OnSave", "OnSave"), M("M:T.Gen", "Gen"),
+            M("M:T.#ctor", ".ctor"),
+            M("M:T.get_X", "get_X"),
+            M("M:T.op_Addition", "op_Addition"),
+            M("M:T.Contract", "Contract"),
+            M("M:T.OnSave", "OnSave"),
+            M("M:T.Gen", "Gen"),
         };
         var graph = Graph(methods);
         var meta = new[]
@@ -125,9 +134,10 @@ public sealed class DeadCodeFinderTests
         var graph = Graph(methods);
         var meta = new[] { Meta("M:T.OnSave", "OnSave", "private", isOverride: true) };
 
-        DeadCodeFinder.Find(graph, System.Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: false)
-            .ShouldBeEmpty();
-        DeadCodeFinder.Find(graph, System.Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: false, includeDispatchMembers: true)
-            .Select(d => d.SymbolId).ShouldBe(new[] { "M:T.OnSave" });
+        DeadCodeFinder.Find(graph, System.Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: false).ShouldBeEmpty();
+        DeadCodeFinder
+            .Find(graph, System.Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: false, includeDispatchMembers: true)
+            .Select(d => d.SymbolId)
+            .ShouldBe(new[] { "M:T.OnSave" });
     }
 }

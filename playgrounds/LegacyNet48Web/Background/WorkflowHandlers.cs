@@ -1,6 +1,6 @@
+using LegacyNet48Web.Entities;
 using MedDBase.Application.Workflows;
 using MedDBase.Wcf;
-using LegacyNet48Web.Entities;
 
 namespace LegacyNet48Web.Background
 {
@@ -11,7 +11,10 @@ namespace LegacyNet48Web.Background
     {
         private readonly DataAdapter _db;
 
-        public InvoiceWorkflowController(DataAdapter db) { _db = db; }
+        public InvoiceWorkflowController(DataAdapter db)
+        {
+            _db = db;
+        }
 
         public override void OnSave()
         {
@@ -32,7 +35,10 @@ namespace LegacyNet48Web.Background
     {
         private readonly DataAdapter _db;
 
-        public ClaimsService(DataAdapter db) { _db = db; }
+        public ClaimsService(DataAdapter db)
+        {
+            _db = db;
+        }
 
         [OperationContract]
         public void SubmitClaim()
@@ -41,8 +47,6 @@ namespace LegacyNet48Web.Background
             _db.SaveEntity(invoice);
         }
 
-        public void Helper()
-        {
-        }
+        public void Helper() { }
     }
 }

@@ -1,26 +1,24 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Text;
 using System.Linq;
+using System.Text;
 using Microsoft.CodeAnalysis;
 
 namespace MMS.Tools.RequestResponseProxyProjectBuilder.Roslyn;
 
 public class Project
 {
-    private static readonly SymbolDisplayFormat FullyQualifiedWithoutGlobalFormat =
-        new SymbolDisplayFormat(
-            typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
-            genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters
-        );
-        
-    private static readonly SymbolDisplayFormat FullyQualifiedWithoutGlobalFormatNullableFull =
-        new SymbolDisplayFormat(
-            typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
-            genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters,
-            miscellaneousOptions: SymbolDisplayMiscellaneousOptions.ExpandNullable
-        );
-        
+    private static readonly SymbolDisplayFormat FullyQualifiedWithoutGlobalFormat = new SymbolDisplayFormat(
+        typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
+        genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters
+    );
+
+    private static readonly SymbolDisplayFormat FullyQualifiedWithoutGlobalFormatNullableFull = new SymbolDisplayFormat(
+        typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
+        genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters,
+        miscellaneousOptions: SymbolDisplayMiscellaneousOptions.ExpandNullable
+    );
+
     private readonly Dictionary<string, Stack<string>> tags = new();
     private INamedTypeSymbol currentType;
     private IMethodSymbol currentCtor;
@@ -44,7 +42,7 @@ public class Project
         Push("<[Interfaces]>", ExtractInterfaces(typeSymbol));
 
         var output = ReplaceMarkup(template);
-            
+
         output = ReplaceForEach(output, "ForEachAction", IterateActions);
         output = ReplaceForEach(output, "ForEachEvent", IterateEvents);
         output = ReplaceForEach(output, "ForEachCtor", IterateCtors);
@@ -73,7 +71,8 @@ public class Project
 
             sb.Append(template.Substring(pos, startTag - pos));
             int endTag = template.IndexOf($"</[{tag}]>", startTag, StringComparison.Ordinal);
-            if (endTag == -1) throw new Exception($"Missing </[{tag}]>");
+            if (endTag == -1)
+                throw new Exception($"Missing </[{tag}]>");
 
             int contentStart = startTag + tag.Length + 4;
             string inner = template.Substring(contentStart, endTag - contentStart);
@@ -83,14 +82,12 @@ public class Project
         }
         return sb.ToString();
     }
-        
+
     private string IterateEvents(string code)
     {
         var sb = new StringBuilder();
 
-        var items = GetDeclaredAndInheritedNonOverriddenEvents(currentType)
-                   .OrderBy(evt => evt.Name)
-                   .ToArray();
+        var items = GetDeclaredAndInheritedNonOverriddenEvents(currentType).OrderBy(evt => evt.Name).ToArray();
 
         int count = items.Length;
         int index = 0;
@@ -125,7 +122,8 @@ public class Project
     {
         var sb = new StringBuilder();
         var method = (currentEvent.Type as INamedTypeSymbol)?.DelegateInvokeMethod;
-        if (method == null) return "";
+        if (method == null)
+            return "";
 
         int index = 0;
         foreach (var param in method.Parameters)
@@ -136,9 +134,9 @@ public class Project
             Push("<[CommaIfNotLast]>", index < method.Parameters.Length - 1 ? "," : "");
             Push("<[AmpersandIfNotLast]>", index < method.Parameters.Length - 1 ? "," : "&");
             Push("<[CommaOnFirst]>", index == 0 ? "," : "");
-                
+
             sb.Append(ReplaceMarkup(section));
-                
+
             Pop("<[CommaOnFirst]>");
             Pop("<[EventParamType]>");
             Pop("<[EventParamName]>");
@@ -155,9 +153,7 @@ public class Project
         var sb = new StringBuilder();
 
         string GetCtorKey(IMethodSymbol ctor) =>
-            string.Join(",", ctor.Parameters.Select(p => 
-                p.Type.ToDisplayString(FullyQualifiedWithoutGlobalFormat) + ":" + p.Name
-            ));
+            string.Join(",", ctor.Parameters.Select(p => p.Type.ToDisplayString(FullyQualifiedWithoutGlobalFormat) + ":" + p.Name));
 
         var seenSignatures = new HashSet<string>();
         var constructors = new List<IMethodSymbol>();
@@ -166,7 +162,7 @@ public class Project
         {
             if (ctor.DeclaredAccessibility != Accessibility.Public || ctor.IsStatic)
                 continue;
-            
+
             var key = GetCtorKey(ctor);
             if (seenSignatures.Add(key))
             {
@@ -194,7 +190,7 @@ public class Project
         for (int index = 0; index < count; index++)
         {
             IParameterSymbol item = currentCtor.Parameters[index];
-                
+
             Push("<[CtorParamName]>", item.Name);
             if (item.Type is INamedTypeSymbol { IsGenericType: true } namedType)
             {
@@ -211,7 +207,7 @@ public class Project
             {
                 Push("<[CtorParamType]>", item.Type.ToDisplayString(FullyQualifiedWithoutGlobalFormat).Replace('+', '.'));
             }
-                
+
             Push("<[Index]>", index.ToString());
             Push("<[AmpersandIfNotLast]>", index == count - 1 ? "" : "&");
             Push("<[CommaIfNotLast]>", index == count - 1 ? "" : ",");
@@ -233,9 +229,7 @@ public class Project
     {
         var sb = new StringBuilder();
 
-        var items = GetDeclaredAndInheritedClientActions(currentType)
-                   .OrderBy(mi => mi.Name)
-                   .ToArray();
+        var items = GetDeclaredAndInheritedClientActions(currentType).OrderBy(mi => mi.Name).ToArray();
 
         int count = items.Length;
         int index = 0;
@@ -263,7 +257,7 @@ public class Project
 
         return sb.ToString();
     }
-        
+
     private string IterateActionParams(string code)
     {
         var sb = new StringBuilder();
@@ -276,8 +270,10 @@ public class Project
             var type = item.Type;
             string typeName;
 
-            if (type is INamedTypeSymbol { IsGenericType: true } namedType &&
-                namedType.ConstructedFrom.ToDisplayString(FullyQualifiedWithoutGlobalFormatNullableFull) == "System.Nullable<T>")
+            if (
+                type is INamedTypeSymbol { IsGenericType: true } namedType
+                && namedType.ConstructedFrom.ToDisplayString(FullyQualifiedWithoutGlobalFormatNullableFull) == "System.Nullable<T>"
+            )
             {
                 typeName = $"Nullable<{namedType.TypeArguments[0].ToDisplayString(FullyQualifiedWithoutGlobalFormat)}>";
             }
@@ -306,7 +302,7 @@ public class Project
 
         return sb.ToString();
     }
-        
+
     private static IEnumerable<IEventSymbol> GetDeclaredAndInheritedNonOverriddenEvents(INamedTypeSymbol type)
     {
         var seenNames = new HashSet<string>();
@@ -338,10 +334,12 @@ public class Project
                 if (method.DeclaredAccessibility != Accessibility.Public || method.IsStatic)
                     continue;
 
-                var hasClientActionAttr = method.GetAttributes()
-                                                .Any(attr => attr.AttributeClass?.ToDisplayString() == "MMS.Web.UI.Attributes.ClientActionAttribute");
+                var hasClientActionAttr = method
+                    .GetAttributes()
+                    .Any(attr => attr.AttributeClass?.ToDisplayString() == "MMS.Web.UI.Attributes.ClientActionAttribute");
 
-                var signature = $"{method.Name}({string.Join(",", method.Parameters.Select(p => p.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)))})";
+                var signature =
+                    $"{method.Name}({string.Join(",", method.Parameters.Select(p => p.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)))})";
 
                 if (!methods.ContainsKey(signature))
                 {
@@ -349,16 +347,17 @@ public class Project
                 }
             }
         }
-            
+
         return methods.Values.Where(m => m.HasClientActionAttr).Select(m => m.Method).ToArray();
     }
-        
+
     private static AttributeData? FindFirstOccurrenceOfAttributeInInheritanceChain(INamedTypeSymbol typeSymbol)
     {
         for (var current = typeSymbol; current != null; current = current.BaseType)
         {
-            var result = current.GetAttributes()
-                                .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "MMS.Web.UI.Attributes.ProxyInterfacesAttribute");
+            var result = current
+                .GetAttributes()
+                .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "MMS.Web.UI.Attributes.ProxyInterfacesAttribute");
 
             if (result != null)
                 return result;
@@ -366,19 +365,19 @@ public class Project
 
         return null;
     }
-        
+
     private string ExtractInterfaces(INamedTypeSymbol typeSymbol)
     {
         var attr = FindFirstOccurrenceOfAttributeInInheritanceChain(typeSymbol);
         if (attr == null)
             return "";
 
-        var interfaces = attr.ConstructorArguments[0].Values
-                             .Select(v => v.Value?.ToString() ?? "")
-                             .Where(v => !string.IsNullOrWhiteSpace(v))
-                             .Distinct()
-                             .ToList();
-            
+        var interfaces = attr.ConstructorArguments[0]
+            .Values.Select(v => v.Value?.ToString() ?? "")
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Distinct()
+            .ToList();
+
         return interfaces.Count > 0 ? ", " + string.Join(", ", interfaces) : "";
     }
 

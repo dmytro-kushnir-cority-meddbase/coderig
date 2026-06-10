@@ -13,9 +13,13 @@ namespace MMS.Web.UI
     public abstract class ProxyBase
     {
         protected ProxyBase(System.Type pageType) { }
+
         protected void AddWorkflow(object url) { }
+
         protected void LoadChildDialog(string className, string containerId, string url, string title) { }
+
         protected void ProcessEventDelegate(string id, System.Delegate handler, string name) { }
+
         protected static string ToStringForLink(object value) => value?.ToString();
     }
 
@@ -34,6 +38,7 @@ namespace MMS.Web.UI
     public abstract class PageBase
     {
         public virtual void Initialise() { }
+
         public virtual void OnAction() { }
     }
 }
@@ -42,9 +47,7 @@ namespace MMS.Web.UI.Attributes
 {
     // Marks a ClientPage method as a client-callable action endpoint.
     [System.AttributeUsage(System.AttributeTargets.Method)]
-    public sealed class ClientActionAttribute : System.Attribute
-    {
-    }
+    public sealed class ClientActionAttribute : System.Attribute { }
 }
 
 namespace MedDBase.Nucleus.Interfaces.Services
@@ -52,6 +55,7 @@ namespace MedDBase.Nucleus.Interfaces.Services
     public abstract class ServiceBase
     {
         public abstract void Startup();
+
         protected virtual void Shutdown() { }
     }
 }
@@ -71,6 +75,7 @@ namespace MedDBase.Application.Workflows
     public abstract class WorkflowControllerBase
     {
         public virtual void OnSave() { }
+
         public virtual void OnCancel() { }
     }
 }
@@ -81,9 +86,7 @@ namespace MedDBase.Wcf
     // third-party and dropped by the runtime-assembly filter, so a first-party attribute is what
     // lets the fixture exercise the attribute-gated (baseTypes:["*"]) WCF classInheritance rule.
     [System.AttributeUsage(System.AttributeTargets.Method)]
-    public sealed class OperationContractAttribute : System.Attribute
-    {
-    }
+    public sealed class OperationContractAttribute : System.Attribute { }
 }
 
 namespace MedDBase.Messages
@@ -95,8 +98,10 @@ namespace MedDBase.Messages
 
     public static class ChamberMsgExtensions
     {
-        public static void tell<T>(this T msg) where T : IChamberMsg { }
-        public static System.Threading.Tasks.Task<TReply> ask<T, TReply>(this T msg) where T : IChamberMsg
-            => System.Threading.Tasks.Task.FromResult(default(TReply)!);
+        public static void tell<T>(this T msg)
+            where T : IChamberMsg { }
+
+        public static System.Threading.Tasks.Task<TReply> ask<T, TReply>(this T msg)
+            where T : IChamberMsg => System.Threading.Tasks.Task.FromResult(default(TReply)!);
     }
 }

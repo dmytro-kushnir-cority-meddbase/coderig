@@ -18,8 +18,7 @@ public sealed class AnalyzedPlaygrounds : IDisposable
     private readonly Dictionary<string, Lazy<Task<AnalyzedPlayground>>> _cache = new(StringComparer.Ordinal);
     private readonly List<TempPlayground> _owned = new();
 
-    public Task<AnalyzedPlayground> LegacyNet48Async() =>
-        GetAsync(nameof(LegacyNet48Async), TempPlayground.CreateLegacyNet48Async);
+    public Task<AnalyzedPlayground> LegacyNet48Async() => GetAsync(nameof(LegacyNet48Async), TempPlayground.CreateLegacyNet48Async);
 
     public Task<AnalyzedPlayground> EntryPointEffectsAsync() =>
         GetAsync(nameof(EntryPointEffectsAsync), TempPlayground.CreateEntryPointEffectsAsync);

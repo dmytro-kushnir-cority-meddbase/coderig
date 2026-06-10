@@ -2,8 +2,7 @@
 
 public static class Templates
 {
-    public const string Request = 
-"""
+    public const string Request = """
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -222,9 +221,8 @@ namespace <[Namespace]>
 }
 
 """;
-    
-    public const string Response = 
-"""
+
+    public const string Response = """
 using System;
 using System.Collections.Generic;
 using System.Text;

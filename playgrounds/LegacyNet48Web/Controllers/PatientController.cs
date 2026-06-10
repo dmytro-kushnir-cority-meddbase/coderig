@@ -8,7 +8,10 @@ namespace LegacyNet48Web.Controllers
     {
         private readonly DataAdapter _db;
 
-        public PatientController(DataAdapter db) { _db = db; }
+        public PatientController(DataAdapter db)
+        {
+            _db = db;
+        }
 
         [HttpGet, Route("")]
         public IHttpActionResult GetAll()

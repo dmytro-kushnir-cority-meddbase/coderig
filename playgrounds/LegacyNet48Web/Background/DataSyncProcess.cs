@@ -1,5 +1,5 @@
-using MedDBase.Application.Core.Background;
 using LegacyNet48Web.Entities;
+using MedDBase.Application.Core.Background;
 using MedDBase.Messages;
 
 namespace LegacyNet48Web.Background
@@ -8,7 +8,10 @@ namespace LegacyNet48Web.Background
     {
         private readonly DataAdapter _db;
 
-        public DataSyncProcess(DataAdapter db) { _db = db; }
+        public DataSyncProcess(DataAdapter db)
+        {
+            _db = db;
+        }
 
         public void Process()
         {

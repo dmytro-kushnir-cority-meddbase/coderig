@@ -35,8 +35,7 @@ public static class FactProjection
             .Symbols.Where(s => s.Kind == "type")
             .GroupBy(t => t.SymbolId)
             .Select(g => g.First())
-            .Select(t => (t.SymbolId, t.Namespace, t.FilePath, t.Line,
-                IsAbstract: t.Modifiers.Split(' ').Contains("abstract")))
+            .Select(t => (t.SymbolId, t.Namespace, t.FilePath, t.Line, IsAbstract: t.Modifiers.Split(' ').Contains("abstract")))
             .ToArray();
 
         var ctorRefs = result
@@ -54,9 +53,18 @@ public static class FactProjection
     public static FactGraphData GraphData(AnalysisResult result)
     {
         var callEdges = result
-            .References.Where(r => r.EnclosingSymbolId != null
-                && (r.RefKind == "invocation" || r.RefKind == "methodGroup" || r.RefKind == "ctor"))
-            .Select(r => new CallEdge(r.EnclosingSymbolId!, r.TargetSymbolId, r.RefKind, r.FilePath, r.Line, r.EnclosingLoopKind, r.EnclosingLoopDetail))
+            .References.Where(r =>
+                r.EnclosingSymbolId != null && (r.RefKind == "invocation" || r.RefKind == "methodGroup" || r.RefKind == "ctor")
+            )
+            .Select(r => new CallEdge(
+                r.EnclosingSymbolId!,
+                r.TargetSymbolId,
+                r.RefKind,
+                r.FilePath,
+                r.Line,
+                r.EnclosingLoopKind,
+                r.EnclosingLoopDetail
+            ))
             .Distinct()
             .ToArray();
 
@@ -86,9 +94,18 @@ public static class FactProjection
         result
             .References.Where(r => r.RefKind == "invocation")
             .Select(r => new FactInvocation(
-                r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.ReceiverType,
-                r.FirstArgumentTemplate, r.FirstArgumentType,
-                r.EnclosingLoopKind, r.EnclosingLoopDetail, r.EnclosingInvocations, r.EnclosingCatchTypes))
+                r.TargetSymbolId,
+                r.EnclosingSymbolId,
+                r.FilePath,
+                r.Line,
+                r.ReceiverType,
+                r.FirstArgumentTemplate,
+                r.FirstArgumentType,
+                r.EnclosingLoopKind,
+                r.EnclosingLoopDetail,
+                r.EnclosingInvocations,
+                r.EnclosingCatchTypes
+            ))
             .ToArray();
 
     // Mirrors Reads.LoadThrowRefsAsync: throw sites (RefKind="throw"), target = thrown exception type.

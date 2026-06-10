@@ -46,6 +46,5 @@ public static class FactStructuralContext
     public static string? EncodeList(IReadOnlyList<string> values) =>
         values.Count == 0 ? null : string.Join(ListSeparator.ToString(), values);
 
-    public static IReadOnlyList<string> DecodeList(string? encoded) =>
-        string.IsNullOrEmpty(encoded) ? [] : encoded.Split(ListSeparator);
+    public static IReadOnlyList<string> DecodeList(string? encoded) => string.IsNullOrEmpty(encoded) ? [] : encoded.Split(ListSeparator);
 }

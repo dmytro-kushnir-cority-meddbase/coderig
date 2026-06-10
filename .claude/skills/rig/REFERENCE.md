@@ -7,9 +7,9 @@
 | `rig index <sln\|csproj> [--rules p…] [--identity id] [--from entry.csproj] [--parallelism n] [--durable]` | Extract facts. Solution = all projects' source in one run (callgraph crosses boundaries in-process). Single `.csproj` = that project's source only (refs become metadata DLLs). **`--from entry.csproj`** = index only the entry project's transitive ProjectReference closure (minus test projects) — still ONE cross-project workspace; writes the closure to `relevant-projects.json`. Skips all out-of-closure test/tool projects before their design-time build. **`--parallelism n`** parallelises the (independent, no-binary) design-time builds. **Save is fast + crash-safe by default**: durability-off pragmas + write-to-temp + atomic rename over `rig.db` (so a fresh `index` cleanly REPLACES — the old "index APPENDS" footgun is gone; that now only applies to `mine`/`--identity`). **`--durable`** opts into a journaled write. |
 | `rig mine <sln> --from <csproj> [--rules p…] [--identity id] [--parallelism n]` | BFS DOWN the dep graph from `--from` (toward what it references). Each project indexed as its own run under one `--identity`, stitched at query time. Direction matters: `--from Pages` reaches Workflows; `--from Workflows` does NOT reach Pages. |
 | `rig runs` | List runs + symbol/reference/di counts (provenance / health check). |
-| `rig derive [--rules p…] [--limit n] [--format tsv]` | Stage-2 over facts: re-derive effects + page/action/background/wcf entry points + delegate/method-group handoffs. One DB open, one rule load. |
-| `rig reaches <pat> [--maxdepth n] [--format tsv]` | Effects reachable forward from an entry point. Annotates loop-fanout (`🔁xN`). |
-| `rig tree <pat> [--full\|--summary] [--maxdepth n]` | Full first-party call TREE. Default prunes to effect-bearing paths; `--full` = all; `--summary` = effect rollup. `↺seen` marks cycle/shared-callee re-entry. |
+| `rig derive [--rules p…] [--limit n] [--only p,…] [--exclude p,…] [--format tsv]` | Stage-2 over facts: re-derive effects + page/action/background/wcf entry points + delegate/method-group handoffs. One DB open, one rule load. |
+| `rig reaches <pat> [--maxdepth n] [--only p,…] [--exclude p,…] [--format tsv]` | Effects reachable forward from an entry point. Annotates loop-fanout (`🔁xN`) + per-effect emoji. |
+| `rig tree <pat> [--full\|--summary\|--effects] [--only p,…] [--exclude p,…] [--maxdepth n]` | Call TREE (box-drawing, source-ordered, emoji per effect). Default prunes to effect-bearing paths; `--full` = all; `--summary` = rollup; **`--effects` = only effectful methods, no skeleton** (escape the 10-screen tree). `↺seen` marks cycle/shared-callee re-entry. |
 | `rig callers <pat> [--roots] [--maxdepth n]` | Reverse reachability. `--roots` = entry-point candidates (reachable methods with no predecessor) = "which entry points touch X". |
 | `rig path <from> <to>` | One concrete path (BFS-shortest), with per-hop file:line + loop context. |
 | `rig dead [--lib] [--include-dispatch] [--all] [--root pat…] [--rules p…] [--format tsv]` | Unreachable first-party methods. Report-only. See SKILL.md. |
@@ -46,10 +46,39 @@ Detector families seen in practice (MedDBase rules): `llblgen` (entity read/writ
 `throw` (incl. LanguageExt `failwith`/`raise` via `declaring_type` strategy), `clientpage_nav/event/proxy`,
 `chamber_msg` / `eventbus` (messaging), `soap`/`http`/`queue`/`llm` (external providers).
 
+**Filtering effects** (`reaches`/`tree`/`derive`): `--only <list>` keeps just those, `--exclude <list>`
+drops them (exclude wins on overlap). The list is **comma- OR whitespace-separated and repeatable**; tokens
+match `provider` (`throw`) or `provider:operation` (`llblgen:read`). Headline: **`--exclude throw`** to drop
+exception noise. Per-effect emoji glyphs are overridable per-repo via `rig.effect-emoji.json` (or
+`.rig/effect-emoji.json`): a flat `{"llblgen:write":"💾","soap":"☎️",…}`, looked up `provider:operation` →
+`provider` → `•`.
+
 ## Reachability / dispatch behaviour
 
 The graph follows: direct calls + method-group + ctor edges, **interface→impl** dispatch (single-impl
 DI hop), and **base-virtual/abstract→override** dispatch (transitive, generic-stripped, IsOverride-gated).
+
+**Receiver-type narrowing (precision — the signal/noise fix).** `tree`/`reaches`/`path`/`callers` resolve
+dispatch **edge-aware**: a virtual/base/interface call narrows to the *static receiver type* mined onto the
+call edge (`CallEdge.ReceiverType`), so `company.Save()` reaches `CompanyEntity.Save` (+ Company subtypes),
+NOT all ~114 `CommonEntityBase.Save` overrides. It falls back to **full CHA** whenever the receiver is
+unreliable (null / an interface / an error-type `!:` / the declaring base itself / not a first-party CHA
+target) — so no real target is dropped. Effect of this on the MedDBase monolith: `ProcessHealthcodeQueue
+--effects` went 604→405 and the 114-way Save god-seam vanished. Two notes:
+- The precomputed `dispatch_edges` table (which BOUNDS the SQL load) stays **CHA (the sound superset)**;
+  narrowing lives only in the in-memory traversal. So SQL set-reachability ⊇ the narrowed in-memory set.
+- Reverse (`callers`) narrowing is **dispatch-hop-precise, not path-precise**: once a shared base method
+  (e.g. `CommonEntityBase.Save`) enters the reverse closure, all its direct callers rejoin (set-based BFS
+  can't attribute which caller's receiver matched). Recall-preserving; some reverse precision is left on
+  the table. Residual forward fan-outs (×2–×13) are genuinely base/interface-typed receivers
+  (controllers/`IWorkflowMaster`, actor dispatch, loggers) correctly falling back to CHA — "all bets off
+  past these god-seams".
+
+**Reading effect counts:** an effect listed N times = **N static call-sites** that reach it (branches
+included), NOT N runtime writes — an insert-vs-update method shows the same write twice; one fires per call.
+`reaches` also splits genuine reach from a **dispatch fan-out** bucket (`reach is … NOT a real call`); read
+the direct-effects / depth-shallow surface as the real contract.
+
 Recall recoveries already built in:
 - **`!:` error-edge fallback** — under partial binding an implementer's interface edge can be an error
   type (`!:IFoo`) while the call resolved the real type; dispatch recovers via interface simple-name. (Highest-impact recall fix.)

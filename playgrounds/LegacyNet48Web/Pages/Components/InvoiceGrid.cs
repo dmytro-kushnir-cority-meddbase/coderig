@@ -9,13 +9,9 @@ namespace LegacyNet48Web.Pages.Components
     public class InvoiceGrid : ClientControl
     {
         [ClientAction]
-        public void Sort()
-        {
-        }
+        public void Sort() { }
 
         [ClientAction]
-        public void Page(int pageNumber)
-        {
-        }
+        public void Page(int pageNumber) { }
     }
 }

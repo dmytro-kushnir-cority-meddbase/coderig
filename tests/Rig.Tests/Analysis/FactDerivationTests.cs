@@ -42,7 +42,8 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
                 "Accounts/InvoiceMain.SubmitInvoice",
                 "Workflows/ReferralPane.Submit",
                 "Workflows/WorkflowPaneBase.Save",
-            });
+            }
+        );
         actionRoutes.ShouldNotContain(r => r.Contains("InvoiceGrid", StringComparison.Ordinal));
 
         // --- PAGE entry points: every CONCRETE ClientPage subtype, one per constructor (Login has
@@ -52,18 +53,21 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var pageRoutes = entryPoints.Where(e => e.Kind == "page").Select(e => e.Route).ToArray();
         pageRoutes.ShouldNotContain("Accounts/InvoiceMainBase");
         pageRoutes.ShouldNotContain(r => r.Contains("WorkflowPaneBase", StringComparison.Ordinal));
-        pageRoutes.OrderBy(r => r, StringComparer.Ordinal).ShouldBe(
-            new[]
-            {
-                "Account/Public/LegacyLogin", // PageBase reflection page (G2) — also a "page" kind
-                "Account/Public/Login",
-                "Account/Public/Login",
-                "Account/Public/Main",
-                "Accounts/InvoiceMain",
-                "Accounts/TermsAndConditions",
-                "Admin/UserManagement",
-                "Workflows/ReferralPane",
-            });
+        pageRoutes
+            .OrderBy(r => r, StringComparer.Ordinal)
+            .ShouldBe(
+                new[]
+                {
+                    "Account/Public/LegacyLogin", // PageBase reflection page (G2) — also a "page" kind
+                    "Account/Public/Login",
+                    "Account/Public/Login",
+                    "Account/Public/Main",
+                    "Accounts/InvoiceMain",
+                    "Accounts/TermsAndConditions",
+                    "Admin/UserManagement",
+                    "Workflows/ReferralPane",
+                }
+            );
     }
 
     [Fact]
@@ -107,13 +111,12 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         //  * DataSyncProcess : IBackgroundProcess           -> INTERFACE-edge closure + handlerMethods["Process"]
         //  * InvoiceWorkflowController : WorkflowControllerBase -> requireOverride: only the OVERRIDE OnSave
         //  * ClaimsService.SubmitClaim                       -> baseTypes:["*"] gated by [OperationContract]
-        backend.ShouldBe(
-            new[]
+        backend.ShouldBe(new[]
             {
                 ("background", "LegacyNet48Web.Background.DataSyncProcess.Process"),
-                ("workflow",   "LegacyNet48Web.Background.InvoiceWorkflowController.OnSave"),
+                ("workflow", "LegacyNet48Web.Background.InvoiceWorkflowController.OnSave"),
                 ("background", "LegacyNet48Web.Background.ReportGeneratorService.Startup"),
-                ("wcf",        "LegacyNet48Web.Background.ClaimsService.SubmitClaim"),
+                ("wcf", "LegacyNet48Web.Background.ClaimsService.SubmitClaim"),
                 // PageBase reflection-page handlers (G2) — classInheritance on Initialise/OnAction.
                 ("pagehandler", "LegacyNet48Web.Pages.Account.Public.LegacyLogin.Initialise"),
                 ("pagehandler", "LegacyNet48Web.Pages.Account.Public.LegacyLogin.OnAction"),
@@ -163,19 +166,24 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var throwRefs = FactProjection.ThrowRefs(result);
         throwRefs.ShouldContain(t =>
             t.Target.EndsWith("AccessDeniedException", StringComparison.Ordinal)
-            && t.Enclosing != null && t.Enclosing.Contains("AssertRight", StringComparison.Ordinal));
+            && t.Enclosing != null
+            && t.Enclosing.Contains("AssertRight", StringComparison.Ordinal)
+        );
 
         // Derivation: a MatchThrow rule gated on the exception's simple-name suffix yields an effect
         // whose resource is the thrown type. No invocation/ctor rule could ever surface this guard.
         var rule = new FactEffectRule(
-            "authz", "deny",
-            Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(),
+            "authz",
+            "deny",
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            Array.Empty<string>(),
             DeclaringTypeNameEndsWith: new[] { "AccessDeniedException" },
             MatchThrow: true,
-            Resource: "receiver_type");
+            Resource: "receiver_type"
+        );
 
-        var effects = FactEffectDeriver.Derive(
-            FactProjection.Invocations(result), new[] { rule }, throwRefs: throwRefs);
+        var effects = FactEffectDeriver.Derive(FactProjection.Invocations(result), new[] { rule }, throwRefs: throwRefs);
 
         var authz = effects.Where(e => e.Provider == "authz").ToList();
         authz.ShouldNotBeEmpty();
@@ -193,15 +201,11 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         // Stage-1 facts must now carry the receiver's static type so the effect deriver can gate
         // receiverTypes on the real receiver instead of approximating it with the declaring type.
         var getMulti = result
-            .References.Where(r =>
-                r.RefKind == "invocation" && r.TargetSymbolId.Contains("GetMultiAsync", StringComparison.Ordinal)
-            )
+            .References.Where(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("GetMultiAsync", StringComparison.Ordinal))
             .ToArray();
 
         getMulti.ShouldNotBeEmpty();
-        getMulti.ShouldContain(r =>
-            r.ReceiverType != null && r.ReceiverType.Contains("DataAdapter", StringComparison.Ordinal)
-        );
+        getMulti.ShouldContain(r => r.ReceiverType != null && r.ReceiverType.Contains("DataAdapter", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -215,9 +219,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         // string_argument resource resolution) and its static type (for argument_type), so the
         // stage-2 effect deriver can resolve the same `resource` strings the Roslyn pass does (P2a).
         var submitBill = result
-            .References.Where(r =>
-                r.RefKind == "invocation" && r.TargetSymbolId.Contains("SubmitBill", StringComparison.Ordinal)
-            )
+            .References.Where(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("SubmitBill", StringComparison.Ordinal))
             .ToArray();
 
         submitBill.ShouldNotBeEmpty();
@@ -300,8 +302,12 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
 
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
         var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
-        var effects = FactEffectDeriver.Derive(FactProjection.Invocations(result), rules, providerFilter: null,
-            baseEdges: FactProjection.EntryPointData(result).BaseEdges);
+        var effects = FactEffectDeriver.Derive(
+            FactProjection.Invocations(result),
+            rules,
+            providerFilter: null,
+            baseEdges: FactProjection.EntryPointData(result).BaseEdges
+        );
 
         // G4: SOAP / HTTP-print / queue / LLM are pure rule data — the deriver matches them with no
         // code change. OutboundGateway.SendEverything invokes one of each.
@@ -315,9 +321,12 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         foreach (var (provider, operation) in expected)
         {
             effects.ShouldContain(
-                e => e.Provider == provider && e.Operation == operation
+                e =>
+                    e.Provider == provider
+                    && e.Operation == operation
                     && e.EnclosingSymbolId!.Contains("OutboundGateway.SendEverything", StringComparison.Ordinal),
-                $"expected a {provider}/{operation} effect from OutboundGateway.SendEverything");
+                $"expected a {provider}/{operation} effect from OutboundGateway.SendEverything"
+            );
         }
     }
 
@@ -329,23 +338,23 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
 
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
         var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
-        var effects = FactEffectDeriver.Derive(FactProjection.Invocations(result), rules, providerFilter: null,
-            baseEdges: FactProjection.EntryPointData(result).BaseEdges);
+        var effects = FactEffectDeriver.Derive(
+            FactProjection.Invocations(result),
+            rules,
+            providerFilter: null,
+            baseEdges: FactProjection.EntryPointData(result).BaseEdges
+        );
 
         // receiver_type (P1a): `new HealthcodeServiceProxy().SubmitBill("<bill/>")` resolves the
         // effect resource to the receiver's static type FQN.
         effects.ShouldContain(e =>
-            e.Provider == "soap" && e.Operation == "submit"
-            && e.ResourceType == "LegacyNet48Web.External.HealthcodeServiceProxy"
+            e.Provider == "soap" && e.Operation == "submit" && e.ResourceType == "LegacyNet48Web.External.HealthcodeServiceProxy"
         );
 
         // argument_type (P1b): `_db.StartTransaction(System.Data.IsolationLevel.ReadCommitted, ...)`
         // resolves to the FIRST ARGUMENT's type — NOT the declaring DataAccessAdapterBase. This pins
         // that the deriver resolves the resource from facts rather than using the declaring type.
-        effects.ShouldContain(e =>
-            e.Provider == "llblgen" && e.Operation == "tx_begin"
-            && e.ResourceType == "System.Data.IsolationLevel"
-        );
+        effects.ShouldContain(e => e.Provider == "llblgen" && e.Operation == "tx_begin" && e.ResourceType == "System.Data.IsolationLevel");
     }
 
     [Fact]
@@ -359,15 +368,18 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
         var epData = FactProjection.EntryPointData(result);
         var effects = FactEffectDeriver.Derive(
-            FactProjection.Invocations(result), effectRules, providerFilter: null,
-            baseEdges: epData.BaseEdges, ctorRefs: epData.CtorRefs, observationRules: observationRules);
+            FactProjection.Invocations(result),
+            effectRules,
+            providerFilter: null,
+            baseEdges: epData.BaseEdges,
+            ctorRefs: epData.CtorRefs,
+            observationRules: observationRules
+        );
 
         // looped_effect (P1c facts -> P2b deriver): TeamWorkflow.LoadTeamSummaryAsync reads redis
         // inside a `foreach`, so the redis read effect there carries a looped_effect/foreach note.
         effects.ShouldContain(e =>
-            e.Provider == "redis"
-            && e.Observations != null
-            && e.Observations.Any(o => o.Type == "looped_effect" && o.Context == "foreach")
+            e.Provider == "redis" && e.Observations != null && e.Observations.Any(o => o.Type == "looped_effect" && o.Context == "foreach")
         );
 
         // parallel_fanout: TeamWorkflow.ProcessBatchAsync reads redis inside `Parallel.ForEach(...)`.
@@ -388,14 +400,19 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
         var epData = FactProjection.EntryPointData(result);
         var effects = FactEffectDeriver.Derive(
-            FactProjection.Invocations(result), rules, providerFilter: null,
-            baseEdges: epData.BaseEdges, ctorRefs: epData.CtorRefs);
+            FactProjection.Invocations(result),
+            rules,
+            providerFilter: null,
+            baseEdges: epData.BaseEdges,
+            ctorRefs: epData.CtorRefs
+        );
 
         // G5: new InvoiceEntity(pk) and new InvoiceEntity(pk, txn) are llblgen fetches; the empty
         // `new InvoiceEntity { ... }` ctor is NOT. ResourceType for a ctor-fetch is the entity type.
         var entityFetches = effects
-            .Where(e => e.Provider == "llblgen" && e.Operation == "fetch"
-                && e.ResourceType.Contains("InvoiceEntity", StringComparison.Ordinal))
+            .Where(e =>
+                e.Provider == "llblgen" && e.Operation == "fetch" && e.ResourceType.Contains("InvoiceEntity", StringComparison.Ordinal)
+            )
             .ToArray();
 
         // Exactly the two with-argument constructors in EntityFetcher.Load — the empty ctors
@@ -423,17 +440,16 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         proxyEffects.ShouldContain(e =>
             e.Operation == "show"
             && e.ResourceType.Contains("InvoiceEditProxy", StringComparison.Ordinal)
-            && e.EnclosingSymbolId!.Contains("InvoiceMain.SubmitInvoice", StringComparison.Ordinal));
+            && e.EnclosingSymbolId!.Contains("InvoiceMain.SubmitInvoice", StringComparison.Ordinal)
+        );
 
         // FP #1: TermsAndConditions (a ClientPage) declares its OWN ShowDialog() and calls it.
         // It does not derive ProxyBase, so it must NOT be a clientpage_proxy effect.
-        proxyEffects.ShouldNotContain(e =>
-            e.ResourceType.Contains("TermsAndConditions", StringComparison.Ordinal));
+        proxyEffects.ShouldNotContain(e => e.ResourceType.Contains("TermsAndConditions", StringComparison.Ordinal));
 
         // FP #2: InvoiceServiceProxy's name ends in "Proxy" but it does NOT derive ProxyBase.
         // The base-type gate (not the name suffix) must exclude it.
-        proxyEffects.ShouldNotContain(e =>
-            e.ResourceType.Contains("InvoiceServiceProxy", StringComparison.Ordinal));
+        proxyEffects.ShouldNotContain(e => e.ResourceType.Contains("InvoiceServiceProxy", StringComparison.Ordinal));
     }
 
     // The ClientPage navigation proxies (<Page>Proxy : ProxyBase) are emitted by the
@@ -446,10 +462,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
     public async Task Source_generated_clientpage_proxies_are_indexed()
     {
         var playground = await _playgrounds.LegacyNet48Async();
-        var typeNames = (playground.Result.Symbols ?? [])
-            .Where(s => s.Kind == "type")
-            .Select(s => s.Name)
-            .ToArray();
+        var typeNames = (playground.Result.Symbols ?? []).Where(s => s.Kind == "type").Select(s => s.Name).ToArray();
 
         typeNames.ShouldContain("LoginProxy");
     }

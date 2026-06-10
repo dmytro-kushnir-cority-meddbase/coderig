@@ -45,25 +45,32 @@ internal static class XmlDiMiner
             if (string.IsNullOrWhiteSpace(impl))
                 return;
 
-            foreach (var iface in service.Elements()
-                .Where(e => e.Name.LocalName == "Implements")
-                .Select(e => e.Attribute("type")?.Value)
-                .Where(t => !string.IsNullOrWhiteSpace(t)))
+            foreach (
+                var iface in service
+                    .Elements()
+                    .Where(e => e.Name.LocalName == "Implements")
+                    .Select(e => e.Attribute("type")?.Value)
+                    .Where(t => !string.IsNullOrWhiteSpace(t))
+            )
             {
-                results.Add(new DiRegistrationInfo(
-                    ServiceType: iface!,
-                    ImplementationType: impl,
-                    Lifetime: "singleton",
-                    RegistrationKind: "xml_service_descriptor",
-                    FilePath: filePath,
-                    Line: 0,
-                    Confidence: "high",
-                    Basis: "xml_config",
-                    Reason: "xml_di_miner",
-                    Evidence: Path.GetFileName(filePath)
-                ));
+                results.Add(
+                    new DiRegistrationInfo(
+                        ServiceType: iface!,
+                        ImplementationType: impl,
+                        Lifetime: "singleton",
+                        RegistrationKind: "xml_service_descriptor",
+                        FilePath: filePath,
+                        Line: 0,
+                        Confidence: "high",
+                        Basis: "xml_config",
+                        Reason: "xml_di_miner",
+                        Evidence: Path.GetFileName(filePath)
+                    )
+                );
             }
         }
-        catch { /* skip malformed files */ }
+        catch
+        { /* skip malformed files */
+        }
     }
 }

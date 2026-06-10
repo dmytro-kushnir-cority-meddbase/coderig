@@ -74,7 +74,8 @@ internal static class FactExtractor
                 receiverType,
                 firstArgTemplate,
                 firstArgType,
-                structural);
+                structural
+            );
         }
 
         // --- Object creations -> ctor refs ---
@@ -100,8 +101,15 @@ internal static class FactExtractor
             if (type is null or IErrorTypeSymbol)
                 continue;
             AddReference(
-                references, type, "throw", EnclosingSymbolId(thrown, model), tree, thrown,
-                structural: StructuralContextOf(thrown, model), allowRuntime: true);
+                references,
+                type,
+                "throw",
+                EnclosingSymbolId(thrown, model),
+                tree,
+                thrown,
+                structural: StructuralContextOf(thrown, model),
+                allowRuntime: true
+            );
         }
 
         return new FactExtractionResult(symbols, references, relations);
@@ -113,26 +121,27 @@ internal static class FactExtractor
         if (docId is null)
             return;
 
-        symbols.Add(new SymbolFact(
-            SymbolId: docId,
-            Kind: KindOf(symbol),
-            Name: symbol.Name,
-            Namespace: symbol.ContainingNamespace?.ToDisplayString() ?? "",
-            ContainingSymbolId: symbol.ContainingSymbol?.GetDocumentationCommentId(),
-            Modifiers: ModifiersOf(symbol),
-            TypeKind: symbol is INamedTypeSymbol t ? t.TypeKind.ToString().ToLowerInvariant() : "",
-            Signature: symbol.ToDisplayString(),
-            FilePath: tree.FilePath,
-            Line: tree.GetLineSpan(node.Span).StartLinePosition.Line + 1,
-            DefiningAssembly: symbol.ContainingAssembly?.Name ?? "",
-            IsOverride: symbol.IsOverride
-        ));
+        symbols.Add(
+            new SymbolFact(
+                SymbolId: docId,
+                Kind: KindOf(symbol),
+                Name: symbol.Name,
+                Namespace: symbol.ContainingNamespace?.ToDisplayString() ?? "",
+                ContainingSymbolId: symbol.ContainingSymbol?.GetDocumentationCommentId(),
+                Modifiers: ModifiersOf(symbol),
+                TypeKind: symbol is INamedTypeSymbol t ? t.TypeKind.ToString().ToLowerInvariant() : "",
+                Signature: symbol.ToDisplayString(),
+                FilePath: tree.FilePath,
+                Line: tree.GetLineSpan(node.Span).StartLinePosition.Line + 1,
+                DefiningAssembly: symbol.ContainingAssembly?.Name ?? "",
+                IsOverride: symbol.IsOverride
+            )
+        );
     }
 
     private static void AddTypeRelations(List<TypeRelationFact> relations, INamedTypeSymbol type, string typeDocId)
     {
-        if (type.BaseType is { SpecialType: SpecialType.None } baseType
-            && baseType.GetDocumentationCommentId() is { } baseDocId)
+        if (type.BaseType is { SpecialType: SpecialType.None } baseType && baseType.GetDocumentationCommentId() is { } baseDocId)
         {
             relations.Add(new TypeRelationFact(typeDocId, baseDocId, "base"));
         }
@@ -155,7 +164,8 @@ internal static class FactExtractor
         string? firstArgumentTemplate = null,
         string? firstArgumentType = null,
         StructuralContext structural = default,
-        bool allowRuntime = false)
+        bool allowRuntime = false
+    )
     {
         // For constructors, point the reference at the constructor's containing type's ctor DocID;
         // for everything else use the symbol's own DocID. Reduced extension methods resolve to the
@@ -180,22 +190,24 @@ internal static class FactExtractor
         if (!inSource && !allowRuntime && !isCallFact && IsRuntimeAssembly(assembly))
             return;
 
-        references.Add(new ReferenceFact(
-            TargetSymbolId: docId,
-            RefKind: refKind,
-            EnclosingSymbolId: enclosingId,
-            TargetAssembly: assembly,
-            TargetInSource: inSource,
-            FilePath: tree.FilePath,
-            Line: tree.GetLineSpan(node.Span).StartLinePosition.Line + 1,
-            ReceiverType: receiverType,
-            FirstArgumentTemplate: firstArgumentTemplate,
-            FirstArgumentType: firstArgumentType,
-            EnclosingLoopKind: structural.LoopKind,
-            EnclosingLoopDetail: structural.LoopDetail,
-            EnclosingInvocations: structural.EnclosingInvocations,
-            EnclosingCatchTypes: structural.CatchTypes
-        ));
+        references.Add(
+            new ReferenceFact(
+                TargetSymbolId: docId,
+                RefKind: refKind,
+                EnclosingSymbolId: enclosingId,
+                TargetAssembly: assembly,
+                TargetInSource: inSource,
+                FilePath: tree.FilePath,
+                Line: tree.GetLineSpan(node.Span).StartLinePosition.Line + 1,
+                ReceiverType: receiverType,
+                FirstArgumentTemplate: firstArgumentTemplate,
+                FirstArgumentType: firstArgumentType,
+                EnclosingLoopKind: structural.LoopKind,
+                EnclosingLoopDetail: structural.LoopDetail,
+                EnclosingInvocations: structural.EnclosingInvocations,
+                EnclosingCatchTypes: structural.CatchTypes
+            )
+        );
     }
 
     // Static type of an invocation's receiver: `a.Foo()` -> type of `a` (open-generic FQN).
@@ -206,8 +218,7 @@ internal static class FactExtractor
         if (name.Parent is MemberAccessExpressionSyntax member && member.Name == name)
             return model.GetTypeInfo(member.Expression).Type?.OriginalDefinition.ToDisplayString();
 
-        if (name.Parent is MemberBindingExpressionSyntax binding
-            && binding.Parent is ConditionalAccessExpressionSyntax conditional)
+        if (name.Parent is MemberBindingExpressionSyntax binding && binding.Parent is ConditionalAccessExpressionSyntax conditional)
             return model.GetTypeInfo(conditional.Expression).Type?.OriginalDefinition.ToDisplayString();
 
         return null;
@@ -218,7 +229,11 @@ internal static class FactExtractor
     // which resolves to the attribute constructor and is recorded as a "ctor" ref — the attribute's
     // first positional argument, exposing MVC route literals ([Route("..")], [HttpGet("..")]) to the
     // entry-point deriver (P1d). Null for any other ref shape.
-    private static ExpressionSyntax? FirstArgumentExpressionOf(SimpleNameSyntax name, string refKind, InvocationExpressionSyntax? invocation)
+    private static ExpressionSyntax? FirstArgumentExpressionOf(
+        SimpleNameSyntax name,
+        string refKind,
+        InvocationExpressionSyntax? invocation
+    )
     {
         if (refKind == "invocation")
             return invocation?.ArgumentList.Arguments.FirstOrDefault()?.Expression;
@@ -338,13 +353,14 @@ internal static class FactExtractor
     {
         if (name.Parent is InvocationExpressionSyntax direct && direct.Expression == name)
             return direct;
-        if (name.Parent is MemberAccessExpressionSyntax member
+        if (
+            name.Parent is MemberAccessExpressionSyntax member
             && member.Name == name
             && member.Parent is InvocationExpressionSyntax memberInvocation
-            && memberInvocation.Expression == member)
+            && memberInvocation.Expression == member
+        )
             return memberInvocation;
-        if (name.Parent is MemberBindingExpressionSyntax binding
-            && binding.Parent is InvocationExpressionSyntax conditionalInvocation)
+        if (name.Parent is MemberBindingExpressionSyntax binding && binding.Parent is InvocationExpressionSyntax conditionalInvocation)
             return conditionalInvocation;
         return null;
     }
@@ -413,27 +429,36 @@ internal static class FactExtractor
         // Modifiers previously omitted this; the dead-code finder tiers candidates by visibility
         // (private uncalled = high confidence; public = possible external API), so it's recorded here.
         var access = AccessibilityOf(symbol.DeclaredAccessibility);
-        if (access is not null) parts.Add(access);
-        if (symbol.IsStatic) parts.Add("static");
-        if (symbol.IsAbstract) parts.Add("abstract");
-        if (symbol.IsSealed) parts.Add("sealed");
-        if (symbol.IsVirtual) parts.Add("virtual");
-        if (symbol.IsOverride) parts.Add("override");
-        if (symbol is IMethodSymbol { IsAsync: true }) parts.Add("async");
-        if (symbol is IFieldSymbol { IsReadOnly: true } or IPropertySymbol { IsReadOnly: true }) parts.Add("readonly");
+        if (access is not null)
+            parts.Add(access);
+        if (symbol.IsStatic)
+            parts.Add("static");
+        if (symbol.IsAbstract)
+            parts.Add("abstract");
+        if (symbol.IsSealed)
+            parts.Add("sealed");
+        if (symbol.IsVirtual)
+            parts.Add("virtual");
+        if (symbol.IsOverride)
+            parts.Add("override");
+        if (symbol is IMethodSymbol { IsAsync: true })
+            parts.Add("async");
+        if (symbol is IFieldSymbol { IsReadOnly: true } or IPropertySymbol { IsReadOnly: true })
+            parts.Add("readonly");
         return string.Join(' ', parts);
     }
 
-    private static string? AccessibilityOf(Accessibility accessibility) => accessibility switch
-    {
-        Accessibility.Public => "public",
-        Accessibility.Private => "private",
-        Accessibility.Internal => "internal",
-        Accessibility.Protected => "protected",
-        Accessibility.ProtectedOrInternal => "protected internal",
-        Accessibility.ProtectedAndInternal => "private protected",
-        _ => null,
-    };
+    private static string? AccessibilityOf(Accessibility accessibility) =>
+        accessibility switch
+        {
+            Accessibility.Public => "public",
+            Accessibility.Private => "private",
+            Accessibility.Internal => "internal",
+            Accessibility.Protected => "protected",
+            Accessibility.ProtectedOrInternal => "protected internal",
+            Accessibility.ProtectedAndInternal => "private protected",
+            _ => null,
+        };
 
     private static bool IsRuntimeAssembly(string assembly) =>
         assembly.StartsWith("System", StringComparison.Ordinal)

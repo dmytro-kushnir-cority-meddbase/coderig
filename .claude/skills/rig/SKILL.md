@@ -28,7 +28,9 @@ rig mine Solution.slnx --from Entry.csproj --parallelism 1   # BFS down the dep 
 
 # Query (cwd MUST contain .rig/)
 rig reaches "Type.Method"                        # effects reachable from an entry point
-rig tree "Type.Method"                           # call tree (default: paths that hit an effect; --full)
+rig tree "Type.Method"                            # call tree (default: paths that hit an effect; --full)
+rig tree "Type.Method" --effects --maxdepth 3     # COMPACT: only effectful methods, no skeleton (escape the 10-screen tree)
+rig tree "Type.Method" --exclude throw            # drop a noisy effect class (see Effect filtering)
 rig callers "Type.Method" --roots                # reverse: entry-point candidates that reach it
 rig path "From.Method" "To.Method"               # one concrete path between two symbols
 rig derive                                       # re-derive ALL effects + entry points from facts
@@ -37,6 +39,20 @@ rig refs "IFoo" / rig symbols "Foo" --kind method
 ```
 
 Patterns are case-insensitive substring matches over DocIDs (`M:Ns.Type.Method(args)`).
+
+## Reading effect output (don't misread the counts)
+
+`reaches`/`tree`/`derive` annotate methods with effects, each prefixed by an emoji (💾 write, 🔍 read,
+📥 fetch, ☎️ soap, 🌐 http, 📤 queue, 📣 echo, 📡 eventbus, 🗃️ cache, 📦 object-store, 📁 io, ⚠️ throw,
+✅/↩️ tx). Override the glyph map per-repo with `rig.effect-emoji.json` (`{"llblgen:write":"💾",...}`).
+
+- **An effect listed N times = N static call-sites that reach it (branches included), NOT N runtime
+  writes.** An insert-vs-update method shows the same write twice (one per branch); only one fires per
+  call. Read occurrences as "places in code," never as execution multiplicity.
+- **`tree` children are in source order** (call-site line ≈ eager-inline execution order), deterministic.
+- **Effect filtering** — `--only <list>` keeps just those, `--exclude <list>` drops them (exclude wins).
+  The list is comma- **or** whitespace-separated and repeatable; tokens match `provider` (`throw`) or
+  `provider:operation` (`llblgen:read`). Headline use: **`--exclude throw`** to hide exceptions.
 
 ## Core workflow — answer a reachability/effect question
 

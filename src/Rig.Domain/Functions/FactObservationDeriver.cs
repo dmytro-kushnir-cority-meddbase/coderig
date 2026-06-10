@@ -20,15 +20,17 @@ public static class FactObservationDeriver
         string? loopDetail,
         IReadOnlyList<FactStructuralContext.EnclosingInvocation> enclosingInvocations,
         IReadOnlyList<string> catchTypes,
-        FactObservationRules rules)
+        FactObservationRules rules
+    )
     {
         var observations = new List<EffectObservationInfo>();
 
         // looped_effect — the effect is lexically inside a loop (nearest enclosing loop).
         if (loopKind is not null)
         {
-            observations.Add(new EffectObservationInfo(
-                "looped_effect", loopKind, loopDetail ?? loopKind, "high", "compilation", "effect_inside_loop"));
+            observations.Add(
+                new EffectObservationInfo("looped_effect", loopKind, loopDetail ?? loopKind, "high", "compilation", "effect_inside_loop")
+            );
         }
 
         // parallel_fanout — a fanout wrapper (Task.WhenAll / Parallel.ForEach…) lexically encloses
@@ -37,12 +39,14 @@ public static class FactObservationDeriver
         {
             var fanout = rules.ParallelFanout.FirstOrDefault(f =>
                 string.Equals(enclosing.ReceiverText, f.Receiver, StringComparison.Ordinal)
-                && f.Methods.Contains(enclosing.MethodName, StringComparer.Ordinal));
+                && f.Methods.Contains(enclosing.MethodName, StringComparer.Ordinal)
+            );
             if (fanout is not null)
             {
                 var context = $"{fanout.Receiver}.{enclosing.MethodName}";
-                observations.Add(new EffectObservationInfo(
-                    "parallel_fanout", context, context, "high", "compilation", "effect_inside_parallel_fanout"));
+                observations.Add(
+                    new EffectObservationInfo("parallel_fanout", context, context, "high", "compilation", "effect_inside_parallel_fanout")
+                );
                 break;
             }
         }
@@ -54,13 +58,25 @@ public static class FactObservationDeriver
         {
             var match = enclosingInvocations
                 .Where(e => rule.WrapperMethods.Contains(e.MethodName, StringComparer.Ordinal))
-                .Select(e => (e.ReceiverType, Pattern: rule.ReceiverTypePatterns.FirstOrDefault(p =>
-                    e.ReceiverType.IndexOf(p, StringComparison.Ordinal) >= 0)))
+                .Select(e =>
+                    (
+                        e.ReceiverType,
+                        Pattern: rule.ReceiverTypePatterns.FirstOrDefault(p => e.ReceiverType.IndexOf(p, StringComparison.Ordinal) >= 0)
+                    )
+                )
                 .FirstOrDefault(m => m.Pattern is not null);
             if (match.Pattern is not null)
             {
-                observations.Add(new EffectObservationInfo(
-                    "resilience_retry", match.Pattern, match.ReceiverType, "high", "compilation", "effect_inside_resilience_retry"));
+                observations.Add(
+                    new EffectObservationInfo(
+                        "resilience_retry",
+                        match.Pattern,
+                        match.ReceiverType,
+                        "high",
+                        "compilation",
+                        "effect_inside_resilience_retry"
+                    )
+                );
                 break;
             }
         }
@@ -77,8 +93,16 @@ public static class FactObservationDeriver
                 var matched = rule.CatchTypePatterns.FirstOrDefault(p => caught.IndexOf(p, StringComparison.Ordinal) >= 0);
                 if (matched is not null)
                 {
-                    observations.Add(new EffectObservationInfo(
-                        "concurrency_handled", matched, caught, "high", "compilation", "efcore_optimistic_concurrency_catch"));
+                    observations.Add(
+                        new EffectObservationInfo(
+                            "concurrency_handled",
+                            matched,
+                            caught,
+                            "high",
+                            "compilation",
+                            "efcore_optimistic_concurrency_catch"
+                        )
+                    );
                     break;
                 }
             }

@@ -1,5 +1,5 @@
-using MMS.Web.UI.Attributes;
 using LegacyNet48Web.Pages.Proxies;
+using MMS.Web.UI.Attributes;
 
 namespace LegacyNet48Web.Pages.Accounts
 {
@@ -24,13 +24,9 @@ namespace LegacyNet48Web.Pages.Accounts
         }
 
         [ClientAction]
-        public void RefreshList()
-        {
-        }
+        public void RefreshList() { }
 
         // No [ClientAction]: a plain helper, NOT an action entry point.
-        public void RecomputeTotals()
-        {
-        }
+        public void RecomputeTotals() { }
     }
 }

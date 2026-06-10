@@ -1,19 +1,17 @@
-﻿using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Microsoft.CodeAnalysis.Text;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Text;
 
 namespace MMS.Tools.RequestResponseProxyProjectBuilder.Roslyn;
 
 [Generator]
 public class RequestResponseProxyGenerator : ISourceGenerator
 {
-    public void Initialize(GeneratorInitializationContext context)
-    {
-    }
+    public void Initialize(GeneratorInitializationContext context) { }
 
     public void Execute(GeneratorExecutionContext context)
     {
@@ -57,8 +55,14 @@ public class RequestResponseProxyGenerator : ISourceGenerator
                 var requestProxy = project.GenerateProxy(typeSymbol: typeSymbol, template: requestTemplate);
                 var responseProxy = project.GenerateProxy(typeSymbol: typeSymbol, template: responseTemplate);
 
-                context.AddSource(hintName: $"{safeName}_ResponseProxy.g.cs", sourceText: SourceText.From(text: responseProxy, encoding: Encoding.UTF8));
-                context.AddSource(hintName: $"{safeName}_RequestProxy.g.cs", sourceText: SourceText.From(text: requestProxy, encoding: Encoding.UTF8));
+                context.AddSource(
+                    hintName: $"{safeName}_ResponseProxy.g.cs",
+                    sourceText: SourceText.From(text: responseProxy, encoding: Encoding.UTF8)
+                );
+                context.AddSource(
+                    hintName: $"{safeName}_RequestProxy.g.cs",
+                    sourceText: SourceText.From(text: requestProxy, encoding: Encoding.UTF8)
+                );
             }
         }
     }
