@@ -1,6 +1,4 @@
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Rig.Analysis.Rules;
 using Rig.Domain.Data;
 
 namespace Rig.Analysis;
@@ -21,21 +19,3 @@ internal sealed record SourceExtractionResult(
 );
 
 internal sealed record SourceModel(string ProjectName, string FilePath, SyntaxTree Tree, SyntaxNode Root, SemanticModel SemanticModel);
-
-internal sealed record MethodModel(
-    string Key,
-    string DisplayName,
-    string FilePath,
-    int Line,
-    MethodDeclarationSyntax Body,
-    SemanticModel SemanticModel,
-    IReadOnlyList<EffectInfo> Effects
-);
-
-internal sealed record CallGraphContext(
-    IReadOnlyDictionary<string, MethodModel> Methods,
-    IReadOnlyList<EffectRule> DispatchRules,
-    IReadOnlyDictionary<string, IReadOnlyList<string>> DispatchIndex,
-    IReadOnlyDictionary<string, string> SingleImplIndex,
-    IReadOnlyList<EffectInfo> AllEffects
-);

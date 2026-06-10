@@ -1,3 +1,0 @@
-﻿namespace Rig.Domain.Data;
-
-public sealed record EntryPointInfo(string Kind, string Method, string Route, string DisplayName, string FilePath, int Line);
