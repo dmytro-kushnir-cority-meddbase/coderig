@@ -137,8 +137,9 @@ public static class CliApplication
 
         output.WriteLine($"Indexed: {Path.GetFullPath(result.SolutionPath)}");
         output.WriteLine($"Run: {runId}");
-        output.WriteLine($"EntryPoints: {result.EntryPoints.Count}");
-        output.WriteLine($"Effects: {result.Effects.Count}");
+        output.WriteLine($"Symbols: {result.Symbols?.Count ?? 0}");
+        output.WriteLine($"References: {result.References?.Count ?? 0}");
+        output.WriteLine($"DiRegistrations: {result.DiRegistrations.Count}");
 
         return 0;
     }
@@ -156,7 +157,7 @@ public static class CliApplication
             output.WriteLine($"    indexed={run.CreatedAtUtc:u}");
             output.WriteLine($"    solution={run.SolutionPath}");
             output.WriteLine(
-                $"    entrypoints={run.EntryPointCount} effects={run.EffectCount} di={run.DiRegistrationCount} methods={run.MethodObservationCount} invocations={run.InvocationObservationCount}"
+                $"    symbols={run.SymbolCount} references={run.ReferenceCount} di={run.DiRegistrationCount}"
             );
         }
 

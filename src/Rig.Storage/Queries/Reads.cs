@@ -76,11 +76,9 @@ public static class Reads
                 run.Id,
                 DateTimeOffset.Parse(run.CreatedAtUtcText),
                 run.SolutionPath,
-                run.EntryPointCount,
-                run.EffectCount,
+                run.SymbolCount,
+                run.ReferenceCount,
                 run.DiRegistrationCount,
-                run.MethodObservationCount,
-                run.InvocationObservationCount,
                 run.ProjectIdentity,
                 run.SourceProjectPath
             ))

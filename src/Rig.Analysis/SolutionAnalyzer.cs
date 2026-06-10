@@ -1,4 +1,3 @@
-using Rig.Analysis.CallGraph;
 using Rig.Analysis.Extraction;
 using Rig.Analysis.Inventory;
 using Rig.Analysis.Rules;
@@ -43,19 +42,7 @@ public static class SolutionAnalyzer
             .ToArray();
 
         progress?.Invoke("Building projections");
-        var entryPoints = extractionResults.SelectMany(result => result.EntryPoints).ToArray();
-        var effects = extractionResults.SelectMany(result => result.Effects).ToArray();
         var diRegistrations = extractionResults.SelectMany(result => result.DiRegistrations).ToArray();
-        var methodObservations = extractionResults
-            .SelectMany(result => result.MethodObservations)
-            .OrderBy(observation => observation.FilePath, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(observation => observation.Line)
-            .ToArray();
-        var invocationObservations = extractionResults
-            .SelectMany(result => result.InvocationObservations)
-            .OrderBy(observation => observation.FilePath, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(observation => observation.Line)
-            .ToArray();
         var symbolFacts = extractionResults.SelectMany(result => result.Symbols).ToArray();
         var referenceFacts = extractionResults.SelectMany(result => result.References).ToArray();
         var typeRelationFacts = extractionResults.SelectMany(result => result.TypeRelations).ToArray();
@@ -73,17 +60,8 @@ public static class SolutionAnalyzer
         if (xmlRegistrations.Count > 0)
             progress?.Invoke($"XML DI miner: {xmlRegistrations.Count} mappings from {rules.XmlDiFiles.Count} path(s)");
 
-        progress?.Invoke($"Building callgraphs for {entryPoints.Length} entrypoints");
-        var callGraphs = CallGraphBuilder.Build(
-            entryPoints,
-            sources,
-            effects,
-            rules.Effects.Where(r => r.TreatAsDispatch).ToArray(),
-            allDiRegistrations
-        );
-
-        progress?.Invoke($"Analysis complete: {entryPoints.Length} entrypoints, {effects.Length} effects, "
-            + $"{symbolFacts.Length} symbols, {referenceFacts.Length} references");
+        progress?.Invoke($"Analysis complete: {symbolFacts.Length} symbols, "
+            + $"{referenceFacts.Length} references, {allDiRegistrations.Length} di registrations");
 
         // For project-level indexing, record the specific project path
         var sourceProjectPath = solutionFullPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
@@ -93,12 +71,7 @@ public static class SolutionAnalyzer
         return new AnalysisResult(
             solutionPath,
             sourceSet.SourceFiles,
-            entryPoints,
-            effects,
-            diRegistrations,
-            callGraphs,
-            methodObservations,
-            invocationObservations,
+            allDiRegistrations,
             ProjectIdentity: projectIdentity,
             SourceProjectPath: sourceProjectPath,
             Symbols: symbolFacts,
@@ -114,21 +87,10 @@ public static class SolutionAnalyzer
 
     private static SourceExtractionResult ExtractSource(SourceModel source, AnalysisRuleSet rules)
     {
-        var entryPoints = EntryPointExtractor
-            .FindMinimalApiEntryPoints(source, rules)
-            .Concat(EntryPointExtractor.FindMvcEntryPoints(source, rules))
-            .Concat(EntryPointExtractor.FindClassInheritanceEntryPoints(source, rules))
-            .Concat(EntryPointExtractor.FindPageModelEntryPoints(source, rules))
-            .ToArray();
-
         var facts = FactExtractor.Extract(source);
 
         return new SourceExtractionResult(
-            entryPoints,
-            EffectExtractor.FindEffects(source, rules).ToArray(),
             DiRegistrationExtractor.FindDiRegistrations(source, rules).ToArray(),
-            RoslynObservationExtractor.FindMethodObservations(source).ToArray(),
-            RoslynObservationExtractor.FindInvocationObservations(source).ToArray(),
             facts.Symbols,
             facts.References,
             facts.TypeRelations

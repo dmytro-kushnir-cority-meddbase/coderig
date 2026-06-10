@@ -4,11 +4,9 @@ public record RunSummary(
     string Id,
     DateTimeOffset CreatedAtUtc,
     string SolutionPath,
-    int EntryPointCount,
-    int EffectCount,
+    int SymbolCount,
+    int ReferenceCount,
     int DiRegistrationCount,
-    int MethodObservationCount,
-    int InvocationObservationCount,
     string? ProjectIdentity = null,
     string? SourceProjectPath = null
 );

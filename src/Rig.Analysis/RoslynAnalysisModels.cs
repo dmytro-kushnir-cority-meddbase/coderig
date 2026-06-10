@@ -14,11 +14,7 @@ internal sealed record SolutionSourceSet(
 );
 
 internal sealed record SourceExtractionResult(
-    IReadOnlyList<EntryPointInfo> EntryPoints,
-    IReadOnlyList<EffectInfo> Effects,
     IReadOnlyList<DiRegistrationInfo> DiRegistrations,
-    IReadOnlyList<MethodObservationInfo> MethodObservations,
-    IReadOnlyList<InvocationObservationInfo> InvocationObservations,
     IReadOnlyList<SymbolFact> Symbols,
     IReadOnlyList<ReferenceFact> References,
     IReadOnlyList<TypeRelationFact> TypeRelations
