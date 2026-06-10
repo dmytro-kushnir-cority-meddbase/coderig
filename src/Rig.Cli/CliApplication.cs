@@ -35,11 +35,6 @@ public static class CliApplication
             "index" => await RunIndexAsync(args, output, error, workingDirectory),
             "mine" => await RunMineAsync(args, output, error, workingDirectory),
             "runs" => await RunRunsAsync(output, workingDirectory),
-            "entrypoints" => await RunEntryPointsAsync(output, error, workingDirectory),
-            "effects" => await RunEffectsAsync(args, output, error, workingDirectory),
-            "trace" => await RunTraceAsync(args, output, error, workingDirectory),
-            "callgraph" => await RunCallGraphAsync(args, output, error, workingDirectory),
-            "callgraphs" => await RunCallGraphsAsync(args, output, error, workingDirectory),
             "di" => await RunDiAsync(output, error, workingDirectory),
             "symbols" => await RunSymbolsAsync(args, output, error, workingDirectory),
             "refs" => await RunRefsAsync(args, output, error, workingDirectory),
@@ -79,13 +74,7 @@ public static class CliApplication
         output.WriteLine("  rig index <solution|project> [--rules <path>...] [--identity <id>]");
         output.WriteLine("  rig mine <solution> --from <project.csproj> [--rules <path>...] [--identity <id>] [--parallelism <n>]");
         output.WriteLine("  rig runs");
-        output.WriteLine("  rig entrypoints");
-        output.WriteLine("  rig callgraph <index> [--full] [--summary]");
-        output.WriteLine("  rig callgraphs [--full] [--summary]");
-        output.WriteLine("  rig effects [--entrypoint <index>]");
-        output.WriteLine("  rig trace <symbol> [--paths]");
-        output.WriteLine("  rig trace --contains <text> [--paths]");
-        output.WriteLine("  rig di");
+        output.WriteLine("  rig di   (DI registrations: service -> implementation, lifetime, source)");
         output.WriteLine("  rig symbols <pattern> [--kind <k>] [--limit <n>]");
         output.WriteLine("  rig refs <pattern> [--first-party] [--kind <refkind>] [--limit <n>]");
         output.WriteLine("  rig path <fromPattern> <toPattern>");
@@ -174,61 +163,6 @@ public static class CliApplication
         return 0;
     }
 
-    private static async Task<int> RunEntryPointsAsync(TextWriter output, TextWriter error, string workingDirectory)
-    {
-        await using var context = OpenContext(workingDirectory);
-        var entryPoints = await Reads.LoadEntryPointsAsync(context);
-        if (entryPoints is null)
-        {
-            return NoRunError(error);
-        }
-
-        output.WriteLine("EntryPoints");
-        for (var i = 0; i < entryPoints.Count; i++)
-        {
-            var ep = entryPoints[i];
-            output.WriteLine($"  [{i, 3}] {ep.DisplayName}  {Path.GetFileName(ep.FilePath)}:{ep.Line}");
-        }
-
-        return 0;
-    }
-
-    private static async Task<int> RunEffectsAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
-    {
-        int? entryPointIndex = null;
-        if (args.Length >= 3 && args[1] == "--entrypoint")
-        {
-            if (!int.TryParse(args[2], out var idx))
-            {
-                error.WriteLine("Invalid entrypoint index.");
-                error.WriteLine("Usage: rig effects --entrypoint <index>");
-                return 2;
-            }
-            entryPointIndex = idx;
-        }
-
-        await using var context = OpenContext(workingDirectory);
-
-        IReadOnlyList<EffectInfo>? effects;
-        if (entryPointIndex.HasValue)
-        {
-            effects = await Reads.LoadEffectsForEntryPointAsync(context, entryPointIndex.Value);
-        }
-        else
-        {
-            effects = await Reads.LoadEffectsAsync(context);
-        }
-
-        if (effects is null)
-        {
-            return NoRunError(error);
-        }
-
-        EffectRenderer.Render(effects, entryPointIndex, output);
-
-        return 0;
-    }
-
     private static async Task<int> RunDiAsync(TextWriter output, TextWriter error, string workingDirectory)
     {
         await using var context = OpenContext(workingDirectory);
@@ -239,57 +173,6 @@ public static class CliApplication
         }
 
         DiRenderer.Render(registrations, output);
-
-        return 0;
-    }
-
-    private static async Task<int> RunTraceAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
-    {
-        var pathsMode = args.Contains("--paths");
-        string? symbol;
-
-        if (args.Length >= 3 && args[1] == "--contains")
-        {
-            await using var context = OpenContext(workingDirectory);
-            var matches = await Reads.FindCallGraphSymbolsAsync(context, args[2]);
-            if (matches is null)
-            {
-                return NoRunError(error);
-            }
-
-            if (matches.Count == 0)
-            {
-                error.WriteLine($"No callgraph symbol matches: {args[2]}");
-                return 2;
-            }
-
-            if (matches.Count > 1)
-            {
-                TraceRenderer.RenderAmbiguous(args[2], matches, error);
-                return 2;
-            }
-
-            symbol = matches[0];
-        }
-        else if (args.Length >= 2 && args[1] != "--paths")
-        {
-            symbol = args[1];
-        }
-        else
-        {
-            error.WriteLine("Usage: rig trace <symbol> [--paths]");
-            error.WriteLine("Usage: rig trace --contains <text> [--paths]");
-            return 2;
-        }
-
-        await using var traceContext = OpenContext(workingDirectory);
-        var trace = await Reads.LoadTraceAsync(traceContext, symbol);
-        if (trace is null)
-        {
-            return NoRunError(error);
-        }
-
-        TraceRenderer.Render(trace, pathsMode, output);
 
         return 0;
     }
@@ -335,87 +218,10 @@ public static class CliApplication
         return 0;
     }
 
-    private static async Task<int> RunCallGraphAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
-    {
-        if (args.Length < 2 || !int.TryParse(args[1], out var entryPointIndex))
-        {
-            error.WriteLine("Missing or invalid entrypoint index.");
-            error.WriteLine("Usage: rig callgraph <index> [--full] [--summary]");
-            return 2;
-        }
-
-        var fullMode = args.Contains("--full");
-        var summaryMode = args.Contains("--summary");
-
-        await using var context = OpenContext(workingDirectory);
-        var runId = await GetLatestRunIdOrWriteErrorAsync(context, error);
-        if (runId is null)
-        {
-            return 2;
-        }
-
-        var callGraph = await Reads.LoadCallGraphAsync(context, runId, entryPointIndex);
-
-        if (callGraph is null)
-        {
-            error.WriteLine($"Callgraph not found: [{entryPointIndex}]");
-            return 2;
-        }
-
-        CallGraphRenderer.Render(callGraph, entryPointIndex, fullMode, summaryMode, output);
-
-        return 0;
-    }
-
-    private static async Task<int> RunCallGraphsAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
-    {
-        var fullMode = args.Contains("--full");
-        var summaryMode = args.Contains("--summary");
-
-        await using var context = OpenContext(workingDirectory);
-        var runId = await GetLatestRunIdOrWriteErrorAsync(context, error);
-        if (runId is null)
-        {
-            return 2;
-        }
-
-        var entryPoints = await Reads.LoadEntryPointsAsync(context);
-        if (entryPoints is null)
-        {
-            return NoRunError(error);
-        }
-
-        for (var i = 0; i < entryPoints.Count; i++)
-        {
-            var callGraph = await Reads.LoadCallGraphAsync(context, runId, i);
-            if (callGraph is null)
-            {
-                continue;
-            }
-
-            CallGraphRenderer.Render(callGraph, i, fullMode, summaryMode, output);
-
-            output.WriteLine();
-        }
-
-        return 0;
-    }
-
     private static RigDbContext OpenContext(string workingDirectory)
     {
         var storeDirectory = Path.Combine(workingDirectory, ".rig");
         return new RigDbContext(Path.Combine(storeDirectory, "rig.db"));
-    }
-
-    private static async Task<string?> GetLatestRunIdOrWriteErrorAsync(RigDbContext context, TextWriter error)
-    {
-        var runId = await Reads.GetLatestRunIdAsync(context);
-        if (runId is null)
-        {
-            NoRunError(error);
-        }
-
-        return runId;
     }
 
     private static int NoRunError(TextWriter error)
