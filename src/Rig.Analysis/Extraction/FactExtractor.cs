@@ -566,10 +566,13 @@ internal static class FactExtractor
                 !assignment.OperatorToken.IsKind(SyntaxKind.EqualsToken),
                 true
             ),
-            PrefixUnaryExpressionSyntax prefix when prefix.IsKind(SyntaxKind.PreIncrementExpression)
-                || prefix.IsKind(SyntaxKind.PreDecrementExpression) => (true, true),
-            PostfixUnaryExpressionSyntax postfix when postfix.IsKind(SyntaxKind.PostIncrementExpression)
-                || postfix.IsKind(SyntaxKind.PostDecrementExpression) => (true, true),
+            PrefixUnaryExpressionSyntax prefix
+                when prefix.IsKind(SyntaxKind.PreIncrementExpression) || prefix.IsKind(SyntaxKind.PreDecrementExpression) => (true, true),
+            PostfixUnaryExpressionSyntax postfix
+                when postfix.IsKind(SyntaxKind.PostIncrementExpression) || postfix.IsKind(SyntaxKind.PostDecrementExpression) => (
+                true,
+                true
+            ),
             _ => (true, false),
         };
     }
@@ -603,8 +606,7 @@ internal static class FactExtractor
         return false;
     }
 
-    private static SyntaxNode? AccessorNode(IMethodSymbol accessor) =>
-        accessor.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+    private static SyntaxNode? AccessorNode(IMethodSymbol accessor) => accessor.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
 
     private static string? EnclosingSymbolId(SyntaxNode node, SemanticModel model)
     {

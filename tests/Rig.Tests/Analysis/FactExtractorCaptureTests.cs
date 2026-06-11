@@ -118,16 +118,12 @@ public sealed class FactExtractorCaptureTests
         result.References.ShouldContain(r => r.RefKind == "write" && r.TargetSymbolId.Contains("State.Settings"));
 
         // The write site emits an invocation EDGE into the bodied setter, carrying the receiver type.
-        var setCall = result.References.Single(r =>
-            r.RefKind == "invocation" && r.TargetSymbolId.Contains("set_Settings")
-        );
+        var setCall = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("set_Settings"));
         setCall.EnclosingSymbolId!.ShouldContain("State.Save");
         setCall.ReceiverType.ShouldBe("App.State");
 
         // The read site emits an invocation edge into the bodied getter.
-        var getCall = result.References.Single(r =>
-            r.RefKind == "invocation" && r.TargetSymbolId.Contains("get_Settings")
-        );
+        var getCall = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("get_Settings"));
         getCall.EnclosingSymbolId!.ShouldContain("State.Load");
 
         // Auto-property: no accessor node, no accessor edge — neither read nor write side.
