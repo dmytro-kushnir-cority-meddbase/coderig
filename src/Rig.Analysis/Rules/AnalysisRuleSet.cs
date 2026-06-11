@@ -272,7 +272,12 @@ internal sealed record EffectRule(
     // gates (declaringTypes / declaringTypeNameEndsWith / declaringTypeBaseTypes) apply to the THROWN
     // exception type, and the effect resource is that exception type. Surfaces guard/permission exits
     // (e.g. AccessDeniedException) as effects so a read path that drops its check is visible.
-    bool MatchThrow = false
+    bool MatchThrow = false,
+    // Wrapper gate: match an invocation whose TARGET method itself calls one of these patterns (e.g.
+    // "Echo.Process.ask") — recognizes request/response wrappers from data, no per-type curation. The
+    // effect emits at the wrapper's call sites; resource:type_argument yields the caller's concrete
+    // type-arg combo. See FactEffectRule.TargetCallsMethods.
+    IReadOnlyList<string>? TargetCallsMethods = null
 );
 
 // A curated async-handoff dispatcher: when its consuming ctor/method is handed a method-group, the

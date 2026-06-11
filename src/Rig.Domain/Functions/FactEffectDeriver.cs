@@ -52,7 +52,10 @@ public static class FactEffectDeriver
         // Dispatch rules drive the call graph, not effects — the Roslyn FindEffects skips them, so
         // we do too (otherwise a dispatch rule with a resolvable resource would leak in as an effect).
         // Invocation rules are the default; constructor rules (MatchConstructor) match ctor refs.
-        var invocationRules = rules.Where(r => !r.MatchConstructor && !r.MatchThrow && !r.TreatAsDispatch).ToArray();
+        var wrapperRules = rules.Where(r => r.TargetCallsMethods is { Count: > 0 } && !r.TreatAsDispatch).ToArray();
+        var invocationRules = rules
+            .Where(r => !r.MatchConstructor && !r.MatchThrow && !r.TreatAsDispatch && r.TargetCallsMethods is not { Count: > 0 })
+            .ToArray();
         var constructorRules = rules.Where(r => r.MatchConstructor && !r.TreatAsDispatch).ToArray();
         var throwRules = rules.Where(r => r.MatchThrow && !r.TreatAsDispatch).ToArray();
 
@@ -105,6 +108,55 @@ public static class FactEffectDeriver
                     new DerivedEffect(rule.Provider, rule.Operation, resource!, inv.Enclosing, inv.FilePath, inv.Line, observations)
                 );
                 break; // first matching rule wins
+            }
+        }
+
+        // Wrapper-matched effects: a request/response WRAPPER is any method that itself calls one of a
+        // rule's TargetCallsMethods patterns (e.g. a generic helper that calls Echo.Process.ask). The
+        // effect is emitted at the wrapper's CALL SITES, so resource:type_argument resolves to the
+        // caller's CONCRETE type-arg combo (the message+reply contract the raw ask<R>(pid,object) loses).
+        // Wrappers are identified from data — no per-type curation.
+        if (wrapperRules.Length > 0)
+        {
+            // Per rule: the set of methods that call any of its target patterns (the wrappers).
+            var wrapperSets = wrapperRules.ToDictionary(
+                rule => rule,
+                rule =>
+                {
+                    var set = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var inv in invocations)
+                        if (
+                            inv.Enclosing is not null
+                            && rule.TargetCallsMethods!.Any(p => inv.Target.IndexOf(p, StringComparison.Ordinal) >= 0)
+                        )
+                            set.Add(inv.Enclosing);
+                    return set;
+                }
+            );
+
+            foreach (var inv in invocations)
+            {
+                foreach (var rule in wrapperRules)
+                {
+                    if (providerFilter is not null && !string.Equals(rule.Provider, providerFilter, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (!wrapperSets[rule].Contains(inv.Target))
+                        continue; // the called method is not a wrapper for this rule
+                    // Wrapper rules resolve from the call-site type args / arg name (not the declaring type).
+                    var resource = ResolveResource(
+                        rule.Resource,
+                        inv.Receiver,
+                        inv.FirstArgTemplate,
+                        inv.FirstArgType,
+                        "",
+                        inv.TypeArguments,
+                        inv.FirstArgName
+                    );
+                    if (string.IsNullOrWhiteSpace(resource))
+                        continue;
+                    results.Add(new DerivedEffect(rule.Provider, rule.Operation, resource!, inv.Enclosing, inv.FilePath, inv.Line));
+                    break;
+                }
             }
         }
 

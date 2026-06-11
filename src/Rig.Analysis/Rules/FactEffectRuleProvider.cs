@@ -40,7 +40,8 @@ public static class FactEffectRuleProvider
             rule.ContainingTypes,
             rule.ContainingMethods,
             rule.Resource,
-            rule.TreatAsDispatch
+            rule.TreatAsDispatch,
+            rule.TargetCallsMethods
         );
     }
 }

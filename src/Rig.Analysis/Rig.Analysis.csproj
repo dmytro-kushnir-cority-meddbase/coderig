@@ -7,6 +7,11 @@
   <ItemGroup>
     <PackageReference Include="Buildalyzer" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" />
+    <!-- Direct pins promoting two transitive deps of the Roslyn workspace stack to safe versions:
+         VisualBasic 5.3.0 (match Common, clears NU1608) + System.Security.Cryptography.Xml 10.0.8
+         (clears the High-severity NU1903 on 9.0.0). Versions come from Directory.Packages.props. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.VisualBasic" />
+    <PackageReference Include="System.Security.Cryptography.Xml" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Rig.Domain\Rig.Domain.csproj" />

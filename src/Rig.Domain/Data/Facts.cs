@@ -439,5 +439,13 @@ public sealed record FactEffectRule(
     string Resource = "",
     // When true the rule drives call-graph dispatch, not an effect; the Roslyn FindEffects skips it.
     // The fact effect deriver skips it too so dispatch rules don't leak in as effects.
-    bool TreatAsDispatch = false
+    bool TreatAsDispatch = false,
+    // WRAPPER gate (data-driven, no per-type curation): match an invocation whose TARGET method is
+    // itself a method that calls one of these patterns (substring over the called DocID, e.g.
+    // "Echo.Process.ask"). Identifies request/response WRAPPERS — a generic helper like
+    // `AccountsService<TReply,TMsg>(TMsg msg) => ask<…<TReply>>(pid, msg)` is recognized because it
+    // calls ask, and the effect is emitted at the wrapper's CALL SITES, where `resource:type_argument`
+    // resolves to the caller's CONCRETE type-arg combo (TReply,TMsg) — the message+reply contract the
+    // raw `ask<R>(pid, object)` discards. Method-name / declaring-type gates are ignored when set.
+    IReadOnlyList<string>? TargetCallsMethods = null
 );
