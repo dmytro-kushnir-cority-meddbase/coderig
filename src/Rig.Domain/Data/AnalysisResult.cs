@@ -13,5 +13,7 @@ public sealed record AnalysisResult(
     // Stage-1 rule-agnostic facts (symbol + reference index). See docs/fact-layer-refactor.md.
     IReadOnlyList<SymbolFact>? Symbols = null,
     IReadOnlyList<ReferenceFact>? References = null,
-    IReadOnlyList<TypeRelationFact>? TypeRelations = null
+    IReadOnlyList<TypeRelationFact>? TypeRelations = null,
+    // Exact Roslyn-mined member-level dispatch edges (override + interface impl) — see DispatchFact.
+    IReadOnlyList<DispatchFact>? DispatchFacts = null
 );

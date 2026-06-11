@@ -23,7 +23,14 @@ internal sealed record AnalysisRuleSet(
     // These are merged directly into the SingleImplIndex without requiring code-level DI patterns.
     IReadOnlyList<StaticDiMapping> StaticDiMappings,
     // Paths to XML service descriptor directories/files whose mappings are mined at index time.
-    IReadOnlyList<string> XmlDiFiles
+    IReadOnlyList<string> XmlDiFiles,
+    // Curated async-handoff dispatchers (background/timer/actor/event schedulers). When one of these
+    // consumes a method-group, the graph layer reclassifies that edge as a handoff (default-cut from
+    // synchronous reach; --async walks it tagged). See HandoffClassifier.
+    IReadOnlyList<HandoffDispatcherRule> HandoffDispatchers,
+    // Codebase-specific `rig tree` render rules (presentation only — never affects reach).
+    IReadOnlyList<RenderRule> RenderCollapseSeams,
+    IReadOnlyList<RenderRule> RenderOpaqueTypes
 )
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
@@ -127,6 +134,9 @@ internal sealed record AnalysisRuleSet(
                 .Concat(document.Observations?.ConcurrencyHandled ?? [])
                 .ToArray(),
             ResilienceRetryObservations = ResilienceRetryObservations.Concat(document.Observations?.ResilienceRetry ?? []).ToArray(),
+            HandoffDispatchers = HandoffDispatchers.Concat(document.HandoffDispatchers ?? []).ToArray(),
+            RenderCollapseSeams = RenderCollapseSeams.Concat(document.Render?.CollapseSeams ?? []).ToArray(),
+            RenderOpaqueTypes = RenderOpaqueTypes.Concat(document.Render?.OpaqueTypes ?? []).ToArray(),
         };
     }
 
@@ -182,7 +192,10 @@ internal sealed record AnalysisRuleSet(
             document.Observations?.ResilienceRetry ?? [],
             [Path.GetFullPath(rulesPath)],
             document.StaticDiMappings ?? [],
-            document.XmlDiFiles ?? []
+            document.XmlDiFiles ?? [],
+            document.HandoffDispatchers ?? [],
+            document.Render?.CollapseSeams ?? [],
+            document.Render?.OpaqueTypes ?? []
         );
     }
 }
@@ -262,6 +275,19 @@ internal sealed record EffectRule(
     bool MatchThrow = false
 );
 
+// A curated async-handoff dispatcher: when its consuming ctor/method is handed a method-group, the
+// graph layer reclassifies that edge as a handoff. `consumerPatterns` are substrings matched against
+// the (arity-stripped) consuming invocation/ctor target DocID (e.g.
+// "RepeatingBackgroundProcessSchedule.#ctor", "Echo.Process.spawn", "IAsyncEvent.Add"); `kind` is the
+// execution-origin kind the callback gets (background|timer|actor|event); `repeating` flags a
+// re-firing schedule. Projected to FactHandoffRule for the Domain classifier.
+internal sealed record HandoffDispatcherRule(string Id, string Kind, IReadOnlyList<string> ConsumerPatterns, bool Repeating = false);
+
+// A `rig tree` render rule: a DocID substring `Pattern` + a human `Label`/`Reason` shown in the
+// rendered marker. Used for both collapse-seams (fold a fan-out hub's children) and opaque-types
+// (draw a node as a leaf). Codebase-specific presentation data; projected to FactRenderRule.
+internal sealed record RenderRule(string Pattern, string? Label = null, string? Reason = null, string? Id = null);
+
 internal sealed record DiRegistrationRule(IReadOnlyList<string> Methods, string Lifetime, string RegistrationKind, string Reason)
 {
     public bool Matches(string methodName)
@@ -297,6 +323,8 @@ internal sealed class AnalysisRulesDocument
 
     public List<DiRegistrationRule>? DiRegistrations { get; set; }
 
+    public List<HandoffDispatcherRule>? HandoffDispatchers { get; set; }
+
     public List<StaticDiMapping>? StaticDiMappings { get; set; }
 
     // Paths to directories (or individual files) containing XML service descriptors.
@@ -309,6 +337,17 @@ internal sealed class AnalysisRulesDocument
     public ProjectsSection? Projects { get; set; }
 
     public ObservationsSection? Observations { get; set; }
+
+    public RenderRulesSection? Render { get; set; }
+}
+
+// `render` rule section — codebase-specific `rig tree` presentation rules (collapse fan-out hubs,
+// draw infra types as opaque leaves). Pure presentation; never affects reach. See FactRenderRules.
+internal sealed class RenderRulesSection
+{
+    public List<RenderRule>? CollapseSeams { get; set; }
+
+    public List<RenderRule>? OpaqueTypes { get; set; }
 }
 
 internal sealed class ObservationsSection

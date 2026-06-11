@@ -129,6 +129,9 @@ public sealed class SourceFileClassifierTests
             [],
             [],
             [],
+            [],
+            [],
+            [],
             []
         );
     }

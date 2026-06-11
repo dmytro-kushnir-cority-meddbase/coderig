@@ -78,7 +78,15 @@ public static class FactEffectDeriver
                 // Resolve the resource the same way the Roslyn path does; when it can't be resolved
                 // the effect is DROPPED (Roslyn returns null from TryCreateEffect), which is what
                 // aligns the fact effects with the index effects.
-                var resource = ResolveResource(rule.Resource, inv.Receiver, inv.FirstArgTemplate, inv.FirstArgType, declaringType);
+                var resource = ResolveResource(
+                    rule.Resource,
+                    inv.Receiver,
+                    inv.FirstArgTemplate,
+                    inv.FirstArgType,
+                    declaringType,
+                    inv.TypeArguments,
+                    inv.FirstArgName
+                );
                 if (string.IsNullOrWhiteSpace(resource))
                     continue; // matched, but the resource is unresolvable — no effect; let a later rule try
 
@@ -291,12 +299,21 @@ public static class FactEffectDeriver
         string? receiver,
         string? firstArgTemplate,
         string? firstArgType,
-        string declaringType
+        string declaringType,
+        string? typeArguments,
+        string? firstArgName
     )
     {
         return strategy switch
         {
             "receiver_type" => receiver,
+            // Call-site generic type argument(s) — e.g. the asked/published message type of an Echo
+            // `ask<TResponse>(..)` / a typed dispatch. Concrete at direct call sites; a type-parameter
+            // name inside a generic helper (see B2 for caller-side concretization).
+            "type_argument" => typeArguments,
+            // The first argument's member/identifier path — the routing target / discriminator, e.g.
+            // the ProcessId DNS constant `tell(PaymentGatewayProcessDns.AccountService, msg)`.
+            "argument_name" => firstArgName,
             // The invocation target's declaring type — independent of how it's called. Needed for
             // statically-imported helpers that have no receiver (e.g. `using static LanguageExt.Prelude;`
             // then a bare `failwith(...)`), where receiver_type resolves to null and drops the effect.

@@ -253,7 +253,17 @@ public static class Reads
 
     // Loads the fact-derived call graph for cross-project path finding (stage 2 over facts).
     // No Roslyn, no entry-point anchoring — every method's call edges, across all runs.
-    public static async Task<FactGraphData> LoadFactGraphAsync(RigDbContext context, CancellationToken cancellationToken = default)
+    //
+    // When `handoffRules` is supplied, dispatcher-consumed method-group edges are reclassified to
+    // Kind="handoff" by HandoffClassifier BEFORE the graph is returned — the SINGLE shared place
+    // classification happens, so the in-memory oracle (this graph), the SQL materializer (which calls
+    // this, then writes call_edges with the classified Kind), and the EF-fallback query paths all agree
+    // by construction. Null/empty rules => no classification (raw method-group edges).
+    public static async Task<FactGraphData> LoadFactGraphAsync(
+        RigDbContext context,
+        IReadOnlyList<FactHandoffRule>? handoffRules = null,
+        CancellationToken cancellationToken = default
+    )
     {
         // First-party callees only. The fact store now keeps ALL method-call refs (incl. BCL/runtime)
         // so any effect rule can match them at derive time without a re-mine — but the call GRAPH
@@ -322,7 +332,46 @@ public static class Reads
             .Select(m => new MethodRef(m.SymbolId, m.Name, m.ContainingSymbolId, m.IsOverride))
             .ToArray();
 
-        return new FactGraphData(callEdges, implEdges, methods, baseEdges);
+        var classifiedEdges = HandoffClassifier.Classify(callEdges, handoffRules);
+        var minedDispatch = await LoadDispatchFactsAsync(context, cancellationToken);
+        return new FactGraphData(classifiedEdges, implEdges, methods, baseEdges, minedDispatch);
+    }
+
+    // Loads the exact Roslyn-mined dispatch facts (dispatch_facts) into FactGraphData.MinedDispatch.
+    // Probed (not assumed): a store indexed before dispatch facts existed has no table — return null
+    // so FactPathFinder degrades to the pre-mining name/arity CHA (flagged heuristic) instead of
+    // throwing "no such table" on a read-only connection that can't migrate.
+    private static async Task<IReadOnlyList<DispatchFact>?> LoadDispatchFactsAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!await TableExistsAsync(context, "dispatch_facts", cancellationToken))
+            return null;
+
+        var rows = await context
+            .DispatchFacts.Select(d => new
+            {
+                d.SourceMember,
+                d.TargetMember,
+                d.Kind,
+            })
+            .ToArrayAsync(cancellationToken);
+        return rows.Select(d => new DispatchFact(d.SourceMember, d.TargetMember, d.Kind)).Distinct().ToArray();
+    }
+
+    private static async Task<bool> TableExistsAsync(RigDbContext context, string table, CancellationToken cancellationToken)
+    {
+        var connection = (DbConnection)context.Database.GetDbConnection();
+        if (connection.State != System.Data.ConnectionState.Open)
+            await connection.OpenAsync(cancellationToken);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=$name LIMIT 1;";
+        var p = command.CreateParameter();
+        p.ParameterName = "$name";
+        p.Value = table;
+        command.Parameters.Add(p);
+        return await command.ExecuteScalarAsync(cancellationToken) is not null;
     }
 
     // Loads first-party method metadata for the dead-code finder: every declared method symbol with
@@ -375,31 +424,22 @@ public static class Reads
             || p.EndsWith(".generated.cs", StringComparison.OrdinalIgnoreCase);
     }
 
-    // Derives handoff (delegate / method-group) entry points from facts — a category the
-    // structural entry-point rules miss. First-party targets only (TargetInSource). No re-index.
+    // Derives handoff (delegate / method-group) entry points from facts — a category the structural
+    // entry-point rules miss. First-party targets only (TargetInSource). No re-index. When
+    // `handoffRules` are supplied, each handoff is CLASSIFIED (Dispatcher + Kind set for
+    // dispatcher-consumed delegates; null for the unclassified residual) by running the same
+    // HandoffClassifier the graph layer uses — so the listing here and the cut in traversal agree.
+    // Returns classified handoffs first, then the residual; capped at `limit`.
     public static async Task<IReadOnlyList<HandoffEntryPoint>> DeriveHandoffEntryPointsAsync(
         RigDbContext context,
         int limit,
+        IReadOnlyList<FactHandoffRule>? handoffRules = null,
         CancellationToken cancellationToken = default
     )
     {
-        var rows = await context
-            .ReferenceFacts.Where(r => r.RefKind == "methodGroup" && r.TargetInSource && r.EnclosingSymbolId != null)
-            .Select(r => new
-            {
-                r.TargetSymbolId,
-                r.EnclosingSymbolId,
-                r.FilePath,
-                r.Line,
-            })
-            .ToArrayAsync(cancellationToken);
-
-        return rows.GroupBy(r => (r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line))
-            .Select(g => g.Key)
-            .OrderBy(k => k.TargetSymbolId, StringComparer.Ordinal)
-            .Take(limit)
-            .Select(k => new HandoffEntryPoint(k.TargetSymbolId, k.EnclosingSymbolId!, k.FilePath, k.Line))
-            .ToArray();
+        var graph = await LoadFactGraphAsync(context, handoffRules, cancellationToken).ConfigureAwait(false);
+        var handoffs = HandoffClassifier.HandoffEntryPoints(graph.CallEdges, handoffRules ?? []);
+        return handoffs.Take(limit).ToArray();
     }
 
     // Loads the facts needed by FactEntryPointDeriver: base-type edges, constructor+type symbols,
@@ -502,6 +542,8 @@ public static class Reads
                 r.EnclosingLoopDetail,
                 r.EnclosingInvocations,
                 r.EnclosingCatchTypes,
+                r.TypeArguments,
+                r.FirstArgumentName,
             })
             .ToArrayAsync(cancellationToken);
         return rows.Select(r => new FactInvocation(
@@ -515,7 +557,9 @@ public static class Reads
                 r.EnclosingLoopKind,
                 r.EnclosingLoopDetail,
                 r.EnclosingInvocations,
-                r.EnclosingCatchTypes
+                r.EnclosingCatchTypes,
+                r.TypeArguments,
+                r.FirstArgumentName
             ))
             .ToArray();
     }

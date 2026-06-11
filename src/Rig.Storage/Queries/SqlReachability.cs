@@ -44,6 +44,7 @@ public static class SqlReachability
         RigDbContext context,
         IReadOnlyCollection<string> seeds,
         Direction direction,
+        bool includeHandoff = false,
         CancellationToken cancellationToken = default
     )
     {
@@ -53,7 +54,7 @@ public static class SqlReachability
 
         var connection = await OpenAsync(context, cancellationToken).ConfigureAwait(false);
         using var command = connection.CreateCommand();
-        command.CommandText = BuildSetCte(command, seeds, direction);
+        command.CommandText = BuildSetCte(command, seeds, direction, includeHandoff);
         using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             result.Add(reader.GetString(0));
@@ -71,11 +72,16 @@ public static class SqlReachability
     // FactPathFinder.AllDispatchEdges), and the seed set matches index.Nodes (the `nodes` table unions
     // edge endpoints with symbol_facts methods), so the keyset matches the in-memory oracle for the
     // same maxDepth. min(depth) over the bounded CTE is the BFS-shortest depth.
+    // includeHandoff=false (sync-cut, the default) appends `AND Kind <> 'handoff'` to the call_edges
+    // leg, so an async handoff registration does not count as reaching its callback — matching the
+    // in-memory oracle's SyncCut mode. true (--async) walks them. The dispatch_edges leg is never
+    // handoff, so it is unfiltered in both modes.
     public static async Task<IReadOnlyDictionary<string, int>> ReachedWithDepthAsync(
         RigDbContext context,
         string pattern,
         Direction direction,
         int maxDepth,
+        bool includeHandoff = false,
         CancellationToken cancellationToken = default
     )
     {
@@ -109,13 +115,14 @@ public static class SqlReachability
             )
             .ConfigureAwait(false);
 
+        var handoffFilter = includeHandoff ? "" : " AND ce.Kind <> 'handoff'";
         for (var d = 0; d < maxDepth; d++)
         {
             var added = 0;
             added += await ExecNonQueryAsync(
                     connection,
                     $"INSERT OR IGNORE INTO reach_depth(sym, depth) "
-                        + $"SELECT ce.{next}, {d + 1} FROM call_edges ce JOIN reach_depth r ON ce.{frontier} = r.sym WHERE r.depth = {d};",
+                        + $"SELECT ce.{next}, {d + 1} FROM call_edges ce JOIN reach_depth r ON ce.{frontier} = r.sym WHERE r.depth = {d}{handoffFilter};",
                     null,
                     cancellationToken
                 )
@@ -150,10 +157,12 @@ public static class SqlReachability
         RigDbContext context,
         string pattern,
         int maxDepth,
+        bool includeHandoff = false,
         CancellationToken cancellationToken = default
     )
     {
-        var reachable = await ReachedWithDepthAsync(context, pattern, Direction.Reverse, maxDepth, cancellationToken).ConfigureAwait(false);
+        var reachable = await ReachedWithDepthAsync(context, pattern, Direction.Reverse, maxDepth, includeHandoff, cancellationToken)
+            .ConfigureAwait(false);
         if (reachable.Count == 0)
             return [];
 
@@ -174,12 +183,17 @@ public static class SqlReachability
             }
         }
 
+        // A no-predecessor root has no incoming SYNCHRONOUS call edge (handoff edges don't count under
+        // sync-cut — that's exactly what makes a scheduled callback a background ORIGIN) and no incoming
+        // dispatch edge. Under --async, handoff edges count as predecessors so a callback only surfaces
+        // as a root when nothing — sync or scheduled — reaches it.
+        var handoffFilter = includeHandoff ? "" : " AND Kind <> 'handoff'";
         var roots = new List<string>();
         await ReadAsync(
                 connection,
-                """
+                $"""
                 SELECT s.sym FROM reach_set s
-                WHERE NOT EXISTS (SELECT 1 FROM call_edges     WHERE ToSym = s.sym)
+                WHERE NOT EXISTS (SELECT 1 FROM call_edges     WHERE ToSym = s.sym{handoffFilter})
                   AND NOT EXISTS (SELECT 1 FROM dispatch_edges WHERE ToSym = s.sym)
                 ORDER BY s.sym;
                 """,
@@ -215,9 +229,10 @@ public static class SqlReachability
     // Forward: follow FromSym -> ToSym (callees + dispatch targets). Reverse: follow ToSym -> FromSym
     // (callers + reverse dispatch). A single recursive term joins the recursion frontier against a
     // UNION ALL of both edge tables, so the FromSym/ToSym indexes drive the walk.
-    private static string BuildSetCte(DbCommand command, IReadOnlyCollection<string> seeds, Direction direction)
+    private static string BuildSetCte(DbCommand command, IReadOnlyCollection<string> seeds, Direction direction, bool includeHandoff)
     {
         var (frontierCol, nextCol) = direction == Direction.Forward ? ("FromSym", "ToSym") : ("ToSym", "FromSym");
+        var handoffFilter = includeHandoff ? "" : " WHERE Kind <> 'handoff'";
 
         var seedValues = new StringBuilder();
         var i = 0;
@@ -238,7 +253,7 @@ public static class SqlReachability
             WITH RECURSIVE
             seeds(sym) AS (VALUES {seedValues}),
             edges(frontier, next) AS (
-                SELECT {frontierCol}, {nextCol} FROM call_edges
+                SELECT {frontierCol}, {nextCol} FROM call_edges{handoffFilter}
                 UNION ALL
                 SELECT {frontierCol}, {nextCol} FROM dispatch_edges
             ),
@@ -303,7 +318,7 @@ public static class SqlReachability
                 """
                 SELECT r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.ReceiverType,
                        r.FirstArgumentTemplate, r.FirstArgumentType, r.EnclosingLoopKind, r.EnclosingLoopDetail,
-                       r.EnclosingInvocations, r.EnclosingCatchTypes
+                       r.EnclosingInvocations, r.EnclosingCatchTypes, r.TypeArguments, r.FirstArgumentName
                 FROM reference_facts r JOIN reach_set s ON r.EnclosingSymbolId = s.sym
                 WHERE r.RefKind = 'invocation';
                 """,
@@ -320,7 +335,9 @@ public static class SqlReachability
                             reader.IsDBNull(7) ? null : reader.GetString(7),
                             reader.IsDBNull(8) ? null : reader.GetString(8),
                             reader.IsDBNull(9) ? null : reader.GetString(9),
-                            reader.IsDBNull(10) ? null : reader.GetString(10)
+                            reader.IsDBNull(10) ? null : reader.GetString(10),
+                            reader.IsDBNull(11) ? null : reader.GetString(11),
+                            reader.IsDBNull(12) ? null : reader.GetString(12)
                         )
                     ),
                 cancellationToken
@@ -384,12 +401,18 @@ public static class SqlReachability
         // receiver (full CHA) instead of throwing.
         var hasReceiver = await ColumnExistsAsync(connection, "call_edges", "ReceiverType", cancellationToken).ConfigureAwait(false);
         var receiverSelect = hasReceiver ? "c.ReceiverType" : "NULL";
+        // HandoffDispatcher rides along so the bounded in-memory graph carries the async-handoff
+        // classification — the in-memory FactPathFinder applies the sync-cut / --async filter over the
+        // (superset) bounded graph, so this column is what lets it tell handoff edges apart. Null on a
+        // store built before classification (degrades to no handoffs = the pre-async behavior).
+        var hasHandoff = await ColumnExistsAsync(connection, "call_edges", "HandoffDispatcher", cancellationToken).ConfigureAwait(false);
+        var handoffSelect = hasHandoff ? "c.HandoffDispatcher" : "NULL";
 
         var callEdges = new List<CallEdge>();
         await ReadAsync(
                 connection,
                 $"""
-                SELECT c.FromSym, c.ToSym, c.Kind, c.FilePath, c.Line, c.LoopKind, c.LoopDetail, {receiverSelect}
+                SELECT c.FromSym, c.ToSym, c.Kind, c.FilePath, c.Line, c.LoopKind, c.LoopDetail, {receiverSelect}, {handoffSelect}
                 FROM call_edges c JOIN reach_set r ON c.{edgeJoinCol} = r.sym;
                 """,
                 reader =>
@@ -402,7 +425,8 @@ public static class SqlReachability
                             reader.IsDBNull(4) ? 0 : reader.GetInt32(4),
                             reader.IsDBNull(5) ? null : reader.GetString(5),
                             reader.IsDBNull(6) ? null : reader.GetString(6),
-                            reader.IsDBNull(7) ? null : reader.GetString(7)
+                            reader.IsDBNull(7) ? null : reader.GetString(7),
+                            reader.IsDBNull(8) ? null : reader.GetString(8)
                         )
                     ),
                 cancellationToken
@@ -447,7 +471,27 @@ public static class SqlReachability
             )
             .ConfigureAwait(false);
 
-        return new FactGraphData(callEdges, implEdges.ToArray(), methodById.Values.ToArray(), baseEdges.ToArray());
+        // Mined dispatch facts ride into the bounded graph so the in-memory FactPathFinder resolves
+        // dispatch exact-first over it, matching the full-graph oracle (and the materialised
+        // dispatch_edges, which are built from the same facts). Loaded WHOLE like the type relations —
+        // the table is tiny relative to reference_facts, and an unbounded superset can only agree with
+        // the full graph. Probed: a pre-dispatch-facts store has no table → null → CHA fallback,
+        // exactly matching its dispatch_edges (also built heuristic-only).
+        IReadOnlyList<DispatchFact>? minedDispatch = null;
+        if (await TableExistsAsync(connection, "dispatch_facts", cancellationToken).ConfigureAwait(false))
+        {
+            var mined = new HashSet<DispatchFact>();
+            await ReadAsync(
+                    connection,
+                    "SELECT DISTINCT SourceMember, TargetMember, Kind FROM dispatch_facts;",
+                    reader => mined.Add(new DispatchFact(reader.GetString(0), reader.GetString(1), reader.GetString(2))),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            minedDispatch = mined.ToArray();
+        }
+
+        return new FactGraphData(callEdges, implEdges.ToArray(), methodById.Values.ToArray(), baseEdges.ToArray(), minedDispatch);
     }
 
     // Builds the temp `reach_set` table = the directional closure of all pattern-matching symbols, in

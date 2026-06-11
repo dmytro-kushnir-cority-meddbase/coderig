@@ -104,5 +104,29 @@ public sealed class CliApplicationTests
         output.GetStringBuilder().Clear();
         (await CliApplication.RunAsync(["dead"], output, error, workingDirectory)).ShouldBe(0);
         output.ToString().ShouldContain("Dead-code candidates:");
+
+        // B1: call-site capture of generic TYPE ARGUMENTS + the first-argument member path flows all
+        // the way through a real index → SQLite → derive. The gateway fixture's ask<T>/tell rules
+        // resolve their resource to the captured type arg / routing target (not the declaring type).
+        // reaches loads effect rules from the working dir; the playground's gateway rules live next to
+        // the solution, so pass them explicitly (the index already wrote the captured columns to .rig).
+        var rulesPath = Path.Combine(Path.GetDirectoryName(solutionPath)!, "rig.rules.json");
+        output.GetStringBuilder().Clear();
+        (
+            await CliApplication.RunAsync(
+                ["reaches", "PaymentGatewayCaller.Dispatch", "--rules", rulesPath],
+                output,
+                error,
+                workingDirectory
+            )
+        ).ShouldBe(0);
+        var reaches = output.ToString();
+        // The ask effect appearing AT ALL proves the type_argument resolved non-null (an unresolved
+        // resource drops the effect) — i.e. the generic type arg was captured through index → derive.
+        reaches.ShouldContain("gateway_ask ask");
+        reaches.ShouldContain("Team"); // the captured response type argument (PaymentGatewayResponse<…Team>)
+        // The tell effect's resource is the captured first-argument member path (the routing target).
+        reaches.ShouldContain("gateway_tell tell");
+        reaches.ShouldContain("PaymentGatewayProcessDns.PaymentService");
     }
 }

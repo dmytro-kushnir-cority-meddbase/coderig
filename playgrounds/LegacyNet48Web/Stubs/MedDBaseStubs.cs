@@ -66,6 +66,36 @@ namespace MedDBase.Application.Core.Background
     {
         void Process();
     }
+
+    // The delegate a schedule runs. A method-group handed here is an async HANDOFF, not a call.
+    public delegate void BackgroundProcessScheduleDelegate();
+
+    // One-shot schedule (M2): hands `work` to a dispatcher to run LATER at `when`.
+    public class BackgroundProcessSchedule
+    {
+        public BackgroundProcessSchedule(System.DateTime when, BackgroundProcessScheduleDelegate work, string name) { }
+    }
+
+    // Repeating schedule (M1 — the ProcessHealthcodeQueue shape): re-fires `work` every `interval`.
+    public class RepeatingBackgroundProcessSchedule
+    {
+        public RepeatingBackgroundProcessSchedule(System.TimeSpan interval, BackgroundProcessScheduleDelegate work, string name) { }
+    }
+
+    // AsyncEvent subscription (M5): the handler is invoked later on the event's own worker thread.
+    public interface IAsyncEvent<T>
+    {
+        void Add(System.Action<T> handler);
+    }
+}
+
+namespace Echo
+{
+    // Echo actor spawn (M6): the inbox delegate handles messages later on the actor's thread.
+    public static class Process
+    {
+        public static object spawn<TMsg>(string name, System.Action<TMsg> inbox) => null;
+    }
 }
 
 namespace MedDBase.Application.Workflows

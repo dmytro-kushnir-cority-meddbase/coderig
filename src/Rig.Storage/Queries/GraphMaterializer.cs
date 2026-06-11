@@ -22,18 +22,22 @@ namespace Rig.Storage.Queries;
 // EF FactPathFinder would compute lazily.
 public static class GraphMaterializer
 {
-    public sealed record GraphStats(int CallEdges, int DispatchEdges, int Nodes = 0);
+    public sealed record GraphStats(int CallEdges, int DispatchEdges, int Nodes = 0, int HeuristicDispatchEdges = 0);
 
     private const int InsertBatchSize = 20_000;
 
     public static async Task<GraphStats> BuildAsync(
         RigDbContext context,
+        Domain.Data.FactHandoffRule[]? handoffRules = null,
         Action<string>? progress = null,
         CancellationToken cancellationToken = default
     )
     {
         progress?.Invoke("Loading facts");
-        var graph = await Reads.LoadFactGraphAsync(context, cancellationToken).ConfigureAwait(false);
+        // Classify dispatcher-consumed method-group edges here (the materializer owns the call_edges
+        // table) so the persisted Kind="handoff" + HandoffDispatcher flow to every SQL reader; the
+        // in-memory oracle classifies identically by being given the same rules.
+        var graph = await Reads.LoadFactGraphAsync(context, handoffRules, cancellationToken).ConfigureAwait(false);
 
         var connection = (DbConnection)context.Database.GetDbConnection();
         if (connection.State != System.Data.ConnectionState.Open)
@@ -48,7 +52,7 @@ public static class GraphMaterializer
         await ExecuteAsync(connection, transaction, "DELETE FROM dispatch_edges;", cancellationToken).ConfigureAwait(false);
 
         var callCount = await InsertCallEdgesAsync(connection, transaction, graph, progress, cancellationToken).ConfigureAwait(false);
-        var dispatchCount = await InsertDispatchEdgesAsync(connection, transaction, graph, progress, cancellationToken)
+        var (dispatchCount, heuristicCount) = await InsertDispatchEdgesAsync(connection, transaction, graph, progress, cancellationToken)
             .ConfigureAwait(false);
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -68,7 +72,7 @@ public static class GraphMaterializer
         progress?.Invoke("Building search index (FTS5 trigram)");
         await BuildSearchIndexAsync(connection, progress, cancellationToken).ConfigureAwait(false);
 
-        return new GraphStats(callCount, dispatchCount, nodeCount);
+        return new GraphStats(callCount, dispatchCount, nodeCount, heuristicCount);
     }
 
     private static async Task BuildSearchIndexAsync(DbConnection connection, Action<string>? progress, CancellationToken cancellationToken)
@@ -167,7 +171,8 @@ public static class GraphMaterializer
                     Line         INTEGER,
                     LoopKind     TEXT,
                     LoopDetail   TEXT,
-                    ReceiverType TEXT
+                    ReceiverType TEXT,
+                    HandoffDispatcher TEXT
                 );
                 """,
                 cancellationToken
@@ -177,6 +182,9 @@ public static class GraphMaterializer
         // dispatch narrowing). `rig graph` rebuilds the rows anyway; this just makes the column present
         // so the INSERT/SELECT carry it. Reads degrade gracefully (NULL receiver => CHA) on old stores.
         await AddColumnIfMissingAsync(connection, "call_edges", "ReceiverType", "TEXT", cancellationToken).ConfigureAwait(false);
+        // Likewise add HandoffDispatcher to a pre-existing table so the INSERT/SELECT carry it (a store
+        // created before async-handoff classification). Re-`rig graph` repopulates it from the rules.
+        await AddColumnIfMissingAsync(connection, "call_edges", "HandoffDispatcher", "TEXT", cancellationToken).ConfigureAwait(false);
         await ExecuteAsync(connection, null, "CREATE INDEX IF NOT EXISTS IX_call_edges_FromSym ON call_edges(FromSym);", cancellationToken)
             .ConfigureAwait(false);
         await ExecuteAsync(connection, null, "CREATE INDEX IF NOT EXISTS IX_call_edges_ToSym ON call_edges(ToSym);", cancellationToken)
@@ -189,12 +197,16 @@ public static class GraphMaterializer
                 CREATE TABLE IF NOT EXISTS dispatch_edges (
                     FromSym TEXT NOT NULL,
                     ToSym   TEXT NOT NULL,
-                    Kind    TEXT NOT NULL
+                    Kind    TEXT NOT NULL,
+                    Basis   TEXT
                 );
                 """,
                 cancellationToken
             )
             .ConfigureAwait(false);
+        // Add Basis to a pre-existing dispatch_edges (a store graphed before dispatch provenance).
+        // Render-only — the CTE set walk never reads it; re-`rig graph` repopulates the rows.
+        await AddColumnIfMissingAsync(connection, "dispatch_edges", "Basis", "TEXT", cancellationToken).ConfigureAwait(false);
         await ExecuteAsync(
                 connection,
                 null,
@@ -222,8 +234,8 @@ public static class GraphMaterializer
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
-            "INSERT INTO call_edges (FromSym, ToSym, Kind, FilePath, Line, LoopKind, LoopDetail, ReceiverType) "
-            + "VALUES ($from, $to, $kind, $file, $line, $loopKind, $loopDetail, $receiver);";
+            "INSERT INTO call_edges (FromSym, ToSym, Kind, FilePath, Line, LoopKind, LoopDetail, ReceiverType, HandoffDispatcher) "
+            + "VALUES ($from, $to, $kind, $file, $line, $loopKind, $loopDetail, $receiver, $handoff);";
         var pFrom = AddParam(command, "$from");
         var pTo = AddParam(command, "$to");
         var pKind = AddParam(command, "$kind");
@@ -232,6 +244,7 @@ public static class GraphMaterializer
         var pLoopKind = AddParam(command, "$loopKind");
         var pLoopDetail = AddParam(command, "$loopDetail");
         var pReceiver = AddParam(command, "$receiver");
+        var pHandoff = AddParam(command, "$handoff");
 
         var count = 0;
         foreach (var edge in FactPathFinder.AllCallEdges(graph))
@@ -244,6 +257,7 @@ public static class GraphMaterializer
             pLoopKind.Value = (object?)edge.LoopKind ?? DBNull.Value;
             pLoopDetail.Value = (object?)edge.LoopDetail ?? DBNull.Value;
             pReceiver.Value = (object?)edge.ReceiverType ?? DBNull.Value;
+            pHandoff.Value = (object?)edge.HandoffDispatcher ?? DBNull.Value;
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             if (++count % InsertBatchSize == 0)
                 progress?.Invoke($"call_edges: {count}");
@@ -252,7 +266,7 @@ public static class GraphMaterializer
         return count;
     }
 
-    private static async Task<int> InsertDispatchEdgesAsync(
+    private static async Task<(int Total, int Heuristic)> InsertDispatchEdgesAsync(
         DbConnection connection,
         DbTransaction transaction,
         Domain.Data.FactGraphData graph,
@@ -262,23 +276,28 @@ public static class GraphMaterializer
     {
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = "INSERT INTO dispatch_edges (FromSym, ToSym, Kind) VALUES ($from, $to, $kind);";
+        command.CommandText = "INSERT INTO dispatch_edges (FromSym, ToSym, Kind, Basis) VALUES ($from, $to, $kind, $basis);";
         var pFrom = AddParam(command, "$from");
         var pTo = AddParam(command, "$to");
         var pKind = AddParam(command, "$kind");
+        var pBasis = AddParam(command, "$basis");
 
         var count = 0;
+        var heuristic = 0;
         foreach (var edge in FactPathFinder.AllDispatchEdges(graph))
         {
             pFrom.Value = edge.From;
             pTo.Value = edge.To;
             pKind.Value = edge.Kind;
+            pBasis.Value = edge.Basis;
+            if (edge.Basis == "heuristic")
+                heuristic++;
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             if (++count % InsertBatchSize == 0)
                 progress?.Invoke($"dispatch_edges: {count}");
         }
-        progress?.Invoke($"dispatch_edges: {count} (done)");
-        return count;
+        progress?.Invoke($"dispatch_edges: {count} (done; {count - heuristic} roslyn-mined, {heuristic} heuristic)");
+        return (count, heuristic);
     }
 
     // Adds `column` to `table` when a pre-existing store doesn't already have it (idempotent). SQLite

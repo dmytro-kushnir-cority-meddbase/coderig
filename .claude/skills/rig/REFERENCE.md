@@ -7,11 +7,11 @@
 | `rig index <sln\|csproj> [--rules p…] [--identity id] [--from entry.csproj] [--parallelism n] [--durable]` | Extract facts. Solution = all projects' source in one run (callgraph crosses boundaries in-process). Single `.csproj` = that project's source only (refs become metadata DLLs). **`--from entry.csproj`** = index only the entry project's transitive ProjectReference closure (minus test projects) — still ONE cross-project workspace; writes the closure to `relevant-projects.json`. Skips all out-of-closure test/tool projects before their design-time build. **`--parallelism n`** parallelises the (independent, no-binary) design-time builds. **Save is fast + crash-safe by default**: durability-off pragmas + write-to-temp + atomic rename over `rig.db` (so a fresh `index` cleanly REPLACES — the old "index APPENDS" footgun is gone; that now only applies to `mine`/`--identity`). **`--durable`** opts into a journaled write. |
 | `rig mine <sln> --from <csproj> [--rules p…] [--identity id] [--parallelism n]` | BFS DOWN the dep graph from `--from` (toward what it references). Each project indexed as its own run under one `--identity`, stitched at query time. Direction matters: `--from Pages` reaches Workflows; `--from Workflows` does NOT reach Pages. |
 | `rig runs` | List runs + symbol/reference/di counts (provenance / health check). |
-| `rig derive [--rules p…] [--limit n] [--only p,…] [--exclude p,…] [--format tsv]` | Stage-2 over facts: re-derive effects + page/action/background/wcf entry points + delegate/method-group handoffs. One DB open, one rule load. |
-| `rig reaches <pat> [--maxdepth n] [--only p,…] [--exclude p,…] [--format tsv]` | Effects reachable forward from an entry point. Annotates loop-fanout (`🔁xN`) + per-effect emoji. |
-| `rig tree <pat> [--full\|--summary\|--effects] [--only p,…] [--exclude p,…] [--maxdepth n]` | Call TREE (box-drawing, source-ordered, emoji per effect). Default prunes to effect-bearing paths; `--full` = all; `--summary` = rollup; **`--effects` = only effectful methods, no skeleton** (escape the 10-screen tree). `↺seen` marks cycle/shared-callee re-entry. |
-| `rig callers <pat> [--roots] [--maxdepth n]` | Reverse reachability. `--roots` = entry-point candidates (reachable methods with no predecessor) = "which entry points touch X". |
-| `rig path <from> <to>` | One concrete path (BFS-shortest), with per-hop file:line + loop context. |
+| `rig derive [--rules p…] [--limit n] [--only p,…] [--exclude p,…] [--format tsv]` | Stage-2 over facts: re-derive effects + page/action/background/wcf entry points + **classified** handoffs (background/timer/actor/event, by dispatcher + registration site, with an `async_handoff` note) + promoted handoff origins; unclassified-methodGroup residual collapsed to a count. One DB open, one rule load. |
+| `rig reaches <pat> [--async] [--maxdepth n] [--only p,…] [--exclude p,…] [--format tsv]` | Effects reachable forward. **Synchronous by default** (async handoffs NOT crossed). **`--async`** walks handoffs → an extra **async (scheduled)** `⚡cross_thread` bucket (`⤳ via <dispatcher>`) alongside direct + dispatch-fan-out. Annotates loop-fanout (`🔁xN`) + per-effect emoji. TSV trailing `handoffVia` column. |
+| `rig tree <pat> [--full\|--summary\|--effects] [--async] [--only p,…] [--exclude p,…] [--maxdepth n]` | Call TREE (box-drawing, source-ordered, emoji per effect). **Synchronous by default**; **`--async`** crosses handoffs, marking the hop `⤳handoff via <dispatcher> [cross_thread]`. `--full` = all; `--summary` = rollup; **`--effects` = only effectful methods**. `↺seen` marks cycle/shared-callee re-entry. |
+| `rig callers <pat> [--roots\|--entrypoints] [--async] [--rules p…] [--maxdepth n]` | Reverse reachability. **Synchronous by default**, so a background callback has no synchronous predecessor → it surfaces as its own `--roots` origin; **`--async`** counts the registrar as reaching it via the handoff. `--roots` = no-predecessor candidates (heuristic — also surfaces unbound interface members). **`--entrypoints` = the RULE-DETECTED entry points (the `derive` set: page/action/handler + promoted handoff origins) that reach the target** — the precise "which of my real entry points touch this code", joined by declaration site. |
+| `rig path <from> <to> [--async]` | One concrete path (BFS-shortest), with per-hop file:line + loop context. Synchronous by default; **`--async`** crosses + renders the `⤳ handoff via <dispatcher>` hop. |
 | `rig dead [--lib] [--include-dispatch] [--all] [--root pat…] [--rules p…] [--format tsv]` | Unreachable first-party methods. Report-only. See SKILL.md. |
 | `rig refs <pat> [--first-party] [--kind <refkind>] [--limit n]` | Reference facts to a symbol (invocation/methodGroup/ctor/typeUse/throw/attributeUse). |
 | `rig symbols <pat> [--kind <k>] [--limit n]` | Declared symbols (method/type/property/field/event). |
@@ -58,6 +58,34 @@ exception noise. Per-effect emoji glyphs are overridable per-repo via `rig.effec
 The graph follows: direct calls + method-group + ctor edges, **interface→impl** dispatch (single-impl
 DI hop), and **base-virtual/abstract→override** dispatch (transitive, generic-stripped, IsOverride-gated).
 
+**Exact dispatch facts (mined-first model).** The member-level interface→impl / base→override
+correspondence is MINED by Roslyn at extraction into `dispatch_facts`
+(`IMethodSymbol.OverriddenMethod` for overrides, `FindImplementationForInterfaceMember` for interface
+impls — signature-exact and generic-correct, incl. explicit interface impls and same-arity overloads
+that name matching cross-contaminates). Query-time dispatch uses these FIRST (`Basis="roslyn"`,
+forward closure over the immediate mined hops); the old name+arity CHA scan remains ONLY as a
+fallback for members with no mined edge, plus the always-on `!:` error-edge simple-name recovery —
+both flagged **`Basis="heuristic"`** and rendered with a `~heuristic` marker (tree
+`«impl-dispatch ~heuristic»`, path `[impl-dispatch (heuristic)]`, reaches `~heuristic` suffix, TSV
+`dispatchBasis` column) — meaning: the dispatch target was inferred by name/arity because Roslyn
+couldn't bind that interface/base (net48 partial binding); high-but-not-perfect, verify before relying
+on it. `rig graph` prints the roslyn-vs-heuristic split; `dispatch_edges` carries
+`Basis`. Heuristic share on a healthy single-workspace index is small (the `!:` residue); a store
+indexed BEFORE dispatch facts existed derives all-heuristic until re-indexed (extraction change →
+re-`rig index` + `rig graph` to benefit).
+
+**Async handoff edges (`Kind="handoff"`).** A method-group consumed by a curated `handoffDispatchers`
+dispatcher (background/timer/actor/event scheduler) is reclassified to a `handoff` edge at graph-build
+time (`HandoffClassifier`, co-location on the registration site; written to `call_edges.Kind` +
+`HandoffDispatcher` by `rig graph`). Traversal **cuts these by default** (sync — a registration doesn't
+look like it runs its callback) and walks them under **`--async`**, carrying a `HandoffVia` provenance tag
+(cloned from the `DispatchVia` machinery: inherited through the scheduled subtree, dropped where a node is
+also reachable synchronously). `--async` is uniform across `reaches`/`tree`/`path`/`callers`. Invariants
+the SQL path holds per mode: `CHA-oracle(sync) == SQL(Kind<>'handoff')`, `CHA-oracle(async) == SQL(unfiltered)`,
+`narrowed ⊆ SQL`, `sync ⊆ async`, and the bounded SQL load stays the (async) superset of both. **`dead`
+keeps ALL method-group AND handoff targets as roots** regardless of classification (recall rail), so a
+scheduled-only callback is never falsely flagged dead.
+
 **Receiver-type narrowing (precision — the signal/noise fix).** `tree`/`reaches`/`path`/`callers` resolve
 dispatch **edge-aware**: a virtual/base/interface call narrows to the *static receiver type* mined onto the
 call edge (`CallEdge.ReceiverType`), so `company.Save()` reaches `CompanyEntity.Save` (+ Company subtypes),
@@ -81,7 +109,8 @@ the direct-effects / depth-shallow surface as the real contract.
 
 Recall recoveries already built in:
 - **`!:` error-edge fallback** — under partial binding an implementer's interface edge can be an error
-  type (`!:IFoo`) while the call resolved the real type; dispatch recovers via interface simple-name. (Highest-impact recall fix.)
+  type (`!:IFoo`) while the call resolved the real type; dispatch recovers via interface simple-name,
+  marked `~heuristic`. (Highest-impact recall fix — never removed by the exact-dispatch model.)
 - **generic-stripped lookup** — a base edge stores instantiated `Foo{A,B}` while methods are on open
   `Foo\`2`; lookups strip generics so dispatch still lands.
 - **transitive in-set project references** — the index workspace wires the full transitive closure of

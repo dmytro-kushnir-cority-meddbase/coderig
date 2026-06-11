@@ -68,6 +68,29 @@
       }
     ]
   },
+  "handoffDispatchers": [
+    {
+      "id": "playground.repeating.schedule",
+      "kind": "background",
+      "repeating": true,
+      "consumerPatterns": ["RepeatingBackgroundProcessSchedule.#ctor"]
+    },
+    {
+      "id": "playground.oneshot.schedule",
+      "kind": "background",
+      "consumerPatterns": [".BackgroundProcessSchedule.#ctor"]
+    },
+    {
+      "id": "playground.asyncevent",
+      "kind": "event",
+      "consumerPatterns": ["IAsyncEvent.Add"]
+    },
+    {
+      "id": "playground.echo.spawn",
+      "kind": "actor",
+      "consumerPatterns": ["Echo.Process.spawn"]
+    }
+  ],
   "effects": [
     {
       "provider": "llblgen",

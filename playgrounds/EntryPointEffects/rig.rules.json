@@ -7,5 +7,27 @@
         "reason": "generated_fixture"
       }
     ]
-  }
+  },
+  "effects": [
+    {
+      "provider": "gateway_ask",
+      "operation": "ask",
+      "methods": ["Ask"],
+      "declaringTypes": ["EntryPointEffects.Api.Services.PaymentGatewayProcess"],
+      "resource": "type_argument",
+      "confidence": "high",
+      "basis": "fact_derived",
+      "reason": "gateway_ask_response_type"
+    },
+    {
+      "provider": "gateway_tell",
+      "operation": "tell",
+      "methods": ["Tell"],
+      "declaringTypes": ["EntryPointEffects.Api.Services.PaymentGatewayProcess"],
+      "resource": "argument_name",
+      "confidence": "high",
+      "basis": "fact_derived",
+      "reason": "gateway_tell_target"
+    }
+  ]
 }

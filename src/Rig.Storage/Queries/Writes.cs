@@ -86,7 +86,8 @@ public static class Writes
         var symbols = result.Symbols ?? [];
         var references = result.References ?? [];
         var relations = result.TypeRelations ?? [];
-        long total = symbols.Count + references.Count + relations.Count;
+        var dispatch = result.DispatchFacts ?? [];
+        long total = symbols.Count + references.Count + relations.Count + dispatch.Count;
         long saved = 0;
         var pending = 0;
 
@@ -147,6 +148,8 @@ public static class Writes
                     EnclosingLoopDetail = r.EnclosingLoopDetail,
                     EnclosingInvocations = r.EnclosingInvocations,
                     EnclosingCatchTypes = r.EnclosingCatchTypes,
+                    TypeArguments = r.TypeArguments,
+                    FirstArgumentName = r.FirstArgumentName,
                 }
             );
             saved++;
@@ -165,6 +168,24 @@ public static class Writes
                     TypeSymbolId = t.TypeSymbolId,
                     RelatedSymbolId = t.RelatedSymbolId,
                     RelationKind = t.RelationKind,
+                }
+            );
+            saved++;
+            if (++pending >= FactBatchSize)
+                await FlushAsync();
+        }
+
+        for (var i = 0; i < dispatch.Count; i++)
+        {
+            var d = dispatch[i];
+            context.DispatchFacts.Add(
+                new DispatchFactEntity
+                {
+                    RunId = runId,
+                    DispatchFactIndex = i,
+                    SourceMember = d.SourceMember,
+                    TargetMember = d.TargetMember,
+                    Kind = d.Kind,
                 }
             );
             saved++;
@@ -227,6 +248,24 @@ public static class Writes
     // EnsureCreatedAsync only creates tables in a brand-new DB — it never alters existing ones.
     private static async Task MigrateAsync(RigDbContext context, CancellationToken cancellationToken)
     {
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
+                ALTER TABLE reference_facts ADD COLUMN IF NOT EXISTS TypeArguments TEXT;
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken); // ignore if already exists
+
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
+                ALTER TABLE reference_facts ADD COLUMN IF NOT EXISTS FirstArgumentName TEXT;
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken);
+
         await context
             .Database.ExecuteSqlRawAsync(
                 """
@@ -304,6 +343,8 @@ public static class Writes
                 EnclosingLoopDetail TEXT,
                 EnclosingInvocations TEXT,
                 EnclosingCatchTypes TEXT,
+                TypeArguments      TEXT,
+                FirstArgumentName  TEXT,
                 PRIMARY KEY (RunId, ReferenceFactIndex)
             );
             """,
@@ -337,6 +378,24 @@ public static class Writes
         );
         await context.Database.ExecuteSqlRawAsync(
             "CREATE INDEX IF NOT EXISTS IX_type_relation_facts_RelatedSymbolId ON type_relation_facts(RelatedSymbolId);",
+            cancellationToken
+        );
+
+        await context.Database.ExecuteSqlRawAsync(
+            """
+            CREATE TABLE IF NOT EXISTS dispatch_facts (
+                RunId             TEXT NOT NULL,
+                DispatchFactIndex INTEGER NOT NULL,
+                SourceMember      TEXT NOT NULL,
+                TargetMember      TEXT NOT NULL,
+                Kind              TEXT NOT NULL,
+                PRIMARY KEY (RunId, DispatchFactIndex)
+            );
+            """,
+            cancellationToken
+        );
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS IX_dispatch_facts_SourceMember ON dispatch_facts(SourceMember);",
             cancellationToken
         );
     }

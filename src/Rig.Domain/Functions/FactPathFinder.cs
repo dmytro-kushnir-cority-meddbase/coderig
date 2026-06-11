@@ -8,25 +8,59 @@ namespace Rig.Domain.Functions;
 // type-relation facts + DocID member-name matching — no Roslyn, no SemanticModel.
 // (Rig.Domain targets netstandard2.0, so this avoids TryAdd / ranges / Contains(string,cmp).)
 //
-// Dispatch is resolved EDGE-AWARE (receiver-type narrowing): the in-memory traversal narrows a
+// Dispatch is resolved EXACT-FIRST: the member-level interface→impl / base→override correspondence
+// comes from the Roslyn-MINED dispatch facts when present (FactGraphData.MinedDispatch, Basis=
+// "roslyn" — signature-exact, generic-correct), with the name/arity CHA scan kept only as a FLAGGED
+// fallback (Basis="heuristic") for members Roslyn couldn't bind (`!:` error-typed interfaces, unmined
+// stores). And EDGE-AWARE (receiver-type narrowing): the in-memory traversal narrows a
 // virtual/base/interface call to the STATIC RECEIVER TYPE mined onto the call edge (CallEdge.
 // ReceiverType) — `company.Save()` reaches CompanyEntity.Save (+ Company subtypes), not all 114
-// CommonEntityBase.Save overrides. It falls back to full CHA whenever the receiver is unreliable
-// (null/interface/error-type/the declaring base/not a known first-party type), so no real target
-// is ever dropped. The precomputed dispatch_edges table and AllDispatchEdges stay CHA (the sound
-// superset that bounds the SQL load); narrowing lives ONLY in the in-memory edge traversal.
+// CommonEntityBase.Save overrides. It falls back to the full receiver-blind set whenever the receiver
+// is unreliable (null/interface/error-type/the declaring base/not a known first-party type), so no
+// real target is ever dropped. The precomputed dispatch_edges table and AllDispatchEdges stay
+// receiver-blind (the sound superset that bounds the SQL load); narrowing lives ONLY in the
+// in-memory edge traversal.
 public static class FactPathFinder
 {
-    public static IReadOnlyList<PathStep>? Find(FactGraphData graph, string fromPattern, string toPattern, int maxDepth = 20)
+    // How traversal treats async HANDOFF edges (Kind=="handoff" — a delegate handed to a dispatcher
+    // to run later / on another thread). SyncCut (the default everywhere) skips them, so a timer/
+    // background registration does NOT look like it executes its callback synchronously. AsyncInclude
+    // walks them, tagging the reached subtree with HandoffVia provenance (cloned from the DispatchVia
+    // machinery) so `--async` can show the scheduled reach distinctly. sync ⊆ async by construction.
+    public enum TraversalMode
+    {
+        SyncCut,
+        AsyncInclude,
+    }
+
+    public static IReadOnlyList<PathStep>? Find(
+        FactGraphData graph,
+        string fromPattern,
+        string toPattern,
+        int maxDepth = 20,
+        TraversalMode mode = TraversalMode.SyncCut
+    )
     {
         var index = BuildIndex(graph);
 
         // Parent links carry the edge that reached the node (for path + kind reconstruction),
-        // including its enclosing-loop context so the reconstructed path can mark looped hops, and
-        // the dispatch fan-out degree so a path that traverses a base-virtual fan-out shows it.
+        // including its enclosing-loop context so the reconstructed path can mark looped hops, the
+        // dispatch fan-out degree so a path that traverses a base-virtual fan-out shows it, the
+        // handoff-dispatcher provenance so an --async path can render the cross-thread hop, and the
+        // dispatch BASIS (roslyn-mined vs name/arity heuristic) so inferred hops are flagged.
         var parent = new Dictionary<
             string,
-            (string From, string Kind, string? File, int Line, string? LoopKind, string? LoopDetail, int Fanout)?
+            (
+                string From,
+                string Kind,
+                string? File,
+                int Line,
+                string? LoopKind,
+                string? LoopDetail,
+                int Fanout,
+                string? HandoffVia,
+                string? Basis
+            )?
         >(StringComparer.Ordinal);
         var queue = new Queue<(string Node, int Depth)>();
         // Receiver of the edge that reached each node — narrows that node's dispatch when expanded.
@@ -50,11 +84,25 @@ public static class FactPathFinder
             if (depth >= maxDepth)
                 continue;
 
-            foreach (var s in Successors(current, index, receiverOf.TryGetValue(current, out var rc) ? rc : null))
+            foreach (var s in Successors(current, index, receiverOf.TryGetValue(current, out var rc) ? rc : null, mode))
             {
                 if (!parent.ContainsKey(s.Node))
                     receiverOf[s.Node] = s.OutReceiver;
-                Enqueue(parent, queue, s.Node, current, s.Kind, s.File, s.Line, s.LoopKind, s.LoopDetail, s.Fanout, depth);
+                Enqueue(
+                    parent,
+                    queue,
+                    s.Node,
+                    current,
+                    s.Kind,
+                    s.File,
+                    s.Line,
+                    s.LoopKind,
+                    s.LoopDetail,
+                    s.Fanout,
+                    s.HandoffVia,
+                    s.Basis,
+                    depth
+                );
             }
         }
 
@@ -74,13 +122,24 @@ public static class FactPathFinder
     // is inherited forward through the fanned-out subtree (like NearestLoop), and is null/0 when the
     // node is reachable directly (a real call) or only through single-target dispatch. Lets `reaches`
     // separate genuine per-entry reach from base-virtual dispatch fan-out instead of over-counting it.
+    // HandoffVia (clone of DispatchVia): under AsyncInclude, when the BFS-shortest path to this node
+    // crossed an async handoff edge, HandoffVia = that edge's dispatcher id (e.g. the rule that
+    // matched RepeatingBackgroundProcessSchedule). Inherited forward through the scheduled subtree
+    // (like NearestLoop/DispatchVia), and null when the node is also reachable synchronously (the
+    // shorter sync route reaches it first, with no handoff ancestor). Always null under SyncCut.
+    // DispatchBasis: provenance of the dispatch hops on the BFS-shortest path to this node —
+    // "heuristic" (STICKY: at least one name/arity-guessed dispatch hop on the path; the reach is
+    // only as trustworthy as that guess), "roslyn" (dispatch crossed, all hops exact mined facts),
+    // or null (no dispatch hop on the path). Inherited forward like NearestLoop/HandoffVia.
     public sealed record ReachInfo(
         int Depth,
         int LoopNesting,
         string? NearestLoopKind,
         string? NearestLoopDetail,
         string? DispatchVia = null,
-        int DispatchDegree = 0
+        int DispatchDegree = 0,
+        string? HandoffVia = null,
+        string? DispatchBasis = null
     );
 
     // Full reachability: BFS the call graph (incl. interface->impl dispatch) from every node
@@ -93,10 +152,11 @@ public static class FactPathFinder
         string fromPattern,
         int maxDepth = 20,
         int maxNodes = 20000,
-        bool narrowDispatch = true
+        bool narrowDispatch = true,
+        TraversalMode mode = TraversalMode.SyncCut
     )
     {
-        var info = ReachesWithFanout(graph, fromPattern, maxDepth, maxNodes, narrowDispatch);
+        var info = ReachesWithFanout(graph, fromPattern, maxDepth, maxNodes, narrowDispatch, mode);
         var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var kv in info)
             depthOf[kv.Key] = kv.Value.Depth;
@@ -112,7 +172,8 @@ public static class FactPathFinder
         string fromPattern,
         int maxDepth = 20,
         int maxNodes = 20000,
-        bool narrowDispatch = true
+        bool narrowDispatch = true,
+        TraversalMode mode = TraversalMode.SyncCut
     )
     {
         var index = BuildIndex(graph, narrowDispatch);
@@ -136,7 +197,7 @@ public static class FactPathFinder
             var cur = info[current];
             if (cur.Depth >= maxDepth)
                 continue;
-            foreach (var s in Successors(current, index, receiverOf[current]))
+            foreach (var s in Successors(current, index, receiverOf[current], mode))
             {
                 if (info.ContainsKey(s.Node))
                     continue;
@@ -153,7 +214,14 @@ public static class FactPathFinder
                 var fannedOut = s.Fanout > 1;
                 var via = fannedOut ? s.Via : cur.DispatchVia;
                 var degree = fannedOut ? s.Fanout : cur.DispatchDegree;
-                info[s.Node] = new ReachInfo(cur.Depth + 1, nesting, nearKind, nearDetail, via, degree);
+                // HandoffVia (clone of the DispatchVia inheritance): set when THIS edge is a handoff,
+                // else inherited from the parent — so the whole scheduled subtree carries the
+                // provenance, and a node first reached synchronously (shorter route) carries none.
+                var handoffVia = s.HandoffVia ?? cur.HandoffVia;
+                // Dispatch-basis inheritance: "heuristic" is STICKY (one guessed hop taints the whole
+                // downstream reach), otherwise this edge's basis or the inherited one.
+                var basis = s.Basis == "heuristic" || cur.DispatchBasis == "heuristic" ? "heuristic" : (s.Basis ?? cur.DispatchBasis);
+                info[s.Node] = new ReachInfo(cur.Depth + 1, nesting, nearKind, nearDetail, via, degree, handoffVia, basis);
                 receiverOf[s.Node] = s.OutReceiver;
                 queue.Enqueue(s.Node);
             }
@@ -168,7 +236,13 @@ public static class FactPathFinder
     // it's reached its children are built; later encounters become a Truncated leaf ("seen"), so a
     // cycle or a heavily-shared callee can't blow the tree up. maxDepth bounds depth; maxNodes bounds
     // total emitted nodes (a Truncated leaf is emitted at the cut). Returns one TraceNode per root.
-    public static IReadOnlyList<TraceNode> BuildTree(FactGraphData graph, string fromPattern, int maxDepth = 20, int maxNodes = 20000)
+    public static IReadOnlyList<TraceNode> BuildTree(
+        FactGraphData graph,
+        string fromPattern,
+        int maxDepth = 20,
+        int maxNodes = 20000,
+        TraversalMode mode = TraversalMode.SyncCut
+    )
     {
         var index = BuildIndex(graph);
         var expanded = new HashSet<string>(StringComparer.Ordinal);
@@ -186,12 +260,15 @@ public static class FactPathFinder
                     loopKind: null,
                     loopDetail: null,
                     fanout: 0,
+                    handoffVia: null,
+                    dispatchBasis: null,
                     incomingReceiver: null,
                     depth: 0,
                     maxDepth,
                     index,
                     expanded,
-                    budget
+                    budget,
+                    mode
                 )
             );
         }
@@ -204,13 +281,17 @@ public static class FactPathFinder
         string? loopKind,
         string? loopDetail,
         int fanout,
+        string? handoffVia,
+        // Provenance of the dispatch edge that reached this node (roslyn|heuristic), null otherwise.
+        string? dispatchBasis,
         // The receiver type of the edge that reached this node — narrows this node's own dispatch fan-out.
         string? incomingReceiver,
         int depth,
         int maxDepth,
         GraphIndex index,
         HashSet<string> expanded,
-        int[] budget
+        int[] budget,
+        TraversalMode mode
     )
     {
         budget[0]--;
@@ -219,20 +300,54 @@ public static class FactPathFinder
         // emit a leaf and don't descend, so the tree stays finite and each method's subtree is
         // printed once.
         if (expanded.Contains(symbol) || depth >= maxDepth || budget[0] <= 0)
-            return new TraceNode(symbol, edgeKind, loopKind, loopDetail, EmptyNodes, Truncated: true, Fanout: fanout);
+            return new TraceNode(
+                symbol,
+                edgeKind,
+                loopKind,
+                loopDetail,
+                EmptyNodes,
+                Truncated: true,
+                Fanout: fanout,
+                HandoffVia: handoffVia,
+                DispatchBasis: dispatchBasis
+            );
 
         expanded.Add(symbol);
 
         var children = new List<TraceNode>();
-        foreach (var s in Successors(symbol, index, incomingReceiver))
+        foreach (var s in Successors(symbol, index, incomingReceiver, mode))
         {
             if (budget[0] <= 0)
                 break;
             children.Add(
-                BuildNode(s.Node, s.Kind, s.LoopKind, s.LoopDetail, s.Fanout, s.OutReceiver, depth + 1, maxDepth, index, expanded, budget)
+                BuildNode(
+                    s.Node,
+                    s.Kind,
+                    s.LoopKind,
+                    s.LoopDetail,
+                    s.Fanout,
+                    s.HandoffVia,
+                    s.Basis,
+                    s.OutReceiver,
+                    depth + 1,
+                    maxDepth,
+                    index,
+                    expanded,
+                    budget,
+                    mode
+                )
             );
         }
-        return new TraceNode(symbol, edgeKind, loopKind, loopDetail, children, Fanout: fanout);
+        return new TraceNode(
+            symbol,
+            edgeKind,
+            loopKind,
+            loopDetail,
+            children,
+            Fanout: fanout,
+            HandoffVia: handoffVia,
+            DispatchBasis: dispatchBasis
+        );
     }
 
     private static readonly IReadOnlyList<TraceNode> EmptyNodes = new TraceNode[0];
@@ -243,7 +358,12 @@ public static class FactPathFinder
     // substring) — callers pass concrete entry-point DocIDs. Unknown root ids (not present as graph
     // nodes) are skipped. Underpins the unreachable-symbol / dead-code finder: dead = first-party
     // methods − this set − the roots themselves.
-    public static HashSet<string> ReachableFromAll(FactGraphData graph, IEnumerable<string> roots, int maxNodes = 2_000_000)
+    public static HashSet<string> ReachableFromAll(
+        FactGraphData graph,
+        IEnumerable<string> roots,
+        int maxNodes = 2_000_000,
+        TraversalMode mode = TraversalMode.SyncCut
+    )
     {
         var index = BuildIndex(graph);
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -259,7 +379,7 @@ public static class FactPathFinder
         while (queue.Count > 0 && seen.Count < maxNodes)
         {
             var current = queue.Dequeue();
-            foreach (var s in Successors(current, index, receiverOf.TryGetValue(current, out var rc) ? rc : null))
+            foreach (var s in Successors(current, index, receiverOf.TryGetValue(current, out var rc) ? rc : null, mode))
                 if (seen.Add(s.Node))
                 {
                     receiverOf[s.Node] = s.OutReceiver;
@@ -280,11 +400,12 @@ public static class FactPathFinder
         string toPattern,
         int maxDepth = 20,
         int maxNodes = 20000,
-        bool narrowDispatch = true
+        bool narrowDispatch = true,
+        TraversalMode mode = TraversalMode.SyncCut
     )
     {
         var index = BuildIndex(graph, narrowDispatch);
-        var rev = BuildReverseMaps(graph, narrowDispatch);
+        var rev = BuildReverseMaps(graph, narrowDispatch, mode);
 
         var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
         var queue = new Queue<string>();
@@ -318,11 +439,17 @@ public static class FactPathFinder
     // (no caller, not an impl of a called interface, not an override of a called base) — the tops of
     // the reverse closure, i.e. methods invoked only by the framework / DI / reflection / externally.
     // The honest static approximation of "which entry points touch this method".
-    public static IReadOnlyList<string> EntryRootsReaching(FactGraphData graph, string toPattern, int maxDepth = 20, int maxNodes = 20000)
+    public static IReadOnlyList<string> EntryRootsReaching(
+        FactGraphData graph,
+        string toPattern,
+        int maxDepth = 20,
+        int maxNodes = 20000,
+        TraversalMode mode = TraversalMode.SyncCut
+    )
     {
         var index = BuildIndex(graph);
-        var rev = BuildReverseMaps(graph);
-        var reachable = ReachedBy(graph, toPattern, maxDepth, maxNodes);
+        var rev = BuildReverseMaps(graph, narrowDispatch: true, mode);
+        var reachable = ReachedBy(graph, toPattern, maxDepth, maxNodes, narrowDispatch: true, mode);
         var roots = new List<string>();
         foreach (var m in reachable.Keys)
             if (!Predecessors(m, index, rev).Any())
@@ -334,9 +461,13 @@ public static class FactPathFinder
     private sealed class ReverseMaps
     {
         public Dictionary<string, List<string>> Callers = new(StringComparer.Ordinal);
-        public Dictionary<string, List<string>> InterfacesByType = new(StringComparer.Ordinal);
-        public Dictionary<string, List<string>> BasesByType = new(StringComparer.Ordinal);
-        public HashSet<string> IsOverride = new(StringComparer.Ordinal);
+
+        // target method -> the dispatch SOURCE methods that resolve to it. Built as the exact REVERSE
+        // of the forward DispatchTargets (CHA, receiver-blind) over every node, so reverse traversal
+        // sees precisely the edges the materialised dispatch_edges table carries (SQL == oracle by
+        // construction) — mined-first resolution, error-type recovery and the heuristic fallback all
+        // included, instead of a parallel name-matching reimplementation that could drift.
+        public Dictionary<string, List<string>> ReverseDispatch = new(StringComparer.Ordinal);
 
         // Per virtual/base/interface method node: the receiver-type "profile" of all direct call edges
         // that target it. Used to narrow reverse dispatch — a base method only reverse-reaches an
@@ -353,11 +484,18 @@ public static class FactPathFinder
         public HashSet<string> StrippedReceivers = new(StringComparer.Ordinal);
     }
 
-    private static ReverseMaps BuildReverseMaps(FactGraphData graph, bool narrowDispatch = true)
+    private static ReverseMaps BuildReverseMaps(FactGraphData graph, bool narrowDispatch = true, TraversalMode mode = TraversalMode.SyncCut)
     {
         var rev = new ReverseMaps { NarrowDispatch = narrowDispatch };
         foreach (var edge in graph.CallEdges)
         {
+            // Sync-cut: an async handoff edge is NOT a synchronous caller->callee link, so it must not
+            // make the registrar a predecessor of the callback (else `callers` would claim the
+            // registrar reaches the callback synchronously, and the callback wouldn't surface as a
+            // background origin via `--roots`). --async keeps the link.
+            if (mode == TraversalMode.SyncCut && edge.Kind == "handoff")
+                continue;
+
             if (!rev.Callers.TryGetValue(edge.Callee, out var list))
                 rev.Callers[edge.Callee] = list = new List<string>();
             list.Add(edge.Caller);
@@ -370,61 +508,39 @@ public static class FactPathFinder
             else
                 profile.StrippedReceivers.Add(stripped);
         }
-        foreach (var e in graph.ImplementsEdges)
+
+        // Reverse dispatch = the forward CHA dispatch edges, inverted. (The receiver-blind superset;
+        // ReverseDispatchReaches narrows per hop when narrowing is on.)
+        var index = BuildIndex(graph, narrowDispatch: false);
+        foreach (var node in index.Nodes)
+        foreach (var target in DispatchTargets(node, index, receiverType: null))
         {
-            if (!rev.InterfacesByType.TryGetValue(e.ImplType, out var list))
-                rev.InterfacesByType[e.ImplType] = list = new List<string>();
-            list.Add(e.InterfaceType);
+            if (!rev.ReverseDispatch.TryGetValue(target.Node, out var sources))
+                rev.ReverseDispatch[target.Node] = sources = new List<string>();
+            sources.Add(node);
         }
-        foreach (var e in graph.BaseEdges ?? new List<BaseEdge>())
-        {
-            if (!rev.BasesByType.TryGetValue(e.SubType, out var list))
-                rev.BasesByType[e.SubType] = list = new List<string>();
-            list.Add(e.BaseType);
-        }
-        foreach (var m in graph.Methods)
-            if (m.IsOverride)
-                rev.IsOverride.Add(m.SymbolId);
         return rev;
     }
 
     private static IEnumerable<string> Predecessors(string current, GraphIndex index, ReverseMaps rev)
     {
-        var callers = rev.Callers;
-        var interfacesByType = rev.InterfacesByType;
-        var basesByType = rev.BasesByType;
-        var isOverride = rev.IsOverride;
-
-        if (callers.TryGetValue(current, out var direct))
+        if (rev.Callers.TryGetValue(current, out var direct))
             foreach (var c in direct)
                 yield return c;
 
-        var parsed = ParseMethod(current);
-        if (parsed is null)
-            yield break;
-        var (typeId, name) = parsed.Value;
-
-        // Reverse impl-dispatch: callers invoke the interface method, which dispatches to this impl.
-        // Narrowed: only yield the interface method when SOME caller of it could dispatch to THIS impl
-        // type (its receiver is unreliable or names this type / a supertype-in-scope of it). Else the
-        // impl can't be the runtime target of any of that interface method's call sites — drop it.
-        if (interfacesByType.TryGetValue(typeId, out var ifaces))
-            foreach (var iface in ifaces)
-                if (index.MethodsByStrippedType.TryGetValue(TypeClosure.StripGeneric(iface), out var im))
-                    foreach (var m in im)
-                        if (string.Equals(m.Name, name, StringComparison.Ordinal) && ReverseDispatchReaches(m.SymbolId, typeId, index, rev))
-                            yield return m.SymbolId;
-
-        // Reverse override-dispatch: a call to a base virtual dispatches to this override, so the
-        // base's same-named method reaches it. Gated on this being an override; walk all ancestors.
-        // Narrowed the same way: the base method only reverse-reaches this override when some caller's
-        // receiver type could resolve to this override's declaring type.
-        if (isOverride.Contains(current))
-            foreach (var baseType in Ancestors(typeId, basesByType))
-                if (index.MethodsByStrippedType.TryGetValue(TypeClosure.StripGeneric(baseType), out var bm))
-                    foreach (var m in bm)
-                        if (string.Equals(m.Name, name, StringComparison.Ordinal) && ReverseDispatchReaches(m.SymbolId, typeId, index, rev))
-                            yield return m.SymbolId;
+        // Reverse dispatch: every source method whose (forward) dispatch resolves to `current` —
+        // its interface declaration, base virtual, or transitive base of the override chain. Narrowed:
+        // only yield a source when SOME caller of it could dispatch to current's declaring type (its
+        // receiver is unreliable or in scope of it). Else current can't be the runtime target of any
+        // of that source's call sites — drop it.
+        if (rev.ReverseDispatch.TryGetValue(current, out var sources))
+        {
+            var parsed = ParseMethod(current);
+            var typeId = parsed?.TypeId;
+            foreach (var s in sources)
+                if (typeId is null || ReverseDispatchReaches(s, typeId, index, rev))
+                    yield return s;
+        }
     }
 
     // True when the virtual/base/interface method `baseMethod` can dispatch to an override/impl whose
@@ -457,24 +573,6 @@ public static class FactPathFinder
         return false;
     }
 
-    private static IEnumerable<string> Ancestors(string typeId, Dictionary<string, List<string>> basesByType)
-    {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var stack = new Stack<string>();
-        stack.Push(typeId);
-        while (stack.Count > 0)
-        {
-            var t = stack.Pop();
-            if (basesByType.TryGetValue(t, out var bases))
-                foreach (var b in bases)
-                    if (seen.Add(b))
-                    {
-                        stack.Push(b);
-                        yield return b;
-                    }
-        }
-    }
-
     private sealed class GraphIndex
     {
         public Dictionary<string, List<CallEdge>> Adjacency = new(StringComparer.Ordinal);
@@ -494,6 +592,15 @@ public static class FactPathFinder
         // the CALL's interface resolved (T:Ns.IFoo.M) but the IMPLEMENTER's edge didn't (!:IFoo) —
         // the failure mode that silently kills dispatch and under-reports downstream effects.
         public Dictionary<string, List<string>> ImplsByErrorInterfaceName = new(StringComparer.Ordinal);
+
+        // EXACT Roslyn-mined dispatch edges (dispatch_facts), source member -> [(target, kind)] with
+        // kind "override"|"impl". When a method has any of these, they are AUTHORITATIVE for its
+        // member-level dispatch (Basis="roslyn") and the name/arity CHA scan is skipped; the CHA scan
+        // remains only as a flagged "heuristic" fallback for members with no mined edge, plus the
+        // always-on error-type (`!:`) simple-name recovery (Roslyn never bound those, so no mined
+        // edge can exist). Empty when the graph carries no mined facts (old store / synthetic test
+        // graph) — then everything falls back to CHA exactly as before, marked heuristic.
+        public Dictionary<string, List<(string Target, string Kind)>> MinedDispatchBySource = new(StringComparer.Ordinal);
 
         // Generic-stripped base-edge lookup (stripped base id -> subtype ids), for base-virtual/
         // abstract -> override dispatch. Stripped so a call on the open-generic base reaches overrides
@@ -541,6 +648,13 @@ public static class FactPathFinder
         index.StrippedBaseEdges = TypeClosure.BuildBaseEdgeLookup(
             (graph.BaseEdges ?? new List<BaseEdge>()).Select(e => (e.SubType, e.BaseType))
         );
+        foreach (var fact in graph.MinedDispatch ?? new List<DispatchFact>())
+        {
+            if (!index.MinedDispatchBySource.TryGetValue(fact.SourceMember, out var list))
+                index.MinedDispatchBySource[fact.SourceMember] = list = new List<(string, string)>();
+            if (!list.Contains((fact.TargetMember, fact.Kind)))
+                list.Add((fact.TargetMember, fact.Kind));
+        }
         foreach (var method in graph.Methods)
             index.Nodes.Add(method.SymbolId);
         return index;
@@ -573,8 +687,15 @@ public static class FactPathFinder
         // expanded its own dispatch fan-out can be narrowed edge-aware. For a direct call edge this is
         // the edge's ReceiverType (the receiver of `target` at that call site). Null for dispatch hops
         // (a dispatch edge has no further call-site receiver).
-        string? OutReceiver
-    )> Successors(string current, GraphIndex index, string? incomingReceiver = null)
+        string? OutReceiver,
+        // The dispatcher id when THIS successor is reached via an async handoff edge (Kind=="handoff"),
+        // else null — the HandoffVia provenance seed for the reached node. Only produced under
+        // AsyncInclude (SyncCut skips the edge entirely).
+        string? HandoffVia,
+        // Provenance of a dispatch edge: "roslyn" (exact mined fact) or "heuristic" (name/arity CHA
+        // fallback — flagged to the user). Null for direct call / handoff edges.
+        string? Basis
+    )> Successors(string current, GraphIndex index, string? incomingReceiver = null, TraversalMode mode = TraversalMode.SyncCut)
     {
         // Emit direct call edges in CALL-SITE SOURCE ORDER (by line, then callee for stable ties), not
         // storage order. The graph is loaded from SQL with no ORDER BY, so adjacency order is arbitrary
@@ -584,7 +705,43 @@ public static class FactPathFinder
         // carries its ReceiverType forward so the target's dispatch can be narrowed when it is expanded.
         if (index.Adjacency.TryGetValue(current, out var edges))
             foreach (var edge in edges.OrderBy(e => e.Line).ThenBy(e => e.Callee, StringComparer.Ordinal))
-                yield return (edge.Callee, edge.Kind, edge.FilePath, edge.Line, edge.LoopKind, edge.LoopDetail, 0, null, edge.ReceiverType);
+            {
+                // Sync-cut: an async handoff edge schedules its callback to run later / elsewhere — it
+                // is NOT a synchronous call, so we don't cross it. --async crosses it, seeding the
+                // reached node with the dispatcher provenance (HandoffVia).
+                if (edge.Kind == "handoff")
+                {
+                    if (mode == TraversalMode.SyncCut)
+                        continue;
+                    yield return (
+                        edge.Callee,
+                        edge.Kind,
+                        edge.FilePath,
+                        edge.Line,
+                        edge.LoopKind,
+                        edge.LoopDetail,
+                        0,
+                        null,
+                        edge.ReceiverType,
+                        edge.HandoffDispatcher ?? "handoff",
+                        null
+                    );
+                    continue;
+                }
+                yield return (
+                    edge.Callee,
+                    edge.Kind,
+                    edge.FilePath,
+                    edge.Line,
+                    edge.LoopKind,
+                    edge.LoopDetail,
+                    0,
+                    null,
+                    edge.ReceiverType,
+                    null,
+                    null
+                );
+            }
 
         // Dispatch (synthetic, no call-site line) edges AFTER the line-ordered real calls — the fan-out
         // of `current` itself when it is a virtual/base/interface method, narrowed by the receiver of the
@@ -593,31 +750,93 @@ public static class FactPathFinder
         var dispatch = DispatchTargets(current, index, index.NarrowDispatch ? incomingReceiver : null);
         var degree = dispatch.Count;
         foreach (var d in dispatch)
-            yield return (d.Node, d.Kind, null, 0, null, null, degree, current, null);
+            yield return (d.Node, d.Kind, null, 0, null, null, degree, current, null, null, d.Basis);
     }
 
-    // All synthetic dispatch successors of `method` (a virtual/base/interface method node):
-    // interface->impl (incl. the error-type simple-name recovery) and base-virtual/abstract->override.
-    // Materialized (not lazily yielded) so the caller knows the fan-out degree before emitting any
-    // edge. Deduped by target so a method reached via two mechanisms isn't double-counted in the degree.
+    // All synthetic dispatch successors of `method` (a virtual/base/interface method node), with the
+    // PROVENANCE of each edge. Materialized (not lazily yielded) so the caller knows the fan-out
+    // degree before emitting any edge. Deduped by target so a method reached via two mechanisms isn't
+    // double-counted in the degree.
+    //
+    // Resolution order (exact facts first, heuristic only where Roslyn couldn't bind — flagged):
+    //  1. MINED dispatch facts (Basis="roslyn"): the forward closure of the exact Roslyn-mined
+    //     override/interface-impl edges from `method` (dispatch_facts; IMethodSymbol.OverriddenMethod +
+    //     FindImplementationForInterfaceMember at extraction). Signature-exact and generic-correct —
+    //     a same-named OVERLOAD can never be a target. Closure (not one hop) so a receiver narrowed to
+    //     a grandchild type still finds the grandchild's override directly from the base method.
+    //  2. Error-type simple-name recovery (Basis="heuristic", ALWAYS on): implementers whose interface
+    //     edge failed to bind (`!:IFoo` — net48 partial binding) can have no mined edge by definition;
+    //     recover them by simple name + arity. The single highest-recall feature — never dropped.
+    //  3. Name/arity CHA fallback (Basis="heuristic"): ONLY when `method` has NO mined dispatch edges
+    //     (Roslyn didn't see/bind it at extraction, or the store predates dispatch_facts) — the
+    //     pre-mining interface-impl + override-descendant scan, arity-gated. ~99% correct; the CLI
+    //     tells the user via the ~heuristic marker.
     //
     // `receiverType` is the static receiver type mined at the call site that reached `method` (a display
     // FQN, e.g. "MedDBase.CompanyEntity"). When it resolves to a concrete first-party type that is a
     // descendant of `method`'s declaring type, override/impl dispatch is NARROWED to that receiver's
-    // own subtree — the precise CLR dispatch target set. Otherwise (null/interface/error-type/the
-    // declaring base itself/an unknown type) it falls back to full CHA so no real target is dropped.
-    private static List<(string Node, string Kind)> DispatchTargets(string method, GraphIndex index, string? receiverType = null)
+    // own subtree — the precise CLR dispatch target set (orthogonal to WHICH member: it trims runtime
+    // TYPES, the mined facts fix the member correspondence). Otherwise (null/interface/error-type/the
+    // declaring base itself/an unknown type) it falls back to the full receiver-blind set.
+    private static List<(string Node, string Kind, string Basis)> DispatchTargets(
+        string method,
+        GraphIndex index,
+        string? receiverType = null
+    )
     {
-        var targets = new List<(string Node, string Kind)>();
+        var targets = new List<(string Node, string Kind, string Basis)>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var parsed = ParseMethod(method);
         if (parsed is null)
             return targets;
 
+        // Source method's parameter ARITY — heuristic dispatch is gated on it so an interface/base
+        // call only reaches an impl/override with the MATCHING signature, not a same-named OVERLOAD.
+        // A true override/impl always shares the base/interface method's arity; an overload (e.g.
+        // IWorkflows.Register(int, IWorkflowController) vs ...Register(IWorkflowMaster)) does NOT, so
+        // name-only matching cross-contaminated them. Arity (not full param TYPES) is the safe gate:
+        // it kills the cross-arity overload collision while staying robust to generic instantiation,
+        // where an override's rendered param types legitimately differ from the open-generic base
+        // (`0 vs int). Same-ARITY overloads are beyond it — that's what the mined facts resolve.
+        var arity = ParamArity(method);
+
         // Resolve the receiver to a narrowing subtree, if it is reliable. `narrowRoot` non-null means
-        // override-dispatch (and impl-dispatch) restricts to {narrowRoot} ∪ descendants(narrowRoot)
-        // instead of all descendants of the declaring type. Null => CHA fallback.
+        // dispatch restricts to {narrowRoot} ∪ descendants(narrowRoot) instead of every candidate.
         var narrowRoot = ResolveNarrowRoot(receiverType, parsed.Value.TypeId, index);
+
+        bool InScope(string targetMethodId)
+        {
+            if (narrowRoot is null)
+                return true;
+            var targetType = ParseMethod(targetMethodId)?.TypeId;
+            return targetType is not null && InNarrowSubtree(targetType, narrowRoot, index);
+        }
+
+        // 1. Mined facts: forward closure from `method`. hasMined reflects whether ANY mined edge
+        // leaves the closure (pre-narrowing) — when true, the member correspondence is known exactly
+        // and the CHA fallback (3) is suppressed; narrowing may still trim every target.
+        var hasMined = false;
+        if (index.MinedDispatchBySource.Count > 0)
+        {
+            var visited = new HashSet<string>(StringComparer.Ordinal) { method };
+            var stack = new Stack<string>();
+            stack.Push(method);
+            while (stack.Count > 0)
+            {
+                var current = stack.Pop();
+                if (!index.MinedDispatchBySource.TryGetValue(current, out var outs))
+                    continue;
+                foreach (var (target, kind) in outs)
+                {
+                    if (!visited.Add(target))
+                        continue;
+                    hasMined = true;
+                    stack.Push(target); // walk through narrowed-out intermediates to their subtypes
+                    if (InScope(target) && seen.Add(target))
+                        targets.Add((target, kind == "impl" ? "impl-dispatch" : "override-dispatch", "roslyn"));
+                }
+            }
+        }
 
         void AddImplMethods(IEnumerable<string> impls)
         {
@@ -630,37 +849,52 @@ public static class FactPathFinder
                 if (!index.MethodsByStrippedType.TryGetValue(TypeClosure.StripGeneric(impl), out var implMethods))
                     continue;
                 foreach (var concrete in implMethods)
-                    if (string.Equals(concrete.Name, parsed.Value.Name, StringComparison.Ordinal) && seen.Add(concrete.SymbolId))
-                        targets.Add((concrete.SymbolId, "impl-dispatch"));
+                    if (
+                        string.Equals(concrete.Name, parsed.Value.Name, StringComparison.Ordinal)
+                        && ParamArity(concrete.SymbolId) == arity
+                        && seen.Add(concrete.SymbolId)
+                    )
+                        targets.Add((concrete.SymbolId, "impl-dispatch", "heuristic"));
             }
         }
 
-        // Interface -> concrete DI dispatch.
-        if (index.ImplsByInterface.TryGetValue(parsed.Value.TypeId, out var impls))
-            AddImplMethods(impls);
-
-        // Simple-name fallback: recover dispatch to implementers whose interface edge failed to
-        // resolve (!:IFoo) by matching the call's interface simple name. Method-name-gated; only
-        // consults error-type edges, so the blast radius is the partial-binding cases that would
-        // otherwise be invisible. (May slightly over-dispatch across same-named interfaces in
-        // different namespaces — a deliberate recall-over-precision trade for broken bindings.)
+        // 2. Simple-name fallback (always on): recover dispatch to implementers whose interface edge
+        // failed to resolve (!:IFoo) by matching the call's interface simple name. Method-name-gated;
+        // only consults error-type edges, so the blast radius is the partial-binding cases that would
+        // otherwise be invisible — Roslyn never bound these, so no mined edge can cover them. (May
+        // slightly over-dispatch across same-named interfaces in different namespaces — a deliberate
+        // recall-over-precision trade for broken bindings.) Deduped against the mined set via `seen`.
         if (index.ImplsByErrorInterfaceName.TryGetValue(SimpleTypeName(parsed.Value.TypeId), out var nameImpls))
             AddImplMethods(nameImpls);
 
-        // Base-virtual/abstract -> override dispatch (G6/G3): a call resolved to a base-type method
-        // also reaches the SAME-named OVERRIDE on every (transitive) subtype. This is what makes an
-        // abstract [ClientAction] (or framework virtual like OnSave) reach the effects in its concrete
-        // override. Gated on IsOverride so it doesn't dispatch to unrelated same-named (hidden) methods.
-        // When the receiver narrows, scan only the receiver's subtree (its own override + its subtypes')
-        // instead of every descendant of the declaring base — the headline 114-way fan-out collapse.
-        var subtree = narrowRoot is not null ? NarrowSubtree(narrowRoot, index) : Descendants(parsed.Value.TypeId, index);
-        foreach (var sub in subtree)
+        // 3. Name/arity CHA fallback — only when the member has NO mined dispatch edge (residual
+        // binding gaps + stores without dispatch_facts). Same scan as before mining existed.
+        if (!hasMined)
         {
-            if (!index.MethodsByStrippedType.TryGetValue(TypeClosure.StripGeneric(sub), out var subMethods))
-                continue;
-            foreach (var m in subMethods)
-                if (m.IsOverride && string.Equals(m.Name, parsed.Value.Name, StringComparison.Ordinal) && seen.Add(m.SymbolId))
-                    targets.Add((m.SymbolId, "override-dispatch"));
+            // Interface -> concrete DI dispatch.
+            if (index.ImplsByInterface.TryGetValue(parsed.Value.TypeId, out var impls))
+                AddImplMethods(impls);
+
+            // Base-virtual/abstract -> override dispatch (G6/G3): a call resolved to a base-type method
+            // also reaches the SAME-named OVERRIDE on every (transitive) subtype. This is what makes an
+            // abstract [ClientAction] (or framework virtual like OnSave) reach the effects in its
+            // concrete override. Gated on IsOverride so it doesn't dispatch to unrelated same-named
+            // (hidden) methods. When the receiver narrows, scan only the receiver's subtree (its own
+            // override + its subtypes') instead of every descendant of the declaring base.
+            var subtree = narrowRoot is not null ? NarrowSubtree(narrowRoot, index) : Descendants(parsed.Value.TypeId, index);
+            foreach (var sub in subtree)
+            {
+                if (!index.MethodsByStrippedType.TryGetValue(TypeClosure.StripGeneric(sub), out var subMethods))
+                    continue;
+                foreach (var m in subMethods)
+                    if (
+                        m.IsOverride
+                        && string.Equals(m.Name, parsed.Value.Name, StringComparison.Ordinal)
+                        && ParamArity(m.SymbolId) == arity
+                        && seen.Add(m.SymbolId)
+                    )
+                        targets.Add((m.SymbolId, "override-dispatch", "heuristic"));
+            }
         }
 
         return targets;
@@ -785,19 +1019,21 @@ public static class FactPathFinder
         return receiver.Length == 0 ? null : "T:" + receiver;
     }
 
-    // Materialises EVERY synthetic dispatch edge in the graph — (sourceMethod -> targetMethod, kind)
-    // for interface->impl (incl. error-type simple-name recovery) and base-virtual/abstract->override,
-    // for all method nodes, in FULL CHA (receiver-blind). This feeds the precomputed `dispatch_edges`
-    // table, the SOUND SUPERSET that bounds the SQL reachability load — narrowing happens only in the
-    // in-memory edge traversal (Successors), so dispatch_edges must stay receiver-blind so the bounded
-    // subgraph it produces still contains every edge a narrowed traversal could visit. Deduped per
-    // source; sources are distinct.
-    public static IEnumerable<(string From, string To, string Kind)> AllDispatchEdges(FactGraphData graph)
+    // Materialises EVERY synthetic dispatch edge in the graph — (sourceMethod -> targetMethod, kind,
+    // basis) for interface->impl and base-virtual/abstract->override: the Roslyn-MINED edges
+    // (Basis="roslyn", the forward closure of dispatch_facts) plus the flagged heuristic fallback
+    // (error-type simple-name recovery + name/arity CHA for unmined members, Basis="heuristic"), for
+    // all method nodes, receiver-blind. This feeds the precomputed `dispatch_edges` table, the SOUND
+    // SUPERSET that bounds the SQL reachability load — narrowing happens only in the in-memory edge
+    // traversal (Successors), so dispatch_edges must stay receiver-blind so the bounded subgraph it
+    // produces still contains every edge a narrowed traversal could visit. Deduped per source;
+    // sources are distinct.
+    public static IEnumerable<(string From, string To, string Kind, string Basis)> AllDispatchEdges(FactGraphData graph)
     {
         var index = BuildIndex(graph, narrowDispatch: false);
         foreach (var node in index.Nodes)
         foreach (var target in DispatchTargets(node, index, receiverType: null))
-            yield return (node, target.Node, target.Kind);
+            yield return (node, target.Node, target.Kind, target.Basis);
     }
 
     // The direct call edges as (caller -> callee, kind), deduped — the other half of the graph the
@@ -811,11 +1047,22 @@ public static class FactPathFinder
         int Line,
         string? LoopKind,
         string? LoopDetail,
-        string? ReceiverType
+        string? ReceiverType,
+        string? HandoffDispatcher
     )> AllCallEdges(FactGraphData graph)
     {
         foreach (var edge in graph.CallEdges)
-            yield return (edge.Caller, edge.Callee, edge.Kind, edge.FilePath, edge.Line, edge.LoopKind, edge.LoopDetail, edge.ReceiverType);
+            yield return (
+                edge.Caller,
+                edge.Callee,
+                edge.Kind,
+                edge.FilePath,
+                edge.Line,
+                edge.LoopKind,
+                edge.LoopDetail,
+                edge.ReceiverType,
+                edge.HandoffDispatcher
+            );
     }
 
     // Transitive strict descendants of a type, memoised. Keyed on the generic-stripped id so the
@@ -829,7 +1076,20 @@ public static class FactPathFinder
     }
 
     private static void Enqueue(
-        Dictionary<string, (string From, string Kind, string? File, int Line, string? LoopKind, string? LoopDetail, int Fanout)?> parent,
+        Dictionary<
+            string,
+            (
+                string From,
+                string Kind,
+                string? File,
+                int Line,
+                string? LoopKind,
+                string? LoopDetail,
+                int Fanout,
+                string? HandoffVia,
+                string? Basis
+            )?
+        > parent,
         Queue<(string, int)> queue,
         string node,
         string from,
@@ -839,17 +1099,32 @@ public static class FactPathFinder
         string? loopKind,
         string? loopDetail,
         int fanout,
+        string? handoffVia,
+        string? basis,
         int depth
     )
     {
         if (parent.ContainsKey(node))
             return;
-        parent[node] = (from, kind, file, line, loopKind, loopDetail, fanout);
+        parent[node] = (from, kind, file, line, loopKind, loopDetail, fanout, handoffVia, basis);
         queue.Enqueue((node, depth + 1));
     }
 
     private static IReadOnlyList<PathStep> Reconstruct(
-        Dictionary<string, (string From, string Kind, string? File, int Line, string? LoopKind, string? LoopDetail, int Fanout)?> parent,
+        Dictionary<
+            string,
+            (
+                string From,
+                string Kind,
+                string? File,
+                int Line,
+                string? LoopKind,
+                string? LoopDetail,
+                int Fanout,
+                string? HandoffVia,
+                string? Basis
+            )?
+        > parent,
         string target
     )
     {
@@ -859,7 +1134,17 @@ public static class FactPathFinder
         {
             var link = parent[node];
             steps.Add(
-                new PathStep(node, link?.Kind ?? "entry", link?.File, link?.Line ?? 0, link?.LoopKind, link?.LoopDetail, link?.Fanout ?? 0)
+                new PathStep(
+                    node,
+                    link?.Kind ?? "entry",
+                    link?.File,
+                    link?.Line ?? 0,
+                    link?.LoopKind,
+                    link?.LoopDetail,
+                    link?.Fanout ?? 0,
+                    link?.HandoffVia,
+                    link?.Basis
+                )
             );
             if (link is null)
                 break;
@@ -882,6 +1167,33 @@ public static class FactPathFinder
         if (lastDot < 0)
             return null;
         return ("T:" + body.Substring(0, lastDot), body.Substring(lastDot + 1));
+    }
+
+    // Parameter ARITY of a method DocID: the number of top-level parameters in its "(...)" list, or 0
+    // when there is none ("M:T.M" / "M:T.M()"). Commas inside generic-argument braces "{...}" or array
+    // brackets "[...]" don't count (e.g. "Func{A,B,C}" is ONE parameter). Used to stop name-only
+    // interface/override dispatch from matching a same-named OVERLOAD with a different signature.
+    private static int ParamArity(string docId)
+    {
+        var open = docId.IndexOf('(');
+        if (open < 0)
+            return 0;
+        var close = docId.LastIndexOf(')');
+        if (close <= open + 1)
+            return 0; // "()" — no parameters
+        var count = 1;
+        var depth = 0;
+        for (var i = open + 1; i < close; i++)
+        {
+            var c = docId[i];
+            if (c is '{' or '[' or '(')
+                depth++;
+            else if (c is '}' or ']' or ')')
+                depth--;
+            else if (c == ',' && depth == 0)
+                count++;
+        }
+        return count;
     }
 
     // Simple (un-namespaced, arity-stripped) name from a type DocID:

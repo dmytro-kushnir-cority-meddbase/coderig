@@ -61,7 +61,17 @@ public sealed record ReferenceFact(
     string? EnclosingInvocations = null,
     // Caught exception-type FQNs of all enclosing try/catch clauses, joined via FactStructuralContext.
     // concurrency_handled (catch-type pattern at a commit site). Null when not inside a try/catch.
-    string? EnclosingCatchTypes = null
+    string? EnclosingCatchTypes = null,
+    // Generic TYPE ARGUMENTS at the call site, comma-joined (e.g. `ask<PaymentGatewayResponse<T>>(..)`
+    // → "PaymentGatewayResponse<T>"). Concrete at direct call sites; a type-PARAMETER name inside a
+    // generic helper (the caller's concrete binding is recovered separately — see B2). Feeds the
+    // stage-2 `type_argument` resource (e.g. the asked/published message type). Null for non-generic calls.
+    string? TypeArguments = null,
+    // The first argument rendered as its member/identifier path when it is a member access or plain
+    // identifier (e.g. `tell(PaymentGatewayProcessDns.AccountService, msg)` → "PaymentGatewayProcessDns.
+    // AccountService") — the routing target / discriminator, concrete even inside a generic helper.
+    // Feeds the stage-2 `argument_name` resource. Null when the first arg is a literal/other shape.
+    string? FirstArgumentName = null
 );
 
 /// <summary>A base-type or implemented-interface edge between two types.</summary>
@@ -70,6 +80,18 @@ public sealed record TypeRelationFact(
     string RelatedSymbolId,
     string RelationKind // base|interface
 );
+
+/// <summary>
+/// An EXACT member-level dispatch edge mined by Roslyn at extraction: SourceMember (a base virtual /
+/// interface method DocID) dispatches at runtime to TargetMember (the override / implementing method
+/// DocID). Kind = "override" (IMethodSymbol.OverriddenMethod, the immediate base→override hop) or
+/// "impl" (INamedTypeSymbol.FindImplementationForInterfaceMember). Both are signature-exact and
+/// generic-correct (IFoo`1.M(`0) → Bar.M(System.Int32)) — the member correspondence that name/arity
+/// CHA matching can only guess at (and got wrong for same-name overloads). Query-time dispatch uses
+/// these FIRST (Basis="roslyn") and falls back to the name/arity CHA heuristic only where Roslyn
+/// couldn't bind (net48 error-typed `!:` interfaces / unmined members), marking those "heuristic".
+/// </summary>
+public sealed record DispatchFact(string SourceMember, string TargetMember, string Kind);
 
 // --- Stage-3 (read) query projections ---
 
@@ -104,7 +126,14 @@ public sealed record CallEdge(
     // CompanyEntity dispatches only to CompanyEntity's Save override (+ its subtypes), not to
     // all 114 CommonEntityBase.Save overrides (CHA over-approximation). Null for bare/static
     // calls and non-invocation refs; falls back to full CHA when null/interface/error-type/base.
-    string? ReceiverType = null
+    string? ReceiverType = null,
+    // The id of the handoffDispatchers rule that classified this edge as an async HANDOFF — a
+    // delegate (method-group) handed to a dispatcher (a background/timer/actor/event scheduler) to
+    // run LATER / on another thread, not invoked synchronously here. Set ONLY when Kind=="handoff"
+    // (HandoffClassifier rewrote a dispatcher-consumed methodGroup edge); null for every ordinary
+    // edge. Sync-cut traversal skips Kind=="handoff" edges; --async walks them carrying this as the
+    // HandoffVia provenance. The callback target is a first-class execution origin (a root).
+    string? HandoffDispatcher = null
 );
 
 // An "implType implements ifaceType" edge (from a type-relation fact).
@@ -125,7 +154,13 @@ public sealed record FactGraphData(
     IReadOnlyList<MethodRef> Methods,
     // subType -> baseType edges; enables base-virtual/abstract -> override dispatch. Defaults to
     // empty so existing constructions stay source-compatible.
-    IReadOnlyList<BaseEdge>? BaseEdges = null
+    IReadOnlyList<BaseEdge>? BaseEdges = null,
+    // EXACT Roslyn-mined dispatch edges (dispatch_facts). When present, DispatchTargets resolves
+    // virtual/interface dispatch from these FIRST (Basis="roslyn") and uses the name/arity CHA scan
+    // only as a flagged fallback for members with no mined edge (Basis="heuristic"). Null/empty =>
+    // behaves like before this fact existed (pure CHA, all heuristic) — old stores and synthetic
+    // test graphs degrade gracefully.
+    IReadOnlyList<DispatchFact>? MinedDispatch = null
 );
 
 // One hop in a found path. LoopKind/LoopDetail describe the enclosing loop of the call that
@@ -142,7 +177,15 @@ public sealed record PathStep(
     int Line,
     string? LoopKind = null,
     string? LoopDetail = null,
-    int Fanout = 0
+    int Fanout = 0,
+    // The dispatcher id of the async HANDOFF edge that reached this step (Kind=="handoff"), or null
+    // for a synchronous hop. Only populated under --async traversal — sync-cut never crosses a
+    // handoff edge. Lets `rig path --async` render the cross-thread hop (⤳ via <dispatcher>).
+    string? HandoffVia = null,
+    // Provenance of the dispatch edge that reached this step: "roslyn" (exact, mined at extraction)
+    // or "heuristic" (name/arity CHA fallback — Roslyn couldn't bind the interface/base; ~99%
+    // correct, verify). Null for non-dispatch hops. Lets `rig path` flag inferred hops.
+    string? DispatchBasis = null
 );
 
 // A node in a call TREE rooted at an entry point (rig tree). EdgeKind/LoopKind describe the call
@@ -161,12 +204,81 @@ public sealed record TraceNode(
     // edge is an impl-/override-dispatch that fanned its source method out to N targets (this node
     // is one of N siblings — D3 edge provenance), else 0. Lets the renderer mark a fan-out hop
     // (e.g. base.Save() -> all *Entity.Save) distinctly from a real call.
-    int Fanout = 0
+    int Fanout = 0,
+    // The dispatcher id when the edge that reached this node is an async HANDOFF (EdgeKind=="handoff"):
+    // the callback was scheduled, not called. Only present under --async (sync-cut prunes the edge),
+    // so the tree renderer can show "⤳ via <dispatcher>" at the cross-thread boundary. Null otherwise.
+    string? HandoffVia = null,
+    // Provenance of the dispatch edge that reached this node from its parent: "roslyn" (exact mined
+    // fact) or "heuristic" (name/arity CHA fallback). Null for non-dispatch edges. The tree renderer
+    // marks heuristic hops («impl-dispatch ~heuristic») so the user knows the hop was inferred.
+    string? DispatchBasis = null
 );
 
 // A method handed off as a delegate (method-group) — a deferred/background entry point the
 // structural entry-point rules don't catch (e.g. RepeatingBackgroundProcessSchedule(.., Process)).
-public sealed record HandoffEntryPoint(string Target, string RegisteredIn, string FilePath, int Line);
+// Dispatcher/Kind are set when the handoff was CLASSIFIED against the handoffDispatchers rule set
+// (Dispatcher = the matching rule id; Kind = background|timer|actor|event); both null for the
+// unclassified-methodGroup residual (a delegate handed to something outside the curated set).
+public sealed record HandoffEntryPoint(
+    string Target,
+    string RegisteredIn,
+    string FilePath,
+    int Line,
+    string? Dispatcher = null,
+    string? Kind = null
+);
+
+// A handoff-dispatcher rule (the fact-matchable projection of a `handoffDispatchers` JSON entry):
+// a curated dispatcher whose CONSUMING ctor/method, when it is handed a method-group, makes that
+// method-group an async handoff rather than a synchronous call. ConsumerPatterns are matched as
+// substrings against the (generic-arity-stripped) DocID of the consuming invocation/ctor target
+// (e.g. "RepeatingBackgroundProcessSchedule.#ctor", "Echo.Process.spawn", "IAsyncEvent.Add"). Kind
+// is the execution-origin kind the promoted callback gets (background|timer|actor|event); Repeating
+// flags a re-firing schedule (vs one-shot). Rule data, not code — see the "detectors are data"
+// agreement; the generic matcher lives in HandoffClassifier.
+public sealed record FactHandoffRule(string Id, string Kind, IReadOnlyList<string> ConsumerPatterns, bool Repeating = false);
+
+// Codebase-specific RENDER knowledge for `rig tree` — presentation rules, NOT analysis facts. They
+// only change what the tree DRAWS; the underlying reach is untouched and stays exact. Loaded from the
+// `render` rule section (cascaded via --rules) and projected from AnalysisRuleSet, exactly like
+// FactHandoffRule. Ships EMPTY, so a codebase with no curated render rules always sees the raw exact
+// tree — the abstraction is the codebase author's data, never a hardcoded heuristic. `rig tree --raw`
+// bypasses these. Patterns are case-insensitive substrings of a node's DocID (rig's pattern convention).
+//   - CollapseSeams match a fan-out HUB (e.g. a reflection service-locator's interface method, or an
+//     ORM entity-constructor factory): the hub's candidate children are folded into ONE summary leaf
+//     carrying the union of their effects + a hidden-line count, instead of N polymorphic subtrees.
+//   - OpaqueTypes match a type/namespace whose internals aren't worth expanding (e.g. an ORM query
+//     builder): a matching node is drawn as a leaf — its own effects still print, its subtree does not.
+public sealed record FactRenderRules(IReadOnlyList<FactRenderRule> CollapseSeams, IReadOnlyList<FactRenderRule> OpaqueTypes)
+{
+    public static readonly FactRenderRules Empty = new([], []);
+
+    public bool IsEmpty => CollapseSeams.Count == 0 && OpaqueTypes.Count == 0;
+
+    public FactRenderRule? MatchCollapseSeam(string symbolId) => FirstMatch(CollapseSeams, symbolId);
+
+    public FactRenderRule? MatchOpaque(string symbolId) => FirstMatch(OpaqueTypes, symbolId);
+
+    private static FactRenderRule? FirstMatch(IReadOnlyList<FactRenderRule> rules, string symbolId)
+    {
+        if (rules.Count == 0)
+            return null;
+        // Match against the DocID with the parameter list stripped, so a namespace/type pattern (e.g.
+        // "Echo.") hits the DECLARING type only — never a parameter type in the signature (an app method
+        // `M:App.Foo.Bar(Echo.ProcessId)` must NOT match "Echo.").
+        var paren = symbolId.IndexOf('(');
+        var head = paren >= 0 ? symbolId.Substring(0, paren) : symbolId;
+        foreach (var rule in rules)
+            if (head.IndexOf(rule.Pattern, StringComparison.OrdinalIgnoreCase) >= 0)
+                return rule;
+        return null;
+    }
+}
+
+// One render rule: a DocID substring `Pattern` + a short `Label` shown in the rendered marker
+// (e.g. «opaque: ORM» / [seam: reflection service-locator]).
+public sealed record FactRenderRule(string Pattern, string Label);
 
 // An invocation reference fact, with the enrichment fed to the stage-2 effect/observation derivers
 // (P1a–P1c). Replaces the positional tuple that grew past readability. Receiver/FirstArgument feed
@@ -182,7 +294,11 @@ public sealed record FactInvocation(
     string? LoopKind = null,
     string? LoopDetail = null,
     string? EnclosingInvocations = null,
-    string? CatchTypes = null
+    string? CatchTypes = null,
+    // Call-site generic type arguments (comma-joined) and the first-argument member/identifier path.
+    // Feed the `type_argument` / `argument_name` effect-resource strategies (P2a). See ReferenceFact.
+    string? TypeArguments = null,
+    string? FirstArgName = null
 );
 
 // An effect re-derived from the reference index by matching an invocation target against the

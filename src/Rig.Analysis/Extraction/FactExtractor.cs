@@ -20,8 +20,11 @@ internal static class FactExtractor
         var symbols = new List<SymbolFact>();
         var references = new List<ReferenceFact>();
         var relations = new List<TypeRelationFact>();
+        var dispatch = new List<DispatchFact>();
+        var dispatchSeen = new HashSet<(string, string, string)>();
 
-        // --- Declarations -> SymbolFact (+ TypeRelation for type base/interface edges) ---
+        // --- Declarations -> SymbolFact (+ TypeRelation for type base/interface edges, DispatchFact
+        //     for exact member-level dispatch) ---
         foreach (var decl in root.DescendantNodes().OfType<MemberDeclarationSyntax>())
         {
             var symbol = model.GetDeclaredSymbol(decl);
@@ -46,7 +49,16 @@ internal static class FactExtractor
             AddSymbol(symbols, symbol, tree, decl);
 
             if (symbol is INamedTypeSymbol typeSymbol)
+            {
                 AddTypeRelations(relations, typeSymbol, docId);
+                AddInterfaceDispatchFacts(dispatch, dispatchSeen, typeSymbol);
+            }
+
+            // EXACT override edge: the immediate base→override hop, resolved by Roslyn (no name/arity
+            // guessing). The transitive chain (A.M ← B.M ← C.M) is reconstructed by forward closure at
+            // query time, so only the immediate hop is stored.
+            if (symbol is IMethodSymbol { OverriddenMethod: { } overridden } overrideMethod)
+                AddDispatchFact(dispatch, dispatchSeen, overridden, overrideMethod, "override");
         }
 
         // --- References -> ReferenceFact (one pass over every simple name) ---
@@ -62,7 +74,10 @@ internal static class FactExtractor
 
             var invocation = refKind == "invocation" ? InvocationOf(name) : null;
             var receiverType = refKind == "invocation" ? ReceiverTypeOf(name, model) : null;
-            var (firstArgTemplate, firstArgType) = FirstArgumentOf(FirstArgumentExpressionOf(name, refKind, invocation), model);
+            var (firstArgTemplate, firstArgType, firstArgName) = FirstArgumentOf(
+                FirstArgumentExpressionOf(name, refKind, invocation),
+                model
+            );
             var structural = StructuralContextOf(invocation, model);
             AddReference(
                 references,
@@ -74,7 +89,8 @@ internal static class FactExtractor
                 receiverType,
                 firstArgTemplate,
                 firstArgType,
-                structural
+                structural,
+                firstArgumentName: firstArgName
             );
         }
 
@@ -112,7 +128,58 @@ internal static class FactExtractor
             );
         }
 
-        return new FactExtractionResult(symbols, references, relations);
+        return new FactExtractionResult(symbols, references, relations, dispatch);
+    }
+
+    // EXACT interface-impl dispatch edges for a declared type: for every interface the type implements
+    // (AllInterfaces — direct AND inherited, so a call through a base interface still finds the impl),
+    // for every ordinary interface method, FindImplementationForInterfaceMember resolves the EXACT
+    // implementing method — signature-correct and generic-correct (IFoo`1.M(`0) → Bar.M(System.Int32)),
+    // including explicit interface implementations and impls inherited from a base class — everything
+    // name/arity matching guesses at. The SOURCE may be a framework interface (kept: a first-party call
+    // can resolve to it); the TARGET must be first-party (only first-party methods are graph nodes).
+    private static void AddInterfaceDispatchFacts(
+        List<DispatchFact> dispatch,
+        HashSet<(string, string, string)> seen,
+        INamedTypeSymbol type
+    )
+    {
+        if (type.TypeKind is not (TypeKind.Class or TypeKind.Struct))
+            return;
+
+        foreach (var iface in type.AllInterfaces)
+        foreach (var member in iface.GetMembers())
+        {
+            if (member is not IMethodSymbol { MethodKind: MethodKind.Ordinary } interfaceMethod)
+                continue;
+            if (type.FindImplementationForInterfaceMember(interfaceMethod) is IMethodSymbol impl)
+                AddDispatchFact(dispatch, seen, interfaceMethod, impl, "impl");
+        }
+    }
+
+    // Emits one deduped (Source, Target, Kind) dispatch fact keyed by OriginalDefinition DocIDs (the
+    // same identity call edges use, so generic instantiations join). Dedup is per-file; cross-file
+    // duplicates (partial types, subtypes re-walking inherited interfaces) collapse at load time.
+    private static void AddDispatchFact(
+        List<DispatchFact> dispatch,
+        HashSet<(string, string, string)> seen,
+        IMethodSymbol source,
+        IMethodSymbol target,
+        string kind
+    )
+    {
+        var resolvedTarget = target.OriginalDefinition;
+        // Only first-party targets become graph nodes; a metadata-only impl/override can't carry facts.
+        if (!resolvedTarget.Locations.Any(location => location.IsInSource))
+            return;
+
+        var sourceId = source.OriginalDefinition.GetDocumentationCommentId();
+        var targetId = resolvedTarget.GetDocumentationCommentId();
+        if (sourceId is null || targetId is null || sourceId == targetId)
+            return;
+
+        if (seen.Add((sourceId, targetId, kind)))
+            dispatch.Add(new DispatchFact(sourceId, targetId, kind));
     }
 
     private static void AddSymbol(List<SymbolFact> symbols, ISymbol symbol, SyntaxTree tree, SyntaxNode node)
@@ -164,9 +231,16 @@ internal static class FactExtractor
         string? firstArgumentTemplate = null,
         string? firstArgumentType = null,
         StructuralContext structural = default,
-        bool allowRuntime = false
+        bool allowRuntime = false,
+        string? firstArgumentName = null
     )
     {
+        // Generic type arguments at the CALL SITE — read from the constructed `target` BEFORE
+        // OriginalDefinition strips them below (e.g. `ask<PaymentGatewayResponse<T>>` → that type).
+        var typeArguments = target is IMethodSymbol { TypeArguments.Length: > 0 } generic
+            ? string.Join(",", generic.TypeArguments.Select(t => t.ToDisplayString()))
+            : null;
+
         // For constructors, point the reference at the constructor's containing type's ctor DocID;
         // for everything else use the symbol's own DocID. Reduced extension methods resolve to the
         // original definition so the DocID matches the declaration.
@@ -205,7 +279,9 @@ internal static class FactExtractor
                 EnclosingLoopKind: structural.LoopKind,
                 EnclosingLoopDetail: structural.LoopDetail,
                 EnclosingInvocations: structural.EnclosingInvocations,
-                EnclosingCatchTypes: structural.CatchTypes
+                EnclosingCatchTypes: structural.CatchTypes,
+                TypeArguments: typeArguments,
+                FirstArgumentName: firstArgumentName
             )
         );
     }
@@ -248,14 +324,17 @@ internal static class FactExtractor
     // interpolated, via StringTemplateExtensions — the same helper the Roslyn EffectExtractor uses
     // for http_argument/string_argument) and its static type (open-generic FQN, for argument_type).
     // Returns (null, null) for a null argument.
-    private static (string? Template, string? Type) FirstArgumentOf(ExpressionSyntax? argument, SemanticModel model)
+    private static (string? Template, string? Type, string? Name) FirstArgumentOf(ExpressionSyntax? argument, SemanticModel model)
     {
         if (argument is null)
-            return (null, null);
+            return (null, null, null);
 
         var template = argument.GetStringTemplate();
         var type = model.GetTypeInfo(argument).Type?.OriginalDefinition.ToDisplayString();
-        return (template, type);
+        // Member/identifier path of the argument (the routing target / discriminator, e.g.
+        // `PaymentGatewayProcessDns.AccountService`); null for literals and other expression shapes.
+        var name = argument is MemberAccessExpressionSyntax or IdentifierNameSyntax ? argument.ToString() : null;
+        return (template, type, name);
     }
 
     // Structural-context facts for an invocation (P1c) — the rule-agnostic raw structure the Roslyn
@@ -470,5 +549,6 @@ internal static class FactExtractor
 internal sealed record FactExtractionResult(
     IReadOnlyList<SymbolFact> Symbols,
     IReadOnlyList<ReferenceFact> References,
-    IReadOnlyList<TypeRelationFact> TypeRelations
+    IReadOnlyList<TypeRelationFact> TypeRelations,
+    IReadOnlyList<DispatchFact> Dispatch
 );

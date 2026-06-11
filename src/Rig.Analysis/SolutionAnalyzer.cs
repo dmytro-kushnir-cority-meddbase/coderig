@@ -58,6 +58,7 @@ public static class SolutionAnalyzer
         var symbolFacts = extractionResults.SelectMany(result => result.Symbols).ToArray();
         var referenceFacts = extractionResults.SelectMany(result => result.References).ToArray();
         var typeRelationFacts = extractionResults.SelectMany(result => result.TypeRelations).ToArray();
+        var dispatchFacts = extractionResults.SelectMany(result => result.Dispatch).ToArray();
 
         // Mine XML service descriptor files (e.g. App_Data/Common/Xml/Services/*.xml) and
         // any inline static mappings, then merge with code-detected DI registrations.
@@ -98,7 +99,8 @@ public static class SolutionAnalyzer
             SourceProjectPath: sourceProjectPath,
             Symbols: symbolFacts,
             References: referenceFacts,
-            TypeRelations: typeRelationFacts
+            TypeRelations: typeRelationFacts,
+            DispatchFacts: dispatchFacts
         );
     }
 
@@ -115,7 +117,8 @@ public static class SolutionAnalyzer
             DiRegistrationExtractor.FindDiRegistrations(source, rules).ToArray(),
             facts.Symbols,
             facts.References,
-            facts.TypeRelations
+            facts.TypeRelations,
+            facts.Dispatch
         );
     }
 }

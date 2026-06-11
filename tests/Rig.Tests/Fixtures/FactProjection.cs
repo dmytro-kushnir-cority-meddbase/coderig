@@ -49,12 +49,16 @@ public static class FactProjection
     }
 
     // Mirrors Reads.LoadFactGraphAsync: the fact-derived call graph (call edges + interface and base
-    // edges + method descriptors with IsOverride) for FactPathFinder.
-    public static FactGraphData GraphData(AnalysisResult result)
+    // edges + method descriptors with IsOverride) for FactPathFinder. When `handoffRules` are supplied,
+    // dispatcher-consumed method-group edges are classified to Kind="handoff" exactly as the SQLite
+    // path does (HandoffClassifier), so the in-memory oracle matches the materialized store.
+    public static FactGraphData GraphData(AnalysisResult result, IReadOnlyList<FactHandoffRule>? handoffRules = null)
     {
         var callEdges = result
             .References.Where(r =>
-                r.EnclosingSymbolId != null && (r.RefKind == "invocation" || r.RefKind == "methodGroup" || r.RefKind == "ctor")
+                r.EnclosingSymbolId != null
+                && r.TargetInSource
+                && (r.RefKind == "invocation" || r.RefKind == "methodGroup" || r.RefKind == "ctor")
             )
             .Select(r => new CallEdge(
                 r.EnclosingSymbolId!,
@@ -67,6 +71,7 @@ public static class FactProjection
             ))
             .Distinct()
             .ToArray();
+        var classifiedEdges = HandoffClassifier.Classify(callEdges, handoffRules);
 
         var implEdges = result
             .TypeRelations.Where(t => t.RelationKind == "interface")
@@ -87,7 +92,10 @@ public static class FactProjection
             .Select(m => new MethodRef(m.SymbolId, m.Name, m.ContainingSymbolId, m.IsOverride))
             .ToArray();
 
-        return new FactGraphData(callEdges, implEdges, methods, baseEdges);
+        // Mirrors Reads.LoadDispatchFactsAsync: the exact Roslyn-mined dispatch edges, deduped.
+        var minedDispatch = result.DispatchFacts?.Distinct().ToArray();
+
+        return new FactGraphData(classifiedEdges, implEdges, methods, baseEdges, minedDispatch);
     }
 
     public static IReadOnlyList<FactInvocation> Invocations(AnalysisResult result) =>

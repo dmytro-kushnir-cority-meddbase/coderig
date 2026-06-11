@@ -32,6 +32,8 @@ public sealed class RigDbContext(string databasePath, bool pooling = true, bool 
 
     public DbSet<TypeRelationFactEntity> TypeRelationFacts => Set<TypeRelationFactEntity>();
 
+    public DbSet<DispatchFactEntity> DispatchFacts => Set<DispatchFactEntity>();
+
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
         var connectionString = $"Data Source={databasePath}";
@@ -94,6 +96,13 @@ public sealed class RigDbContext(string databasePath, bool pooling = true, bool 
             entity.HasKey(t => new { t.RunId, t.TypeRelationFactIndex });
             entity.HasIndex(t => t.TypeSymbolId);
             entity.HasIndex(t => t.RelatedSymbolId);
+        });
+
+        modelBuilder.Entity<DispatchFactEntity>(entity =>
+        {
+            entity.ToTable("dispatch_facts");
+            entity.HasKey(d => new { d.RunId, d.DispatchFactIndex });
+            entity.HasIndex(d => d.SourceMember);
         });
     }
 }

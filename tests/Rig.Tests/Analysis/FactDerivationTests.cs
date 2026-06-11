@@ -154,6 +154,97 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         reachable.Keys.ShouldContain(k => k.Contains("SaveEntity", StringComparison.Ordinal));
     }
 
+    // --- Exact Roslyn-mined dispatch facts (docs/HANDOFF-exact-dispatch-facts.md) ---
+    // Fixture: playgrounds/LegacyNet48Web/Dispatch/DispatchZoo.cs. Ground truth by construction.
+
+    [Fact]
+    public async Task Mined_dispatch_resolves_same_arity_overloads_exactly()
+    {
+        var playground = await _playgrounds.LegacyNet48Async();
+        var graph = FactProjection.GraphData(playground.Result);
+
+        // The bug shape: IDispatchWorkflows declares TWO same-name, SAME-ARITY overloads of Register.
+        // Name+arity CHA cannot tell them apart; the mined impl edges must pair each interface
+        // overload ONLY with the impl that shares its exact signature.
+        var overloadEdges = FactPathFinder
+            .AllDispatchEdges(graph)
+            .Where(e => e.From.Contains("IDispatchWorkflows.Register(", StringComparison.Ordinal))
+            .ToList();
+        overloadEdges.Count.ShouldBe(2);
+        overloadEdges.ShouldAllBe(e => e.Basis == "roslyn");
+        foreach (var edge in overloadEdges)
+            edge.To.ShouldBe(edge.From.Replace("IDispatchWorkflows", "WorkflowRegistry"));
+
+        // End-to-end: the caller of the (int, ControllerTask) overload reaches ONLY the matching impl.
+        var reach = FactPathFinder.Reaches(graph, "WorkflowCaller.RegisterController");
+        reach.Keys.ShouldContain(k => k.Contains("WorkflowRegistry.Register(System.Int32", StringComparison.Ordinal));
+        reach.Keys.ShouldContain(k => k.Contains("ControllerRegistered", StringComparison.Ordinal));
+        reach.Keys.ShouldNotContain(k => k.Contains("WorkflowRegistry.Register(System.String", StringComparison.Ordinal));
+        reach.Keys.ShouldNotContain(k => k.Contains("MasterRegistered", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Mined_dispatch_maps_generic_interface_members_exactly()
+    {
+        var playground = await _playgrounds.LegacyNet48Async();
+        var result = playground.Result;
+
+        // The mined fact pairs the open-generic interface member with the instantiated impl —
+        // `0 vs System.Int32 in the DocIDs, which string/arity matching alone could never align
+        // as an EXACT (rather than guessed) correspondence. Proves the edge came from Roslyn.
+        (result.DispatchFacts ?? []).ShouldContain(d =>
+            d.Kind == "impl"
+            && d.SourceMember == "M:LegacyNet48Web.Dispatch.IRepo`1.Store(`0)"
+            && d.TargetMember == "M:LegacyNet48Web.Dispatch.IntRepo.Store(System.Int32)"
+        );
+
+        var graph = FactProjection.GraphData(result);
+        var edge = FactPathFinder.AllDispatchEdges(graph).Single(e => e.From == "M:LegacyNet48Web.Dispatch.IRepo`1.Store(`0)");
+        edge.To.ShouldBe("M:LegacyNet48Web.Dispatch.IntRepo.Store(System.Int32)");
+        edge.Basis.ShouldBe("roslyn");
+
+        var reach = FactPathFinder.Reaches(graph, "RepoCaller.Use");
+        reach.Keys.ShouldContain("M:LegacyNet48Web.Dispatch.IntRepo.Store(System.Int32)");
+        reach.Keys.ShouldContain(k => k.Contains("StoredInt", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Mined_dispatch_covers_override_chains_via_forward_closure()
+    {
+        var playground = await _playgrounds.LegacyNet48Async();
+        var result = playground.Result;
+
+        // Mining stores only the IMMEDIATE base->override hops (IMethodSymbol.OverriddenMethod)...
+        var facts = result.DispatchFacts ?? [];
+        facts.ShouldContain(d =>
+            d.Kind == "override"
+            && d.SourceMember.Contains("AlertBase.Raise", StringComparison.Ordinal)
+            && d.TargetMember.Contains("EmailAlert.Raise", StringComparison.Ordinal)
+        );
+        facts.ShouldContain(d =>
+            d.Kind == "override"
+            && d.SourceMember.Contains("EmailAlert.Raise", StringComparison.Ordinal)
+            && d.TargetMember.Contains("PagerAlert.Raise", StringComparison.Ordinal)
+        );
+
+        // ...and the query-time forward closure fans the BASE method out to the WHOLE chain, exact.
+        var graph = FactProjection.GraphData(result);
+        var fromBase = FactPathFinder
+            .AllDispatchEdges(graph)
+            .Where(e => e.From.Contains("AlertBase.Raise", StringComparison.Ordinal))
+            .ToList();
+        fromBase
+            .Select(e => e.To)
+            .OrderBy(t => t, StringComparer.Ordinal)
+            .ShouldBe(new[] { "M:LegacyNet48Web.Dispatch.EmailAlert.Raise", "M:LegacyNet48Web.Dispatch.PagerAlert.Raise" });
+        fromBase.ShouldAllBe(e => e.Basis == "roslyn");
+
+        // A base-typed call site reaches every override (no receiver narrowing — base receiver).
+        var reach = FactPathFinder.Reaches(graph, "AlertCaller.Fire");
+        reach.Keys.ShouldContain("M:LegacyNet48Web.Dispatch.EmailAlert.Raise");
+        reach.Keys.ShouldContain("M:LegacyNet48Web.Dispatch.PagerAlert.Raise");
+    }
+
     [Fact]
     public async Task Throw_sites_are_extracted_and_derived_as_effects()
     {
