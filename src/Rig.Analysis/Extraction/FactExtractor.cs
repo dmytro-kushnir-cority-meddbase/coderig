@@ -1,4 +1,5 @@
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Rig.Analysis;
 using Rig.Domain.Data;
@@ -54,6 +55,23 @@ internal static class FactExtractor
                 AddInterfaceDispatchFacts(dispatch, dispatchSeen, typeSymbol);
             }
 
+            // Property/indexer accessors with a real body are first-class callable methods: emit them
+            // as method symbols (so they become graph NODES — renderable, dispatch-resolvable) and
+            // carry their override edges, exactly like ordinary methods. Auto-property accessors (no
+            // body) are skipped: no effect to walk, and emitting them would bloat the graph with trivial
+            // get_/set_ leaves. The CALL edges into these accessors are emitted at the access sites below.
+            if (symbol is IPropertySymbol property)
+            {
+                foreach (var accessor in Accessors(property))
+                {
+                    if (!HasAccessorBody(accessor))
+                        continue;
+                    AddSymbol(symbols, accessor, tree, AccessorNode(accessor) ?? decl);
+                    if (accessor.OverriddenMethod is { } overriddenAccessor)
+                        AddDispatchFact(dispatch, dispatchSeen, overriddenAccessor, accessor, "override");
+                }
+            }
+
             // EXACT override edge: the immediate base→override hop, resolved by Roslyn (no name/arity
             // guessing). The transitive chain (A.M ← B.M ← C.M) is reconstructed by forward closure at
             // query time, so only the immediate hop is stored.
@@ -92,6 +110,13 @@ internal static class FactExtractor
                 structural,
                 firstArgumentName: firstArgName
             );
+
+            // A property/indexer access is, semantically, a call to its get_/set_ accessor. The
+            // read/write ref above records the data-flow touch; this records the call EDGE into a bodied
+            // accessor so reach walks its effects (a setter that validates/persists, a lazy getter that
+            // fetches). See AddAccessorInvocations for the body-only selectivity.
+            if (target is IPropertySymbol propertyAccess && refKind is "read" or "write")
+                AddAccessorInvocations(references, propertyAccess, name, model, tree);
         }
 
         // --- Object creations -> ctor refs ---
@@ -150,11 +175,36 @@ internal static class FactExtractor
         foreach (var iface in type.AllInterfaces)
         foreach (var member in iface.GetMembers())
         {
-            if (member is not IMethodSymbol { MethodKind: MethodKind.Ordinary } interfaceMethod)
-                continue;
-            if (type.FindImplementationForInterfaceMember(interfaceMethod) is IMethodSymbol impl)
-                AddDispatchFact(dispatch, seen, interfaceMethod, impl, "impl");
+            switch (member)
+            {
+                case IMethodSymbol { MethodKind: MethodKind.Ordinary } interfaceMethod:
+                    if (type.FindImplementationForInterfaceMember(interfaceMethod) is IMethodSymbol impl)
+                        AddDispatchFact(dispatch, seen, interfaceMethod, impl, "impl");
+                    break;
+
+                // Interface PROPERTY members resolve to the impl property's accessors — the same typed
+                // dispatch as methods (IFoo.Bar setter → Bar.set on the concrete impl). Only bodied impl
+                // accessors are wired (auto-property impls have no effect; their get_/set_ leaves would
+                // bloat the graph and are never call-edge targets, since access sites only emit edges to
+                // bodied accessors).
+                case IPropertySymbol interfaceProperty
+                    when type.FindImplementationForInterfaceMember(interfaceProperty) is IPropertySymbol implProperty:
+                    AddAccessorImplDispatch(dispatch, seen, interfaceProperty.GetMethod, implProperty.GetMethod);
+                    AddAccessorImplDispatch(dispatch, seen, interfaceProperty.SetMethod, implProperty.SetMethod);
+                    break;
+            }
         }
+    }
+
+    private static void AddAccessorImplDispatch(
+        List<DispatchFact> dispatch,
+        HashSet<(string, string, string)> seen,
+        IMethodSymbol? interfaceAccessor,
+        IMethodSymbol? implAccessor
+    )
+    {
+        if (interfaceAccessor is not null && implAccessor is not null && HasAccessorBody(implAccessor))
+            AddDispatchFact(dispatch, seen, interfaceAccessor, implAccessor, "impl");
     }
 
     // Emits one deduped (Source, Target, Kind) dispatch fact keyed by OriginalDefinition DocIDs (the
@@ -476,6 +526,85 @@ internal static class FactExtractor
         var expr = name.Parent is MemberAccessExpressionSyntax m && m.Name == name ? (ExpressionSyntax)m : name;
         return expr.Parent is AssignmentExpressionSyntax assignment && assignment.Left == expr;
     }
+
+    // Emits the call edge(s) into a property/indexer's accessor(s) for one access site. Only first-party
+    // accessors with a real body are emitted — auto-property accessors (`get;`/`set;`) carry no effect, so
+    // walking them adds nothing but width. The receiver type and structural context ride along exactly as
+    // for ordinary invocations, so typed/virtual property dispatch narrows and looped accessor effects show.
+    private static void AddAccessorInvocations(
+        List<ReferenceFact> references,
+        IPropertySymbol property,
+        SimpleNameSyntax name,
+        SemanticModel model,
+        SyntaxTree tree
+    )
+    {
+        var (reads, writes) = AccessShape(name);
+        var getter = reads && property.GetMethod is { } g && HasAccessorBody(g) ? g : null;
+        var setter = writes && property.SetMethod is { } s && HasAccessorBody(s) ? s : null;
+        if (getter is null && setter is null)
+            return;
+
+        var enclosing = EnclosingSymbolId(name, model);
+        var receiver = ReceiverTypeOf(name, model);
+        var structural = StructuralContextOf(name, model);
+        if (getter is not null)
+            AddReference(references, getter, "invocation", enclosing, tree, name, receiver, structural: structural);
+        if (setter is not null)
+            AddReference(references, setter, "invocation", enclosing, tree, name, receiver, structural: structural);
+    }
+
+    // Read/write shape of a property access: a plain read -> (read); a simple `=` assignment -> (write
+    // only, the prior value is discarded); a compound assignment (`+=`) and increment/decrement -> both
+    // (the get_ and set_ accessors both run). Mirrors the access forms IsWriteTarget collapses to "write".
+    private static (bool Read, bool Write) AccessShape(SimpleNameSyntax name)
+    {
+        var expr = name.Parent is MemberAccessExpressionSyntax m && m.Name == name ? (ExpressionSyntax)m : name;
+        return expr.Parent switch
+        {
+            AssignmentExpressionSyntax assignment when assignment.Left == expr => (
+                !assignment.OperatorToken.IsKind(SyntaxKind.EqualsToken),
+                true
+            ),
+            PrefixUnaryExpressionSyntax prefix when prefix.IsKind(SyntaxKind.PreIncrementExpression)
+                || prefix.IsKind(SyntaxKind.PreDecrementExpression) => (true, true),
+            PostfixUnaryExpressionSyntax postfix when postfix.IsKind(SyntaxKind.PostIncrementExpression)
+                || postfix.IsKind(SyntaxKind.PostDecrementExpression) => (true, true),
+            _ => (true, false),
+        };
+    }
+
+    private static IEnumerable<IMethodSymbol> Accessors(IPropertySymbol property)
+    {
+        if (property.GetMethod is { } getter)
+            yield return getter;
+        if (property.SetMethod is { } setter)
+            yield return setter;
+    }
+
+    // True for a first-party accessor with a REAL body: a full `get {…}`/`set {…}`, an expression-bodied
+    // accessor (`get => …`), or an expression-bodied read-only property/indexer (`public int P => …`).
+    // Auto-property accessors (`get;`/`set;`/`init;`) and metadata accessors (no DeclaringSyntaxReferences)
+    // return false — there is nothing to walk, and emitting them would bloat the graph.
+    private static bool HasAccessorBody(IMethodSymbol accessor)
+    {
+        foreach (var reference in accessor.DeclaringSyntaxReferences)
+        {
+            switch (reference.GetSyntax())
+            {
+                case AccessorDeclarationSyntax { Body: not null }:
+                case AccessorDeclarationSyntax { ExpressionBody: not null }:
+                case ArrowExpressionClauseSyntax:
+                case PropertyDeclarationSyntax { ExpressionBody: not null }:
+                case IndexerDeclarationSyntax { ExpressionBody: not null }:
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    private static SyntaxNode? AccessorNode(IMethodSymbol accessor) =>
+        accessor.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
 
     private static string? EnclosingSymbolId(SyntaxNode node, SemanticModel model)
     {
