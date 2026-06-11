@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text;
 using Rig.Analysis;
 using Rig.Analysis.Rules;
 using Rig.Cli.Rendering;
@@ -1775,16 +1776,42 @@ public static class CliApplication
         return "(" + string.Join(", ", parts) + ")";
     }
 
-    // "System.Int32" -> "Int32", "MedDBase.SiteId" -> "SiteId", "SD.…ORMSupportClasses.ITransaction" ->
-    // "ITransaction", "System.Nullable{System.Int32}" -> "Nullable{System.Int32}" (generic tail kept).
+    // Strips the namespace from EVERY type token in a parameter type (not just the outer one) and shows
+    // generics in C# angle-bracket form, so the rendering is consistent at any nesting depth:
+    // "System.Int32" -> "Int32", "SD.…ORMSupportClasses.ITransaction" -> "ITransaction",
+    // "System.Collections.Generic.Dictionary{System.String,System.Object}" -> "Dictionary<String, Object>",
+    // "System.Nullable{MedDBase.SiteId}[]" -> "Nullable<SiteId>[]". Tokenizes on dotted-identifier runs;
+    // every other char (braces->angles, brackets, commas, ref/out '@', '*') is structure and preserved.
     private static string SimplifyParamType(string param)
     {
-        param = param.Trim();
-        var markers = param.IndexOfAny(['{', '<', '[']);
-        var head = markers >= 0 ? param.Substring(0, markers) : param;
-        var tail = markers >= 0 ? param.Substring(markers) : "";
-        var dot = head.LastIndexOf('.');
-        return (dot >= 0 ? head.Substring(dot + 1) : head) + tail;
+        var sb = new StringBuilder();
+        var i = 0;
+        while (i < param.Length)
+        {
+            var c = param[i];
+            if (char.IsLetterOrDigit(c) || c is '_' or '.')
+            {
+                var start = i;
+                while (i < param.Length && (char.IsLetterOrDigit(param[i]) || param[i] is '_' or '.'))
+                    i++;
+                var token = param.Substring(start, i - start);
+                var dot = token.LastIndexOf('.');
+                sb.Append(dot >= 0 ? token.Substring(dot + 1) : token);
+            }
+            else
+            {
+                // Doc-id generic args use {}; render as C# <> with ", " between args for readability.
+                sb.Append(
+                    c == '{' ? '<'
+                    : c == '}' ? '>'
+                    : c
+                );
+                if (c == ',')
+                    sb.Append(' ');
+                i++;
+            }
+        }
+        return sb.ToString().Trim();
     }
 
     // Loop detail (e.g. a foreach's "{ident} in {expr}") can be long/multi-line (LINQ predicates),
