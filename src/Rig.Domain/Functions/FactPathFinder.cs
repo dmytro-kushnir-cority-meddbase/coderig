@@ -84,7 +84,7 @@ public static class FactPathFinder
             if (depth >= maxDepth)
                 continue;
 
-            foreach (var s in Successors(current, index, receiverOf.TryGetValue(current, out var rc) ? rc : null, mode))
+            foreach (var s in Successors(current, index, receiverOf.TryGetValue(current, out var rc) ? rc : null, null, mode))
             {
                 if (!parent.ContainsKey(s.Node))
                     receiverOf[s.Node] = s.OutReceiver;
@@ -181,6 +181,14 @@ public static class FactPathFinder
         // The static receiver type of the (BFS-shortest) edge that reached each node, carried so that
         // node's own dispatch fan-out can be narrowed edge-aware when it is expanded.
         var receiverOf = new Dictionary<string, string?>(StringComparer.Ordinal);
+        // Generic-dispatch narrowing in the CLOSURE: the concrete type-arg binding accumulated at each
+        // node. Unlike receiverOf (BFS-first-wins), this is UNIONED across every path that reaches a node
+        // and the node is re-enqueued when its binding GROWS — so a shared generic hub (e.g. Construct`2.
+        // New reached via several entity caches) ends up narrowed to ALL really-reachable constructors,
+        // never just the first path's (which would unsoundly drop the others). Monotone (sets only grow,
+        // capped) so it reaches a fixpoint. Narrowing is recall-safe in DispatchTargets: an empty/unmatched
+        // binding leaves the full CHA set, so a hub reached without a matching type arg is never emptied.
+        var bindingOf = new Dictionary<string, HashSet<string>?>(StringComparer.Ordinal);
         var queue = new Queue<string>();
         foreach (var start in index.Nodes.Where(n => Contains(n, fromPattern)))
         {
@@ -188,6 +196,7 @@ public static class FactPathFinder
                 continue;
             info[start] = new ReachInfo(0, 0, null, null);
             receiverOf[start] = null;
+            bindingOf[start] = null;
             queue.Enqueue(start);
         }
 
@@ -197,10 +206,26 @@ public static class FactPathFinder
             var cur = info[current];
             if (cur.Depth >= maxDepth)
                 continue;
-            foreach (var s in Successors(current, index, receiverOf[current], mode))
+            foreach (
+                var s in Successors(
+                    current,
+                    index,
+                    receiverOf[current],
+                    bindingOf.TryGetValue(current, out var curBinding) ? curBinding : null,
+                    mode
+                )
+            )
             {
+                // Merge this edge's carried binding into the target; a node whose binding GREW is
+                // re-enqueued (even if already reached) so its generic dispatch re-expands under the
+                // larger binding — this is what keeps the closure sound at shared generic hubs.
+                var grew = MergeBinding(bindingOf, s.Node, s.OutBinding);
                 if (info.ContainsKey(s.Node))
+                {
+                    if (grew)
+                        queue.Enqueue(s.Node);
                     continue;
+                }
                 var looped = s.LoopKind is not null;
                 var nesting = cur.LoopNesting + (looped ? 1 : 0);
                 var nearKind = looped ? s.LoopKind : cur.NearestLoopKind;
@@ -228,6 +253,160 @@ public static class FactPathFinder
         }
 
         return info;
+    }
+
+    // Upper bound on a node's accumulated type-arg binding — a runaway guard for whole-codebase reaches
+    // (real per-node bindings are a handful of types; entity-construct fan-outs are ~tens). At the cap,
+    // growth stops: the binding stays recall-safe (it only ever narrows when a candidate matches, never
+    // empties the set), so a saturated binding simply narrows less, never wrongly.
+    private const int MaxBinding = 256;
+
+    // Unions `incoming` into the carried binding of `node`, creating the entry if absent. Returns true
+    // when the node's binding actually GREW (new concrete types added) — the signal to re-enqueue a
+    // shared generic hub so its dispatch re-expands under the larger binding (the closure fixpoint).
+    private static bool MergeBinding(Dictionary<string, HashSet<string>?> bindingOf, string node, IReadOnlyCollection<string>? incoming)
+    {
+        var hadEntry = bindingOf.TryGetValue(node, out var existing);
+        if (incoming is null || incoming.Count == 0)
+        {
+            if (!hadEntry)
+                bindingOf[node] = null; // record the node as reached with no binding (full CHA)
+            return false;
+        }
+        if (!hadEntry || existing is null)
+        {
+            var set = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var t in incoming)
+            {
+                if (set.Count >= MaxBinding)
+                    break;
+                set.Add(t);
+            }
+            bindingOf[node] = set;
+            return set.Count > 0;
+        }
+        var before = existing.Count;
+        foreach (var t in incoming)
+        {
+            if (existing.Count >= MaxBinding)
+                break;
+            existing.Add(t);
+        }
+        return existing.Count > before;
+    }
+
+    // Monomorphizes generic-FACTORY call edges (see FactGenericFactoryRule): an edge
+    // `caller -> Factory<X,..>` whose call-site construct type arg X is concrete is rewritten to
+    // `caller -> X.Target`, so the traversal goes straight to the constructed type's method and skips the
+    // generic plumbing the factory forwards through (Entity.New``3 -> EntityCache`3.New -> ItemCache`3.Get
+    // -> Construct`2.New -> ×N entity ctors). Edges with no concrete construct (a forwarded type
+    // parameter) or whose target can't be resolved in the loaded graph are left intact — the in-memory
+    // generic-dispatch narrowing remains the fallback there. Pure: returns a new FactGraphData with the
+    // rewritten edges; Methods and type-relation edges are unchanged. Applied once after graph load so
+    // tree / reaches / callers all see the collapsed graph.
+    public static FactGraphData RewriteGenericFactories(FactGraphData graph, IReadOnlyList<FactGenericFactoryRule> rules)
+    {
+        if (rules.Count == 0)
+            return graph;
+
+        // (stripped construct type DocID, method name) -> overloads, for resolving X.Target.
+        var methodsByTypeAndName = new Dictionary<(string Type, string Name), List<MethodRef>>();
+        foreach (var m in graph.Methods)
+        {
+            if (m.ContainingTypeId is null)
+                continue;
+            var key = (TypeClosure.StripGeneric(m.ContainingTypeId), m.Name);
+            if (!methodsByTypeAndName.TryGetValue(key, out var list))
+                methodsByTypeAndName[key] = list = new List<MethodRef>();
+            list.Add(m);
+        }
+
+        var ruleByMethod = new Dictionary<string, FactGenericFactoryRule>(StringComparer.Ordinal);
+        foreach (var r in rules)
+            ruleByMethod[r.Method] = r;
+
+        var rewritten = new List<CallEdge>(graph.CallEdges.Count);
+        var changed = false;
+        foreach (var edge in graph.CallEdges)
+        {
+            var resolved = ResolveFactoryEdge(edge, ruleByMethod, methodsByTypeAndName);
+            if (resolved is null)
+                rewritten.Add(edge);
+            else
+            {
+                rewritten.AddRange(resolved);
+                changed = true;
+            }
+        }
+        return changed ? graph with { CallEdges = rewritten } : graph;
+    }
+
+    // Resolves one call edge against the factory rules: null when the edge isn't a (concrete) factory
+    // call, else the rewritten edge(s) targeting the construct type's method overloads (arity-matched to
+    // the factory call). Returns null (keep the edge) when nothing resolves — never drops the edge.
+    private static List<CallEdge>? ResolveFactoryEdge(
+        CallEdge edge,
+        Dictionary<string, FactGenericFactoryRule> ruleByMethod,
+        Dictionary<(string Type, string Name), List<MethodRef>> methodsByTypeAndName
+    )
+    {
+        var parsed = ParseMethod(edge.Callee);
+        if (parsed is null)
+            return null;
+        // ParseMethod returns TypeId WITH the "T:" prefix and a name that still carries the method
+        // generic-arity marker (e.g. "New``3"); rule.Method is a plain "<declType>.<name>", so strip
+        // the "``N" before matching.
+        var name = parsed.Value.Name;
+        var tick = name.IndexOf("``", StringComparison.Ordinal);
+        if (tick >= 0)
+            name = name.Substring(0, tick);
+        var methodKey = parsed.Value.TypeId.Substring(2) + "." + name;
+        if (!ruleByMethod.TryGetValue(methodKey, out var rule))
+            return null;
+        if (string.IsNullOrEmpty(edge.TypeArguments))
+            return null;
+        var construct = NthTopLevelArg(edge.TypeArguments!, rule.ConstructArgIndex);
+        // Only a concrete, namespaced type can name a real construct; a bare type-parameter token
+        // ("TConstruct") or primitive has no '.' and isn't resolvable -> leave the edge for the fallback.
+        if (construct is null || construct.IndexOf('.') < 0)
+            return null;
+        var constructType = "T:" + TypeClosure.StripGeneric(construct);
+        if (!methodsByTypeAndName.TryGetValue((constructType, rule.TargetMethod), out var candidates))
+            return null;
+        var arity = ParamArity(edge.Callee);
+        var matched = candidates.Where(c => ParamArity(c.SymbolId) == arity).ToList();
+        if (matched.Count == 0)
+            matched = candidates; // no arity match — take all overloads; still bypasses the plumbing
+        if (matched.Count == 0)
+            return null;
+        return matched.Select(m => edge with { Callee = m.SymbolId, TypeArguments = null }).ToList();
+    }
+
+    // The Nth (0-based) top-level element of a comma-joined type-arg list — commas inside <>/()/[]
+    // don't split (so a tuple/generic arg stays whole). Null when out of range / blank.
+    private static string? NthTopLevelArg(string typeArguments, int index)
+    {
+        if (index < 0)
+            return null;
+        var depth = 0;
+        var position = 0;
+        var start = 0;
+        for (var i = 0; i < typeArguments.Length; i++)
+        {
+            var c = typeArguments[i];
+            if (c is '<' or '(' or '[')
+                depth++;
+            else if (c is '>' or ')' or ']')
+                depth--;
+            else if (c == ',' && depth == 0)
+            {
+                if (position == index)
+                    return typeArguments.Substring(start, i - start).Trim();
+                position++;
+                start = i + 1;
+            }
+        }
+        return position == index ? typeArguments.Substring(start).Trim() : null;
     }
 
     // Builds the call TREE rooted at every node matching `fromPattern` (rig tree). Same edge model
@@ -263,6 +442,7 @@ public static class FactPathFinder
                     handoffVia: null,
                     dispatchBasis: null,
                     incomingReceiver: null,
+                    incomingBinding: null,
                     depth: 0,
                     maxDepth,
                     index,
@@ -286,6 +466,9 @@ public static class FactPathFinder
         string? dispatchBasis,
         // The receiver type of the edge that reached this node — narrows this node's own dispatch fan-out.
         string? incomingReceiver,
+        // The concrete type-arg binding in scope on the path to this node — narrows this node's own
+        // GENERIC dispatch fan-out (e.g. Construct`2.New -> Account.New). Parallel to incomingReceiver.
+        IReadOnlyCollection<string>? incomingBinding,
         int depth,
         int maxDepth,
         GraphIndex index,
@@ -315,7 +498,7 @@ public static class FactPathFinder
         expanded.Add(symbol);
 
         var children = new List<TraceNode>();
-        foreach (var s in Successors(symbol, index, incomingReceiver, mode))
+        foreach (var s in Successors(symbol, index, incomingReceiver, incomingBinding, mode))
         {
             if (budget[0] <= 0)
                 break;
@@ -329,6 +512,7 @@ public static class FactPathFinder
                     s.HandoffVia,
                     s.Basis,
                     s.OutReceiver,
+                    s.OutBinding,
                     depth + 1,
                     maxDepth,
                     index,
@@ -379,7 +563,7 @@ public static class FactPathFinder
         while (queue.Count > 0 && seen.Count < maxNodes)
         {
             var current = queue.Dequeue();
-            foreach (var s in Successors(current, index, receiverOf.TryGetValue(current, out var rc) ? rc : null, mode))
+            foreach (var s in Successors(current, index, receiverOf.TryGetValue(current, out var rc) ? rc : null, null, mode))
                 if (seen.Add(s.Node))
                 {
                     receiverOf[s.Node] = s.OutReceiver;
@@ -694,8 +878,20 @@ public static class FactPathFinder
         string? HandoffVia,
         // Provenance of a dispatch edge: "roslyn" (exact mined fact) or "heuristic" (name/arity CHA
         // fallback — flagged to the user). Null for direct call / handoff edges.
-        string? Basis
-    )> Successors(string current, GraphIndex index, string? incomingReceiver = null, TraversalMode mode = TraversalMode.SyncCut)
+        string? Basis,
+        // The concrete generic type-arg binding to carry to the TARGET node (parallel to OutReceiver):
+        // the incoming binding extended with this edge's own concrete type args. Drives generic-dispatch
+        // narrowing when the target is later expanded. Reference-equal to the incoming binding when the
+        // edge adds no concrete type args (the common case — most edges forward type parameters or are
+        // non-generic), so threading it costs no allocation on those.
+        IReadOnlyCollection<string>? OutBinding
+    )> Successors(
+        string current,
+        GraphIndex index,
+        string? incomingReceiver = null,
+        IReadOnlyCollection<string>? incomingBinding = null,
+        TraversalMode mode = TraversalMode.SyncCut
+    )
     {
         // Emit direct call edges in CALL-SITE SOURCE ORDER (by line, then callee for stable ties), not
         // storage order. The graph is loaded from SQL with no ORDER BY, so adjacency order is arbitrary
@@ -709,6 +905,9 @@ public static class FactPathFinder
                 // Sync-cut: an async handoff edge schedules its callback to run later / elsewhere — it
                 // is NOT a synchronous call, so we don't cross it. --async crosses it, seeding the
                 // reached node with the dispatcher provenance (HandoffVia).
+                // Extend the carried binding with THIS edge's concrete type args (a forwarded type
+                // parameter / non-generic call adds nothing and returns the same set reference).
+                var outBinding = ExtendBinding(incomingBinding, edge.TypeArguments);
                 if (edge.Kind == "handoff")
                 {
                     if (mode == TraversalMode.SyncCut)
@@ -724,7 +923,8 @@ public static class FactPathFinder
                         null,
                         edge.ReceiverType,
                         edge.HandoffDispatcher ?? "handoff",
-                        null
+                        null,
+                        outBinding
                     );
                     continue;
                 }
@@ -739,18 +939,67 @@ public static class FactPathFinder
                     null,
                     edge.ReceiverType,
                     null,
-                    null
+                    null,
+                    outBinding
                 );
             }
 
         // Dispatch (synthetic, no call-site line) edges AFTER the line-ordered real calls — the fan-out
         // of `current` itself when it is a virtual/base/interface method, narrowed by the receiver of the
-        // call that REACHED current (edge-aware). Tagged with the group's fan-out degree (N) and attributed
-        // to `current` (the dispatch source). This preserves the prior per-node tree shape and ordering.
-        var dispatch = DispatchTargets(current, index, index.NarrowDispatch ? incomingReceiver : null);
+        // call that REACHED current (edge-aware) AND by the carried type-arg binding (generic-dispatch
+        // narrowing). Tagged with the group's fan-out degree (N) and attributed to `current` (the dispatch
+        // source). The dispatch hop adds no call-site type args, so targets inherit `current`'s binding.
+        var dispatch = DispatchTargets(
+            current,
+            index,
+            index.NarrowDispatch ? incomingReceiver : null,
+            index.NarrowDispatch ? incomingBinding : null
+        );
         var degree = dispatch.Count;
         foreach (var d in dispatch)
-            yield return (d.Node, d.Kind, null, 0, null, null, degree, current, null, null, d.Basis);
+            yield return (d.Node, d.Kind, null, 0, null, null, degree, current, null, null, d.Basis, incomingBinding);
+    }
+
+    // Extends a carried type-arg binding with the CONCRETE type args of one call edge. "Concrete" =
+    // contains a '.' (a namespaced first-party/system type, e.g. "MedDBase.…Account"); a forwarded
+    // type-PARAMETER token ("TConstruct") or a bare primitive ("int") has no '.' and is skipped — only
+    // namespaced types can be a dispatch candidate's declaring type. Splits on the TOP-LEVEL comma so a
+    // tuple/generic arg never mis-splits. Returns the same set reference when nothing concrete is added
+    // (the overwhelmingly common case), so threading the binding allocates only on genuinely generic
+    // concrete call sites.
+    private static IReadOnlyCollection<string>? ExtendBinding(IReadOnlyCollection<string>? current, string? typeArguments)
+    {
+        if (string.IsNullOrEmpty(typeArguments) || typeArguments!.IndexOf('.') < 0)
+            return current;
+
+        HashSet<string>? extended = null;
+        var depth = 0;
+        var start = 0;
+        for (var i = 0; i <= typeArguments.Length; i++)
+        {
+            if (i < typeArguments.Length)
+            {
+                var c = typeArguments[i];
+                if (c is '<' or '(' or '[')
+                    depth++;
+                else if (c is '>' or ')' or ']')
+                    depth--;
+                if (!(c == ',' && depth == 0) && i < typeArguments.Length)
+                    continue;
+            }
+            var part = typeArguments.Substring(start, i - start).Trim();
+            start = i + 1;
+            // Only namespaced types can name a dispatch candidate's declaring type; tuples/primitives/
+            // type-parameter tokens can't, so they're never useful as a binding and are skipped.
+            if (part.IndexOf('.') >= 0 && part.IndexOf(' ') < 0 && part.IndexOf('(') < 0)
+            {
+                extended ??= current is null
+                    ? new HashSet<string>(StringComparer.Ordinal)
+                    : new HashSet<string>(current, StringComparer.Ordinal);
+                extended.Add(part);
+            }
+        }
+        return extended ?? current;
     }
 
     // All synthetic dispatch successors of `method` (a virtual/base/interface method node), with the
@@ -781,7 +1030,14 @@ public static class FactPathFinder
     private static List<(string Node, string Kind, string Basis)> DispatchTargets(
         string method,
         GraphIndex index,
-        string? receiverType = null
+        string? receiverType = null,
+        // Concrete generic type args in scope on the path that reached `method` (the carried binding).
+        // When `method` is a GENERIC dispatch hub whose CHA fan-out includes the constructor/impl of one
+        // of these types (e.g. `Construct`2.New` fanning to all entity constructors, with `Account` in
+        // scope from `Entity.New<Account,…>` above), the fan-out is narrowed to that candidate. Recall-
+        // safe: applied only when it leaves ≥1 target, else full CHA stands (so a hub reached without a
+        // matching binding — the type flowed in by an uncaptured route — is never wrongly emptied).
+        IReadOnlyCollection<string>? carriedBinding = null
     )
     {
         var targets = new List<(string Node, string Kind, string Basis)>();
@@ -897,7 +1153,41 @@ public static class FactPathFinder
             }
         }
 
-        return targets;
+        return NarrowByTypeArguments(targets, carriedBinding, index);
+    }
+
+    // Generic-dispatch narrowing (monomorphization): given a fanned-out candidate set and the concrete
+    // type arguments in scope on the path, keep only candidates whose DECLARING TYPE is one of those
+    // concretes (or a subtype) — `Construct`2.New` fanned to 43 entity constructors collapses to
+    // `Account.New` when `Account` is the carried type arg from `Entity.New<Account,…>` above. The
+    // concrete entity that the open generic `TConstruct` is bound to on this path picks its own
+    // constructor out of the CHA over-approximation. Recall-safe: only applied when it keeps ≥1 target
+    // (an unrelated/empty binding leaves the full set), and only when narrowing is enabled. Other carried
+    // concretes (the pk type `int`, the record type) match no candidate and harmlessly drop out.
+    private static List<(string Node, string Kind, string Basis)> NarrowByTypeArguments(
+        List<(string Node, string Kind, string Basis)> targets,
+        IReadOnlyCollection<string>? carriedBinding,
+        GraphIndex index
+    )
+    {
+        if (!index.NarrowDispatch || carriedBinding is not { Count: > 0 } || targets.Count <= 1)
+            return targets;
+
+        var roots = new List<string>();
+        foreach (var t in carriedBinding)
+            if (ReceiverToStrippedTypeId(t) is { } root)
+                roots.Add(root);
+        if (roots.Count == 0)
+            return targets;
+
+        var narrowed = new List<(string Node, string Kind, string Basis)>();
+        foreach (var t in targets)
+        {
+            var declType = ParseMethod(t.Node)?.TypeId;
+            if (declType is not null && roots.Any(r => InNarrowSubtree(declType, r, index)))
+                narrowed.Add(t);
+        }
+        return narrowed.Count > 0 ? narrowed : targets;
     }
 
     // Resolves a call-site receiver type (a display FQN, e.g. "MedDBase.CompanyEntity"/"Ns.Foo<T>")

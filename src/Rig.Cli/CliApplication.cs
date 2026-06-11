@@ -472,12 +472,27 @@ public static class CliApplication
         RigDbContext context,
         string pattern,
         SqlReachability.Direction direction,
+        IReadOnlyList<FactHandoffRule> handoffRules,
+        IReadOnlyList<FactGenericFactoryRule>? factoryRules = null
+    )
+    {
+        var inputs = await SqlReachability.HasGraphAsync(context)
+            ? await SqlReachability.LoadReachInputsAsync(context, pattern, direction)
+            : await LoadReachInputsFromRowsAsync(context, handoffRules);
+
+        // Monomorphize generic-factory call edges (e.g. Entity.New<Account,…> -> Account.New), collapsing
+        // the generic plumbing so tree/reaches/callers go straight to the constructed type. Edges with no
+        // concrete construct keep their plumbing (the in-memory generic-dispatch narrowing covers those).
+        if (factoryRules is { Count: > 0 })
+            inputs = inputs with { Graph = FactPathFinder.RewriteGenericFactories(inputs.Graph, factoryRules) };
+        return inputs;
+    }
+
+    private static async Task<SqlReachability.ReachInputs> LoadReachInputsFromRowsAsync(
+        RigDbContext context,
         IReadOnlyList<FactHandoffRule> handoffRules
     )
     {
-        if (await SqlReachability.HasGraphAsync(context))
-            return await SqlReachability.LoadReachInputsAsync(context, pattern, direction);
-
         var graph = await Reads.LoadFactGraphAsync(context, handoffRules);
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
@@ -776,10 +791,11 @@ public static class CliApplication
                 i++;
             }
         var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var factoryRules = FactGenericFactoryRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
 
         await using var context = OpenReadContext(workingDirectory);
 
-        var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, handoffRules);
+        var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, handoffRules, factoryRules);
         var graph = inputs.Graph;
         var reachable = FactPathFinder.ReachesWithFanout(graph, fromPattern, maxDepth, mode: mode);
 
@@ -922,13 +938,17 @@ public static class CliApplication
         var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         // Codebase-specific render rules (collapse fan-out seams / opaque infra types). Presentation
         // only — never affects reach. `--raw` bypasses them to print the exact unfiltered tree.
-        var renderRules = args.Contains("--raw")
-            ? FactRenderRules.Empty
-            : FactRenderRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        // `--raw` also bypasses the generic-factory edge rewrite, so the exact plumbing chain
+        // (Entity.New``3 -> … -> Construct`2.New -> ×N) is visible for inspection.
+        var raw = args.Contains("--raw");
+        var renderRules = raw ? FactRenderRules.Empty : FactRenderRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var factoryRules = raw
+            ? Array.Empty<FactGenericFactoryRule>()
+            : FactGenericFactoryRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
 
         await using var context = OpenReadContext(workingDirectory);
 
-        var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, handoffRules);
+        var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, handoffRules, factoryRules);
         var graph = inputs.Graph;
         var roots = FactPathFinder.BuildTree(graph, fromPattern, maxDepth, mode: mode);
         if (roots.Count == 0)

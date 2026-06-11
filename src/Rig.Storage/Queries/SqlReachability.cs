@@ -408,6 +408,33 @@ public static class SqlReachability
         var hasHandoff = await ColumnExistsAsync(connection, "call_edges", "HandoffDispatcher", cancellationToken).ConfigureAwait(false);
         var handoffSelect = hasHandoff ? "c.HandoffDispatcher" : "NULL";
 
+        // Call-site generic type arguments aren't stored on call_edges; they live on reference_facts
+        // (B1 capture) and drive generic-dispatch narrowing in the in-memory FactPathFinder. Load them in
+        // ONE bulk pass keyed by (caller, callee, line) and attach in memory — NOT a per-edge correlated
+        // subquery, which is pathological here: reach_set is the receiver-BLIND CHA superset, so even a
+        // tiny query's bounded graph carries every fanned-out edge, and a per-edge subquery then runs
+        // thousands of times. The bulk query is bounded to reach_set on the caller-side index and returns
+        // only the (few) generic call sites. Probed so a store predating the column degrades to no
+        // narrowing (full CHA). Non-generic / synthesized dispatch edges have no entry -> null.
+        var hasTypeArgs = await ColumnExistsAsync(connection, "reference_facts", "TypeArguments", cancellationToken).ConfigureAwait(false);
+        var typeArgsByEdge = new Dictionary<(string, string, int), string>();
+        if (hasTypeArgs)
+            await ReadAsync(
+                    connection,
+                    $"""
+                    SELECT rf.EnclosingSymbolId, rf.TargetSymbolId, rf.Line, rf.TypeArguments
+                    FROM reference_facts rf JOIN reach_set r ON rf.EnclosingSymbolId = r.sym
+                    WHERE rf.TypeArguments IS NOT NULL;
+                    """,
+                    reader =>
+                    {
+                        var key = (reader.GetString(0), reader.GetString(1), reader.IsDBNull(2) ? 0 : reader.GetInt32(2));
+                        typeArgsByEdge[key] = reader.GetString(3); // first wins; dup (caller,callee,line) is vanishingly rare
+                    },
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+
         var callEdges = new List<CallEdge>();
         await ReadAsync(
                 connection,
@@ -416,19 +443,26 @@ public static class SqlReachability
                 FROM call_edges c JOIN reach_set r ON c.{edgeJoinCol} = r.sym;
                 """,
                 reader =>
+                {
+                    var from = reader.GetString(0);
+                    var to = reader.GetString(1);
+                    var line = reader.IsDBNull(4) ? 0 : reader.GetInt32(4);
+                    typeArgsByEdge.TryGetValue((from, to, line), out var typeArgs);
                     callEdges.Add(
                         new CallEdge(
-                            reader.GetString(0),
-                            reader.GetString(1),
+                            from,
+                            to,
                             reader.GetString(2),
                             reader.IsDBNull(3) ? "" : reader.GetString(3),
-                            reader.IsDBNull(4) ? 0 : reader.GetInt32(4),
+                            line,
                             reader.IsDBNull(5) ? null : reader.GetString(5),
                             reader.IsDBNull(6) ? null : reader.GetString(6),
                             reader.IsDBNull(7) ? null : reader.GetString(7),
-                            reader.IsDBNull(8) ? null : reader.GetString(8)
+                            reader.IsDBNull(8) ? null : reader.GetString(8),
+                            typeArgs
                         )
-                    ),
+                    );
+                },
                 cancellationToken
             )
             .ConfigureAwait(false);

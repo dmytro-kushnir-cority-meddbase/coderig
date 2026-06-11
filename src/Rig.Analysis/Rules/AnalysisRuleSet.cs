@@ -30,7 +30,11 @@ internal sealed record AnalysisRuleSet(
     IReadOnlyList<HandoffDispatcherRule> HandoffDispatchers,
     // Codebase-specific `rig tree` render rules (presentation only — never affects reach).
     IReadOnlyList<RenderRule> RenderCollapseSeams,
-    IReadOnlyList<RenderRule> RenderOpaqueTypes
+    IReadOnlyList<RenderRule> RenderOpaqueTypes,
+    // Codebase-specific generic-factory monomorphization rules: rewrite a generic factory call edge to
+    // its constructed type's method, collapsing the generic plumbing. Affects the call graph (tree /
+    // reaches), unlike render rules. See FactGenericFactoryRule.
+    IReadOnlyList<GenericFactoryRule> GenericFactories
 )
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
@@ -137,6 +141,7 @@ internal sealed record AnalysisRuleSet(
             HandoffDispatchers = HandoffDispatchers.Concat(document.HandoffDispatchers ?? []).ToArray(),
             RenderCollapseSeams = RenderCollapseSeams.Concat(document.Render?.CollapseSeams ?? []).ToArray(),
             RenderOpaqueTypes = RenderOpaqueTypes.Concat(document.Render?.OpaqueTypes ?? []).ToArray(),
+            GenericFactories = GenericFactories.Concat(document.GenericFactories ?? []).ToArray(),
         };
     }
 
@@ -195,7 +200,8 @@ internal sealed record AnalysisRuleSet(
             document.XmlDiFiles ?? [],
             document.HandoffDispatchers ?? [],
             document.Render?.CollapseSeams ?? [],
-            document.Render?.OpaqueTypes ?? []
+            document.Render?.OpaqueTypes ?? [],
+            document.GenericFactories ?? []
         );
     }
 }
@@ -277,7 +283,10 @@ internal sealed record EffectRule(
     // "Echo.Process.ask") — recognizes request/response wrappers from data, no per-type curation. The
     // effect emits at the wrapper's call sites; resource:type_argument yields the caller's concrete
     // type-arg combo. See FactEffectRule.TargetCallsMethods.
-    IReadOnlyList<string>? TargetCallsMethods = null
+    IReadOnlyList<string>? TargetCallsMethods = null,
+    // Selects ONE top-level position (0-based) of the comma-joined type_argument resource instead of
+    // the whole combo. Null = whole combo. See FactEffectRule.TypeArgumentIndex.
+    int? TypeArgumentIndex = null
 );
 
 // A curated async-handoff dispatcher: when its consuming ctor/method is handed a method-group, the
@@ -292,6 +301,17 @@ internal sealed record HandoffDispatcherRule(string Id, string Kind, IReadOnlyLi
 // rendered marker. Used for both collapse-seams (fold a fan-out hub's children) and opaque-types
 // (draw a node as a leaf). Codebase-specific presentation data; projected to FactRenderRule.
 internal sealed record RenderRule(string Pattern, string? Label = null, string? Reason = null, string? Id = null);
+
+// A generic-factory monomorphization rule: rewrite a call to `Method` (matched as "<declType>.<name>")
+// to its constructed type's `TargetMethod`, where the construct is type-arg `ConstructArgIndex`.
+// Codebase-specific; projected to FactGenericFactoryRule. `Reason`/`Id` are documentation only.
+internal sealed record GenericFactoryRule(
+    string Method,
+    int ConstructArgIndex = 0,
+    string TargetMethod = "New",
+    string? Reason = null,
+    string? Id = null
+);
 
 internal sealed record DiRegistrationRule(IReadOnlyList<string> Methods, string Lifetime, string RegistrationKind, string Reason)
 {
@@ -344,6 +364,8 @@ internal sealed class AnalysisRulesDocument
     public ObservationsSection? Observations { get; set; }
 
     public RenderRulesSection? Render { get; set; }
+
+    public List<GenericFactoryRule>? GenericFactories { get; set; }
 }
 
 // `render` rule section — codebase-specific `rig tree` presentation rules (collapse fan-out hubs,

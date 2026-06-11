@@ -133,7 +133,16 @@ public sealed record CallEdge(
     // (HandoffClassifier rewrote a dispatcher-consumed methodGroup edge); null for every ordinary
     // edge. Sync-cut traversal skips Kind=="handoff" edges; --async walks them carrying this as the
     // HandoffVia provenance. The callback target is a first-class execution origin (a root).
-    string? HandoffDispatcher = null
+    string? HandoffDispatcher = null,
+    // Call-site generic type arguments of THIS edge (comma-joined display FQNs, mined into
+    // ReferenceFactEntity.TypeArguments). Concrete at a direct call like `Entity.New<Account,int,
+    // AccountRecord>` (-> "…Account,int,…AccountRecord"); a forwarded type-PARAMETER token (e.g.
+    // "TConstruct") inside a generic body. Carried forward by the traversal as a path-scoped binding of
+    // concrete types in scope, so a downstream GENERIC dispatch hub (e.g. `Construct`2.New`, CHA-fanned
+    // to all entity constructors) is narrowed to the candidate whose declaring type is one of those
+    // concretes — `Account.New` — instead of the full fan-out. Null for synthesized dispatch edges and
+    // non-generic calls.
+    string? TypeArguments = null
 );
 
 // An "implType implements ifaceType" edge (from a type-relation fact).
@@ -279,6 +288,19 @@ public sealed record FactRenderRules(IReadOnlyList<FactRenderRule> CollapseSeams
 // One render rule: a DocID substring `Pattern` + a short `Label` shown in the rendered marker
 // (e.g. «opaque: ORM» / [seam: reflection service-locator]).
 public sealed record FactRenderRule(string Pattern, string Label);
+
+// A generic-FACTORY resolution rule (codebase-specific, data-driven). A call to `Method` with a
+// CONCRETE type argument is monomorphized at the call site: the edge is rewritten to point straight at
+// the constructed type's `TargetMethod`, bypassing the generic plumbing the factory forwards through.
+// E.g. `Entity.New<Account,int,AccountRecord>(pk)` (Method = "MedDBase.DataAccessTier.Entity.New",
+// ConstructArgIndex = 0, TargetMethod = "New") rewrites the caller's edge to `Account.New`, so the
+// reader never walks Entity.New``3 -> EntityCache`3.New -> ItemCache`3.Get -> Construct`2.New (-> ×N
+// entity ctors). Where the type arg ISN'T concrete (a forwarded type parameter inside another generic
+// helper) there is nothing to resolve, so the edge is left intact and the in-memory generic-dispatch
+// narrowing (carried type-arg binding) remains the fallback. `Method` is matched as the callee's
+// "<declaringType>.<name>" (arity-agnostic); the rewrite picks the construct type's `TargetMethod`
+// overloads whose arity matches the factory call's, falling back to keeping the edge when none resolve.
+public sealed record FactGenericFactoryRule(string Method, int ConstructArgIndex, string TargetMethod);
 
 // An invocation reference fact, with the enrichment fed to the stage-2 effect/observation derivers
 // (P1a–P1c). Replaces the positional tuple that grew past readability. Receiver/FirstArgument feed
@@ -447,5 +469,12 @@ public sealed record FactEffectRule(
     // calls ask, and the effect is emitted at the wrapper's CALL SITES, where `resource:type_argument`
     // resolves to the caller's CONCRETE type-arg combo (TReply,TMsg) — the message+reply contract the
     // raw `ask<R>(pid, object)` discards. Method-name / declaring-type gates are ignored when set.
-    IReadOnlyList<string>? TargetCallsMethods = null
+    IReadOnlyList<string>? TargetCallsMethods = null,
+    // Selects ONE top-level position of the comma-joined `type_argument` resource (0-based) instead of
+    // the whole combo. Null = the whole combo (echo wrappers, where <TReply,TMsg> together is the
+    // contract). 0 = the leading type arg — e.g. `Entity.New<TConstruct,TPk,TRecord>` whose signature
+    // pins the constructed entity to position 0, so the effect resolves to that one type at the
+    // concrete call site (entity_cache:read Account) rather than the CHA-fanned per-entity aggregate.
+    // Only consulted when Resource == "type_argument".
+    int? TypeArgumentIndex = null
 );

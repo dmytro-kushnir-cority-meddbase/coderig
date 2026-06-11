@@ -88,7 +88,8 @@ public static class FactEffectDeriver
                     inv.FirstArgType,
                     declaringType,
                     inv.TypeArguments,
-                    inv.FirstArgName
+                    inv.FirstArgName,
+                    rule.TypeArgumentIndex
                 );
                 if (string.IsNullOrWhiteSpace(resource))
                     continue; // matched, but the resource is unresolvable — no effect; let a later rule try
@@ -150,7 +151,8 @@ public static class FactEffectDeriver
                         inv.FirstArgType,
                         "",
                         inv.TypeArguments,
-                        inv.FirstArgName
+                        inv.FirstArgName,
+                        rule.TypeArgumentIndex
                     );
                     if (string.IsNullOrWhiteSpace(resource))
                         continue;
@@ -353,7 +355,8 @@ public static class FactEffectDeriver
         string? firstArgType,
         string declaringType,
         string? typeArguments,
-        string? firstArgName
+        string? firstArgName,
+        int? typeArgumentIndex = null
     )
     {
         return strategy switch
@@ -362,7 +365,13 @@ public static class FactEffectDeriver
             // Call-site generic type argument(s) — e.g. the asked/published message type of an Echo
             // `ask<TResponse>(..)` / a typed dispatch. Concrete at direct call sites; a type-parameter
             // name inside a generic helper (see B2 for caller-side concretization).
-            "type_argument" => typeArguments,
+            // The whole comma-joined combo when no index is set (echo wrappers: <TReply,TMsg> together
+            // is the contract). With typeArgumentIndex set, ONE top-level position — e.g. index 0 of
+            // `Entity.New<Account,int,AccountRecord>` is the constructed entity, resolving the effect to
+            // that one type at the concrete call site (entity_cache:read Account) instead of the
+            // CHA-fanned per-entity aggregate. Indexing splits on the TOP-LEVEL comma only, so a
+            // tuple/generic arg (e.g. `(ChamberId, int)` or `Foo<A, B>`) never mis-splits a position.
+            "type_argument" => typeArgumentIndex is null ? typeArguments : NthTypeArgument(typeArguments, typeArgumentIndex.Value),
             // The first argument's member/identifier path — the routing target / discriminator, e.g.
             // the ProcessId DNS constant `tell(PaymentGatewayProcessDns.AccountService, msg)`.
             "argument_name" => firstArgName,
@@ -378,6 +387,36 @@ public static class FactEffectDeriver
             // LLBLGen/MedDBase target). Unknown or empty strategy -> null (effect dropped).
             _ => null,
         };
+    }
+
+    // The Nth (0-based) element of a comma-joined display-type list, split on the TOP-LEVEL comma
+    // only: commas nested inside <> (generics) or () (tuples) are skipped, so index 0 of
+    // "Account,int,Rec" -> "Account", "Foo<A, B>,int" -> "Foo<A, B>", "(ChamberId, int),Rec" ->
+    // "(ChamberId, int)". Null/blank input or an out-of-range index -> null (effect dropped, like any
+    // unresolved resource).
+    private static string? NthTypeArgument(string? typeArguments, int index)
+    {
+        if (string.IsNullOrWhiteSpace(typeArguments) || index < 0)
+            return null;
+        var depth = 0;
+        var position = 0;
+        var start = 0;
+        for (var i = 0; i < typeArguments!.Length; i++)
+        {
+            var c = typeArguments[i];
+            if (c is '<' or '(' or '[')
+                depth++;
+            else if (c is '>' or ')' or ']')
+                depth--;
+            else if (c == ',' && depth == 0)
+            {
+                if (position == index)
+                    return typeArguments.Substring(start, i - start).Trim();
+                position++;
+                start = i + 1;
+            }
+        }
+        return position == index ? typeArguments.Substring(start).Trim() : null;
     }
 
     // Strip the scheme and surrounding slashes from an HTTP resource (port of
