@@ -298,6 +298,24 @@ public sealed record FactRenderRules(IReadOnlyList<FactRenderRule> CollapseSeams
 // (e.g. «opaque: ORM» / [seam: reflection service-locator]).
 public sealed record FactRenderRule(string Pattern, string Label);
 
+// A traversal-cut rule: a node whose DocID matches `Pattern` is emitted as-is but its successors
+// are NOT walked — it becomes a traversal leaf. This stops reflection service-locator seams (and
+// similar infra) from exploding the tree AND prevents their deep expansion from stealing shallow
+// direct calls (problem 1). Unlike render rules (presentation-only), this affects the TRAVERSAL
+// itself. `--raw` bypasses cuts so the exact plumbing is inspectable.
+public sealed record FactTraversalCutRule(string Pattern, string Label)
+{
+    // True when `symbolId` matches this cut rule. Matches against the DocID head (parameter list
+    // stripped before the first '('), so a namespace/type pattern never accidentally matches a
+    // parameter type in the signature. Case-insensitive, same convention as FactRenderRules.
+    public bool IsMatch(string symbolId)
+    {
+        var paren = symbolId.IndexOf('(');
+        var head = paren >= 0 ? symbolId.Substring(0, paren) : symbolId;
+        return head.IndexOf(Pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+}
+
 // A generic-FACTORY resolution rule (codebase-specific, data-driven). A call to `Method` with a
 // CONCRETE type argument is monomorphized at the call site: the edge is rewritten to point straight at
 // the constructed type's `TargetMethod`, bypassing the generic plumbing the factory forwards through.

@@ -34,7 +34,11 @@ internal sealed record AnalysisRuleSet(
     // Codebase-specific generic-factory monomorphization rules: rewrite a generic factory call edge to
     // its constructed type's method, collapsing the generic plumbing. Affects the call graph (tree /
     // reaches), unlike render rules. See FactGenericFactoryRule.
-    IReadOnlyList<GenericFactoryRule> GenericFactories
+    IReadOnlyList<GenericFactoryRule> GenericFactories,
+    // Traversal-cut rules: nodes matching these patterns are emitted as leaves — their successors are
+    // NOT walked. Unlike render rules (presentation-only), these stop the TRAVERSAL so deep infra
+    // seams can't steal shallow direct-call expansions. `--raw` bypasses cuts. See FactTraversalCutRule.
+    IReadOnlyList<TraversalCutRule> TraversalCuts
 )
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
@@ -142,6 +146,7 @@ internal sealed record AnalysisRuleSet(
             RenderCollapseSeams = RenderCollapseSeams.Concat(document.Render?.CollapseSeams ?? []).ToArray(),
             RenderOpaqueTypes = RenderOpaqueTypes.Concat(document.Render?.OpaqueTypes ?? []).ToArray(),
             GenericFactories = GenericFactories.Concat(document.GenericFactories ?? []).ToArray(),
+            TraversalCuts = TraversalCuts.Concat(document.TraversalCuts ?? []).ToArray(),
         };
     }
 
@@ -201,7 +206,8 @@ internal sealed record AnalysisRuleSet(
             document.HandoffDispatchers ?? [],
             document.Render?.CollapseSeams ?? [],
             document.Render?.OpaqueTypes ?? [],
-            document.GenericFactories ?? []
+            document.GenericFactories ?? [],
+            document.TraversalCuts ?? []
         );
     }
 }
@@ -302,6 +308,11 @@ internal sealed record HandoffDispatcherRule(string Id, string Kind, IReadOnlyLi
 // (draw a node as a leaf). Codebase-specific presentation data; projected to FactRenderRule.
 internal sealed record RenderRule(string Pattern, string? Label = null, string? Reason = null, string? Id = null);
 
+// A traversal-cut rule: a node whose DocID matches `Pattern` is a traversal leaf — emitted but
+// successors are not walked. Only pattern + label are required; id/reason are documentation.
+// Projected to FactTraversalCutRule by FactTraversalCutRuleProvider.
+internal sealed record TraversalCutRule(string Pattern, string? Label = null, string? Reason = null, string? Id = null);
+
 // A generic-factory monomorphization rule: rewrite a call to `Method` (matched as "<declType>.<name>")
 // to its constructed type's `TargetMethod`, where the construct is type-arg `ConstructArgIndex`.
 // Codebase-specific; projected to FactGenericFactoryRule. `Reason`/`Id` are documentation only.
@@ -366,6 +377,9 @@ internal sealed class AnalysisRulesDocument
     public RenderRulesSection? Render { get; set; }
 
     public List<GenericFactoryRule>? GenericFactories { get; set; }
+
+    // Top-level key "traversalCuts": list of {pattern, label, id?, reason?} cut rules.
+    public List<TraversalCutRule>? TraversalCuts { get; set; }
 }
 
 // `render` rule section — codebase-specific `rig tree` presentation rules (collapse fan-out hubs,

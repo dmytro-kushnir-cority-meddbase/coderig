@@ -153,10 +153,11 @@ public static class FactPathFinder
         int maxDepth = 20,
         int maxNodes = 20000,
         bool narrowDispatch = true,
-        TraversalMode mode = TraversalMode.SyncCut
+        TraversalMode mode = TraversalMode.SyncCut,
+        IReadOnlyList<FactTraversalCutRule>? cutRules = null
     )
     {
-        var info = ReachesWithFanout(graph, fromPattern, maxDepth, maxNodes, narrowDispatch, mode);
+        var info = ReachesWithFanout(graph, fromPattern, maxDepth, maxNodes, narrowDispatch, mode, cutRules);
         var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var kv in info)
             depthOf[kv.Key] = kv.Value.Depth;
@@ -173,10 +174,16 @@ public static class FactPathFinder
         int maxDepth = 20,
         int maxNodes = 20000,
         bool narrowDispatch = true,
-        TraversalMode mode = TraversalMode.SyncCut
+        TraversalMode mode = TraversalMode.SyncCut,
+        IReadOnlyList<FactTraversalCutRule>? cutRules = null
     )
     {
         var index = BuildIndex(graph, narrowDispatch);
+        if (cutRules is { Count: > 0 })
+        {
+            index.TraversalCutRules = cutRules;
+            index.ApplyTraversalCuts = true;
+        }
         var info = new Dictionary<string, ReachInfo>(StringComparer.Ordinal);
         // The static receiver type of the (BFS-shortest) edge that reached each node, carried so that
         // node's own dispatch fan-out can be narrowed edge-aware when it is expanded.
@@ -500,125 +507,162 @@ public static class FactPathFinder
     // Builds the call TREE rooted at every node matching `fromPattern` (rig tree). Same edge model
     // as Reaches/Find (direct calls + interface->impl + base->override dispatch, with loop context),
     // but materialized as a tree for rendering. Each method is EXPANDED ONCE globally: the first time
-    // it's reached its children are built; later encounters become a Truncated leaf ("seen"), so a
-    // cycle or a heavily-shared callee can't blow the tree up. maxDepth bounds depth; maxNodes bounds
-    // total emitted nodes (a Truncated leaf is emitted at the cut). Returns one TraceNode per root.
+    // it's reached (shallowest depth, source order among same-depth peers) its children are built;
+    // later encounters become a Truncated leaf ("seen"), so a cycle or a heavily-shared callee can't
+    // blow the tree up. maxDepth bounds depth; maxNodes bounds total emitted nodes (a Truncated leaf
+    // is emitted at the cap). Returns one TraceNode per root.
+    //
+    // BFS (shallowest-first) ensures a shallow direct call is NEVER stolen by a deep infra seam that
+    // happened to be expanded first in DFS source order: BFS processes nodes at increasing depth, and
+    // among same-depth peers it preserves source order (Successors yields children in line order).
+    // `cutRules`: when non-null, nodes matching a traversal-cut rule are expanded as leaves — their
+    // own effects are visible but their subtree is not walked (stops reflection seams from expanding).
     public static IReadOnlyList<TraceNode> BuildTree(
         FactGraphData graph,
         string fromPattern,
         int maxDepth = 20,
         int maxNodes = 20000,
-        TraversalMode mode = TraversalMode.SyncCut
+        TraversalMode mode = TraversalMode.SyncCut,
+        IReadOnlyList<FactTraversalCutRule>? cutRules = null
     )
     {
         var index = BuildIndex(graph);
-        var expanded = new HashSet<string>(StringComparer.Ordinal);
-        var budget = new int[] { maxNodes };
+        if (cutRules is { Count: > 0 })
+        {
+            index.TraversalCutRules = cutRules;
+            index.ApplyTraversalCuts = true;
+        }
 
-        var roots = new List<TraceNode>();
+        var expanded = new HashSet<string>(StringComparer.Ordinal);
+        var budget = maxNodes;
+
+        // Mutable build node — built during BFS, converted to immutable TraceNode at the end.
+        // Receiver/Binding are the narrowing contexts inherited from the edge that enqueued this node,
+        // passed into Successors when this node is expanded so its own dispatch is narrowed correctly.
+        var mutableRoots = new List<MutableNode>();
+        var queue = new Queue<MutableNode>();
+
         foreach (var root in index.Nodes.Where(n => Contains(n, fromPattern)).OrderBy(n => n, StringComparer.Ordinal))
         {
-            if (budget[0] <= 0)
+            if (budget <= 0)
                 break;
-            roots.Add(
-                BuildNode(
-                    root,
-                    "entry",
-                    loopKind: null,
-                    loopDetail: null,
-                    fanout: 0,
-                    handoffVia: null,
-                    dispatchBasis: null,
-                    incomingReceiver: null,
-                    incomingBinding: null,
-                    depth: 0,
-                    maxDepth,
-                    index,
-                    expanded,
-                    budget,
-                    mode
-                )
-            );
+            var node = new MutableNode(root, "entry", null, null, 0, null, null, 0, null, null);
+            mutableRoots.Add(node);
+            queue.Enqueue(node);
         }
-        return roots;
-    }
 
-    private static TraceNode BuildNode(
-        string symbol,
-        string edgeKind,
-        string? loopKind,
-        string? loopDetail,
-        int fanout,
-        string? handoffVia,
-        // Provenance of the dispatch edge that reached this node (roslyn|heuristic), null otherwise.
-        string? dispatchBasis,
-        // The receiver type of the edge that reached this node — narrows this node's own dispatch fan-out.
-        string? incomingReceiver,
-        // The concrete type-arg binding in scope on the path to this node — narrows this node's own
-        // GENERIC dispatch fan-out (e.g. Construct`2.New -> Account.New). Parallel to incomingReceiver.
-        IReadOnlyCollection<string>? incomingBinding,
-        int depth,
-        int maxDepth,
-        GraphIndex index,
-        HashSet<string> expanded,
-        int[] budget,
-        TraversalMode mode
-    )
-    {
-        budget[0]--;
-
-        // Already expanded elsewhere (cycle / shared callee), at the depth cap, or out of budget:
-        // emit a leaf and don't descend, so the tree stays finite and each method's subtree is
-        // printed once.
-        if (expanded.Contains(symbol) || depth >= maxDepth || budget[0] <= 0)
-            return new TraceNode(
-                symbol,
-                edgeKind,
-                loopKind,
-                loopDetail,
-                EmptyNodes,
-                Truncated: true,
-                Fanout: fanout,
-                HandoffVia: handoffVia,
-                DispatchBasis: dispatchBasis
-            );
-
-        expanded.Add(symbol);
-
-        var children = new List<TraceNode>();
-        foreach (var s in Successors(symbol, index, incomingReceiver, incomingBinding, mode))
+        while (queue.Count > 0 && budget > 0)
         {
-            if (budget[0] <= 0)
-                break;
-            children.Add(
-                BuildNode(
+            var n = queue.Dequeue();
+            budget--;
+
+            // Already expanded elsewhere (cycle / shared callee), at depth cap, or out of budget:
+            // mark as truncated and do NOT expand. budget check is re-checked after decrement.
+            if (expanded.Contains(n.Symbol) || n.Depth >= maxDepth || budget <= 0)
+            {
+                n.Truncated = true;
+                continue;
+            }
+
+            expanded.Add(n.Symbol);
+
+            // Traversal cut: the node is a leaf — emit it but don't walk its successors.
+            // The cut is checked AFTER marking expanded so the node itself is rendered correctly
+            // (its own effects are visible); only its successors are suppressed.
+            if (index.ApplyTraversalCuts && index.IsTraversalCut(n.Symbol))
+                continue;
+
+            foreach (var s in Successors(n.Symbol, index, n.Receiver, n.Binding, mode))
+            {
+                var kid = new MutableNode(
                     s.Node,
                     s.Kind,
                     s.LoopKind,
                     s.LoopDetail,
-                    s.Fanout,
+                    n.Depth + 1,
                     s.HandoffVia,
                     s.Basis,
+                    s.Fanout,
                     s.OutReceiver,
-                    s.OutBinding,
-                    depth + 1,
-                    maxDepth,
-                    index,
-                    expanded,
-                    budget,
-                    mode
-                )
-            );
+                    s.OutBinding
+                );
+                n.Kids.Add(kid);
+                queue.Enqueue(kid);
+            }
         }
+
+        return mutableRoots.Select(ToTraceNode).ToArray();
+    }
+
+    // Mutable node used during BFS tree construction; converted to immutable TraceNode afterward.
+    private sealed class MutableNode
+    {
+        public readonly string Symbol;
+        public readonly string EdgeKind;
+        public readonly string? LoopKind;
+        public readonly string? LoopDetail;
+        public readonly int Depth;
+        public readonly string? HandoffVia;
+        public readonly string? DispatchBasis;
+        public readonly int Fanout;
+
+        // Narrowing contexts carried to Successors when this node is expanded:
+        public readonly string? Receiver;
+        public readonly IReadOnlyCollection<string>? Binding;
+        public bool Truncated;
+        public readonly List<MutableNode> Kids = new List<MutableNode>();
+
+        public MutableNode(
+            string symbol,
+            string edgeKind,
+            string? loopKind,
+            string? loopDetail,
+            int depth,
+            string? handoffVia,
+            string? dispatchBasis,
+            int fanout,
+            string? receiver,
+            IReadOnlyCollection<string>? binding
+        )
+        {
+            Symbol = symbol;
+            EdgeKind = edgeKind;
+            LoopKind = loopKind;
+            LoopDetail = loopDetail;
+            Depth = depth;
+            HandoffVia = handoffVia;
+            DispatchBasis = dispatchBasis;
+            Fanout = fanout;
+            Receiver = receiver;
+            Binding = binding;
+        }
+    }
+
+    private static TraceNode ToTraceNode(MutableNode n)
+    {
+        if (n.Truncated)
+            return new TraceNode(
+                n.Symbol,
+                n.EdgeKind,
+                n.LoopKind,
+                n.LoopDetail,
+                EmptyNodes,
+                Truncated: true,
+                Fanout: n.Fanout,
+                HandoffVia: n.HandoffVia,
+                DispatchBasis: n.DispatchBasis
+            );
+
+        var children = n.Kids.Count == 0 ? EmptyNodes : (IReadOnlyList<TraceNode>)n.Kids.Select(ToTraceNode).ToArray();
         return new TraceNode(
-            symbol,
-            edgeKind,
-            loopKind,
-            loopDetail,
+            n.Symbol,
+            n.EdgeKind,
+            n.LoopKind,
+            n.LoopDetail,
             children,
-            Fanout: fanout,
-            HandoffVia: handoffVia,
-            DispatchBasis: dispatchBasis
+            Fanout: n.Fanout,
+            HandoffVia: n.HandoffVia,
+            DispatchBasis: n.DispatchBasis
         );
     }
 
@@ -889,6 +933,23 @@ public static class FactPathFinder
         // CHA — every same-named override/impl — is used (the sound superset, for AllDispatchEdges /
         // dispatch_edges and the SQL-equivalence oracle path).
         public bool NarrowDispatch = true;
+
+        // Traversal-cut rules (Task B): when ApplyTraversalCuts is true, a node matching any of
+        // these rules is a traversal leaf — its successors are NOT yielded by Successors. Only
+        // enabled for BuildTree / ReachesWithFanout (tree/reaches/path); never for dead-code or
+        // callers traversals (which must see the full graph).
+        public bool ApplyTraversalCuts = false;
+        public IReadOnlyList<FactTraversalCutRule>? TraversalCutRules = null;
+
+        public bool IsTraversalCut(string symbolId)
+        {
+            if (TraversalCutRules is null)
+                return false;
+            foreach (var rule in TraversalCutRules)
+                if (rule.IsMatch(symbolId))
+                    return true;
+            return false;
+        }
     }
 
     private static GraphIndex BuildIndex(FactGraphData graph, bool narrowDispatch = true)
@@ -981,6 +1042,11 @@ public static class FactPathFinder
         TraversalMode mode = TraversalMode.SyncCut
     )
     {
+        // Traversal cut: if the current node matches a cut rule, emit no successors — it is a leaf.
+        // The node itself was already emitted by the caller; we just stop walking into it here.
+        if (index.ApplyTraversalCuts && index.IsTraversalCut(current))
+            yield break;
+
         // Emit direct call edges in CALL-SITE SOURCE ORDER (by line, then callee for stable ties), not
         // storage order. The graph is loaded from SQL with no ORDER BY, so adjacency order is arbitrary
         // and non-deterministic; C# executes calls eagerly inline, so line order is a good approximation

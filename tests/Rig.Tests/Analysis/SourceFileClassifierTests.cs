@@ -133,6 +133,7 @@ public sealed class SourceFileClassifierTests
             [],
             [],
             [],
+            [],
             []
         );
     }

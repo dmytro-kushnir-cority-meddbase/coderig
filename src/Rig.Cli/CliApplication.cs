@@ -793,12 +793,16 @@ public static class CliApplication
             }
         var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         var factoryRules = FactGenericFactoryRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var raw = args.Contains("--raw");
+        var cutRules = raw
+            ? Array.Empty<FactTraversalCutRule>()
+            : FactTraversalCutRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
 
         await using var context = OpenReadContext(workingDirectory);
 
         var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, handoffRules, factoryRules);
         var graph = inputs.Graph;
-        var reachable = FactPathFinder.ReachesWithFanout(graph, fromPattern, maxDepth, mode: mode);
+        var reachable = FactPathFinder.ReachesWithFanout(graph, fromPattern, maxDepth, mode: mode, cutRules: cutRules);
 
         var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
@@ -946,12 +950,17 @@ public static class CliApplication
         var factoryRules = raw
             ? Array.Empty<FactGenericFactoryRule>()
             : FactGenericFactoryRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        // Traversal-cut rules: stop drilling into infra seams (reflection service-locators etc.)
+        // during TRAVERSAL so they can't steal shallow direct-call expansions. `--raw` bypasses.
+        var cutRules = raw
+            ? Array.Empty<FactTraversalCutRule>()
+            : FactTraversalCutRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
 
         await using var context = OpenReadContext(workingDirectory);
 
         var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, handoffRules, factoryRules);
         var graph = inputs.Graph;
-        var roots = FactPathFinder.BuildTree(graph, fromPattern, maxDepth, mode: mode);
+        var roots = FactPathFinder.BuildTree(graph, fromPattern, maxDepth, mode: mode, cutRules: cutRules);
         if (roots.Count == 0)
         {
             output.WriteLine($"No symbol matches '{fromPattern}'.");
@@ -1055,7 +1064,8 @@ public static class CliApplication
                 output,
                 files,
                 locById,
-                signatures
+                signatures,
+                cutRules
             );
         }
         return 0;
@@ -1115,7 +1125,10 @@ public static class CliApplication
         bool files = false,
         IReadOnlyDictionary<string, (string? File, int Line)>? locById = null,
         // `--signatures`: show each method's compact parameter signature so same-named overloads differ.
-        bool signatures = false
+        bool signatures = false,
+        // Traversal-cut rules for the «cut» marker: a node matching a cut rule gets a visible marker
+        // indicating that its subtree was cut during traversal (not just render). Null = no markers.
+        IReadOnlyList<FactTraversalCutRule>? cutRules = null
     )
     {
         var dispatchTag = node.DispatchBasis == "heuristic" ? $"{node.EdgeKind} ~heuristic" : node.EdgeKind;
@@ -1130,13 +1143,29 @@ public static class CliApplication
         // print, but its subtree is suppressed (the type's internals aren't worth expanding).
         var opaque = isRoot ? null : renderRules.MatchOpaque(node.SymbolId);
         var opaqueTag = opaque is not null ? $" «opaque: {opaque.Label}»" : "";
+        // Traversal-cut marker: a node whose successors were cut during traversal (empty children,
+        // not because it has none, but because a cut rule stopped the walk). We detect this by
+        // matching the cut rules against the node and checking it has no children (was a traversal leaf).
+        var cutTag = "";
+        if (cutRules is { Count: > 0 } && node.Children.Count == 0 && !node.Truncated)
+        {
+            FactTraversalCutRule? matchedCut = null;
+            foreach (var rule in cutRules)
+                if (rule.IsMatch(node.SymbolId))
+                {
+                    matchedCut = rule;
+                    break;
+                }
+            if (matchedCut is not null)
+                cutTag = $" «cut: {matchedCut.Label}»";
+        }
         var fx = effectsByMethod.TryGetValue(node.SymbolId, out var list) ? "  " + string.Join(" ", list.Select(e => "{" + e + "}")) : "";
         var loc =
             files && locById is not null && locById.TryGetValue(node.SymbolId, out var l) && l.File is not null
                 ? $"  📄 {ShortenPath(l.File)}:{l.Line}"
                 : "";
         var name = PrettyGenericName(ShortName(node.SymbolId)) + (signatures ? ShortSignature(node.SymbolId) : "");
-        var label = $"{name}{dispatch}{handoff}{loop}{seen}{opaqueTag}{fx}{loc}";
+        var label = $"{name}{dispatch}{handoff}{loop}{seen}{opaqueTag}{cutTag}{fx}{loc}";
         output.WriteLine(isRoot ? label : $"{prefix}{(isLast ? "└─ " : "├─ ")}{label}");
 
         if (opaque is not null)
@@ -1180,7 +1209,8 @@ public static class CliApplication
                 output,
                 files,
                 locById,
-                signatures
+                signatures,
+                cutRules
             );
     }
 
