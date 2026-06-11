@@ -1135,7 +1135,7 @@ public static class CliApplication
             files && locById is not null && locById.TryGetValue(node.SymbolId, out var l) && l.File is not null
                 ? $"  📄 {ShortenPath(l.File)}:{l.Line}"
                 : "";
-        var name = ShortName(node.SymbolId) + (signatures ? ShortSignature(node.SymbolId) : "");
+        var name = PrettyGenericName(ShortName(node.SymbolId)) + (signatures ? ShortSignature(node.SymbolId) : "");
         var label = $"{name}{dispatch}{handoff}{loop}{seen}{opaqueTag}{fx}{loc}";
         output.WriteLine(isRoot ? label : $"{prefix}{(isLast ? "└─ " : "├─ ")}{label}");
 
@@ -1789,6 +1789,19 @@ public static class CliApplication
         while (i < param.Length)
         {
             var c = param[i];
+            if (c == '`')
+            {
+                // A type-parameter REFERENCE: ``N (method type param) or `N (containing-type param).
+                // Render the positional placeholder T/U/V… (the real name isn't in the doc id).
+                i++;
+                if (i < param.Length && param[i] == '`')
+                    i++;
+                var ds = i;
+                while (i < param.Length && char.IsDigit(param[i]))
+                    i++;
+                sb.Append(int.TryParse(param.Substring(ds, i - ds), out var idx) ? TypeParamName(idx) : "T");
+                continue;
+            }
             if (char.IsLetterOrDigit(c) || c is '_' or '.')
             {
                 var start = i;
@@ -1812,6 +1825,42 @@ public static class CliApplication
             }
         }
         return sb.ToString().Trim();
+    }
+
+    // Positional generic type-parameter placeholder (the real name isn't in the doc id): 0->T, 1->U,
+    // 2->V, … then T7, T8 beyond the single-letter run.
+    private static string TypeParamName(int index) => index is >= 0 and < 7 ? "TUVWXYZ"[index].ToString() : "T" + index;
+
+    // Replaces XML-doc-id generic-ARITY markers in a NAME with readable placeholders, so a node reads
+    // like C#: "Cache`2.GetResults" -> "Cache<T, U>.GetResults",
+    // "CheckAllExternalApplications``1" -> "CheckAllExternalApplications<T>". A bare name is returned
+    // unchanged. (Parameter type-param REFERENCES are handled in SimplifyParamType.)
+    private static string PrettyGenericName(string name)
+    {
+        if (name.IndexOf('`') < 0)
+            return name;
+        var sb = new StringBuilder();
+        var i = 0;
+        while (i < name.Length)
+        {
+            if (name[i] == '`')
+            {
+                i++;
+                if (i < name.Length && name[i] == '`')
+                    i++;
+                var ds = i;
+                while (i < name.Length && char.IsDigit(name[i]))
+                    i++;
+                if (int.TryParse(name.Substring(ds, i - ds), out var n) && n > 0)
+                    sb.Append('<').Append(string.Join(", ", Enumerable.Range(0, n).Select(TypeParamName))).Append('>');
+            }
+            else
+            {
+                sb.Append(name[i]);
+                i++;
+            }
+        }
+        return sb.ToString();
     }
 
     // Loop detail (e.g. a foreach's "{ident} in {expr}") can be long/multi-line (LINQ predicates),

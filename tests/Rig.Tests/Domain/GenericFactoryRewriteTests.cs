@@ -18,6 +18,7 @@ public sealed class GenericFactoryRewriteTests
             new MethodRef("M:N.Caller.Go", "Go", "T:N.Caller"),
             new MethodRef("M:N.Entity.New``3(``1)", "New", "T:N.Entity"),
             new MethodRef("M:N.Account.New(System.Int32)", "New", "T:N.Account"),
+            new MethodRef("M:N.Account.New(System.Guid)", "New", "T:N.Account"),
             new MethodRef("M:N.Account.New(System.Int32,N.ITxn)", "New", "T:N.Account"),
             new MethodRef("M:N.Company.New(System.Int32)", "New", "T:N.Company"),
         };
@@ -46,10 +47,45 @@ public sealed class GenericFactoryRewriteTests
         var rewritten = FactPathFinder.RewriteGenericFactories(g, [Rule]);
 
         var callees = Callees(rewritten, "M:N.Caller.Go");
-        callees.ShouldContain("M:N.Account.New(System.Int32)"); // arity-1 New on the construct
+        callees.ShouldContain("M:N.Account.New(System.Int32)"); // pk=int -> the Int32 overload
         callees.ShouldNotContain("M:N.Entity.New``3(``1)"); // factory edge replaced
+        callees.ShouldNotContain("M:N.Account.New(System.Guid)"); // pk-type disambiguation: not the Guid overload
         callees.ShouldNotContain("M:N.Account.New(System.Int32,N.ITxn)"); // arity 2 — not matched
         callees.ShouldNotContain("M:N.Company.New(System.Int32)"); // wrong construct
+    }
+
+    [Fact]
+    public void Pk_type_disambiguates_same_arity_overloads()
+    {
+        // pk = Guid -> Account.New(Guid), NOT Account.New(Int32) (both arity 1). This is the fix for the
+        // arity-only over-match (Account.New(Int32) showing under a New(Guid) caller).
+        var g = Graph(
+            new CallEdge(
+                "M:N.Caller.Go",
+                "M:N.Entity.New``3(``1)",
+                "invocation",
+                "f.cs",
+                1,
+                TypeArguments: "N.Account,System.Guid,N.AccountRecord"
+            )
+        );
+
+        var callees = Callees(FactPathFinder.RewriteGenericFactories(g, [Rule]), "M:N.Caller.Go");
+
+        callees.ShouldBe(["M:N.Account.New(System.Guid)"]);
+    }
+
+    [Fact]
+    public void Pk_keyword_matches_the_bcl_parameter_type()
+    {
+        // The pk arg may render as a C# keyword ("int") while the overload param is "System.Int32".
+        var g = Graph(
+            new CallEdge("M:N.Caller.Go", "M:N.Entity.New``3(``1)", "invocation", "f.cs", 1, TypeArguments: "N.Account,int,N.AccountRecord")
+        );
+
+        var callees = Callees(FactPathFinder.RewriteGenericFactories(g, [Rule]), "M:N.Caller.Go");
+
+        callees.ShouldBe(["M:N.Account.New(System.Int32)"]);
     }
 
     [Fact]

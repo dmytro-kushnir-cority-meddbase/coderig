@@ -379,7 +379,95 @@ public static class FactPathFinder
             matched = candidates; // no arity match — take all overloads; still bypasses the plumbing
         if (matched.Count == 0)
             return null;
+
+        // Disambiguate same-arity overloads by the PK type. The factory's first parameter is a method
+        // type-param reference (Entity.New``3(``1) -> index 1 = TPk), so the pk type is type-arg[1];
+        // keep only target overloads whose own first parameter type matches it (C#-keyword normalized,
+        // so `int` == System.Int32). Without this, `Entity.New<Account,Guid,…>` resolved to BOTH
+        // Account.New(Guid) and Account.New(Int32) (same arity). Recall-safe: an empty match keeps the
+        // arity-matched set.
+        if (matched.Count > 1)
+        {
+            var pkIndex = TypeParamRefIndex(FirstTopLevelParam(edge.Callee));
+            if (pkIndex >= 0 && NthTopLevelArg(edge.TypeArguments!, pkIndex) is { } pkType)
+            {
+                var pkNorm = NormalizeTypeName(pkType);
+                var byPk = matched.Where(c => NormalizeTypeName(FirstTopLevelParam(c.SymbolId)) == pkNorm).ToList();
+                if (byPk.Count > 0)
+                    matched = byPk;
+            }
+        }
         return matched.Select(m => edge with { Callee = m.SymbolId, TypeArguments = null }).ToList();
+    }
+
+    // C# keyword aliases -> BCL simple name, so a pk type arg rendered as a keyword (`int`) compares
+    // equal to a DocID parameter type (`System.Int32`).
+    private static readonly Dictionary<string, string> CSharpKeywordTypes = new(StringComparer.Ordinal)
+    {
+        ["int"] = "Int32",
+        ["uint"] = "UInt32",
+        ["long"] = "Int64",
+        ["ulong"] = "UInt64",
+        ["short"] = "Int16",
+        ["ushort"] = "UInt16",
+        ["byte"] = "Byte",
+        ["sbyte"] = "SByte",
+        ["bool"] = "Boolean",
+        ["char"] = "Char",
+        ["string"] = "String",
+        ["object"] = "Object",
+        ["float"] = "Single",
+        ["double"] = "Double",
+        ["decimal"] = "Decimal",
+        ["nint"] = "IntPtr",
+        ["nuint"] = "UIntPtr",
+    };
+
+    // Simple type name (namespace + generic/array suffix stripped), with C# keyword aliases mapped to
+    // their BCL name so "int" and "System.Int32" compare equal. "" for null/blank.
+    private static string NormalizeTypeName(string? type)
+    {
+        if (string.IsNullOrWhiteSpace(type))
+            return "";
+        var t = type!.Trim();
+        var marker = t.IndexOfAny(['{', '<', '[']);
+        if (marker >= 0)
+            t = t.Substring(0, marker);
+        var dot = t.LastIndexOf('.');
+        var simple = dot >= 0 ? t.Substring(dot + 1) : t;
+        return CSharpKeywordTypes.TryGetValue(simple, out var bcl) ? bcl : simple;
+    }
+
+    // The first top-level parameter substring of a method DocID's "(...)" list, or null if there is none.
+    private static string? FirstTopLevelParam(string docId)
+    {
+        var open = docId.IndexOf('(');
+        if (open < 0)
+            return null;
+        var close = docId.LastIndexOf(')');
+        if (close <= open + 1)
+            return null;
+        var depth = 0;
+        for (var i = open + 1; i < close; i++)
+        {
+            var c = docId[i];
+            if (c is '{' or '[' or '(' or '<')
+                depth++;
+            else if (c is '}' or ']' or ')' or '>')
+                depth--;
+            else if (c == ',' && depth == 0)
+                return docId.Substring(open + 1, i - (open + 1)).Trim();
+        }
+        return docId.Substring(open + 1, close - (open + 1)).Trim();
+    }
+
+    // A method type-parameter reference token ("``N") -> its index N; -1 for anything else (a concrete
+    // type, a type-level "`N", or null). Used to find which type arg fills a factory's pk parameter.
+    private static int TypeParamRefIndex(string? param)
+    {
+        if (param is null || !param.StartsWith("``", StringComparison.Ordinal))
+            return -1;
+        return int.TryParse(param.Substring(2), out var n) ? n : -1;
     }
 
     // The Nth (0-based) top-level element of a comma-joined type-arg list — commas inside <>/()/[]
