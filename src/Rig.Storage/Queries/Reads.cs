@@ -324,12 +324,14 @@ public static class Reads
                 s.Name,
                 s.ContainingSymbolId,
                 s.IsOverride,
+                s.FilePath,
+                s.Line,
             })
             .ToArrayAsync(cancellationToken);
         var methods = methodRows
             .GroupBy(m => m.SymbolId)
             .Select(g => g.First())
-            .Select(m => new MethodRef(m.SymbolId, m.Name, m.ContainingSymbolId, m.IsOverride))
+            .Select(m => new MethodRef(m.SymbolId, m.Name, m.ContainingSymbolId, m.IsOverride, m.FilePath, m.Line))
             .ToArray();
 
         var classifiedEdges = HandoffClassifier.Classify(callEdges, handoffRules);

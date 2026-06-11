@@ -470,7 +470,7 @@ public static class SqlReachability
         var methodById = new Dictionary<string, MethodRef>(StringComparer.Ordinal);
         await ReadAsync(
                 connection,
-                "SELECT s.SymbolId, s.Name, s.ContainingSymbolId, s.IsOverride "
+                "SELECT s.SymbolId, s.Name, s.ContainingSymbolId, s.IsOverride, s.FilePath, s.Line "
                     + "FROM symbol_facts s JOIN reach_set r ON s.SymbolId = r.sym WHERE s.Kind = 'method';",
                 reader =>
                 {
@@ -480,7 +480,9 @@ public static class SqlReachability
                             id,
                             reader.GetString(1),
                             reader.IsDBNull(2) ? null : reader.GetString(2),
-                            !reader.IsDBNull(3) && reader.GetInt32(3) != 0
+                            !reader.IsDBNull(3) && reader.GetInt32(3) != 0,
+                            reader.IsDBNull(4) ? null : reader.GetString(4),
+                            reader.IsDBNull(5) ? 0 : reader.GetInt32(5)
                         );
                 },
                 cancellationToken

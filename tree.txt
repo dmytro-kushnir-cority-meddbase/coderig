@@ -1,0 +1,84 @@
+InvoiceMain.MatchPayments  {• clientpage_proxy:show InvoiceComponents.MatchAppointmentPaymentsDialogProxy}
+├─ InvoiceMain.GetAvailablePaymentCount  {🔍 llblgen:read Linq.LinqMetaData}
+└─ InvoiceMain.OnAppointmentPaymentsMatched
+   └─ InvoiceMain.BuildPayments  {• clientpage_proxy:show MakePaymentComponents.InvoiceMatchListProxy}
+      └─ InvoiceMain.InvoiceChangedEventHandler
+         ├─ InvoiceMain.BuildInvoiceHeaderTotals
+         │  └─ Fragment.FragmentAsText
+         │     └─ Fragment.AsText
+         │        └─ Fragment.AsXml
+         │           ├─ IFileService.FindXmlFile
+         │           │  └─ ModuleFileService.FindXmlFile «impl-dispatch»
+         │           │     └─ ModuleFileService.FindFile
+         │           │        └─ ModuleFileService.FindFile
+         │           │           └─ ModuleFileService.FileExists 🔁[folder in moduleHierarchy]
+         │           │              └─ IFileSystem.FileExists
+         │           │                 ├─ VirtualBase`1.FileExists «impl-dispatch ×2 fan-out»
+         │           │                 │  └─ VirtualBase`1.ProcessPath
+         │           │                 │     └─ AssemblyEmbeddedResource.ProcessPath «override-dispatch»
+         │           │                 │        └─ AssemblyEmbeddedResource.BuildAssemblyDirectory
+         │           │                 │           └─ CacheBase`2.ProvideResult
+         │           │                 │              └─ CacheBase`2.ProvideResults
+         │           │                 │                 └─ CacheBase`2.GetResults
+         │           │                 │                    └─ Cache`2.GetResults «override-dispatch ×2 fan-out»
+         │           │                 │                       └─ Cache`2.GetResult
+         │           │                 │                          ├─ Invoices.GetResult «override-dispatch ×4 fan-out»  {🗃️ entity_cache:read EntityClasses.AccountCache} {🔍 llblgen:read Linq.LinqMetaData} {📥 llblgen:fetch EntityClasses.CompanyEntity}
+         │           │                 │                          │  ├─ AccountCache.New  {🗃️ entity_cache:read EntityInstances.Account}
+         │           │                 │                          │  │  ├─ AccountCache.New  {🗃️ entity_cache:read EntityInstances.Account} {🗃️ entity_cache:read EntityInstances.Account}
+         │           │                 │                          │  │  │  ├─ Account.New
+         │           │                 │                          │  │  │  │  └─ Account.New  {🔍 llblgen:read Linq.LinqMetaData}
+         │           │                 │                          │  │  │  ├─ Account.New  {📥 llblgen:fetch EntityClasses.AccountEntity}
+         │           │                 │                          │  │  │  └─ Account.New ↺seen  {📥 llblgen:fetch EntityClasses.AccountEntity}
+         │           │                 │                          │  │  ├─ Account.New ↺seen  {📥 llblgen:fetch EntityClasses.AccountEntity}
+         │           │                 │                          │  │  └─ Account.New  {📥 llblgen:fetch EntityClasses.AccountEntity}
+         │           │                 │                          │  └─ Invoices.AddInvoice  {💾 llblgen:write EntityClasses.InvoiceEntity} {💾 llblgen:write EntityClasses.AppointmentInvoiceEntity} {📥 llblgen:fetch EntityClasses.InvoiceEntity} {📥 llblgen:fetch EntityClasses.InvoiceEntity} {📥 llblgen:fetch EntityClasses.AppointmentInvoiceEntity}
+         │           │                 │                          │     └─ ZoneExtensions.ToDateTimeForChamberFromLocal
+         │           │                 │                          │        └─ ZoneExtensions.ToZoned
+         │           │                 │                          │           └─ ZoneExtensions.ZoneValidation
+         │           │                 │                          │              └─ ZoneExtensions.ZoneIdValidation  {🗃️ entity_cache:read EntityInstances.SiteCache}
+         │           │                 │                          │                 └─ SiteCache.New
+         │           │                 │                          │                    └─ SiteCache.New  {🗃️ entity_cache:read EntityInstances.Site}
+         │           │                 │                          │                       ├─ SiteCache.New  {🗃️ entity_cache:read EntityInstances.Site}
+         │           │                 │                          │                       │  └─ Site.New  {📥 llblgen:fetch EntityClasses.SiteEntity}
+         │           │                 │                          │                       ├─ Site.New ↺seen  {📥 llblgen:fetch EntityClasses.SiteEntity}
+         │           │                 │                          │                       └─ Site.New  {📥 llblgen:fetch EntityClasses.SiteEntity}
+         │           │                 │                          └─ AssemblyDirectoryCache.GetResult «override-dispatch ×4 fan-out»
+         │           │                 │                             └─ ClassFactory.GetAssembly
+         │           │                 │                                └─ ClassFactory.AssemblyResolver
+         │           │                 │                                   └─ AssemblyCache.LoadFile  {📁 io:read IO.File}
+         │           │                 └─ Disk.FileExists «impl-dispatch ×2 fan-out»  {📁 io:read IO.File}
+         │           ├─ IFileService.ReadAllText
+         │           │  └─ ModuleFileService.ReadAllText «impl-dispatch»
+         │           │     └─ IFileSystem.ReadAllText
+         │           │        ├─ VirtualBase`1.ReadAllText «impl-dispatch ×2 fan-out»
+         │           │        │  └─ VirtualBase`1.ReadAllText  {📁 io:read IO.StreamReader}
+         │           │        └─ Disk.ReadAllText «impl-dispatch ×2 fan-out»  {📁 io:read IO.File}
+         │           └─ PageLoad.BindDataSections
+         │              └─ PageLoad.BindDataSections
+         │                 └─ PageLoad.BindDataSectionsGeneral
+         │                    └─ PageLoad.GetFormatter
+         │                       └─ FieldFormatFactory.Create
+         │                          └─ AssemblyCache.LoadFile ↺seen  {📁 io:read IO.File}
+         └─ InvoiceMain.BuildToolbar
+            └─ InvoiceMain.BuildPaymentsMenu
+               ├─ PaymentGatewayUtility.OnlinePaymentsEnabled  {🗃️ entity_cache:read EntityClasses.AccountCache}
+               │  ├─ AccountCache.New ↺seen  {🗃️ entity_cache:read EntityInstances.Account} {🗃️ entity_cache:read EntityInstances.Account}
+               │  └─ PayTypeTypedList.GetOnlineTypes
+               │     └─ PayTypeTypedList.Get
+               │        └─ TypedListExtension.Fill``1  {🔍 llblgen:read ORMSupportClasses.TypedListBase<T>}
+               └─ Accountancy.SymmetricCheck``1
+                  └─ Accountancy.CheckAllExternalApplications``1
+                     └─ Accountancy.ProvideExternalApplication
+                        └─ Accountancy.GetExternalApplicationAssemblyName  {🗃️ entity_cache:read EntityClasses.AccountCache}
+                           └─ AccountConfiguration.#ctor
+                              └─ AccountConfiguration.InitialiseLogger
+                                 └─ AccountConfiguration.LogChange
+                                    └─ LoggingHelper.LogConfigPropertyChange
+                                       └─ AuditLog.Log
+                                          └─ IGenericServiceProvider.ProvideService``1
+                                             └─ ApplicationBase.ProvideService``1 «impl-dispatch ×3 fan-out»
+                                                └─ ServiceHelper.ProvideService``1
+                                                   └─ ServiceHelper.ProvideExactService
+                                                      └─ ServiceHelper.CreateService
+                                                         └─ IService.Startup
+                                                            └─ ⋯ 11 dispatch targets collapsed [seam: reflection service-locator]  {📣 echo_publish:tell ×232} {💾 llblgen:write ×228} {📥 llblgen:fetch ×206} {🗄️ llblgen:delete ×122} {📣 echo_publish:ask ×53} {🗃️ entity_cache:read ×47} {🔍 llblgen:read ×22} {• chamber_msg:tell ×6} {📡 eventbus:publish ×5} {📁 io:write ×4} {📦 object_store:write ×4} {📁 io:read ×3} {• lock:acquire ×3} {📦 object_store:delete ×3} {📦 object_store:read ×3} {• db_reader:row_read ×2} {• inproc_timer:schedule ×2} {✅ llblgen:tx_commit ×2} {↩️ llblgen:tx_rollback ×2} {• lock:release ×2} {📤 queue:publish ×2} {• chamber_msg:tell_guaranteed ×1} {• db_connection:open ×1} {🌐 http:request ×1} {🌐 http:send ×1} {• inproc_cache:delete ×1} {• inproc_cache:read ×1} {• process:spawn ×1} {📤 queue:write ×1} {• smtp:connect ×1} …+2 more  (+4267 lines hidden — `tree --raw` to expand)

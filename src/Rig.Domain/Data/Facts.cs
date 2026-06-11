@@ -154,7 +154,16 @@ public sealed record BaseEdge(string SubType, string BaseType);
 
 // Minimal method descriptor for interface->concrete and base->override resolution.
 // IsOverride gates override-dispatch so base.M reaches only subtypes that actually override M.
-public sealed record MethodRef(string SymbolId, string Name, string? ContainingTypeId, bool IsOverride = false);
+// FilePath/Line are the method's DEFINITION location (from symbol_facts), surfaced by `rig tree --files`
+// so each node links to its source. Default null/0 keeps synthetic/test constructions source-compatible.
+public sealed record MethodRef(
+    string SymbolId,
+    string Name,
+    string? ContainingTypeId,
+    bool IsOverride = false,
+    string? FilePath = null,
+    int Line = 0
+);
 
 // The fact-derived call graph loaded for cross-project path finding (stage 2 over facts).
 public sealed record FactGraphData(

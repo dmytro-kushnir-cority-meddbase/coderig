@@ -918,7 +918,7 @@ public static class CliApplication
         if (args.Length < 2 || args[1].StartsWith("--", StringComparison.Ordinal))
         {
             error.WriteLine(
-                "Usage: rig tree <fromPattern> [--full|--summary|--effects] [--async] [--raw] [--rules <path>...] [--maxdepth <n>]"
+                "Usage: rig tree <fromPattern> [--full|--summary|--effects] [--async] [--raw] [--files] [--signatures] [--rules <path>...] [--maxdepth <n>]"
             );
             return 2;
         }
@@ -1028,11 +1028,34 @@ public static class CliApplication
             (p, o) => EffectEmoji.For(emoji, p, o)
         );
 
+        // `--files`: per-node definition location (relpath:line) from the loaded methods, for source links.
+        // `--signatures` (alias --sig): per-node compact param signature, to tell same-named overloads apart.
+        var files = args.Contains("--files");
+        var signatures = args.Contains("--signatures") || args.Contains("--sig");
+        var locById = files
+            ? graph
+                .Methods.GroupBy(m => m.SymbolId)
+                .ToDictionary(g => g.Key, g => (g.First().FilePath, g.First().Line), StringComparer.Ordinal)
+            : null;
+
         foreach (var root in roots)
         {
             if (!full && !SubtreeHasEffect(root, effectsByMethod))
                 continue;
-            RenderTreeNode(root, prefix: "", isLast: true, isRoot: true, effectsByMethod, prune: !full, renderRules, seamEffects, output);
+            RenderTreeNode(
+                root,
+                prefix: "",
+                isLast: true,
+                isRoot: true,
+                effectsByMethod,
+                prune: !full,
+                renderRules,
+                seamEffects,
+                output,
+                files,
+                locById,
+                signatures
+            );
         }
         return 0;
     }
@@ -1085,7 +1108,13 @@ public static class CliApplication
         // effects over the hub's full reach closure, NOT the truncated rendered subtree. Empty falls
         // back to a subtree walk (the closure was unavailable, e.g. unit tests).
         IReadOnlyDictionary<string, List<string>> seamEffects,
-        TextWriter output
+        TextWriter output,
+        // `--files`: append each node's DEFINITION location (relpath:line) so the tree links to source.
+        // locById maps SymbolId -> (file, line) from the loaded methods; null/false leaves nodes bare.
+        bool files = false,
+        IReadOnlyDictionary<string, (string? File, int Line)>? locById = null,
+        // `--signatures`: show each method's compact parameter signature so same-named overloads differ.
+        bool signatures = false
     )
     {
         var dispatchTag = node.DispatchBasis == "heuristic" ? $"{node.EdgeKind} ~heuristic" : node.EdgeKind;
@@ -1101,7 +1130,12 @@ public static class CliApplication
         var opaque = isRoot ? null : renderRules.MatchOpaque(node.SymbolId);
         var opaqueTag = opaque is not null ? $" «opaque: {opaque.Label}»" : "";
         var fx = effectsByMethod.TryGetValue(node.SymbolId, out var list) ? "  " + string.Join(" ", list.Select(e => "{" + e + "}")) : "";
-        var label = $"{ShortName(node.SymbolId)}{dispatch}{handoff}{loop}{seen}{opaqueTag}{fx}";
+        var loc =
+            files && locById is not null && locById.TryGetValue(node.SymbolId, out var l) && l.File is not null
+                ? $"  📄 {ShortenPath(l.File)}:{l.Line}"
+                : "";
+        var name = ShortName(node.SymbolId) + (signatures ? ShortSignature(node.SymbolId) : "");
+        var label = $"{name}{dispatch}{handoff}{loop}{seen}{opaqueTag}{fx}{loc}";
         output.WriteLine(isRoot ? label : $"{prefix}{(isLast ? "└─ " : "├─ ")}{label}");
 
         if (opaque is not null)
@@ -1142,7 +1176,10 @@ public static class CliApplication
                 prune,
                 renderRules,
                 seamEffects,
-                output
+                output,
+                files,
+                locById,
+                signatures
             );
     }
 
@@ -1696,6 +1733,58 @@ public static class CliApplication
         var lastDot = s.LastIndexOf('.');
         var prevDot = lastDot > 0 ? s.LastIndexOf('.', lastDot - 1) : -1;
         return prevDot >= 0 ? s.Substring(prevDot + 1) : s;
+    }
+
+    // Compact parameter signature for `rig tree --signatures`, so same-named OVERLOADS (e.g. the four
+    // SiteCache.New / three Site.New) are distinguishable: "(Int32)", "(SiteId, ITransaction)", "()".
+    // Each parameter type is reduced to its simple name (namespace stripped); generic/array suffixes are
+    // left as-is. Empty string when the DocID carries no parameter list (so a bare member stays bare).
+    private static string ShortSignature(string? symbolId)
+    {
+        if (string.IsNullOrEmpty(symbolId))
+            return "";
+        var s = symbolId!;
+        var open = s.IndexOf('(');
+        if (open < 0)
+            return "";
+        var close = s.LastIndexOf(')');
+        if (close <= open)
+            return "";
+        var inner = s.Substring(open + 1, close - open - 1);
+        if (inner.Length == 0)
+            return "()";
+
+        var parts = new List<string>();
+        var depth = 0;
+        var start = 0;
+        for (var i = 0; i <= inner.Length; i++)
+        {
+            if (i < inner.Length)
+            {
+                var c = inner[i];
+                if (c is '{' or '[' or '(' or '<')
+                    depth++;
+                else if (c is '}' or ']' or ')' or '>')
+                    depth--;
+                if (!(c == ',' && depth == 0))
+                    continue;
+            }
+            parts.Add(SimplifyParamType(inner.Substring(start, i - start)));
+            start = i + 1;
+        }
+        return "(" + string.Join(", ", parts) + ")";
+    }
+
+    // "System.Int32" -> "Int32", "MedDBase.SiteId" -> "SiteId", "SD.…ORMSupportClasses.ITransaction" ->
+    // "ITransaction", "System.Nullable{System.Int32}" -> "Nullable{System.Int32}" (generic tail kept).
+    private static string SimplifyParamType(string param)
+    {
+        param = param.Trim();
+        var markers = param.IndexOfAny(['{', '<', '[']);
+        var head = markers >= 0 ? param.Substring(0, markers) : param;
+        var tail = markers >= 0 ? param.Substring(markers) : "";
+        var dot = head.LastIndexOf('.');
+        return (dot >= 0 ? head.Substring(dot + 1) : head) + tail;
     }
 
     // Loop detail (e.g. a foreach's "{ident} in {expr}") can be long/multi-line (LINQ predicates),
