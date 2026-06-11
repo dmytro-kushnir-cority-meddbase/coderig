@@ -1110,8 +1110,36 @@ public static class FactPathFinder
             index.NarrowDispatch ? incomingBinding : null
         );
         var degree = dispatch.Count;
+        // Dispatch SEEDS the concrete `this`-type for the target frame: resolving a virtual/interface call
+        // to `Bar.M` means the object IS a `Bar`, so the method runs with `this` : Bar. Carry that target's
+        // DECLARING type forward as the receiver (instead of null) so the dispatched-to method's own
+        // `this`-virtual self-calls narrow to it — the seed the self-call propagation then threads down.
+        // This is what collapses the post-impl-dispatch fan-outs (e.g. `Master.SetInvoiceSettings` resolved
+        // by impl-dispatch, whose inner `this.ProvideRoles()` otherwise CHA-fanned to every workflow Master).
         foreach (var d in dispatch)
-            yield return (d.Node, d.Kind, null, 0, null, null, degree, current, null, null, d.Basis, incomingBinding);
+            yield return (
+                d.Node,
+                d.Kind,
+                null,
+                0,
+                null,
+                null,
+                degree,
+                current,
+                DeclaringTypeDisplay(d.Node),
+                null,
+                d.Basis,
+                incomingBinding
+            );
+    }
+
+    // The display-FQN form of a method's declaring type ("M:Ns.Bar.M(..)" -> "Ns.Bar"), as ResolveNarrowRoot
+    // / ReceiverToStrippedTypeId expect (no "T:" prefix; generic markers stripped downstream). Null for a
+    // non-method id. Used to seed the dispatch target's concrete `this`-type as the carried receiver.
+    private static string? DeclaringTypeDisplay(string methodDocId)
+    {
+        var typeId = ParseMethod(methodDocId)?.TypeId;
+        return typeId is null ? null : typeId.Substring(2);
     }
 
     // Extends a carried type-arg binding with the CONCRETE type args of one call edge. "Concrete" =

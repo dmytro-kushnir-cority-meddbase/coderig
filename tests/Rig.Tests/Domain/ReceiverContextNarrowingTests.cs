@@ -121,6 +121,49 @@ public sealed class ReceiverContextNarrowingTests
     }
 
     [Fact]
+    public void Dispatch_seeds_the_resolved_concrete_type_so_a_self_call_inside_it_narrows()
+    {
+        // Caller enters at the BASE WCB.Step with a base-typed receiver, so Step CHA-fans to all three
+        // overrides (receiver unknown). Each fanned target must be SEEDED with its own concrete type, so
+        // the self-call inside Controller.Step (this.Deep, a base-declared virtual) narrows to Controller's
+        // own Deep — not the sibling Deeps. Without dispatch seeding, WCB.Deep would CHA-fan again.
+        var bases = new[]
+        {
+            new BaseEdge("T:N.Controller", "T:N.WCB"),
+            new BaseEdge("T:N.Lab", "T:N.WCB"),
+            new BaseEdge("T:N.Pacs", "T:N.WCB"),
+        };
+        var methods = new[]
+        {
+            new MethodRef("M:N.Caller.Go", "Go", "T:N.Caller"),
+            new MethodRef("M:N.WCB.Step", "Step", "T:N.WCB"),
+            new MethodRef("M:N.WCB.Deep", "Deep", "T:N.WCB"),
+            new MethodRef("M:N.Controller.Step", "Step", "T:N.Controller", IsOverride: true),
+            new MethodRef("M:N.Lab.Step", "Step", "T:N.Lab", IsOverride: true),
+            new MethodRef("M:N.Pacs.Step", "Step", "T:N.Pacs", IsOverride: true),
+            new MethodRef("M:N.Controller.Deep", "Deep", "T:N.Controller", IsOverride: true),
+            new MethodRef("M:N.Lab.Deep", "Deep", "T:N.Lab", IsOverride: true),
+            new MethodRef("M:N.Pacs.Deep", "Deep", "T:N.Pacs", IsOverride: true),
+        };
+        var edges = new[]
+        {
+            new CallEdge("M:N.Caller.Go", "M:N.WCB.Step", "invocation", "f.cs", 10, ReceiverType: "N.WCB"),
+            // Only Controller.Step makes the inner this.Deep() self-call (base-typed receiver).
+            new CallEdge("M:N.Controller.Step", "M:N.WCB.Deep", "invocation", "f.cs", 20, ReceiverType: "N.WCB"),
+        };
+        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+
+        var ids = Ids(FactPathFinder.BuildTree(graph, "M:N.Caller.Go").Single());
+
+        ids.ShouldContain("M:N.Controller.Step"); // Step fan reaches all three (receiver was unknown)
+        ids.ShouldContain("M:N.Lab.Step");
+        ids.ShouldContain("M:N.Pacs.Step");
+        ids.ShouldContain("M:N.Controller.Deep"); // self-call narrowed by the SEEDED Controller type
+        ids.ShouldNotContain("M:N.Lab.Deep"); // sibling Deep — would appear only if seeding were lost
+        ids.ShouldNotContain("M:N.Pacs.Deep");
+    }
+
+    [Fact]
     public void Reaches_closure_also_narrows_the_self_called_inner_virtual()
     {
         // The same recovery in the reaches closure (not just the tree), so `rig reaches` counts the one
