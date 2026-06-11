@@ -1091,7 +1091,7 @@ public static class FactPathFinder
                     edge.LoopDetail,
                     0,
                     null,
-                    edge.ReceiverType,
+                    PropagateReceiver(incomingReceiver, edge, index),
                     null,
                     null,
                     outBinding
@@ -1154,6 +1154,57 @@ public static class FactPathFinder
             }
         }
         return extended ?? current;
+    }
+
+    // RECEIVER-CONTEXT RECOVERY (1-level object sensitivity). The static receiver type mined onto a
+    // call edge is the DECLARED type at that site — for a `base.M()` it's the base, for a `this.M()` it's
+    // the enclosing type — which loses the CONCRETE type the current frame is actually running as. That
+    // loss is exactly what makes a `this`-virtual self-call inside a base method fan out to every sibling
+    // override under CHA (e.g. `WorkflowControllerBase.Initialise` → all N workflow `Controller`s, when
+    // this object is only ever `InvoiceDebtChase.Controller`). The concrete type IS known — it was pinned
+    // at the outer call that entered this object (`InstantiateController<Controller>` / `c.Initialise()`)
+    // and carried in `incomingReceiver`. A self-call runs the callee on the SAME object, so its `this`-type
+    // is the caller's `this`-type: propagate the carried concrete receiver across self-call edges instead
+    // of overwriting it with the (base-typed) edge receiver. External calls (a different object) keep the
+    // edge's own receiver. Pure precision — narrowing stays recall-safe (an unmatched receiver falls back
+    // to full CHA in ResolveNarrowRoot), so no real target is dropped.
+    private static string? PropagateReceiver(string? incomingReceiver, CallEdge edge, GraphIndex index) =>
+        IsSelfCall(incomingReceiver, edge, index) ? incomingReceiver : edge.ReceiverType;
+
+    // True when `edge` is a call on the SAME object as the carrying frame (`this.M()` / `base.M()` /
+    // implicit-`this` `M()`), given the carried concrete this-type `incomingReceiver`. Requires a known
+    // concrete carried type to be meaningful (else there is nothing better to propagate). For an explicit
+    // receiver, self iff the edge's (declared) receiver is an ancestor-or-equal of the concrete this-type
+    // (the `this`/`base` shape) — a sibling/unrelated/more-derived-downcast receiver is an external call.
+    // For a bare receiver (implicit this OR a static call), self iff the callee is declared on the carried
+    // this-type's own hierarchy — so a bare static call into an unrelated type is correctly NOT self.
+    private static bool IsSelfCall(string? incomingReceiver, CallEdge edge, GraphIndex index)
+    {
+        var inThis = incomingReceiver is null ? null : ReceiverToStrippedTypeId(incomingReceiver);
+        if (inThis is null)
+            return false;
+
+        if (!string.IsNullOrEmpty(edge.ReceiverType))
+        {
+            var edgeRecv = ReceiverToStrippedTypeId(edge.ReceiverType!);
+            return edgeRecv is not null && AncestorOrEqual(edgeRecv, inThis, index);
+        }
+
+        var calleeType = ParseMethod(edge.Callee)?.TypeId;
+        if (calleeType is null)
+            return false;
+        var calleeStripped = TypeClosure.StripGeneric(calleeType);
+        return AncestorOrEqual(calleeStripped, inThis, index) || AncestorOrEqual(inThis, calleeStripped, index);
+    }
+
+    // True when `ancestor` == `descendant`, or `descendant` is a transitive base-edge subtype of
+    // `ancestor`. Both are stripped "T:Ns.Type" ids; the stripped-aware descendant checks mirror
+    // ResolveNarrowRoot so instantiated subtype edges (Foo{X}) still match their open-generic form.
+    private static bool AncestorOrEqual(string ancestor, string descendant, GraphIndex index)
+    {
+        if (string.Equals(ancestor, descendant, StringComparison.Ordinal))
+            return true;
+        return Descendants(ancestor, index).Contains(descendant) || DescendantsContainStripped(ancestor, descendant, index);
     }
 
     // All synthetic dispatch successors of `method` (a virtual/base/interface method node), with the
