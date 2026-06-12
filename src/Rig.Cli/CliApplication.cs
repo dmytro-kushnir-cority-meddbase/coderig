@@ -1075,8 +1075,10 @@ public static class CliApplication
         {
             if (!full && !SubtreeHasEffect(root, effectsByMethod))
                 continue;
+            // Fold single-impl interface/base hops (IFoo.M -> Foo.M when there's exactly one target)
+            // into the impl, with a «via IFoo» marker — exact, no info loss. --raw shows the raw hops.
             RenderTreeNode(
-                root,
+                raw ? root : FoldSingleImplHops(root, effectsByMethod),
                 prefix: "",
                 isLast: true,
                 isRoot: true,
@@ -1092,6 +1094,37 @@ public static class CliApplication
             );
         }
         return 0;
+    }
+
+    // Collapses single-target dispatch hops: when a node has exactly one child reached by impl-/override-
+    // dispatch with no fan-out (Fanout <= 1) and the node itself carries no effect, the lone interface/base
+    // hop is folded into its impl — the impl is promoted into the node's slot with a FoldedVia marker
+    // naming the interface. Exact (a 1-target dispatch is determined, not an approximation); recurses
+    // bottom-up so a chain of single-impl hops collapses. The node's own effect, a fan-out (>1), a
+    // truncated/cut leaf, or extra children all block the fold (then children are folded in place).
+    private static TraceNode FoldSingleImplHops(TraceNode node, IReadOnlyDictionary<string, List<string>> effectsByMethod)
+    {
+        var kids = node.Children.Select(c => FoldSingleImplHops(c, effectsByMethod)).ToList();
+        if (
+            kids.Count == 1
+            && kids[0].EdgeKind is "impl-dispatch" or "override-dispatch"
+            && kids[0].Fanout <= 1
+            && !kids[0].Truncated
+            && !effectsByMethod.ContainsKey(node.SymbolId)
+            && !node.Truncated
+        )
+            return kids[0] with { FoldedVia = FoldedViaTypeName(node.SymbolId) };
+        return node with { Children = kids };
+    }
+
+    // The folded-away interface/base TYPE's short name (e.g. "M:Ns.IFoo.Bar``1(..)" -> "IFoo"), for the
+    // «via IFoo» marker — the impl's own name already carries the method, so only the type is informative.
+    private static string FoldedViaTypeName(string methodSymbolId)
+    {
+        var paren = methodSymbolId.IndexOf('(');
+        var head = paren >= 0 ? methodSymbolId.Substring(0, paren) : methodSymbolId;
+        var lastDot = head.LastIndexOf('.');
+        return ShortName(lastDot >= 0 ? head.Substring(0, lastDot) : head);
     }
 
     // Collects effect-bearing methods in DFS (source) order, deduped — the backing of `tree --effects`.
@@ -1155,8 +1188,11 @@ public static class CliApplication
     )
     {
         var dispatchTag = node.DispatchBasis == "heuristic" ? $"{node.EdgeKind} ~heuristic" : node.EdgeKind;
-        var dispatch = node.EdgeKind is "impl-dispatch" or "override-dispatch"
-            ? (node.Fanout > 1 ? $" «{dispatchTag} ×{node.Fanout} fan-out»" : $" «{dispatchTag}»")
+        // A folded single-impl hop shows «via IFoo» (the collapsed interface) in place of the dispatch tag.
+        var dispatch =
+            node.FoldedVia is not null ? $" «via {node.FoldedVia}»"
+            : node.EdgeKind is "impl-dispatch" or "override-dispatch"
+                ? (node.Fanout > 1 ? $" «{dispatchTag} ×{node.Fanout} fan-out»" : $" «{dispatchTag}»")
             : "";
         // An async handoff hop (only present under --async): mark the cross-thread boundary.
         var handoff = node.EdgeKind == "handoff" ? $" ⤳handoff via {ShortName(node.HandoffVia)} [cross_thread]" : "";

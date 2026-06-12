@@ -235,7 +235,11 @@ public sealed record TraceNode(
     // callee + edge kind + loop + handoff + fan-out + basis). A generic method or bodied accessor
     // invoked N times from one parent collapses to a single child carrying N, instead of 1 expansion
     // + N-1 "↺seen" duplicate leaves. 1 for an ordinary single-call edge.
-    int CallSites = 1
+    int CallSites = 1,
+    // Set by the render-time single-impl fold: when an interface/base method dispatched to EXACTLY one
+    // target, that lone interface hop is collapsed into its impl, and this carries the folded-away
+    // interface's short name for a "«via IFoo»" marker. Null when the node was not folded.
+    string? FoldedVia = null
 );
 
 // A method handed off as a delegate (method-group) — a deferred/background entry point the
