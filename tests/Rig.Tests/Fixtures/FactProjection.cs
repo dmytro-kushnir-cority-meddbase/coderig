@@ -67,7 +67,8 @@ public static class FactProjection
                 r.FilePath,
                 r.Line,
                 r.EnclosingLoopKind,
-                r.EnclosingLoopDetail
+                r.EnclosingLoopDetail,
+                DelegateConsumer: r.DelegateConsumer
             ))
             .Distinct()
             .ToArray();

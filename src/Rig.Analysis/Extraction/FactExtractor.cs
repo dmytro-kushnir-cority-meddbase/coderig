@@ -97,6 +97,7 @@ internal static class FactExtractor
                 model
             );
             var structural = StructuralContextOf(invocation, model);
+            var delegateConsumer = refKind == "methodGroup" ? DelegateConsumerOf(name, model) : null;
             AddReference(
                 references,
                 target,
@@ -108,7 +109,8 @@ internal static class FactExtractor
                 firstArgTemplate,
                 firstArgType,
                 structural,
-                firstArgumentName: firstArgName
+                firstArgumentName: firstArgName,
+                delegateConsumer: delegateConsumer
             );
 
             // A property/indexer access is, semantically, a call to its get_/set_ accessor. The
@@ -282,7 +284,8 @@ internal static class FactExtractor
         string? firstArgumentType = null,
         StructuralContext structural = default,
         bool allowRuntime = false,
-        string? firstArgumentName = null
+        string? firstArgumentName = null,
+        string? delegateConsumer = null
     )
     {
         // Generic type arguments at the CALL SITE — read from the constructed `target` BEFORE
@@ -331,7 +334,8 @@ internal static class FactExtractor
                 EnclosingInvocations: structural.EnclosingInvocations,
                 EnclosingCatchTypes: structural.CatchTypes,
                 TypeArguments: typeArguments,
-                FirstArgumentName: firstArgumentName
+                FirstArgumentName: firstArgumentName,
+                DelegateConsumer: delegateConsumer
             )
         );
     }
@@ -492,6 +496,50 @@ internal static class FactExtractor
         if (name.Parent is MemberBindingExpressionSyntax binding && binding.Parent is InvocationExpressionSyntax conditionalInvocation)
             return conditionalInvocation;
         return null;
+    }
+
+    // For a method-group `name` handed as an ARGUMENT to a call/`new`, the DocID of that consuming
+    // invocation/constructor — the delegate's CONSUMER. Found by walking ancestors through the
+    // transparent wrappers between a method-group and the argument list it sits in (member access,
+    // conditional access, cast, parens, the argument + argument-list nodes) to the first enclosing
+    // InvocationExpression or object-creation. Any other intervening node (an assignment for `+=`, an
+    // equals-value clause for a delegate field/local, a lambda body, a statement) means the method-group
+    // is NOT a call argument, so it returns null and the edge stays unclassified — the recall rail.
+    // Line-placement-agnostic by construction: a multi-line `new(\n .., Callback,\n ..)` resolves the
+    // same consumer as a single-line one, which the exact-same-line co-location heuristic missed.
+    private static string? DelegateConsumerOf(SimpleNameSyntax name, SemanticModel model)
+    {
+        foreach (var ancestor in name.Ancestors())
+        {
+            switch (ancestor)
+            {
+                case InvocationExpressionSyntax invocation:
+                    return ConsumerDocId(model.GetSymbolInfo(invocation).Symbol);
+                case BaseObjectCreationExpressionSyntax creation:
+                    return ConsumerDocId(model.GetSymbolInfo(creation).Symbol);
+                case MemberAccessExpressionSyntax:
+                case MemberBindingExpressionSyntax:
+                case ConditionalAccessExpressionSyntax:
+                case ParenthesizedExpressionSyntax:
+                case CastExpressionSyntax:
+                case ArgumentSyntax:
+                case ArgumentListSyntax:
+                    continue;
+                default:
+                    return null;
+            }
+        }
+        return null;
+    }
+
+    // The consuming method/constructor's DocID, resolved to its original definition so it matches the
+    // ctor/invocation TargetSymbolId the rest of the extractor records (handoff ConsumerPatterns
+    // substring-match this). Null if the symbol didn't bind.
+    private static string? ConsumerDocId(ISymbol? symbol)
+    {
+        if (symbol is not IMethodSymbol method)
+            return symbol?.OriginalDefinition.GetDocumentationCommentId();
+        return (method.ReducedFrom ?? method).OriginalDefinition.GetDocumentationCommentId();
     }
 
     private static string? ClassifyReference(SimpleNameSyntax name, ISymbol target) =>

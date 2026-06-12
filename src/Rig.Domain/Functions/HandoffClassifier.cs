@@ -11,28 +11,33 @@ namespace Rig.Domain.Functions;
 // walks them tagged. NOT every methodGroup is a handoff (`list.ForEach(Foo)` is synchronous), so only
 // the curated handoffDispatchers set is split — never the reverse, or recall collapses.
 //
-// Generic infra; the dispatcher set is rule DATA (FactHandoffRule). Two matching paths, both keyed on
-// the CONSUMER (the member the delegate is handed to):
-//   * co-location — the consuming ctor/invocation edge sits at the SAME (Caller, FilePath, Line) as
-//     the method-group edge (C# evaluates an argument expression at the call site), and its target
-//     matches a dispatcher's ConsumerPatterns. This needs no extractor support and covers the whole
-//     MedDBase dispatcher set (every dispatcher takes the delegate as a co-located argument).
-// (An exact `DelegateConsumer` extractor fact — the consumer + arg index mined onto the methodGroup
-// ref — would remove co-location's same-line requirement and catch `event +=`; deferred, see the
-// handoff doc. Co-location is the primary path here.)
+// Generic infra; the dispatcher set is rule DATA (FactHandoffRule). Both matching paths key on the
+// CONSUMER (the member the delegate is handed to):
+//   * DelegateConsumer (primary) — the extractor records, on each method-group edge, the DocID of the
+//     invocation/constructor it is an argument to, resolved by ancestor walk (FactExtractor.
+//     DelegateConsumerOf). Matching that DocID against a dispatcher's ConsumerPatterns is independent
+//     of line placement, so a MULTI-LINE `new BackgroundProcessSchedule(\n when,\n Callback,\n ..)`
+//     classifies identically to a single-line one (the multi-line case the old heuristic missed).
+//   * co-location (fallback, stores indexed before DelegateConsumer existed) — the consuming
+//     ctor/invocation edge sits at the SAME (Caller, FilePath, Line) as the method-group edge (C#
+//     evaluates a single-line argument at the call site), and its target matches ConsumerPatterns.
+// Both are recall-safe: only a method-group whose actual consumer matches a curated dispatcher is
+// reclassified — never the reverse. (`event +=` handoffs are handled separately, by
+// FactPathFinder.MarkEventSubscriptionHandoffs.)
 public static class HandoffClassifier
 {
     // Returns the edge list with dispatcher-consumed method-group edges rewritten to Kind="handoff" +
     // HandoffDispatcher. Every other edge (incl. unmatched method-groups) is returned UNCHANGED — the
-    // recall rail: only edges with a co-located dispatcher consumer are reclassified. Idempotent; a
-    // no-op when `rules` is empty.
+    // recall rail: only edges whose dispatcher consumer matches a curated rule are reclassified.
+    // Idempotent; a no-op when `rules` is empty.
     public static IReadOnlyList<CallEdge> Classify(IReadOnlyList<CallEdge> edges, IReadOnlyList<FactHandoffRule>? rules)
     {
         if (rules is null || rules.Count == 0)
             return edges;
 
-        // Index the consumer targets present at each call SITE (Caller, FilePath, Line) — the
-        // invocation/ctor edges a co-located method-group could be an argument to.
+        // Co-location fallback index: the consumer targets present at each call SITE (Caller, FilePath,
+        // Line) — the invocation/ctor edges a same-line method-group could be an argument to. Only
+        // consulted for method-group edges that carry no DelegateConsumer fact (pre-existing stores).
         var consumersBySite = new Dictionary<(string, string, int), List<string>>();
         foreach (var e in edges)
         {
@@ -53,7 +58,11 @@ public static class HandoffClassifier
                 continue;
             }
 
-            var match = MatchAtSite(consumersBySite, (e.Caller, e.FilePath, e.Line), rules);
+            // Primary: the mined DelegateConsumer (line-free). Fallback: same-line co-location, for
+            // stores indexed before the fact existed (DelegateConsumer null there).
+            var match = e.DelegateConsumer is not null
+                ? Match(e.DelegateConsumer, rules)
+                : MatchAtSite(consumersBySite, (e.Caller, e.FilePath, e.Line), rules);
             result.Add(match is null ? e : e with { Kind = "handoff", HandoffDispatcher = match.Id });
         }
         return result;

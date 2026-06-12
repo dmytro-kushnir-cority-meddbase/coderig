@@ -292,6 +292,9 @@ public static class Reads
                 // generic-factory rewrite + generic-dispatch narrowing. The bounded SQL path attaches these
                 // too; without them here, this fallback silently disabled both (Construct.New CHA-fanned).
                 r.TypeArguments,
+                // The call/`new` a method-group is handed to (line-free); drives async-handoff
+                // classification for multi-line dispatcher registrations. Null on pre-existing stores.
+                r.DelegateConsumer,
             })
             .ToArrayAsync(cancellationToken);
         var callEdges = callRows
@@ -304,7 +307,8 @@ public static class Reads
                 r.EnclosingLoopKind,
                 r.EnclosingLoopDetail,
                 r.ReceiverType,
-                TypeArguments: r.TypeArguments
+                TypeArguments: r.TypeArguments,
+                DelegateConsumer: r.DelegateConsumer
             ))
             .Distinct()
             .ToArray();

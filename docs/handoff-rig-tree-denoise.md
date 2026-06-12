@@ -60,23 +60,32 @@ correct (deferred handlers under `--async`, state dispatch family-narrowed, gene
 
 ## Outstanding tasks (prioritized)
 
-### 1. PROBLEM 1 — background-schedule handoff missed on multi-line `new` (REAL, confirmed)
-**Symptom:** `AgedState.RegisterTermEndProcess → EndOfTerm` and its ~130-line subtree are expanded as
-a synchronous call, but `EndOfTerm` is a deferred timer callback:
-`new BackgroundProcessSchedule(termEnd.Value, EndOfTerm, "...")`.
-**Root cause:** `HandoffClassifier.Classify` matches a method-group to its consumer at the **exact same
-`(caller, file, line)`**. The handoff rule `meddbase.oneshot.schedule` (`.BackgroundProcessSchedule.#ctor`)
-exists and *should* fire, but the multi-line `new(...)` puts the ctor at **line 106** and the `EndOfTerm`
-method-group at **line 108** → co-location fails → not classified → expanded.
-**Fix options** (decide in fresh context):
-  - *Pragmatic:* relax co-location to a tight line window (consumer line ≤ method-group line ≤ +~4).
-    Risk: over-classifying drops a real sync edge (recall loss) — keep the window tight.
-  - *Precise:* match the method-group against its **enclosing invocation** via `FactStructuralContext`
-    (`reference_facts.EnclosingInvocations`) instead of by line — threads that column onto the
-    method-group `CallEdge` across load paths (same shape as the `TypeArguments` fix `d3534e6`).
-**Files:** `src/Rig.Domain/Functions/HandoffClassifier.cs` (matcher), the load paths in
-`src/Rig.Storage/Queries/Reads.cs` + `SqlReachability.cs` if threading structural context.
-**Validate:** after fix, `EndOfTerm` should drop from the sync tree (visible under `--async`).
+### 1. PROBLEM 1 — background-schedule handoff missed on multi-line `new` — ✅ RESOLVED (2026-06-12)
+**Was:** `AgedState.RegisterTermEndProcess → EndOfTerm` (+ ~130-line subtree) expanded as a synchronous
+call because `HandoffClassifier` matched a method-group to its consumer only at the **exact same
+`(caller, file, line)`**; the multi-line `new BackgroundProcessSchedule(termEnd.Value, EndOfTerm, "...")`
+put the ctor on line 106 and the `EndOfTerm` method-group on line 108 → co-location failed.
+**Fix (the precise, line-free option):** a new **`DelegateConsumer`** fact — the DocID of the
+invocation/constructor a method-group is handed to as an argument, resolved by ancestor walk in the
+extractor (`FactExtractor.DelegateConsumerOf`), so it is independent of line placement. Threaded onto
+`ReferenceFact` → `ReferenceFactEntity`/`reference_facts` (additive `ADD COLUMN IF NOT EXISTS`) →
+`CallEdge` in `Reads.LoadFactGraphAsync` (the single classification point; `GraphMaterializer` routes
+through it). `HandoffClassifier.Classify` now matches `edge.DelegateConsumer` against dispatcher
+`ConsumerPatterns` (primary), falling back to same-line co-location only when the fact is null (old
+stores). NO line arithmetic anywhere.
+**Result on the re-mined store:** `EndOfTerm` drops from the sync tree and reappears under `--async`
+tagged `⤳handoff via oneshot.schedule [cross_thread]`. Store-wide, the fact newly classifies **43**
+multi-line dispatcher callbacks (Echo inboxes, Background StandardServices, AsyncEvent.InvokeQueue,
+WorkflowMasterBase.CleanOpenControllers, …) that were previously false sync expansions; single-line
+parity preserved (57 still classified); **zero false positives** (every matched consumer is a curated
+dispatcher). Tests: 6 convoluted multi-line fixtures C1–C6 in `SchedulerZoo.cs` (csharpier-fenced) +
+`MultiLineHandoffTests` + `HandoffClassifierTests`; 139 green.
+**Files:** `FactExtractor.cs`, `Facts.cs` (ReferenceFact + CallEdge), `ReferenceFactEntity.cs`,
+`Writes.cs`, `Reads.cs`, `HandoffClassifier.cs`, test fixtures. (Changes uncommitted on
+`drop-legacy-model` as of handoff update.)
+**Store note:** the meddbase store was re-mined SCOPED to the `MedDBase.csproj` closure
+(`rig index MedDBase.slnx --from …\MedDBase.csproj --parallelism 32`, run `1baa517a…`, 284k symbols),
+NOT the full slnx — trees are smaller than the old full-store baselines for that reason.
 
 ### 2. #24 — query caching (Stage 1 lazy effects sidecar) — biggest deferred item
 Full plan in memory `project_coderig_caching_plan`. Summary: `reaches`/`tree`/`derive` recompute

@@ -71,7 +71,17 @@ public sealed record ReferenceFact(
     // identifier (e.g. `tell(PaymentGatewayProcessDns.AccountService, msg)` → "PaymentGatewayProcessDns.
     // AccountService") — the routing target / discriminator, concrete even inside a generic helper.
     // Feeds the stage-2 `argument_name` resource. Null when the first arg is a literal/other shape.
-    string? FirstArgumentName = null
+    string? FirstArgumentName = null,
+    // For a METHOD-GROUP ref handed as an ARGUMENT to a call/`new` (`new BackgroundProcessSchedule(..,
+    // EndOfTerm, ..)`, `Process.spawn("w", Handle)`), the DocID of that consuming invocation/constructor
+    // — resolved STRUCTURALLY (ancestor walk), so it is independent of line placement: a multi-line
+    // `new(\n .., Callback,\n ..)` links identically to a single-line one. This is the
+    // `DelegateConsumer` the async-handoff classifier matches against handoffDispatchers
+    // ConsumerPatterns (HandoffClassifier), replacing the old exact-same-line co-location heuristic that
+    // missed multi-line registrations (e.g. AgedState.RegisterTermEndProcess → EndOfTerm). Null for
+    // non-methodGroup refs and for method-groups that are NOT a call argument (a `+=` handler, a
+    // delegate field/local assignment, a return).
+    string? DelegateConsumer = null
 );
 
 /// <summary>A base-type or implemented-interface edge between two types.</summary>
@@ -142,7 +152,14 @@ public sealed record CallEdge(
     // to all entity constructors) is narrowed to the candidate whose declaring type is one of those
     // concretes — `Account.New` — instead of the full fan-out. Null for synthesized dispatch edges and
     // non-generic calls.
-    string? TypeArguments = null
+    string? TypeArguments = null,
+    // For a Kind=="methodGroup" edge, the DocID of the invocation/constructor this delegate is handed to
+    // as an argument (ReferenceFact.DelegateConsumer, mined by ancestor walk — line-placement-agnostic).
+    // The async-handoff classifier matches this against handoffDispatchers ConsumerPatterns to reclassify
+    // the edge as Kind=="handoff"; it then becomes irrelevant. Null for non-methodGroup edges, for
+    // method-groups that are not a call argument, and on stores indexed before this fact existed (the
+    // classifier falls back to same-line co-location there).
+    string? DelegateConsumer = null
 );
 
 // An "implType implements ifaceType" edge (from a type-relation fact).
