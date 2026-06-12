@@ -13,7 +13,11 @@ namespace Rig.Analysis.Inventory;
 
 internal static class SolutionSourceLoader
 {
-    private static readonly int DefaultParallelism = Math.Max(1, Math.Min(4, Environment.ProcessorCount / 2));
+    // Default to the full CPU count. The design-time builds run out-of-process (UseSharedCompilation
+    // =false) and emit no binaries, and the in-process Roslyn compile/read loops are CPU-bound, so a
+    // big solution saturates every core rather than leaving most idle at a fixed cap. Override with
+    // --parallelism <n> (e.g. lower it if memory-bound on a very large workspace).
+    private static readonly int DefaultParallelism = Math.Max(1, Environment.ProcessorCount);
 
     public static async Task<SolutionSourceSet> LoadAsync(
         string solutionPath,
@@ -25,8 +29,8 @@ internal static class SolutionSourceLoader
         // Everything else in the solution (test projects, unrelated tools) is skipped before its
         // expensive design-time build runs. Null = whole solution (the historical behaviour).
         IReadOnlySet<string>? scopeProjectPaths = null,
-        // Max concurrent MSBuild design-time builds / Roslyn compilations. Null = a conservative
-        // default (<= 4). The design-time builds run out-of-process with UseSharedCompilation=false
+        // Max concurrent MSBuild design-time builds / Roslyn compilations. Null = DefaultParallelism
+        // (the CPU count). The design-time builds run out-of-process with UseSharedCompilation=false
         // and emit no binaries, so concurrency is safe — this is the dominant indexing cost.
         int? parallelism = null
     )
