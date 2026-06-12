@@ -288,6 +288,10 @@ public static class Reads
                 r.EnclosingLoopKind,
                 r.EnclosingLoopDetail,
                 r.ReceiverType,
+                // Call-site generic type args (e.g. Entity.New<Account,int,AccountRecord>) — they drive the
+                // generic-factory rewrite + generic-dispatch narrowing. The bounded SQL path attaches these
+                // too; without them here, this fallback silently disabled both (Construct.New CHA-fanned).
+                r.TypeArguments,
             })
             .ToArrayAsync(cancellationToken);
         var callEdges = callRows
@@ -299,7 +303,8 @@ public static class Reads
                 r.Line,
                 r.EnclosingLoopKind,
                 r.EnclosingLoopDetail,
-                r.ReceiverType
+                r.ReceiverType,
+                TypeArguments: r.TypeArguments
             ))
             .Distinct()
             .ToArray();
