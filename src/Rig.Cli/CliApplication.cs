@@ -89,16 +89,16 @@ public static class CliApplication
         output.WriteLine("  rig symbols <pattern> [--kind <k>] [--limit <n>]");
         output.WriteLine("  rig refs <pattern> [--first-party] [--kind <refkind>] [--limit <n>]");
         output.WriteLine(
-            "  rig path <fromPattern> <toPattern> [--async] [--maxdepth <n>]   (synchronous by default; --async also walks async handoff edges, tagged; --maxdepth defaults unbounded)"
+            "  rig path <fromPattern> <toPattern> [--async] [--maxdepth|--depth <n>]   (synchronous by default; --async also walks async handoff edges, tagged; --maxdepth defaults unbounded)"
         );
         output.WriteLine(
-            "  rig reaches <fromPattern> [--async] [--rules <path>...] [--maxdepth <n>] [--only <p,..>] [--exclude <p,..>] [--format tsv]   (effects reachable from an entry point; synchronous by default (handoffs cut); --async adds scheduled/cross-thread reach via handoffs in a separate ⚡bucket; --exclude throw to drop exceptions)"
+            "  rig reaches <fromPattern> [--async] [--rules <path>...] [--maxdepth|--depth <n>] [--only <p,..>] [--exclude <p,..>] [--format tsv]   (effects reachable from an entry point; synchronous by default (handoffs cut); --async adds scheduled/cross-thread reach via handoffs in a separate ⚡bucket; --exclude throw to drop exceptions)"
         );
         output.WriteLine(
-            "  rig tree <fromPattern> [--full|--summary|--effects] [--async] [--only <p,..>] [--exclude <p,..>] [--rules <path>...] [--maxdepth <n>]   (call tree from an entry point; default = synchronous paths that reach an effect; --async also crosses handoffs (marked ⤳); --effects = only effectful methods, no skeleton; --exclude throw to drop exceptions)"
+            "  rig tree <fromPattern> [--full|--summary|--effects] [--async] [--only <p,..>] [--exclude <p,..>] [--rules <path>...] [--maxdepth|--depth <n>]   (call tree from an entry point; default = synchronous paths that reach an effect; --async also crosses handoffs (marked ⤳); --effects = only effectful methods, no skeleton; --exclude throw to drop exceptions)"
         );
         output.WriteLine(
-            "  rig callers <toPattern> [--roots|--entrypoints] [--async] [--maxdepth <n>]   (reverse reachability: who reaches this method; defaults to SYNCHRONOUS only (handoffs cut), so background callbacks show as their own origins; --async also counts scheduled paths; --roots = no-predecessor candidates (heuristic); --entrypoints = RULE-DETECTED entry points that reach it (precise))"
+            "  rig callers <toPattern> [--roots|--entrypoints] [--async] [--maxdepth|--depth <n>]   (reverse reachability: who reaches this method; defaults to SYNCHRONOUS only (handoffs cut), so background callbacks show as their own origins; --async also counts scheduled paths; --roots = no-predecessor candidates (heuristic); --entrypoints = RULE-DETECTED entry points that reach it (precise))"
         );
         output.WriteLine(
             "  rig derive [--rules <path>...] [--limit <n>] [--only <p,..>] [--exclude <p,..>]   (stage-2 pass over facts: effects + handoffs; --exclude throw to drop exceptions)"
@@ -728,7 +728,7 @@ public static class CliApplication
     {
         if (args.Length < 3)
         {
-            error.WriteLine("Usage: rig path <fromPattern> <toPattern> [--async] [--maxdepth <n>]");
+            error.WriteLine("Usage: rig path <fromPattern> <toPattern> [--async] [--maxdepth|--depth <n>]");
             return 2;
         }
 
@@ -769,7 +769,7 @@ public static class CliApplication
         return 0;
     }
 
-    // rig reaches <fromPattern> [--rules <path>...] [--maxdepth <n>] [--format tsv]
+    // rig reaches <fromPattern> [--rules <path>...] [--maxdepth|--depth <n>] [--format tsv]
     // Reachability over the SAME fact call graph that powers `rig path` (incl. interface->impl
     // dispatch), intersected with the derived effects: "from this entry point, which captured
     // effects are reachable, and at what depth". Validates effect capture along real call paths.
@@ -777,7 +777,7 @@ public static class CliApplication
     {
         if (args.Length < 2)
         {
-            error.WriteLine("Usage: rig reaches <fromPattern> [--async] [--rules <path>...] [--maxdepth <n>] [--format tsv]");
+            error.WriteLine("Usage: rig reaches <fromPattern> [--async] [--rules <path>...] [--maxdepth|--depth <n>] [--format tsv]");
             return 2;
         }
         var fromPattern = args[1];
@@ -911,7 +911,7 @@ public static class CliApplication
         return 0;
     }
 
-    // rig tree <fromPattern> [--full|--summary] [--rules <path>...] [--maxdepth <n>]
+    // rig tree <fromPattern> [--full|--summary] [--rules <path>...] [--maxdepth|--depth <n>]
     // The full first-party call TREE from an entry point over the fact graph (entrypoint-independent,
     // same edges as reaches/path — incl. interface->impl + base->override dispatch + loop context).
     // Modes mirror the legacy `callgraph`: default prunes to call paths that REACH an effect; --full
@@ -923,7 +923,7 @@ public static class CliApplication
         if (args.Length < 2 || args[1].StartsWith("--", StringComparison.Ordinal))
         {
             error.WriteLine(
-                "Usage: rig tree <fromPattern> [--full|--summary|--effects] [--async] [--raw] [--files] [--signatures] [--rules <path>...] [--maxdepth <n>]"
+                "Usage: rig tree <fromPattern> [--full|--summary|--effects] [--async] [--raw] [--files] [--signatures] [--rules <path>...] [--maxdepth|--depth <n>]"
             );
             return 2;
         }
@@ -1298,7 +1298,7 @@ public static class CliApplication
         return (effects, count);
     }
 
-    // rig callers <toPattern> [--roots|--entrypoints] [--async] [--rules <path>...] [--maxdepth <n>]
+    // rig callers <toPattern> [--roots|--entrypoints] [--async] [--rules <path>...] [--maxdepth|--depth <n>]
     // Reverse reachability over the fact graph: every method that can reach toPattern (transitive
     // callers, incl. reverse interface/override dispatch). DEFAULTS TO SYNCHRONOUS (handoffs cut) — the
     // right lens for "who touches X" attribution; `--async` also walks handoffs (the "could eventually
@@ -1311,7 +1311,7 @@ public static class CliApplication
     {
         if (args.Length < 2 || args[1].StartsWith("--", StringComparison.Ordinal))
         {
-            error.WriteLine("Usage: rig callers <toPattern> [--roots|--entrypoints] [--async] [--rules <path>...] [--maxdepth <n>]");
+            error.WriteLine("Usage: rig callers <toPattern> [--roots|--entrypoints] [--async] [--rules <path>...] [--maxdepth|--depth <n>]");
             return 2;
         }
         var toPattern = args[1];
@@ -1912,7 +1912,9 @@ public static class CliApplication
     // --maxdepth defaults to UNBOUNDED (int.MaxValue) — traversal runs to its natural frontier (the
     // closure, the maxNodes cap, and cycle/shared-callee dedup all still terminate it), not an arbitrary
     // hop cap. Pass --maxdepth <n> to bound it explicitly (e.g. for a shallow nearest-effects view).
-    private static int MaxDepthOf(string[] args) => int.TryParse(GetOption(args, "--maxdepth"), out var d) ? d : int.MaxValue;
+    // --depth is accepted as an alias (the name most people reach for); --maxdepth wins if both given.
+    private static int MaxDepthOf(string[] args) =>
+        int.TryParse(GetOption(args, "--maxdepth") ?? GetOption(args, "--depth"), out var d) ? d : int.MaxValue;
 
     // Traversal DEFAULTS to SYNC-CUT everywhere: async handoff edges (a delegate handed to a
     // background/timer/actor/event dispatcher to run later) are NOT crossed, so a registration never
