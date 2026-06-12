@@ -967,6 +967,216 @@
       "confidence": "high",
       "basis": "compilation+profile",
       "reason": "efcore_rollback_transaction"
+    },
+    {
+      "provider": "http",
+      "operation": "GET",
+      "methods": [ "GetByteArrayAsync", "GetStreamAsync" ],
+      "declaringTypes": [ "System.Net.Http.HttpClient" ],
+      "resource": "http_argument",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "httpclient_get_bytes_stream"
+    },
+    {
+      "provider": "http",
+      "operation": "request",
+      "methods": [ "UploadData", "UploadDataAsync", "UploadString", "UploadStringAsync", "UploadFile", "UploadFileAsync", "UploadValues", "DownloadData", "DownloadDataAsync", "DownloadString", "DownloadStringAsync", "DownloadFile", "DownloadFileAsync", "OpenRead", "OpenWrite" ],
+      "declaringTypes": [ "System.Net.WebClient" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "webclient_request"
+    },
+    {
+      "provider": "http",
+      "operation": "request",
+      "methods": [ "GetResponse", "GetResponseAsync", "GetRequestStream", "GetRequestStreamAsync" ],
+      "declaringTypes": [ "System.Net.WebRequest", "System.Net.HttpWebRequest" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "webrequest_request"
+    },
+    {
+      "provider": "socket",
+      "operation": "io",
+      "methods": [ "Connect", "ConnectAsync", "Send", "SendAsync", "SendTo", "SendToAsync", "Receive", "ReceiveAsync", "ReceiveFrom", "Accept", "AcceptAsync", "Bind", "Listen" ],
+      "declaringTypes": [ "System.Net.Sockets.Socket" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "socket_io"
+    },
+    {
+      "provider": "socket",
+      "operation": "io",
+      "methods": [ "Connect", "ConnectAsync", "GetStream", "Send", "SendAsync", "Receive", "ReceiveAsync" ],
+      "declaringTypes": [ "System.Net.Sockets.TcpClient", "System.Net.Sockets.UdpClient" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "tcp_udp_client_io"
+    },
+    {
+      "provider": "io",
+      "operation": "write",
+      "methods": [ "WriteAllText", "WriteAllTextAsync", "WriteAllBytes", "WriteAllBytesAsync", "WriteAllLines", "WriteAllLinesAsync", "AppendAllText", "AppendAllTextAsync", "AppendAllLines", "Create", "CreateText", "Copy", "Move", "Replace" ],
+      "declaringTypes": [ "System.IO.File" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "file_write"
+    },
+    {
+      "provider": "io",
+      "operation": "read",
+      "methods": [ "ReadAllText", "ReadAllTextAsync", "ReadAllBytes", "ReadAllBytesAsync", "ReadAllLines", "ReadAllLinesAsync", "ReadLines", "OpenRead", "OpenText", "Open", "Exists" ],
+      "declaringTypes": [ "System.IO.File" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "file_read"
+    },
+    {
+      "provider": "io",
+      "operation": "delete",
+      "methods": [ "Delete" ],
+      "declaringTypes": [ "System.IO.File" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "file_delete"
+    },
+    {
+      "provider": "io",
+      "operation": "write",
+      "methods": [ "CreateDirectory", "Delete", "Move" ],
+      "declaringTypes": [ "System.IO.Directory" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "directory_write"
+    },
+    {
+      "provider": "io",
+      "operation": "read",
+      "methods": [ "GetFiles", "GetDirectories", "EnumerateFiles", "EnumerateDirectories", "Exists" ],
+      "declaringTypes": [ "System.IO.Directory" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "directory_read"
+    },
+    {
+      "provider": "io",
+      "operation": "write",
+      "methods": [ "Write", "WriteAsync", "WriteLine", "WriteLineAsync", "Flush", "FlushAsync" ],
+      "declaringTypes": [ "System.IO.StreamWriter", "System.IO.BinaryWriter" ],
+      "resource": "declaring_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "stream_write"
+    },
+    {
+      "provider": "io",
+      "operation": "read",
+      "methods": [ "Read", "ReadAsync", "ReadLine", "ReadLineAsync", "ReadToEnd", "ReadToEndAsync" ],
+      "declaringTypes": [ "System.IO.StreamReader", "System.IO.BinaryReader" ],
+      "resource": "declaring_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "stream_read"
+    },
+    {
+      "provider": "lock",
+      "operation": "acquire",
+      "methods": [ "Enter", "TryEnter", "Wait", "WaitAsync", "WaitOne", "EnterReadLock", "EnterWriteLock", "EnterUpgradeableReadLock", "AcquireReaderLock", "AcquireWriterLock" ],
+      "declaringTypes": [ "System.Threading.Monitor", "System.Threading.SemaphoreSlim", "System.Threading.Semaphore", "System.Threading.WaitHandle", "System.Threading.ReaderWriterLockSlim", "System.Threading.ReaderWriterLock" ],
+      "resource": "declaring_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "lock_acquire"
+    },
+    {
+      "provider": "lock",
+      "operation": "release",
+      "methods": [ "Exit", "Release", "ReleaseMutex", "ExitReadLock", "ExitWriteLock", "ExitUpgradeableReadLock", "ReleaseReaderLock", "ReleaseWriterLock" ],
+      "declaringTypes": [ "System.Threading.Monitor", "System.Threading.SemaphoreSlim", "System.Threading.Semaphore", "System.Threading.Mutex", "System.Threading.ReaderWriterLockSlim", "System.Threading.ReaderWriterLock" ],
+      "resource": "declaring_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "lock_release"
+    },
+    {
+      "provider": "process",
+      "operation": "spawn",
+      "methods": [ "Start" ],
+      "declaringTypes": [ "System.Diagnostics.Process" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "process_start"
+    },
+    {
+      "provider": "inproc_cache",
+      "operation": "write",
+      "methods": [ "Set", "SetAsync", "Add", "AddAsync", "AddOrGetExisting", "CreateEntry", "Insert", "GetOrCreate", "GetOrCreateAsync" ],
+      "declaringTypes": [ "System.Runtime.Caching.MemoryCache", "System.Runtime.Caching.ObjectCache", "Microsoft.Extensions.Caching.Memory.IMemoryCache", "Microsoft.Extensions.Caching.Memory.MemoryCache", "Microsoft.Extensions.Caching.Memory.MemoryCacheExtensions", "System.Web.Caching.Cache" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "inproc_cache_write_stateless_hazard"
+    },
+    {
+      "provider": "inproc_cache",
+      "operation": "read",
+      "methods": [ "Get", "GetAsync", "TryGetValue", "Contains", "GetValues", "GetCacheItem" ],
+      "declaringTypes": [ "System.Runtime.Caching.MemoryCache", "System.Runtime.Caching.ObjectCache", "Microsoft.Extensions.Caching.Memory.IMemoryCache", "Microsoft.Extensions.Caching.Memory.MemoryCache", "System.Web.Caching.Cache" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "inproc_cache_read"
+    },
+    {
+      "provider": "inproc_cache",
+      "operation": "delete",
+      "methods": [ "Remove", "RemoveAsync" ],
+      "declaringTypes": [ "System.Runtime.Caching.MemoryCache", "System.Runtime.Caching.ObjectCache", "Microsoft.Extensions.Caching.Memory.IMemoryCache", "Microsoft.Extensions.Caching.Memory.MemoryCache", "System.Web.Caching.Cache" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "inproc_cache_delete"
+    },
+    {
+      "provider": "session_state",
+      "operation": "write",
+      "methods": [ "Add", "Remove", "RemoveAll", "RemoveAt", "Clear", "Abandon" ],
+      "declaringTypes": [ "System.Web.SessionState.HttpSessionState", "System.Web.SessionState.HttpSessionStateBase" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "http_session_write_stateless_blocker"
+    },
+    {
+      "provider": "app_state",
+      "operation": "write",
+      "methods": [ "Add", "Set", "Remove", "RemoveAll", "Clear", "Lock", "UnLock" ],
+      "declaringTypes": [ "System.Web.HttpApplicationState", "System.Web.HttpApplicationStateBase" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "http_application_state_write_stateless_blocker"
+    },
+    {
+      "provider": "inproc_timer",
+      "operation": "schedule",
+      "methods": [ "Start", "Change" ],
+      "declaringTypes": [ "System.Threading.Timer", "System.Timers.Timer", "System.Threading.Thread" ],
+      "resource": "declaring_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "inproc_timer_thread_stateless_hazard"
     }
   ],
   "diRegistrations": [
@@ -1128,6 +1338,33 @@
       {
         "wrapperMethods": ["Execute", "ExecuteAsync"],
         "receiverTypePatterns": ["ResiliencePipeline", "ExecutionStrategy", "IExecutionStrategy"]
+      }
+    ],
+    "resourceSpan": [
+      {
+        "scopeKind": "using",
+        "scopeTypePatterns": ["Transaction"],
+        "excludeProviders": [
+          "llblgen",
+          "efcore",
+          "db_transaction",
+          "db_connection",
+          "db_reader",
+          "repository",
+          "inproc_cache",
+          "app_state",
+          "session_state",
+          "inproc_timer"
+        ],
+        "observationType": "transaction_spans_effect",
+        "context": "transaction"
+      },
+      {
+        "scopeKind": "lock",
+        "scopeTypePatterns": [],
+        "excludeProviders": ["lock", "inproc_cache", "app_state", "session_state", "inproc_timer"],
+        "observationType": "lock_held_across_effect",
+        "context": "lock"
       }
     ]
   }

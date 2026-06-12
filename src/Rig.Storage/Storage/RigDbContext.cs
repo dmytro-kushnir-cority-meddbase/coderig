@@ -9,37 +9,39 @@ public sealed class RigDbContextDesignTimeFactory : IDesignTimeDbContextFactory<
     public RigDbContext CreateDbContext(string[] args) => new("design-time.db");
 }
 
-public sealed class RigDbContext(string databasePath) : DbContext
+// pooling: when false the connection is opened with Pooling=False, so disposing the context releases
+// the underlying file handle immediately. The write-to-temp-then-rename publish (rig index) needs
+// this — a pooled handle can keep rig.db.tmp open past Dispose and make the atomic File.Move fail.
+//
+// readOnly: opens the main DB with Mode=ReadOnly so SQLite physically rejects any write to it — the
+// query commands (callers/reaches/tree/path/dead/symbols/refs/di/runs/files) pass readOnly:true, making
+// the read/write split an engine-enforced invariant rather than a convention. SqlReachability's TEMP
+// tables (reach_set/reach_depth) still work: SQLite's temp database is separate and stays writable on a
+// read-only main connection. Only the writers (index, mine, graph) open read-write.
+public sealed class RigDbContext(string databasePath, bool pooling = true, bool readOnly = false) : DbContext
 {
     public DbSet<RunEntity> Runs => Set<RunEntity>();
 
-    public DbSet<EntryPointEntity> EntryPoints => Set<EntryPointEntity>();
-
     public DbSet<SourceFileEntity> SourceFiles => Set<SourceFileEntity>();
-
-    public DbSet<EffectEntity> Effects => Set<EffectEntity>();
-
-    public DbSet<EffectObservationEntity> EffectObservations => Set<EffectObservationEntity>();
 
     public DbSet<DiRegistrationEntity> DiRegistrations => Set<DiRegistrationEntity>();
 
-    public DbSet<MethodObservationEntity> MethodObservations => Set<MethodObservationEntity>();
+    public DbSet<SymbolFactEntity> SymbolFacts => Set<SymbolFactEntity>();
 
-    public DbSet<InvocationObservationEntity> InvocationObservations => Set<InvocationObservationEntity>();
+    public DbSet<ReferenceFactEntity> ReferenceFacts => Set<ReferenceFactEntity>();
 
-    public DbSet<CallGraphEntity> CallGraphs => Set<CallGraphEntity>();
+    public DbSet<TypeRelationFactEntity> TypeRelationFacts => Set<TypeRelationFactEntity>();
 
-    public DbSet<CallGraphNodeEntity> CallGraphNodes => Set<CallGraphNodeEntity>();
-
-    public DbSet<CallGraphNodeCallEntity> CallGraphNodeCalls => Set<CallGraphNodeCallEntity>();
-
-    public DbSet<CallGraphBoundaryCallEntity> CallGraphBoundaryCalls => Set<CallGraphBoundaryCallEntity>();
-
-    public DbSet<CallGraphNodeEffectEntity> CallGraphNodeEffects => Set<CallGraphNodeEffectEntity>();
+    public DbSet<DispatchFactEntity> DispatchFacts => Set<DispatchFactEntity>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
-        optionsBuilder.UseSqlite($"Data Source={databasePath}");
+        var connectionString = $"Data Source={databasePath}";
+        if (!pooling)
+            connectionString += ";Pooling=False";
+        if (readOnly)
+            connectionString += ";Mode=ReadOnly";
+        optionsBuilder.UseSqlite(connectionString);
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -51,13 +53,7 @@ public sealed class RigDbContext(string databasePath) : DbContext
             entity.Property(run => run.Id).ValueGeneratedNever();
             entity.Property(run => run.SolutionPath).IsRequired();
             entity.HasIndex(run => run.CreatedAtUtcText);
-        });
-
-        modelBuilder.Entity<EntryPointEntity>(entity =>
-        {
-            entity.ToTable("entrypoints");
-            entity.HasKey(entryPoint => new { entryPoint.RunId, entryPoint.EntryPointIndex });
-            entity.HasIndex(entryPoint => new { entryPoint.RunId, entryPoint.DisplayName });
+            entity.HasIndex(run => run.ProjectIdentity);
         });
 
         modelBuilder.Entity<SourceFileEntity>(entity =>
@@ -68,30 +64,6 @@ public sealed class RigDbContext(string databasePath) : DbContext
             entity.HasIndex(sourceFile => new { sourceFile.RunId, sourceFile.Status });
         });
 
-        modelBuilder.Entity<EffectEntity>(entity =>
-        {
-            entity.ToTable("effects");
-            entity.HasKey(effect => new { effect.RunId, effect.EffectIndex });
-            entity.HasIndex(effect => new
-            {
-                effect.RunId,
-                effect.Provider,
-                effect.Operation,
-            });
-        });
-
-        modelBuilder.Entity<EffectObservationEntity>(entity =>
-        {
-            entity.ToTable("effect_observations");
-            entity.HasKey(observation => new
-            {
-                observation.RunId,
-                observation.EffectIndex,
-                observation.ObservationIndex,
-            });
-            entity.HasIndex(observation => new { observation.RunId, observation.Type });
-        });
-
         modelBuilder.Entity<DiRegistrationEntity>(entity =>
         {
             entity.ToTable("di_registrations");
@@ -100,82 +72,37 @@ public sealed class RigDbContext(string databasePath) : DbContext
             entity.HasIndex(registration => new { registration.RunId, registration.ImplementationType });
         });
 
-        modelBuilder.Entity<MethodObservationEntity>(entity =>
+        modelBuilder.Entity<SymbolFactEntity>(entity =>
         {
-            entity.ToTable("method_observations");
-            entity.HasKey(observation => new { observation.RunId, observation.MethodIndex });
-            entity.HasIndex(observation => new { observation.RunId, observation.Symbol });
-            entity.HasIndex(observation => new { observation.RunId, observation.DisplayName });
+            entity.ToTable("symbol_facts");
+            entity.HasKey(s => new { s.RunId, s.SymbolFactIndex });
+            entity.HasIndex(s => s.SymbolId);
+            entity.HasIndex(s => s.Name);
+            entity.HasIndex(s => new { s.RunId, s.SymbolId });
         });
 
-        modelBuilder.Entity<InvocationObservationEntity>(entity =>
+        modelBuilder.Entity<ReferenceFactEntity>(entity =>
         {
-            entity.ToTable("invocation_observations");
-            entity.HasKey(observation => new { observation.RunId, observation.InvocationIndex });
-            entity.HasIndex(observation => new { observation.RunId, observation.ContainingMethodSymbol });
-            entity.HasIndex(observation => new { observation.RunId, observation.TargetSymbol });
+            entity.ToTable("reference_facts");
+            entity.HasKey(r => new { r.RunId, r.ReferenceFactIndex });
+            entity.HasIndex(r => r.TargetSymbolId);
+            entity.HasIndex(r => r.EnclosingSymbolId);
+            entity.HasIndex(r => new { r.RunId, r.TargetSymbolId });
         });
 
-        modelBuilder.Entity<CallGraphEntity>(entity =>
+        modelBuilder.Entity<TypeRelationFactEntity>(entity =>
         {
-            entity.ToTable("callgraphs");
-            entity.HasKey(graph => new { graph.RunId, graph.GraphIndex });
-            entity.HasIndex(graph => new { graph.RunId, graph.EntryPoint });
+            entity.ToTable("type_relation_facts");
+            entity.HasKey(t => new { t.RunId, t.TypeRelationFactIndex });
+            entity.HasIndex(t => t.TypeSymbolId);
+            entity.HasIndex(t => t.RelatedSymbolId);
         });
 
-        modelBuilder.Entity<CallGraphNodeEntity>(entity =>
+        modelBuilder.Entity<DispatchFactEntity>(entity =>
         {
-            entity.ToTable("callgraph_nodes");
-            entity.HasKey(node => new
-            {
-                node.RunId,
-                node.GraphIndex,
-                node.NodeIndex,
-            });
-            entity.HasIndex(node => new { node.RunId, node.Symbol });
-        });
-
-        modelBuilder.Entity<CallGraphNodeCallEntity>(entity =>
-        {
-            entity.ToTable("callgraph_node_calls");
-            entity.HasKey(call => new
-            {
-                call.RunId,
-                call.GraphIndex,
-                call.NodeIndex,
-                call.CallIndex,
-            });
-        });
-
-        modelBuilder.Entity<CallGraphBoundaryCallEntity>(entity =>
-        {
-            entity.ToTable("callgraph_boundary_calls");
-            entity.HasKey(call => new
-            {
-                call.RunId,
-                call.GraphIndex,
-                call.NodeIndex,
-                call.BoundaryCallIndex,
-            });
-            entity.HasIndex(call => new { call.RunId, call.Kind });
-        });
-
-        modelBuilder.Entity<CallGraphNodeEffectEntity>(entity =>
-        {
-            entity.ToTable("callgraph_node_effects");
-            entity.HasKey(link => new
-            {
-                link.RunId,
-                link.GraphIndex,
-                link.NodeIndex,
-                link.LinkIndex,
-            });
-            entity.HasIndex(link => new
-            {
-                link.RunId,
-                link.GraphIndex,
-                link.NodeIndex,
-            });
+            entity.ToTable("dispatch_facts");
+            entity.HasKey(d => new { d.RunId, d.DispatchFactIndex });
+            entity.HasIndex(d => d.SourceMember);
         });
     }
 }

@@ -1,0 +1,260 @@
+{
+  "entrypoints": {
+    "pageModel": [
+      {
+        "id": "playground.clientpage",
+        "kind": "page",
+        "baseTypes": ["MMS.Web.UI.ClientPage"],
+        "namespacePrefix": "LegacyNet48Web.Pages.",
+        "defaultMethod": "PAGE"
+      },
+      {
+        "id": "playground.clientaction",
+        "kind": "action",
+        "baseTypes": ["MMS.Web.UI.ClientPage"],
+        "namespacePrefix": "LegacyNet48Web.Pages.",
+        "defaultMethod": "ACTION",
+        "handlerMethodAttributes": ["MMS.Web.UI.Attributes.ClientActionAttribute", "ClientAction"]
+      },
+      {
+        "id": "playground.pagebase",
+        "kind": "page",
+        "baseTypes": ["MMS.Web.UI.PageBase"],
+        "namespacePrefix": "LegacyNet48Web.Pages.",
+        "defaultMethod": "PAGE"
+      }
+    ],
+    "classInheritance": [
+      {
+        "id": "playground.pagebase.handlers",
+        "kind": "pagehandler",
+        "baseTypes": ["MMS.Web.UI.PageBase"],
+        "handlerMethods": ["Initialise", "OnAction"],
+        "requireOverride": false,
+        "defaultMethod": "HANDLE"
+      },
+      {
+        "id": "playground.servicebase",
+        "kind": "background",
+        "baseTypes": ["MedDBase.Nucleus.Interfaces.Services.ServiceBase"],
+        "handlerMethods": ["Startup"],
+        "requireOverride": false,
+        "defaultMethod": "RUN"
+      },
+      {
+        "id": "playground.backgroundprocess",
+        "kind": "background",
+        "baseTypes": ["MedDBase.Application.Core.Background.IBackgroundProcess"],
+        "handlerMethods": ["Process"],
+        "requireOverride": false,
+        "defaultMethod": "RUN"
+      },
+      {
+        "id": "playground.workflowcontroller",
+        "kind": "workflow",
+        "baseTypes": ["MedDBase.Application.Workflows.WorkflowControllerBase"],
+        "handlerMethods": ["OnSave", "OnCancel", "HelperSave"],
+        "requireOverride": true,
+        "defaultMethod": "SAVE"
+      },
+      {
+        "id": "playground.wcf",
+        "kind": "wcf",
+        "baseTypes": ["*"],
+        "handlerMethods": ["*"],
+        "requireOverride": false,
+        "handlerMethodAttributes": ["MedDBase.Wcf.OperationContractAttribute", "OperationContract"],
+        "defaultMethod": "INVOKE"
+      }
+    ]
+  },
+  "handoffDispatchers": [
+    {
+      "id": "playground.repeating.schedule",
+      "kind": "background",
+      "repeating": true,
+      "consumerPatterns": ["RepeatingBackgroundProcessSchedule.#ctor"]
+    },
+    {
+      "id": "playground.oneshot.schedule",
+      "kind": "background",
+      "consumerPatterns": [".BackgroundProcessSchedule.#ctor"]
+    },
+    {
+      "id": "playground.asyncevent",
+      "kind": "event",
+      "consumerPatterns": ["IAsyncEvent.Add"]
+    },
+    {
+      "id": "playground.echo.spawn",
+      "kind": "actor",
+      "consumerPatterns": ["Echo.Process.spawn"]
+    }
+  ],
+  "effects": [
+    {
+      "provider": "llblgen",
+      "operation": "fetch",
+      "methods": ["Fetch", "FetchAsync", "FetchEntity", "FetchEntityAsync"],
+      "declaringTypes": [
+        "SD.LLBLGen.Pro.ORMSupportClasses.EntityBase2",
+        "SD.LLBLGen.Pro.ORMSupportClasses.DataAccessAdapterBase"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "LLBLGen entity fetch"
+    },
+    {
+      "provider": "llblgen",
+      "operation": "fetch",
+      "methods": [],
+      "declaringTypeBaseTypes": ["SD.LLBLGen.Pro.ORMSupportClasses.EntityBase2"],
+      "matchConstructor": true,
+      "minArguments": 1,
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "llblgen_entity_constructor_fetch"
+    },
+    {
+      "provider": "llblgen",
+      "operation": "save",
+      "methods": ["Save", "SaveAsync", "SaveEntity", "SaveEntityAsync"],
+      "declaringTypes": [
+        "SD.LLBLGen.Pro.ORMSupportClasses.EntityBase2",
+        "SD.LLBLGen.Pro.ORMSupportClasses.DataAccessAdapterBase"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "LLBLGen entity save"
+    },
+    {
+      "provider": "llblgen",
+      "operation": "delete",
+      "methods": ["Delete", "DeleteAsync", "DeleteEntity"],
+      "declaringTypes": [
+        "SD.LLBLGen.Pro.ORMSupportClasses.EntityBase2",
+        "SD.LLBLGen.Pro.ORMSupportClasses.DataAccessAdapterBase"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "LLBLGen entity delete"
+    },
+    {
+      "provider": "llblgen",
+      "operation": "query",
+      "methods": ["GetMulti", "GetMultiAsync"],
+      "declaringTypes": [
+        "SD.LLBLGen.Pro.ORMSupportClasses.EntityCollectionBase2",
+        "SD.LLBLGen.Pro.ORMSupportClasses.DataAccessAdapterBase"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "LLBLGen collection fetch"
+    },
+    {
+      "provider": "llblgen",
+      "operation": "tx_begin",
+      "methods": ["StartTransaction"],
+      "declaringTypes": ["SD.LLBLGen.Pro.ORMSupportClasses.DataAccessAdapterBase"],
+      "resource": "argument_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "LLBLGen transaction begin"
+    },
+    {
+      "provider": "llblgen",
+      "operation": "tx_commit",
+      "methods": ["Commit"],
+      "declaringTypes": ["SD.LLBLGen.Pro.ORMSupportClasses.DataAccessAdapterBase"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "LLBLGen transaction commit"
+    },
+    {
+      "provider": "llblgen",
+      "operation": "tx_rollback",
+      "methods": ["Rollback"],
+      "declaringTypes": ["SD.LLBLGen.Pro.ORMSupportClasses.DataAccessAdapterBase"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "LLBLGen transaction rollback"
+    },
+    {
+      "provider": "chamber_msg",
+      "operation": "tell",
+      "methods": ["tell"],
+      "declaringTypes": ["MedDBase.Messages.ChamberMsgExtensions"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "ChamberMsg async dispatch"
+    },
+    {
+      "provider": "clientpage_proxy",
+      "operation": "show",
+      "methods": ["Show", "ShowDialog"],
+      "declaringTypeBaseTypes": ["LegacyNet48Web.Pages.Proxies.ProxyBase"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "fact_derived",
+      "reason": "clientpage_proxy_navigate_to_page_fact"
+    },
+    {
+      "provider": "clientpage_proxy",
+      "operation": "redirect",
+      "methods": ["Redirect", "RedirectEmbedded"],
+      "declaringTypeBaseTypes": ["LegacyNet48Web.Pages.Proxies.ProxyBase"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "fact_derived",
+      "reason": "clientpage_proxy_redirect_fact"
+    },
+    {
+      "provider": "soap",
+      "operation": "submit",
+      "methods": ["SubmitBill", "SubmitBillAsync"],
+      "declaringTypes": ["LegacyNet48Web.External"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "soap_web_service_call"
+    },
+    {
+      "provider": "http_print",
+      "operation": "render",
+      "methods": ["RenderPdf"],
+      "declaringTypes": ["LegacyNet48Web.External"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "http_pdf_print_service"
+    },
+    {
+      "provider": "queue",
+      "operation": "enqueue",
+      "methods": ["Enqueue"],
+      "declaringTypes": ["LegacyNet48Web.External"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "background_queue_dispatch"
+    },
+    {
+      "provider": "llm",
+      "operation": "complete",
+      "methods": ["GetSmartLetterResponse"],
+      "declaringTypes": ["LegacyNet48Web.External"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "llm_completion"
+    }
+  ]
+}

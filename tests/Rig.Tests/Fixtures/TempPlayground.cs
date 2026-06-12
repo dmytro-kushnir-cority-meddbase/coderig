@@ -5,29 +5,44 @@ namespace Rig.Tests.Fixtures;
 
 public sealed class TempPlayground : IDisposable
 {
-    private TempPlayground(string rootDirectory, string solutionPath)
+    private TempPlayground(string rootDirectory, string solutionPath, string workingDirectory)
     {
         RootDirectory = rootDirectory;
         SolutionPath = solutionPath;
+        WorkingDirectory = workingDirectory;
     }
 
     public string RootDirectory { get; }
 
     public string SolutionPath { get; }
 
-    public static async Task<TempPlayground> CreateEntryPointEffectsAsync()
+    // Directory that holds the copied playground (and its rig.rules.json). Pass this to the
+    // fact rule providers (FactEntryPointRuleProvider / FactEffectRuleProvider) as the working
+    // directory so they pick up the playground's local rules.
+    public string WorkingDirectory { get; }
+
+    public static Task<TempPlayground> CreateEntryPointEffectsAsync() =>
+        CreateAsync("EntryPointEffects", "EntryPointEffects.slnx", "rig-entrypoint-effects-");
+
+    // The net48 MedDBase-mimicking fixture: ClientPage pages, [ClientAction] actions,
+    // ServiceBase/IBackgroundProcess workers, LLBLGen entity ops, and the negative gate cases
+    // (a [ClientAction] method on a non-ClientPage ClientControl, a non-proxy ShowDialog).
+    public static Task<TempPlayground> CreateLegacyNet48Async() =>
+        CreateAsync("LegacyNet48Web", "LegacyNet48Web.slnx", "rig-legacy-net48-");
+
+    private static async Task<TempPlayground> CreateAsync(string playgroundName, string solutionFileName, string tempPrefix)
     {
         var repositoryRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
-        var sourceDirectory = Path.Combine(repositoryRoot, "playgrounds", "EntryPointEffects");
-        var rootDirectory = Directory.CreateTempSubdirectory("rig-entrypoint-effects-").FullName;
-        var targetDirectory = Path.Combine(rootDirectory, "EntryPointEffects");
+        var sourceDirectory = Path.Combine(repositoryRoot, "playgrounds", playgroundName);
+        var rootDirectory = Directory.CreateTempSubdirectory(tempPrefix).FullName;
+        var targetDirectory = Path.Combine(rootDirectory, playgroundName);
 
         CopyDirectory(sourceDirectory, targetDirectory);
 
-        var solutionPath = Path.Combine(targetDirectory, "EntryPointEffects.slnx");
+        var solutionPath = Path.Combine(targetDirectory, solutionFileName);
         await RunDotnetAsync(["restore", solutionPath], targetDirectory);
 
-        return new TempPlayground(rootDirectory, solutionPath);
+        return new TempPlayground(rootDirectory, solutionPath, targetDirectory);
     }
 
     public void Dispose()

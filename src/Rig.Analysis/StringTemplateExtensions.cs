@@ -4,15 +4,6 @@ namespace Rig.Analysis;
 
 internal static class StringTemplateExtensions
 {
-    public static string? GetLiteralString(this ExpressionSyntax expression)
-    {
-        return expression switch
-        {
-            LiteralExpressionSyntax literal when literal.Token.ValueText is { Length: > 0 } value => value,
-            _ => null,
-        };
-    }
-
     public static string? GetStringTemplate(this ExpressionSyntax expression)
     {
         return expression switch

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Verbatim copy of MedDBase's MMS.Tools.RequestResponseProxyProjectBuilder.Roslyn — the real
+       ClientPage proxy source generator. Referenced by the playground app as an Analyzer (see
+       LegacyNet48Web.csproj) so rig's indexing exercises the exact generated-proxy wiring. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <OutputType>Library</OutputType>
+    <IsRoslynAnalyzer>true</IsRoslynAnalyzer>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <Nullable>disable</Nullable>
+    <!-- The coderig repo uses Central Package Management; this self-contained fixture analyzer pins
+         its own Roslyn versions, so opt out of CPM here to allow inline PackageReference versions. -->
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.3.4" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

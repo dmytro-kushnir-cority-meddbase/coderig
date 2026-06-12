@@ -1,61 +1,202 @@
-﻿using Rig.Domain.Data;
+﻿using Microsoft.EntityFrameworkCore;
+using Rig.Domain.Data;
 using Rig.Storage.Storage;
 
 namespace Rig.Storage.Queries;
 
 public static class Writes
 {
-    public static async Task<string> SaveAsync(RigDbContext context, AnalysisResult result, CancellationToken cancellationToken = default)
+    // fastBulkWrite trades crash durability for speed (journal/fsync off). It is the DEFAULT, because
+    // it is safe for a single exclusive writer producing a throwaway-until-published DB (rig index,
+    // which writes to a temp file and atomically renames on success — a corrupt temp is never
+    // published). Callers OPT OUT (set false) for consistency: mine's in-place PARALLEL appends, or a
+    // user-requested `--durable` in-place index. progress, when set, reports batched save throughput.
+    public static async Task<string> SaveAsync(
+        RigDbContext context,
+        AnalysisResult result,
+        CancellationToken cancellationToken = default,
+        bool fastBulkWrite = true,
+        Action<string>? progress = null
+    )
     {
         var runId = Guid.NewGuid().ToString("n");
 
         await context.Database.EnsureCreatedAsync(cancellationToken);
+        await MigrateAsync(context, cancellationToken);
+
+        if (fastBulkWrite)
+        {
+            // No rollback journal, no fsync, in-memory temp, 64 MB page cache, single-writer lock.
+            // A crash mid-write corrupts this file — acceptable because the caller publishes via
+            // atomic rename, so the live store is never the one being written.
+            foreach (
+                var pragma in new[]
+                {
+                    "PRAGMA journal_mode=OFF;",
+                    "PRAGMA synchronous=OFF;",
+                    "PRAGMA temp_store=MEMORY;",
+                    "PRAGMA cache_size=-65536;",
+                    "PRAGMA locking_mode=EXCLUSIVE;",
+                }
+            )
+                await context.Database.ExecuteSqlRawAsync(pragma, cancellationToken);
+        }
+
+        // Bulk insert: skip per-Add change detection (we never mutate tracked entities) and flush in
+        // batches, clearing the tracker each time so memory stays flat over millions of fact rows.
+        context.ChangeTracker.AutoDetectChangesEnabled = false;
 
         var run = new RunEntity
         {
             Id = runId,
             CreatedAtUtcText = DateTimeOffset.UtcNow.ToString("O"),
             SolutionPath = Path.GetFullPath(result.SolutionPath),
-
-            EntryPointCount = result.EntryPoints.Count,
-            EffectCount = result.Effects.Count,
+            ProjectIdentity = result.ProjectIdentity,
+            SourceProjectPath = result.SourceProjectPath is not null ? Path.GetFullPath(result.SourceProjectPath) : null,
+            SymbolCount = result.Symbols?.Count ?? 0,
+            ReferenceCount = result.References?.Count ?? 0,
             DiRegistrationCount = result.DiRegistrations.Count,
-            MethodObservationCount = result.MethodObservations.Count,
-            InvocationObservationCount = result.InvocationObservations.Count,
         };
 
+        // Header rows first (small) — flushed and detached before the fact batches start clearing
+        // the tracker, so they aren't dropped by a later ChangeTracker.Clear().
         context.Runs.Add(run);
         AddSourceFiles(context, runId, result);
-        AddEntryPoints(context, runId, result);
-        AddEffects(context, runId, result);
         AddDiRegistrations(context, runId, result);
-        AddMethodObservations(context, runId, result);
-        AddInvocationObservations(context, runId, result);
-        AddCallGraphs(context, runId, result.Effects, result);
-
         await context.SaveChangesAsync(cancellationToken);
+        context.ChangeTracker.Clear();
+
+        await SaveFactsBatchedAsync(context, runId, result, progress, cancellationToken);
         return runId;
     }
 
-    private static void AddEntryPoints(RigDbContext context, string runId, AnalysisResult result)
+    private const int FactBatchSize = 20_000;
+
+    // Inserts the symbol/reference/type-relation facts in fixed-size batches, flushing + clearing the
+    // change tracker per batch and reporting cumulative progress. One SaveChanges over millions of
+    // tracked entities is both slow and memory-heavy; batching keeps both bounded.
+    private static async Task SaveFactsBatchedAsync(
+        RigDbContext context,
+        string runId,
+        AnalysisResult result,
+        Action<string>? progress,
+        CancellationToken cancellationToken
+    )
     {
-        for (var index = 0; index < result.EntryPoints.Count; index++)
+        var symbols = result.Symbols ?? [];
+        var references = result.References ?? [];
+        var relations = result.TypeRelations ?? [];
+        var dispatch = result.DispatchFacts ?? [];
+        long total = symbols.Count + references.Count + relations.Count + dispatch.Count;
+        long saved = 0;
+        var pending = 0;
+
+        async Task FlushAsync()
         {
-            var entryPoint = result.EntryPoints[index];
-            context.EntryPoints.Add(
-                new EntryPointEntity
+            await context.SaveChangesAsync(cancellationToken);
+            context.ChangeTracker.Clear();
+            pending = 0;
+            progress?.Invoke($"Saved {saved}/{total} fact rows");
+        }
+
+        for (var i = 0; i < symbols.Count; i++)
+        {
+            var s = symbols[i];
+            context.SymbolFacts.Add(
+                new SymbolFactEntity
                 {
                     RunId = runId,
-                    EntryPointIndex = index,
-                    Kind = entryPoint.Kind,
-                    Method = entryPoint.Method,
-                    Route = entryPoint.Route,
-                    DisplayName = entryPoint.DisplayName,
-                    FilePath = entryPoint.FilePath,
-                    Line = entryPoint.Line,
+                    SymbolFactIndex = i,
+                    SymbolId = s.SymbolId,
+                    Kind = s.Kind,
+                    Name = s.Name,
+                    Namespace = s.Namespace,
+                    ContainingSymbolId = s.ContainingSymbolId,
+                    Modifiers = s.Modifiers,
+                    TypeKind = s.TypeKind,
+                    Signature = s.Signature,
+                    FilePath = s.FilePath,
+                    Line = s.Line,
+                    DefiningAssembly = s.DefiningAssembly,
+                    IsOverride = s.IsOverride,
                 }
             );
+            saved++;
+            if (++pending >= FactBatchSize)
+                await FlushAsync();
         }
+
+        for (var i = 0; i < references.Count; i++)
+        {
+            var r = references[i];
+            context.ReferenceFacts.Add(
+                new ReferenceFactEntity
+                {
+                    RunId = runId,
+                    ReferenceFactIndex = i,
+                    TargetSymbolId = r.TargetSymbolId,
+                    RefKind = r.RefKind,
+                    EnclosingSymbolId = r.EnclosingSymbolId,
+                    TargetAssembly = r.TargetAssembly,
+                    TargetInSource = r.TargetInSource,
+                    FilePath = r.FilePath,
+                    Line = r.Line,
+                    ReceiverType = r.ReceiverType,
+                    FirstArgumentTemplate = r.FirstArgumentTemplate,
+                    FirstArgumentType = r.FirstArgumentType,
+                    EnclosingLoopKind = r.EnclosingLoopKind,
+                    EnclosingLoopDetail = r.EnclosingLoopDetail,
+                    EnclosingInvocations = r.EnclosingInvocations,
+                    EnclosingCatchTypes = r.EnclosingCatchTypes,
+                    TypeArguments = r.TypeArguments,
+                    FirstArgumentName = r.FirstArgumentName,
+                    DelegateConsumer = r.DelegateConsumer,
+                    EnclosingScopes = r.EnclosingScopes,
+                }
+            );
+            saved++;
+            if (++pending >= FactBatchSize)
+                await FlushAsync();
+        }
+
+        for (var i = 0; i < relations.Count; i++)
+        {
+            var t = relations[i];
+            context.TypeRelationFacts.Add(
+                new TypeRelationFactEntity
+                {
+                    RunId = runId,
+                    TypeRelationFactIndex = i,
+                    TypeSymbolId = t.TypeSymbolId,
+                    RelatedSymbolId = t.RelatedSymbolId,
+                    RelationKind = t.RelationKind,
+                }
+            );
+            saved++;
+            if (++pending >= FactBatchSize)
+                await FlushAsync();
+        }
+
+        for (var i = 0; i < dispatch.Count; i++)
+        {
+            var d = dispatch[i];
+            context.DispatchFacts.Add(
+                new DispatchFactEntity
+                {
+                    RunId = runId,
+                    DispatchFactIndex = i,
+                    SourceMember = d.SourceMember,
+                    TargetMember = d.TargetMember,
+                    Kind = d.Kind,
+                }
+            );
+            saved++;
+            if (++pending >= FactBatchSize)
+                await FlushAsync();
+        }
+
+        if (pending > 0)
+            await FlushAsync();
     }
 
     private static void AddSourceFiles(RigDbContext context, string runId, AnalysisResult result)
@@ -77,49 +218,6 @@ public static class Writes
                     Evidence = sourceFile.Evidence,
                 }
             );
-        }
-    }
-
-    private static void AddEffects(RigDbContext context, string runId, AnalysisResult result)
-    {
-        for (var effectIndex = 0; effectIndex < result.Effects.Count; effectIndex++)
-        {
-            var effect = result.Effects[effectIndex];
-            context.Effects.Add(
-                new EffectEntity
-                {
-                    RunId = runId,
-                    EffectIndex = effectIndex,
-                    Provider = effect.Provider,
-                    Operation = effect.Operation,
-                    Resource = effect.Resource,
-                    Method = effect.Method,
-                    FilePath = effect.FilePath,
-                    Line = effect.Line,
-                    Confidence = effect.Confidence,
-                    Basis = effect.Basis,
-                    Reason = effect.Reason,
-                }
-            );
-
-            for (var observationIndex = 0; observationIndex < effect.Observations.Count; observationIndex++)
-            {
-                var observation = effect.Observations[observationIndex];
-                context.EffectObservations.Add(
-                    new EffectObservationEntity
-                    {
-                        RunId = runId,
-                        EffectIndex = effectIndex,
-                        ObservationIndex = observationIndex,
-                        Type = observation.Type,
-                        Context = observation.Context,
-                        Detail = observation.Detail,
-                        Confidence = observation.Confidence,
-                        Basis = observation.Basis,
-                        Reason = observation.Reason,
-                    }
-                );
-            }
         }
     }
 
@@ -148,138 +246,179 @@ public static class Writes
         }
     }
 
-    private static void AddMethodObservations(RigDbContext context, string runId, AnalysisResult result)
+    // Additive migrations for databases created before new columns/tables were introduced.
+    // EnsureCreatedAsync only creates tables in a brand-new DB — it never alters existing ones.
+    private static async Task MigrateAsync(RigDbContext context, CancellationToken cancellationToken)
     {
-        for (var index = 0; index < result.MethodObservations.Count; index++)
-        {
-            var observation = result.MethodObservations[index];
-            context.MethodObservations.Add(
-                new MethodObservationEntity
-                {
-                    RunId = runId,
-                    MethodIndex = index,
-                    Symbol = observation.Symbol,
-                    DisplayName = observation.DisplayName,
-                    FilePath = observation.FilePath,
-                    Line = observation.Line,
-                    ProjectName = observation.ProjectName,
-                }
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
+                ALTER TABLE reference_facts ADD COLUMN IF NOT EXISTS TypeArguments TEXT;
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken); // ignore if already exists
+
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
+                ALTER TABLE reference_facts ADD COLUMN IF NOT EXISTS FirstArgumentName TEXT;
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken);
+
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
+                ALTER TABLE reference_facts ADD COLUMN IF NOT EXISTS DelegateConsumer TEXT;
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken);
+
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
+                ALTER TABLE reference_facts ADD COLUMN IF NOT EXISTS EnclosingScopes TEXT;
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken);
+
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
+                ALTER TABLE runs ADD COLUMN IF NOT EXISTS ProjectIdentity TEXT;
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken); // ignore if already exists
+
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
+                ALTER TABLE runs ADD COLUMN IF NOT EXISTS SourceProjectPath TEXT;
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken);
+
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
+                CREATE INDEX IF NOT EXISTS IX_runs_ProjectIdentity ON runs(ProjectIdentity);
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken);
+
+        await context.Database.ExecuteSqlRawAsync(
+            """
+            CREATE TABLE IF NOT EXISTS symbol_facts (
+                RunId              TEXT NOT NULL,
+                SymbolFactIndex    INTEGER NOT NULL,
+                SymbolId           TEXT NOT NULL,
+                Kind               TEXT NOT NULL,
+                Name               TEXT NOT NULL,
+                Namespace          TEXT NOT NULL,
+                ContainingSymbolId TEXT,
+                Modifiers          TEXT NOT NULL,
+                TypeKind           TEXT NOT NULL,
+                Signature          TEXT NOT NULL,
+                FilePath           TEXT NOT NULL,
+                Line               INTEGER NOT NULL,
+                DefiningAssembly   TEXT NOT NULL,
+                IsOverride         INTEGER NOT NULL,
+                PRIMARY KEY (RunId, SymbolFactIndex)
             );
-        }
-    }
+            """,
+            cancellationToken
+        );
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS IX_symbol_facts_SymbolId ON symbol_facts(SymbolId);",
+            cancellationToken
+        );
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS IX_symbol_facts_Name ON symbol_facts(Name);",
+            cancellationToken
+        );
 
-    private static void AddInvocationObservations(RigDbContext context, string runId, AnalysisResult result)
-    {
-        for (var index = 0; index < result.InvocationObservations.Count; index++)
-        {
-            var observation = result.InvocationObservations[index];
-            context.InvocationObservations.Add(
-                new InvocationObservationEntity
-                {
-                    RunId = runId,
-                    InvocationIndex = index,
-                    ContainingMethodSymbol = observation.ContainingMethodSymbol,
-                    TargetSymbol = observation.TargetSymbol,
-                    TargetDisplayName = observation.TargetDisplayName,
-                    FilePath = observation.FilePath,
-                    Line = observation.Line,
-                    Confidence = observation.Confidence,
-                    Basis = observation.Basis,
-                    Reason = observation.Reason,
-                }
+        await context.Database.ExecuteSqlRawAsync(
+            """
+            CREATE TABLE IF NOT EXISTS reference_facts (
+                RunId              TEXT NOT NULL,
+                ReferenceFactIndex INTEGER NOT NULL,
+                TargetSymbolId     TEXT NOT NULL,
+                RefKind            TEXT NOT NULL,
+                EnclosingSymbolId  TEXT,
+                TargetAssembly     TEXT NOT NULL,
+                TargetInSource     INTEGER NOT NULL,
+                FilePath           TEXT NOT NULL,
+                Line               INTEGER NOT NULL,
+                ReceiverType       TEXT,
+                FirstArgumentTemplate TEXT,
+                FirstArgumentType  TEXT,
+                EnclosingLoopKind  TEXT,
+                EnclosingLoopDetail TEXT,
+                EnclosingInvocations TEXT,
+                EnclosingCatchTypes TEXT,
+                TypeArguments      TEXT,
+                FirstArgumentName  TEXT,
+                DelegateConsumer   TEXT,
+                EnclosingScopes    TEXT,
+                PRIMARY KEY (RunId, ReferenceFactIndex)
             );
-        }
-    }
+            """,
+            cancellationToken
+        );
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS IX_reference_facts_TargetSymbolId ON reference_facts(TargetSymbolId);",
+            cancellationToken
+        );
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS IX_reference_facts_EnclosingSymbolId ON reference_facts(EnclosingSymbolId);",
+            cancellationToken
+        );
 
-    private static void AddCallGraphs(RigDbContext context, string runId, IReadOnlyList<EffectInfo> effects, AnalysisResult result)
-    {
-        var effectIndexByIdentity = effects.Select((e, i) => (e, i)).ToDictionary(pair => pair.e, pair => pair.i);
-
-        for (var graphIndex = 0; graphIndex < result.CallGraphs.Count; graphIndex++)
-        {
-            var graph = result.CallGraphs[graphIndex];
-            context.CallGraphs.Add(
-                new CallGraphEntity
-                {
-                    RunId = runId,
-                    GraphIndex = graphIndex,
-                    EntryPoint = graph.EntryPoint,
-                }
+        await context.Database.ExecuteSqlRawAsync(
+            """
+            CREATE TABLE IF NOT EXISTS type_relation_facts (
+                RunId                 TEXT NOT NULL,
+                TypeRelationFactIndex INTEGER NOT NULL,
+                TypeSymbolId          TEXT NOT NULL,
+                RelatedSymbolId       TEXT NOT NULL,
+                RelationKind          TEXT NOT NULL,
+                PRIMARY KEY (RunId, TypeRelationFactIndex)
             );
+            """,
+            cancellationToken
+        );
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS IX_type_relation_facts_TypeSymbolId ON type_relation_facts(TypeSymbolId);",
+            cancellationToken
+        );
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS IX_type_relation_facts_RelatedSymbolId ON type_relation_facts(RelatedSymbolId);",
+            cancellationToken
+        );
 
-            for (var nodeIndex = 0; nodeIndex < graph.Nodes.Count; nodeIndex++)
-            {
-                var node = graph.Nodes[nodeIndex];
-                context.CallGraphNodes.Add(
-                    new CallGraphNodeEntity
-                    {
-                        RunId = runId,
-                        GraphIndex = graphIndex,
-                        NodeIndex = nodeIndex,
-                        Symbol = node.Symbol,
-                        FilePath = node.FilePath,
-                        Line = node.Line,
-                        Confidence = node.Confidence,
-                        Basis = node.Basis,
-                        Reason = node.Reason,
-                    }
-                );
-
-                for (var callIndex = 0; callIndex < node.Calls.Count; callIndex++)
-                {
-                    context.CallGraphNodeCalls.Add(
-                        new CallGraphNodeCallEntity
-                        {
-                            RunId = runId,
-                            GraphIndex = graphIndex,
-                            NodeIndex = nodeIndex,
-                            CallIndex = callIndex,
-                            TargetSymbol = node.Calls[callIndex],
-                        }
-                    );
-                }
-
-                for (var boundaryCallIndex = 0; boundaryCallIndex < node.BoundaryCalls.Count; boundaryCallIndex++)
-                {
-                    var boundaryCall = node.BoundaryCalls[boundaryCallIndex];
-                    context.CallGraphBoundaryCalls.Add(
-                        new CallGraphBoundaryCallEntity
-                        {
-                            RunId = runId,
-                            GraphIndex = graphIndex,
-                            NodeIndex = nodeIndex,
-                            BoundaryCallIndex = boundaryCallIndex,
-                            Kind = boundaryCall.Kind,
-                            Target = boundaryCall.Target,
-                            Method = boundaryCall.Method,
-                            FilePath = boundaryCall.FilePath,
-                            Line = boundaryCall.Line,
-                            Confidence = boundaryCall.Confidence,
-                            Basis = boundaryCall.Basis,
-                            Reason = boundaryCall.Reason,
-                        }
-                    );
-                }
-
-                for (var linkIndex = 0; linkIndex < node.Effects.Count; linkIndex++)
-                {
-                    if (!effectIndexByIdentity.TryGetValue(node.Effects[linkIndex], out var effectIndex))
-                    {
-                        continue;
-                    }
-
-                    context.CallGraphNodeEffects.Add(
-                        new CallGraphNodeEffectEntity
-                        {
-                            RunId = runId,
-                            GraphIndex = graphIndex,
-                            NodeIndex = nodeIndex,
-                            LinkIndex = linkIndex,
-                            EffectIndex = effectIndex,
-                        }
-                    );
-                }
-            }
-        }
+        await context.Database.ExecuteSqlRawAsync(
+            """
+            CREATE TABLE IF NOT EXISTS dispatch_facts (
+                RunId             TEXT NOT NULL,
+                DispatchFactIndex INTEGER NOT NULL,
+                SourceMember      TEXT NOT NULL,
+                TargetMember      TEXT NOT NULL,
+                Kind              TEXT NOT NULL,
+                PRIMARY KEY (RunId, DispatchFactIndex)
+            );
+            """,
+            cancellationToken
+        );
+        await context.Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS IX_dispatch_facts_SourceMember ON dispatch_facts(SourceMember);",
+            cancellationToken
+        );
     }
 }

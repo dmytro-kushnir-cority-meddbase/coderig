@@ -1,4 +1,3 @@
-using Rig.Analysis.CallGraph;
 using Rig.Analysis.Extraction;
 using Rig.Analysis.Inventory;
 using Rig.Analysis.Rules;
@@ -12,14 +11,27 @@ public static class SolutionAnalyzer
         string solutionPath,
         CancellationToken cancellationToken = default,
         Action<string>? progress = null,
-        IReadOnlyList<string>? extraRulesPaths = null
+        IReadOnlyList<string>? extraRulesPaths = null,
+        string? projectIdentity = null,
+        // When non-null, restrict the solution index to this set of project paths (the entry-project
+        // closure from `rig index --from`); still ONE cross-project Roslyn workspace / run.
+        IReadOnlySet<string>? scopeProjectPaths = null,
+        // Max concurrent design-time builds / compilations (null = conservative default).
+        int? parallelism = null
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
         progress?.Invoke("Loading rules");
         var rules = AnalysisRuleSet.LoadForSolution(solutionFullPath, extraRulesPaths);
         progress?.Invoke("Loading solution");
-        var sourceSet = await SolutionSourceLoader.LoadAsync(solutionFullPath, rules, cancellationToken, progress);
+        var sourceSet = await SolutionSourceLoader.LoadAsync(
+            solutionFullPath,
+            rules,
+            cancellationToken,
+            progress,
+            scopeProjectPaths,
+            parallelism
+        );
         progress?.Invoke("Merging project rules");
         rules = rules.MergeWithProjectDirectories(sourceSet.ProjectDirectories);
         var sources = sourceSet.IndexedSources;
@@ -42,39 +54,53 @@ public static class SolutionAnalyzer
             .ToArray();
 
         progress?.Invoke("Building projections");
-        var entryPoints = extractionResults.SelectMany(result => result.EntryPoints).ToArray();
-        var effects = extractionResults.SelectMany(result => result.Effects).ToArray();
         var diRegistrations = extractionResults.SelectMany(result => result.DiRegistrations).ToArray();
-        var methodObservations = extractionResults
-            .SelectMany(result => result.MethodObservations)
-            .OrderBy(observation => observation.FilePath, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(observation => observation.Line)
-            .ToArray();
-        var invocationObservations = extractionResults
-            .SelectMany(result => result.InvocationObservations)
-            .OrderBy(observation => observation.FilePath, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(observation => observation.Line)
-            .ToArray();
+        var symbolFacts = extractionResults.SelectMany(result => result.Symbols).ToArray();
+        var referenceFacts = extractionResults.SelectMany(result => result.References).ToArray();
+        var typeRelationFacts = extractionResults.SelectMany(result => result.TypeRelations).ToArray();
+        var dispatchFacts = extractionResults.SelectMany(result => result.Dispatch).ToArray();
 
-        progress?.Invoke($"Building callgraphs for {entryPoints.Length} entrypoints");
-        var callGraphs = CallGraphBuilder.Build(
-            entryPoints,
-            sources,
-            effects,
-            rules.Effects.Where(r => r.TreatAsDispatch).ToArray(),
-            diRegistrations
+        // Mine XML service descriptor files (e.g. App_Data/Common/Xml/Services/*.xml) and
+        // any inline static mappings, then merge with code-detected DI registrations.
+        var xmlRegistrations = XmlDiMiner.Mine(rules);
+        var staticRegistrations = rules.StaticDiMappings.Select(m => new DiRegistrationInfo(
+            m.ServiceType,
+            m.ImplementationType,
+            m.Lifetime,
+            m.RegistrationKind,
+            string.Empty,
+            0,
+            "high",
+            "rules",
+            "static_di_mapping",
+            string.Empty
+        ));
+        var allDiRegistrations = diRegistrations.Concat(xmlRegistrations).Concat(staticRegistrations).ToArray();
+        if (xmlRegistrations.Count > 0)
+            progress?.Invoke($"XML DI miner: {xmlRegistrations.Count} mappings from {rules.XmlDiFiles.Count} path(s)");
+
+        progress?.Invoke(
+            $"Analysis complete: {symbolFacts.Length} symbols, "
+                + $"{referenceFacts.Length} references, {allDiRegistrations.Length} di registrations"
         );
 
-        progress?.Invoke($"Analysis complete: {entryPoints.Length} entrypoints, {effects.Length} effects");
+        // For project-level indexing, record the specific project path
+        var sourceProjectPath =
+            solutionFullPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+            || solutionFullPath.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase)
+                ? solutionFullPath
+                : null;
+
         return new AnalysisResult(
             solutionPath,
             sourceSet.SourceFiles,
-            entryPoints,
-            effects,
-            diRegistrations,
-            callGraphs,
-            methodObservations,
-            invocationObservations
+            allDiRegistrations,
+            ProjectIdentity: projectIdentity,
+            SourceProjectPath: sourceProjectPath,
+            Symbols: symbolFacts,
+            References: referenceFacts,
+            TypeRelations: typeRelationFacts,
+            DispatchFacts: dispatchFacts
         );
     }
 
@@ -85,18 +111,14 @@ public static class SolutionAnalyzer
 
     private static SourceExtractionResult ExtractSource(SourceModel source, AnalysisRuleSet rules)
     {
-        var entryPoints = EntryPointExtractor
-            .FindMinimalApiEntryPoints(source, rules)
-            .Concat(EntryPointExtractor.FindMvcEntryPoints(source, rules))
-            .Concat(EntryPointExtractor.FindClassInheritanceEntryPoints(source, rules))
-            .ToArray();
+        var facts = FactExtractor.Extract(source);
 
         return new SourceExtractionResult(
-            entryPoints,
-            EffectExtractor.FindEffects(source, rules).ToArray(),
             DiRegistrationExtractor.FindDiRegistrations(source, rules).ToArray(),
-            RoslynObservationExtractor.FindMethodObservations(source).ToArray(),
-            RoslynObservationExtractor.FindInvocationObservations(source).ToArray()
+            facts.Symbols,
+            facts.References,
+            facts.TypeRelations,
+            facts.Dispatch
         );
     }
 }

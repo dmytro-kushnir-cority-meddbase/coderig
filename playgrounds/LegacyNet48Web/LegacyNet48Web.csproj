@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <!-- The proxy generator lives in a subfolder so TempPlayground copies it with the rest of the
+       playground; exclude it from THIS project's compile (it's a separate analyzer assembly). -->
+  <ItemGroup>
+    <Compile Remove="ProxyGenerator/**/*.cs" />
+  </ItemGroup>
+  <!-- Reference the generator exactly as MedDBase.Pages references the real one: as an Analyzer,
+       not a referenced assembly. This is the wiring rig must honour so generated <Page>Proxy types
+       are indexed. -->
+  <ItemGroup>
+    <ProjectReference Include="ProxyGenerator/ProxyGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+</Project>
