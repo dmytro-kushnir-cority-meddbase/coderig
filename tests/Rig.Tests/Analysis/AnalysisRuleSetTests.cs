@@ -1,12 +1,13 @@
 using Rig.Analysis;
 using Rig.Analysis.Rules;
 using Shouldly;
+using TUnit.Core;
 
 namespace Rig.Tests.Analysis;
 
 public sealed class AnalysisRuleSetTests
 {
-    [Fact]
+    [Test]
     public void LoadForSolution_rejects_file_rules_without_id()
     {
         using var workspace = TempRulesWorkspace.Create(
@@ -24,7 +25,7 @@ public sealed class AnalysisRuleSetTests
         exception.Message.ShouldContain("File rule in `exclude` is missing `id`.");
     }
 
-    [Fact]
+    [Test]
     public void LoadForSolution_rejects_file_rules_without_glob()
     {
         using var workspace = TempRulesWorkspace.Create(
@@ -42,7 +43,7 @@ public sealed class AnalysisRuleSetTests
         exception.Message.ShouldContain("File rule `include-contract` is missing `glob`.");
     }
 
-    [Fact]
+    [Test]
     public void LoadForSolution_merges_solution_and_extra_rules()
     {
         using var workspace = TempRulesWorkspace.Create(
@@ -78,9 +79,7 @@ public sealed class AnalysisRuleSetTests
         }
 
         public string DirectoryPath { get; }
-
         public string SolutionPath { get; }
-
         public string ExtraRulesPath { get; }
 
         public static TempRulesWorkspace Create(string solutionRulesJson, string? extraRulesJson = null)
@@ -99,9 +98,7 @@ public sealed class AnalysisRuleSetTests
         public void Dispose()
         {
             if (Directory.Exists(DirectoryPath))
-            {
                 Directory.Delete(DirectoryPath, recursive: true);
-            }
         }
     }
 }

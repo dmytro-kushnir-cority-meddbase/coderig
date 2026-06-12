@@ -3,11 +3,6 @@ using Rig.Domain.Functions;
 
 namespace Rig.Tests.Fixtures;
 
-// Projects an in-memory AnalysisResult's facts into the deriver inputs, mirroring
-// Reads.LoadFactEntryPointDataAsync / Reads.LoadInvocationRefsAsync (the SQLite path).
-// This lets the fact-layer derivers be tested end-to-end against a fixture solution with
-// NO database — analyze -> project -> derive -> assert. If the Reads projections change,
-// keep these in sync (follow-up: extract a single shared pure projection).
 public static class FactProjection
 {
     public static FactEntryPointDeriver.FactEntryPointData EntryPointData(AnalysisResult result)
@@ -48,10 +43,6 @@ public static class FactProjection
         return new FactEntryPointDeriver.FactEntryPointData(baseEdges, methods, types, ctorRefs, interfaceEdges);
     }
 
-    // Mirrors Reads.LoadFactGraphAsync: the fact-derived call graph (call edges + interface and base
-    // edges + method descriptors with IsOverride) for FactPathFinder. When `handoffRules` are supplied,
-    // dispatcher-consumed method-group edges are classified to Kind="handoff" exactly as the SQLite
-    // path does (HandoffClassifier), so the in-memory oracle matches the materialized store.
     public static FactGraphData GraphData(AnalysisResult result, IReadOnlyList<FactHandoffRule>? handoffRules = null)
     {
         var callEdges = result
@@ -93,7 +84,6 @@ public static class FactProjection
             .Select(m => new MethodRef(m.SymbolId, m.Name, m.ContainingSymbolId, m.IsOverride))
             .ToArray();
 
-        // Mirrors Reads.LoadDispatchFactsAsync: the exact Roslyn-mined dispatch edges, deduped.
         var minedDispatch = result.DispatchFacts?.Distinct().ToArray();
 
         return new FactGraphData(classifiedEdges, implEdges, methods, baseEdges, minedDispatch);
@@ -120,7 +110,6 @@ public static class FactProjection
             ))
             .ToArray();
 
-    // Mirrors Reads.LoadThrowRefsAsync: throw sites (RefKind="throw"), target = thrown exception type.
     public static IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)> ThrowRefs(AnalysisResult result) =>
         result
             .References!.Where(r => r.RefKind == "throw" && r.EnclosingSymbolId != null)

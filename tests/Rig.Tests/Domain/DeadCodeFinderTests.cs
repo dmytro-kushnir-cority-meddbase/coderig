@@ -1,14 +1,10 @@
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Shouldly;
+using TUnit.Core;
 
 namespace Rig.Tests.Domain;
 
-// Unit tests for the unreachable-symbol / dead-code finder (powers `rig dead`, Task #7). Pure
-// in-memory graph + method metadata — no Roslyn, no SQLite. Validates: reachability from roots
-// (incl. dispatch via FactPathFinder), accessibility-based tiering, the dead-cluster invariant, the
-// application-vs-library root treatment, and the off-graph exclusions (ctor/accessor/operator/
-// abstract/override/generated).
 public sealed class DeadCodeFinderTests
 {
     private static DeadCodeFinder.MethodMeta Meta(
@@ -24,10 +20,9 @@ public sealed class DeadCodeFinderTests
 
     private static MethodRef M(string id, string name) => new(id, name, null);
 
-    [Fact]
+    [Test]
     public void Method_reached_from_a_root_is_not_dead_transitively()
     {
-        // Root -> Used -> AlsoUsed ; Orphan is reached by nobody.
         var methods = new[] { M("M:Root.Run", "Run"), M("M:A.Used", "Used"), M("M:A.AlsoUsed", "AlsoUsed"), M("M:A.Orphan", "Orphan") };
         var graph = Graph(
             methods,
@@ -45,14 +40,13 @@ public sealed class DeadCodeFinderTests
         var dead = DeadCodeFinder.Find(graph, new[] { "M:Root.Run" }, meta, treatExternallyVisibleAsRoots: false);
 
         dead.Select(d => d.SymbolId).ShouldBe(new[] { "M:A.Orphan" });
-        dead[0].Tier.ShouldBe(DeadCodeFinder.Tier.High); // private + uncalled
+        dead[0].Tier.ShouldBe(DeadCodeFinder.Tier.High);
         dead[0].Reason.ShouldBe("uncalled");
     }
 
-    [Fact]
+    [Test]
     public void Dead_cluster_callees_are_flagged_as_reached_only_by_dead_code()
     {
-        // DeadHead (uncalled) -> DeadTail. Neither is reachable from the root, but DeadTail HAS a caller.
         var methods = new[] { M("M:Root.Run", "Run"), M("M:D.DeadHead", "DeadHead"), M("M:D.DeadTail", "DeadTail") };
         var graph = Graph(methods, new CallEdge("M:D.DeadHead", "M:D.DeadTail", "invocation", "f.cs", 1));
         var meta = new[]
@@ -66,13 +60,13 @@ public sealed class DeadCodeFinderTests
 
         var head = dead.Single(d => d.SymbolId == "M:D.DeadHead");
         var tail = dead.Single(d => d.SymbolId == "M:D.DeadTail");
-        head.DirectCallers.ShouldBe(0); // cluster root — the actionable head
+        head.DirectCallers.ShouldBe(0);
         head.Reason.ShouldBe("uncalled");
         tail.DirectCallers.ShouldBe(1);
         tail.Reason.ShouldBe("only reached by dead code");
     }
 
-    [Fact]
+    [Test]
     public void Public_method_is_flagged_in_application_mode_but_is_a_root_in_library_mode()
     {
         var methods = new[] { M("M:Api.Exported", "Exported") };
@@ -80,13 +74,13 @@ public sealed class DeadCodeFinderTests
         var meta = new[] { Meta("M:Api.Exported", "Exported", "public") };
 
         var asApp = DeadCodeFinder.Find(graph, System.Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: false);
-        asApp.Single().Tier.ShouldBe(DeadCodeFinder.Tier.Low); // possible external API -> low confidence
+        asApp.Single().Tier.ShouldBe(DeadCodeFinder.Tier.Low);
 
         var asLib = DeadCodeFinder.Find(graph, System.Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: true);
-        asLib.ShouldBeEmpty(); // public = root, not flagged
+        asLib.ShouldBeEmpty();
     }
 
-    [Fact]
+    [Test]
     public void Internal_uncalled_method_is_medium_confidence()
     {
         var methods = new[] { M("M:A.Helper", "Helper") };
@@ -98,10 +92,9 @@ public sealed class DeadCodeFinderTests
         dead.Single().Tier.ShouldBe(DeadCodeFinder.Tier.Medium);
     }
 
-    [Fact]
+    [Test]
     public void Off_graph_and_dispatch_members_are_excluded()
     {
-        // None reachable from any root, but each must be skipped for a structural reason.
         var methods = new[]
         {
             M("M:T.#ctor", ".ctor"),
@@ -127,7 +120,7 @@ public sealed class DeadCodeFinderTests
         dead.ShouldBeEmpty();
     }
 
-    [Fact]
+    [Test]
     public void Override_member_is_flagged_only_when_dispatch_members_are_included()
     {
         var methods = new[] { M("M:T.OnSave", "OnSave") };

@@ -3,12 +3,13 @@ using Rig.Analysis;
 using Rig.Analysis.Inventory;
 using Rig.Analysis.Rules;
 using Shouldly;
+using TUnit.Core;
 
 namespace Rig.Tests.Analysis;
 
 public sealed class SourceFileClassifierTests
 {
-    [Fact]
+    [Test]
     public void Exclude_rules_take_precedence_over_include_rules()
     {
         var rules = Rules(
@@ -35,7 +36,7 @@ public sealed class SourceFileClassifierTests
         classification.Evidence.ShouldBe("exclude-generated");
     }
 
-    [Fact]
+    [Test]
     public void Include_rules_can_force_test_project_source_to_index()
     {
         var rules = Rules(
@@ -62,7 +63,7 @@ public sealed class SourceFileClassifierTests
         classification.Evidence.ShouldBe("include-contract");
     }
 
-    [Fact]
+    [Test]
     public void Test_project_patterns_skip_sources_by_convention()
     {
         var rules = Rules(
@@ -89,7 +90,7 @@ public sealed class SourceFileClassifierTests
         classification.Evidence.ShouldBe("Rig.Tests");
     }
 
-    [Fact]
+    [Test]
     public void Normal_source_files_are_indexed_with_relative_path_evidence()
     {
         var classification = SourceFileClassifier.Classify(
@@ -140,13 +141,7 @@ public sealed class SourceFileClassifierTests
         );
     }
 
-    private static string SolutionPath()
-    {
-        return Path.Combine(SolutionDirectory(), "Test.slnx");
-    }
+    private static string SolutionPath() => Path.Combine(SolutionDirectory(), "Test.slnx");
 
-    private static string SolutionDirectory()
-    {
-        return Path.Combine(Path.GetTempPath(), "rig-classifier-tests");
-    }
+    private static string SolutionDirectory() => Path.Combine(Path.GetTempPath(), "rig-classifier-tests");
 }

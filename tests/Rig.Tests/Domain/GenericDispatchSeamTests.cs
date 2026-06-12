@@ -1,21 +1,10 @@
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Shouldly;
+using TUnit.Core;
 
 namespace Rig.Tests.Domain;
 
-// Receiver-type narrowing across a GENERIC dispatch SEAM (PROBLEM 2). A virtual GetResults on a generic
-// base CacheBase<T,R> is overridden in two SIBLING subclasses: Cache<T,R> (which calls a deeper abstract
-// GetResult that effectful concrete caches implement) and CacheFunc<T,R> (delegates to a Func, no
-// GetResult). A receiver that is-a CacheFunc by INHERITANCE — TxCache<T,R>, or its nested .Sub —
-// WITHOUT overriding GetResults must dispatch to the inherited CacheFunc.GetResults, NEVER the sibling
-// Cache.GetResults, so the unrelated InvoiceCache.GetResult stays unreachable. Mirrors the real
-// ProfileEntity.GetNetworkMembership -> TransactionAwareCache(.SubCache) chain that CHA-fanned into
-// Invoices.GetResult. Mined dispatch facts present (as in the meddbase store). Pure in-memory graph.
-//
-// The receiver display forms are generic ("N.TxCache<T, R>", nested "N.TxCache<T, R>.Sub") — exactly
-// the shapes the receiver-type stripper used to reject (the ", " space / the ".Sub" after ">"), which
-// silently disabled narrowing for every generic-typed receiver.
 public sealed class GenericDispatchSeamTests
 {
     private const string UseFuncCache = "M:N.Zoo.UseFuncCache()";
@@ -51,8 +40,6 @@ public sealed class GenericDispatchSeamTests
             new MethodRef(InvoiceGetResult, "GetResult", "T:N.InvoiceCache", IsOverride: true),
             new MethodRef(AssemblyGetResult, "GetResult", "T:N.AssemblyCache", IsOverride: true),
         };
-        // Roslyn-mined override edges (as the real store carries): the base virtual fans to both
-        // sibling overrides; Cache.GetResult fans to its concrete override.
         var dispatch = new[]
         {
             new DispatchFact("M:N.CacheBase.GetResults(System.Int32)", CacheGetResults, "override"),
@@ -62,8 +49,6 @@ public sealed class GenericDispatchSeamTests
         };
         var edges = new[]
         {
-            // Each entry constructs a cache and calls Provide on it — the receiver display FQN is what
-            // narrowing keys on. TxCache / TxCache.Sub are CacheFunc by inheritance; InvoiceCache is-a Cache.
             new CallEdge(UseFuncCache, "M:N.CacheBase.Provide(System.Int32)", "invocation", "f.cs", 10, ReceiverType: "N.TxCache<T, R>"),
             new CallEdge(
                 UseNestedFuncCache,
@@ -74,30 +59,26 @@ public sealed class GenericDispatchSeamTests
                 ReceiverType: "N.TxCache<T, R>.Sub"
             ),
             new CallEdge(UseRealCache, "M:N.CacheBase.Provide(System.Int32)", "invocation", "f.cs", 30, ReceiverType: "N.InvoiceCache"),
-            // base body: this.GetResults(key) — implicit-this, no receiver (carried `this` flows through).
             new CallEdge("M:N.CacheBase.Provide(System.Int32)", "M:N.CacheBase.GetResults(System.Int32)", "invocation", "f.cs", 40),
-            // Cache.GetResults body: this.GetResult(key).
             new CallEdge(CacheGetResults, CacheGetResult, "invocation", "f.cs", 50),
         };
         return new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases, dispatch);
     }
 
-    [Theory]
-    [InlineData(UseFuncCache)] // receiver TxCache<T, R> (multi-arg generic display)
-    [InlineData(UseNestedFuncCache)] // receiver TxCache<T, R>.Sub (nested generic display)
+    [Test]
+    [Arguments(UseFuncCache)]
+    [Arguments(UseNestedFuncCache)]
     public void A_CacheFunc_receiver_reaches_only_the_inherited_override_not_the_sibling(string entry)
     {
         var reach = FactPathFinder.Reaches(Graph(), entry);
 
-        // The inherited CacheFunc.GetResults is the dispatch target.
         reach.Keys.ShouldContain(CacheFuncGetResults);
-        // The SIBLING Cache branch (and the unrelated InvoiceCache write below it) must be unreachable.
         reach.Keys.ShouldNotContain(CacheGetResults);
         reach.Keys.ShouldNotContain(CacheGetResult);
         reach.Keys.ShouldNotContain(InvoiceGetResult);
     }
 
-    [Fact]
+    [Test]
     public void A_Cache_receiver_reaches_its_own_override_through_both_dispatch_seams()
     {
         // The receiver IS a concrete Cache subtype that INHERITS GetResults from Cache but OVERRIDES
