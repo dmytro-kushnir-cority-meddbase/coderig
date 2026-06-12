@@ -113,7 +113,10 @@ public static class FactProjection
                 r.EnclosingLoopKind,
                 r.EnclosingLoopDetail,
                 r.EnclosingInvocations,
-                r.EnclosingCatchTypes
+                r.EnclosingCatchTypes,
+                r.TypeArguments,
+                r.FirstArgumentName,
+                r.EnclosingScopes
             ))
             .ToArray();
 

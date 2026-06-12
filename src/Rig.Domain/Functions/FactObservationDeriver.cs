@@ -20,7 +20,9 @@ public static class FactObservationDeriver
         string? loopDetail,
         IReadOnlyList<FactStructuralContext.EnclosingInvocation> enclosingInvocations,
         IReadOnlyList<string> catchTypes,
-        FactObservationRules rules
+        FactObservationRules rules,
+        string? provider = null,
+        IReadOnlyList<FactStructuralContext.EnclosingScope>? enclosingScopes = null
     )
     {
         var observations = new List<EffectObservationInfo>();
@@ -109,6 +111,42 @@ public static class FactObservationDeriver
 
             if (observations.Any(o => o.Type == "concurrency_handled"))
                 break;
+        }
+
+        // resource_span (ordering/nesting) — a span-sensitive effect (this provider) is lexically
+        // nested inside a held-resource scope: a transaction-`using` or a `lock`. Proves the resource
+        // is held ACROSS the effect ("transaction spans a network call" / "lock held across IO").
+        // Innermost-first scope chain; the first scope that satisfies a rule emits the observation.
+        if (provider is not null && enclosingScopes is { Count: > 0 })
+        {
+            foreach (var rule in rules.ResourceSpan)
+            {
+                // Deny-list: flag every effect except the scope's own expected family.
+                if (rule.ExcludeProviders.Contains(provider, StringComparer.Ordinal))
+                    continue;
+
+                var scope = enclosingScopes.FirstOrDefault(s =>
+                    string.Equals(s.Kind, rule.ScopeKind, StringComparison.Ordinal)
+                    && (
+                        rule.ScopeTypePatterns.Count == 0
+                        || rule.ScopeTypePatterns.Any(p => s.Type.IndexOf(p, StringComparison.Ordinal) >= 0)
+                    )
+                );
+                // EnclosingScope is a struct; a no-match FirstOrDefault yields Kind == null.
+                if (scope.Kind is null)
+                    continue;
+
+                observations.Add(
+                    new EffectObservationInfo(
+                        rule.ObservationType,
+                        rule.Context,
+                        scope.Type.Length == 0 ? rule.Context : scope.Type,
+                        "high",
+                        "compilation",
+                        "effect_inside_held_resource_scope"
+                    )
+                );
+            }
         }
 
         return observations;

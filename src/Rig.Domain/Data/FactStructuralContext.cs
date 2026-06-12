@@ -49,4 +49,30 @@ public static class FactStructuralContext
         values.Count == 0 ? null : string.Join(ListSeparator.ToString(), values);
 
     public static IReadOnlyList<string> DecodeList(string? encoded) => string.IsNullOrEmpty(encoded) ? [] : encoded!.Split(ListSeparator);
+
+    // One enclosing held-resource scope (innermost-first): the scope KIND ("using"|"lock") and the
+    // resource's static type FQN ("" when unresolved, e.g. a `lock (someField)` whose type didn't
+    // resolve). Feeds the resource_span observation (P2b ordering/nesting): a network/IO effect whose
+    // scope chain contains a transaction-`using` or a `lock` is held across that effect — the
+    // "transaction spans a network call" / "lock held across IO" property.
+    public readonly record struct EnclosingScope(string Kind, string Type);
+
+    public static string? EncodeScopes(IReadOnlyList<EnclosingScope> scopes) =>
+        scopes.Count == 0 ? null : string.Join(ListSeparator.ToString(), scopes.Select(s => $"{s.Kind}{FieldSeparator}{s.Type}"));
+
+    public static IReadOnlyList<EnclosingScope> DecodeScopes(string? encoded)
+    {
+        if (string.IsNullOrEmpty(encoded))
+            return [];
+
+        var result = new List<EnclosingScope>();
+        foreach (var entry in encoded!.Split(ListSeparator))
+        {
+            var fields = entry.Split(FieldSeparator);
+            if (fields.Length == 2)
+                result.Add(new EnclosingScope(fields[0], fields[1]));
+        }
+
+        return result;
+    }
 }

@@ -577,6 +577,7 @@ public static class Reads
                 r.EnclosingCatchTypes,
                 r.TypeArguments,
                 r.FirstArgumentName,
+                r.EnclosingScopes,
             })
             .ToArrayAsync(cancellationToken);
         return rows.Select(r => new FactInvocation(
@@ -592,7 +593,8 @@ public static class Reads
                 r.EnclosingInvocations,
                 r.EnclosingCatchTypes,
                 r.TypeArguments,
-                r.FirstArgumentName
+                r.FirstArgumentName,
+                r.EnclosingScopes
             ))
             .ToArray();
     }

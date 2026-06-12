@@ -42,7 +42,10 @@ internal sealed record AnalysisRuleSet(
     // Context-bound interface-dispatch rules: narrow a context-interface's dispatch fan-out to the impls
     // bound (via a generic BindingBase<C>) to the ENCLOSING context type. Affects the call graph (tree /
     // reaches). See FactContextDispatchRule.
-    IReadOnlyList<ContextDispatchRule> ContextDispatch
+    IReadOnlyList<ContextDispatchRule> ContextDispatch,
+    // Resource-span observation rules: flag a span-sensitive effect (soap/http/io/…) that occurs
+    // lexically inside a transaction-`using` or `lock` scope (ordering/nesting). See FactResourceSpanRule.
+    IReadOnlyList<ResourceSpanObservationRule> ResourceSpanObservations
 )
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
@@ -146,6 +149,7 @@ internal sealed record AnalysisRuleSet(
                 .Concat(document.Observations?.ConcurrencyHandled ?? [])
                 .ToArray(),
             ResilienceRetryObservations = ResilienceRetryObservations.Concat(document.Observations?.ResilienceRetry ?? []).ToArray(),
+            ResourceSpanObservations = ResourceSpanObservations.Concat(document.Observations?.ResourceSpan ?? []).ToArray(),
             HandoffDispatchers = HandoffDispatchers.Concat(document.HandoffDispatchers ?? []).ToArray(),
             RenderCollapseSeams = RenderCollapseSeams.Concat(document.Render?.CollapseSeams ?? []).ToArray(),
             RenderOpaqueTypes = RenderOpaqueTypes.Concat(document.Render?.OpaqueTypes ?? []).ToArray(),
@@ -213,7 +217,8 @@ internal sealed record AnalysisRuleSet(
             document.Render?.OpaqueTypes ?? [],
             document.GenericFactories ?? [],
             document.TraversalCuts ?? [],
-            document.ContextDispatch ?? []
+            document.ContextDispatch ?? [],
+            document.Observations?.ResourceSpan ?? []
         );
     }
 }
@@ -353,6 +358,14 @@ internal sealed record ConcurrencyHandledObservationRule(IReadOnlyList<string> C
 
 internal sealed record ResilienceRetryObservationRule(IReadOnlyList<string> WrapperMethods, IReadOnlyList<string> ReceiverTypePatterns);
 
+internal sealed record ResourceSpanObservationRule(
+    string ScopeKind,
+    IReadOnlyList<string> ScopeTypePatterns,
+    IReadOnlyList<string> ExcludeProviders,
+    string ObservationType,
+    string Context
+);
+
 // Pre-declared interface→implementation mapping sourced from external DI descriptors
 // (e.g. XML service files, web.config appSettings) rather than from code patterns.
 internal sealed record StaticDiMapping(
@@ -412,6 +425,8 @@ internal sealed class ObservationsSection
     public List<ConcurrencyHandledObservationRule>? ConcurrencyHandled { get; set; }
 
     public List<ResilienceRetryObservationRule>? ResilienceRetry { get; set; }
+
+    public List<ResourceSpanObservationRule>? ResourceSpan { get; set; }
 }
 
 internal sealed class ProjectsSection

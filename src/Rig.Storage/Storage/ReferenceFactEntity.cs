@@ -21,4 +21,5 @@ public sealed class ReferenceFactEntity
     public string? TypeArguments { get; set; }
     public string? FirstArgumentName { get; set; }
     public string? DelegateConsumer { get; set; }
+    public string? EnclosingScopes { get; set; }
 }

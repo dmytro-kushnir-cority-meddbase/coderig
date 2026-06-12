@@ -389,7 +389,8 @@ internal static class FactExtractor
                 EnclosingCatchTypes: structural.CatchTypes,
                 TypeArguments: typeArguments,
                 FirstArgumentName: firstArgumentName,
-                DelegateConsumer: delegateConsumer
+                DelegateConsumer: delegateConsumer,
+                EnclosingScopes: structural.EnclosingScopes
             )
         );
     }
@@ -506,19 +507,61 @@ internal static class FactExtractor
             }
         }
 
+        // Enclosing held-resource scopes (innermost-first): `using`/`lock` ancestors. A `using` carries
+        // its resource type (the disposed object — a transaction, connection, …); a `lock` carries the
+        // locked expression's type (or "" if unresolved). Feeds resource_span: a network/IO effect
+        // nested in a transaction-using or a lock is held across that effect.
+        var scopes = new List<FactStructuralContext.EnclosingScope>();
+        foreach (var ancestor in invocation.Ancestors())
+        {
+            if (ancestor is LockStatementSyntax lockStmt)
+                scopes.Add(new FactStructuralContext.EnclosingScope("lock", TypeDisplayOf(lockStmt.Expression, model)));
+            else if (ancestor is UsingStatementSyntax usingStmt)
+                scopes.Add(new FactStructuralContext.EnclosingScope("using", UsingResourceType(usingStmt, model)));
+            else if (ancestor is LocalDeclarationStatementSyntax local && local.UsingKeyword.IsKind(SyntaxKind.UsingKeyword))
+                scopes.Add(new FactStructuralContext.EnclosingScope("using", DeclarationType(local.Declaration, model)));
+        }
+
         return new StructuralContext(
             loopKind,
             loopDetail,
             FactStructuralContext.EncodeInvocations(enclosing),
-            FactStructuralContext.EncodeList(catchTypes)
+            FactStructuralContext.EncodeList(catchTypes),
+            FactStructuralContext.EncodeScopes(scopes)
         );
     }
+
+    // The resource type of a `using` statement: the declared variable's type for
+    // `using (var x = expr)` / `using (Resource x = expr)`, or the expression's type for
+    // `using (expr)`. Open-generic FQN; "" when unresolved.
+    private static string UsingResourceType(UsingStatementSyntax usingStmt, SemanticModel model)
+    {
+        if (usingStmt.Declaration is { } declaration)
+            return DeclarationType(declaration, model);
+        if (usingStmt.Expression is { } expression)
+            return TypeDisplayOf(expression, model);
+        return "";
+    }
+
+    // The declared type of a variable declaration; for `var` Roslyn resolves the inferred type from
+    // the declaration's type syntax, falling back to the first initializer's type. Open-generic FQN.
+    private static string DeclarationType(VariableDeclarationSyntax declaration, SemanticModel model)
+    {
+        var type = model.GetTypeInfo(declaration.Type).Type;
+        if (type is null or IErrorTypeSymbol && declaration.Variables.FirstOrDefault()?.Initializer?.Value is { } initializer)
+            type = model.GetTypeInfo(initializer).Type;
+        return type?.OriginalDefinition.ToDisplayString() ?? "";
+    }
+
+    private static string TypeDisplayOf(ExpressionSyntax expression, SemanticModel model) =>
+        model.GetTypeInfo(expression).Type?.OriginalDefinition.ToDisplayString() ?? "";
 
     private readonly record struct StructuralContext(
         string? LoopKind,
         string? LoopDetail,
         string? EnclosingInvocations,
-        string? CatchTypes
+        string? CatchTypes,
+        string? EnclosingScopes = null
     );
 
     // Operands of throw statements and throw expressions (the thrown value). `throw;` rethrows carry

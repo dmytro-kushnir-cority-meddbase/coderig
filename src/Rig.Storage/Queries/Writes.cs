@@ -151,6 +151,7 @@ public static class Writes
                     TypeArguments = r.TypeArguments,
                     FirstArgumentName = r.FirstArgumentName,
                     DelegateConsumer = r.DelegateConsumer,
+                    EnclosingScopes = r.EnclosingScopes,
                 }
             );
             saved++;
@@ -279,6 +280,15 @@ public static class Writes
         await context
             .Database.ExecuteSqlRawAsync(
                 """
+                ALTER TABLE reference_facts ADD COLUMN IF NOT EXISTS EnclosingScopes TEXT;
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken);
+
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
                 ALTER TABLE runs ADD COLUMN IF NOT EXISTS ProjectIdentity TEXT;
                 """,
                 cancellationToken
@@ -356,6 +366,7 @@ public static class Writes
                 TypeArguments      TEXT,
                 FirstArgumentName  TEXT,
                 DelegateConsumer   TEXT,
+                EnclosingScopes    TEXT,
                 PRIMARY KEY (RunId, ReferenceFactIndex)
             );
             """,

@@ -1339,6 +1339,33 @@
         "wrapperMethods": ["Execute", "ExecuteAsync"],
         "receiverTypePatterns": ["ResiliencePipeline", "ExecutionStrategy", "IExecutionStrategy"]
       }
+    ],
+    "resourceSpan": [
+      {
+        "scopeKind": "using",
+        "scopeTypePatterns": ["Transaction"],
+        "excludeProviders": [
+          "llblgen",
+          "efcore",
+          "db_transaction",
+          "db_connection",
+          "db_reader",
+          "repository",
+          "inproc_cache",
+          "app_state",
+          "session_state",
+          "inproc_timer"
+        ],
+        "observationType": "transaction_spans_effect",
+        "context": "transaction"
+      },
+      {
+        "scopeKind": "lock",
+        "scopeTypePatterns": [],
+        "excludeProviders": ["lock", "inproc_cache", "app_state", "session_state", "inproc_timer"],
+        "observationType": "lock_held_across_effect",
+        "context": "lock"
+      }
     ]
   }
 }

@@ -893,7 +893,7 @@ public static class CliApplication
             var fan = h.Fanout > 0 ? $"  🔁x{h.Fanout} [loop: {ShortLoop(h.Loop)}]" : "";
             var heuristic = h.Basis == "heuristic" ? "  ~heuristic" : "";
             output.WriteLine(
-                $"  d{h.Depth}  {h.Effect.Provider} {h.Effect.Operation}  {ShortName(h.Effect.ResourceType)}  <- {ShortName(h.Effect.EnclosingSymbolId)}{fan}{heuristic}"
+                $"  d{h.Depth}  {h.Effect.Provider} {h.Effect.Operation}  {ShortName(h.Effect.ResourceType)}  <- {ShortName(h.Effect.EnclosingSymbolId)}{fan}{SpanTag(h.Effect)}{heuristic}"
             );
         }
 
@@ -1965,6 +1965,19 @@ public static class CliApplication
             return "?";
         var s = string.Join(" ", detail!.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries));
         return s.Length <= 60 ? s : s.Substring(0, 57) + "...";
+    }
+
+    // A resource-span hazard tag for an effect (P2b ordering/nesting): a network/IO/external effect
+    // that fires while a transaction or lock is held ("transaction spans a network call" / "lock held
+    // across IO"). Empty when the effect carries no span observation.
+    private static string SpanTag(DerivedEffect effect)
+    {
+        var span = (effect.Observations ?? []).FirstOrDefault(o =>
+            o.Type is "transaction_spans_effect" or "lock_held_across_effect"
+        );
+        if (span is null)
+            return "";
+        return span.Type == "transaction_spans_effect" ? "  ⚠ inside-open-tx" : "  ⚠ lock-held-across";
     }
 
     private static string? GetOption(string[] args, string name)

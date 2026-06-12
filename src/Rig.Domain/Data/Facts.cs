@@ -81,7 +81,13 @@ public sealed record ReferenceFact(
     // missed multi-line registrations (e.g. AgedState.RegisterTermEndProcess → EndOfTerm). Null for
     // non-methodGroup refs and for method-groups that are NOT a call argument (a `+=` handler, a
     // delegate field/local assignment, a return).
-    string? DelegateConsumer = null
+    string? DelegateConsumer = null,
+    // The chain of enclosing held-resource scopes (ancestor `using`/`lock` statements, innermost-
+    // first), each encoded as kind/resource-type and joined into one string. Feeds the resource_span
+    // observation (P2b ordering/nesting): a network/IO effect nested in a transaction-`using` or a
+    // `lock` is held across that effect ("transaction spans a network call" / "lock held across IO").
+    // Null when the invocation is not inside any using/lock. Decode with FactStructuralContext.
+    string? EnclosingScopes = null
 );
 
 /// <summary>A base-type or implemented-interface edge between two types.</summary>
@@ -387,7 +393,10 @@ public sealed record FactInvocation(
     // Call-site generic type arguments (comma-joined) and the first-argument member/identifier path.
     // Feed the `type_argument` / `argument_name` effect-resource strategies (P2a). See ReferenceFact.
     string? TypeArguments = null,
-    string? FirstArgName = null
+    string? FirstArgName = null,
+    // Enclosing held-resource scope chain (using/lock), innermost-first. Feeds the resource_span
+    // observation. Decode with FactStructuralContext.DecodeScopes. See ReferenceFact.EnclosingScopes.
+    string? EnclosingScopes = null
 );
 
 // An effect re-derived from the reference index by matching an invocation target against the
@@ -418,10 +427,29 @@ public sealed record FactConcurrencyHandledRule(IReadOnlyList<string> CommitMeth
 // (e.g. "WhenAll" / "ForEach"/"ForEachAsync"). Context = "{Receiver}.{method}".
 public sealed record FactParallelFanoutRule(string Receiver, IReadOnlyList<string> Methods);
 
+// A resource-span observation rule (P2b, ordering/nesting): an effect that occurs LEXICALLY INSIDE a
+// held-resource scope yields an observation proving the resource is held across that effect. The
+// scope is a `using`/`lock` whose KIND equals ScopeKind and whose resource type matches one of
+// ScopeTypePatterns (substring; empty = any type, used for `lock`). Filtering is by DENY-LIST, not
+// allow-list: every effect provider is flagged EXCEPT those in ExcludeProviders — the scope's own
+// expected family (DB ops inside a transaction, in-memory ops a lock protects, the lock/tx effects
+// themselves). Flag-by-default is the safe direction: a newly-added external provider is flagged
+// without a rule edit (an allow-list would silently miss it). Pure syntactic nesting from the
+// captured EnclosingScopes facts — manual `begin`…`commit` with NO `using` block is a separate
+// intra-method-sequence case, NOT covered here.
+public sealed record FactResourceSpanRule(
+    string ScopeKind, // "using" | "lock"
+    IReadOnlyList<string> ScopeTypePatterns, // substrings the scope resource type must match; empty = any
+    IReadOnlyList<string> ExcludeProviders, // providers NOT flagged (the scope's expected family); all others flagged
+    string ObservationType, // emitted observation type, e.g. "transaction_spans_effect"
+    string Context // observation context label, e.g. "transaction" / "lock"
+);
+
 public sealed record FactObservationRules(
     IReadOnlyList<FactResilienceRetryRule> ResilienceRetry,
     IReadOnlyList<FactConcurrencyHandledRule> ConcurrencyHandled,
-    IReadOnlyList<FactParallelFanoutRule> ParallelFanout
+    IReadOnlyList<FactParallelFanoutRule> ParallelFanout,
+    IReadOnlyList<FactResourceSpanRule> ResourceSpan
 );
 
 // An entry point re-derived from facts (type_relation_facts BFS + symbol_facts + reference_facts).

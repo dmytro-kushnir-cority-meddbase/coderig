@@ -102,7 +102,9 @@ public static class FactEffectDeriver
                         inv.LoopDetail,
                         FactStructuralContext.DecodeInvocations(inv.EnclosingInvocations),
                         FactStructuralContext.DecodeList(inv.CatchTypes),
-                        observationRules
+                        observationRules,
+                        rule.Provider,
+                        FactStructuralContext.DecodeScopes(inv.EnclosingScopes)
                     );
 
                 results.Add(

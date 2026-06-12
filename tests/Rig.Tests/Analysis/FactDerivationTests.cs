@@ -621,4 +621,64 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
             && e.EnclosingSymbolId!.Contains("LockZoo.SubmitUnderLock", StringComparison.Ordinal)
         );
     }
+
+    // TODO #8: "transaction spans a network call" / "lock held across IO" is a lexical-NESTING
+    // property — a span-sensitive effect occurs inside a transaction-`using` or `lock` scope. The
+    // resource_span observation proves it from the captured EnclosingScopes facts. Fixtures:
+    // Background/TransactionZoo.cs (canonical Master_HealthcodeServiceImpl shape) + LockZoo.cs.
+    [Fact]
+    public async Task Resource_span_observation_proves_effect_nested_in_transaction_or_lock_scope()
+    {
+        var playground = await _playgrounds.LegacyNet48Async();
+        var result = playground.Result;
+
+        // --- Extraction: the SOAP call in SubmitInsideTransaction carries its enclosing using-scope
+        //     (a FakeTransaction), and the one in SubmitWithoutTransaction carries no scope.
+        var submitInTx = result.References!.Single(r =>
+            r.RefKind == "invocation"
+            && r.TargetSymbolId.Contains("SubmitBill", StringComparison.Ordinal)
+            && r.EnclosingSymbolId!.Contains("TransactionZoo.SubmitInsideTransaction", StringComparison.Ordinal)
+        );
+        var scopes = FactStructuralContext.DecodeScopes(submitInTx.EnclosingScopes);
+        scopes.ShouldContain(s => s.Kind == "using" && s.Type.Contains("Transaction", StringComparison.Ordinal));
+
+        var submitNoTx = result.References!.Single(r =>
+            r.RefKind == "invocation"
+            && r.TargetSymbolId.Contains("SubmitBill", StringComparison.Ordinal)
+            && r.EnclosingSymbolId!.Contains("TransactionZoo.SubmitWithoutTransaction", StringComparison.Ordinal)
+        );
+        FactStructuralContext.DecodeScopes(submitNoTx.EnclosingScopes).ShouldBeEmpty();
+
+        // --- Derivation: the soap effect inside the using(transaction) gets a transaction_spans_effect
+        //     observation; the lock-wrapped soap (LockZoo.SubmitUnderLock) gets lock_held_across_effect.
+        var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
+        var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var effects = FactEffectDeriver.Derive(
+            FactProjection.Invocations(result),
+            effectRules,
+            providerFilter: null,
+            observationRules: observationRules
+        );
+
+        DerivedEffect SoapIn(string method) =>
+            effects.Single(e =>
+                e.Provider == "soap" && e.Operation == "submit" && e.EnclosingSymbolId!.Contains(method, StringComparison.Ordinal)
+            );
+
+        SoapIn("TransactionZoo.SubmitInsideTransaction")
+            .Observations!.ShouldContain(o => o.Type == "transaction_spans_effect" && o.Context == "transaction");
+
+        SoapIn("LockZoo.SubmitUnderLock").Observations!.ShouldContain(o => o.Type == "lock_held_across_effect" && o.Context == "lock");
+
+        // Negative: a SOAP call OUTSIDE any transaction carries no span observation.
+        var soapNoTx = SoapIn("TransactionZoo.SubmitWithoutTransaction");
+        (soapNoTx.Observations ?? []).ShouldNotContain(o => o.Type == "transaction_spans_effect");
+
+        // Deny-list discipline: the lock's OWN acquire/release (provider "lock", excluded) must NOT
+        // be self-flagged as held across itself — otherwise every lock would observe itself.
+        effects
+            .Where(e => e.Provider == "lock")
+            .ShouldAllBe(e => e.Observations == null || e.Observations.All(o => o.Type != "lock_held_across_effect"));
+    }
 }

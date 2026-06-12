@@ -30,7 +30,16 @@ public static class FactObservationRuleProvider
         var concurrency = rules
             .ConcurrencyHandledObservations.Select(r => new FactConcurrencyHandledRule(r.CommitMethods, r.CatchTypePatterns))
             .ToArray();
+        var resourceSpan = rules
+            .ResourceSpanObservations.Select(r => new FactResourceSpanRule(
+                r.ScopeKind,
+                r.ScopeTypePatterns,
+                r.ExcludeProviders,
+                r.ObservationType,
+                r.Context
+            ))
+            .ToArray();
 
-        return new FactObservationRules(resilience, concurrency, ParallelFanout);
+        return new FactObservationRules(resilience, concurrency, ParallelFanout, resourceSpan);
     }
 }
