@@ -155,7 +155,60 @@ internal static class FactExtractor
             );
         }
 
+        // --- lock(x){} statements -> synthetic Monitor.Enter/Exit invocation refs ---
+        // The C# language spec DEFINES `lock (x) S` to lower to
+        //   Monitor.Enter(x, ref f); try { S } finally { if (f) Monitor.Exit(x); }
+        // — but the lock keyword carries no invocation SYNTAX, so the SimpleName pass above never sees
+        // these calls. Without this, a `lock {}` block carries NO lock effect, even though an explicit
+        // `Monitor.Enter(x)` call in the same body would (the lock-acquire rule already matches it).
+        // We record the spec-guaranteed lowered calls — acquire at the lock keyword, release at the
+        // body's closing brace — and let the existing data-driven lock rules classify them. The
+        // DETECTION stays in rules (builtin-rules.json); this only records a structural fact the
+        // language guarantees, exactly as the ctor/throw passes record their constructs.
+        AddLockStatementRefs(references, root, model, tree);
+
         return new FactExtractionResult(symbols, references, relations, dispatch);
+    }
+
+    // Emit synthetic Monitor.Enter (acquire) and Monitor.Exit (release) invocation refs for every
+    // `lock (x) {}` statement, resolving the real Monitor method symbols from the compilation so the
+    // refs carry genuine DocIds (the same the lock rule's declaringTypes gate matches). The release is
+    // pinned to the body's closing-brace line so the acquire/release straddle the locked body — the
+    // lexical span the ordering work (transaction/lock-held-across-IO) will read.
+    private static void AddLockStatementRefs(List<ReferenceFact> references, SyntaxNode root, SemanticModel model, SyntaxTree tree)
+    {
+        var locks = root.DescendantNodes().OfType<LockStatementSyntax>().ToArray();
+        if (locks.Length == 0)
+            return;
+
+        var monitor = model.Compilation.GetTypeByMetadataName("System.Threading.Monitor");
+        var enter = monitor?.GetMembers("Enter").OfType<IMethodSymbol>().FirstOrDefault();
+        var exit = monitor?.GetMembers("Exit").OfType<IMethodSymbol>().FirstOrDefault();
+        if (enter is null || exit is null)
+            return; // no Monitor in this compilation's references — nothing to lower against.
+
+        foreach (var lockStmt in locks)
+        {
+            var enclosing = EnclosingSymbolId(lockStmt, model);
+            var structural = StructuralContextOf(lockStmt, model);
+
+            // acquire: at the `lock` keyword / locked expression. allowRuntime keeps the BCL ref.
+            AddReference(references, enter, "invocation", enclosing, tree, lockStmt.Expression, structural: structural, allowRuntime: true);
+
+            // release: at the closing brace of the block (or the embedded statement's last line).
+            var releaseLine = tree.GetLineSpan(lockStmt.Statement.Span).EndLinePosition.Line + 1;
+            AddReference(
+                references,
+                exit,
+                "invocation",
+                enclosing,
+                tree,
+                lockStmt.Expression,
+                structural: structural,
+                allowRuntime: true,
+                lineOverride: releaseLine
+            );
+        }
     }
 
     // EXACT interface-impl dispatch edges for a declared type: for every interface the type implements
@@ -285,7 +338,8 @@ internal static class FactExtractor
         StructuralContext structural = default,
         bool allowRuntime = false,
         string? firstArgumentName = null,
-        string? delegateConsumer = null
+        string? delegateConsumer = null,
+        int? lineOverride = null
     )
     {
         // Generic type arguments at the CALL SITE — read from the constructed `target` BEFORE
@@ -325,7 +379,7 @@ internal static class FactExtractor
                 TargetAssembly: assembly,
                 TargetInSource: inSource,
                 FilePath: tree.FilePath,
-                Line: tree.GetLineSpan(node.Span).StartLinePosition.Line + 1,
+                Line: lineOverride ?? tree.GetLineSpan(node.Span).StartLinePosition.Line + 1,
                 ReceiverType: receiverType,
                 FirstArgumentTemplate: firstArgumentTemplate,
                 FirstArgumentType: firstArgumentType,

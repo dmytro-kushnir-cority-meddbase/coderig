@@ -557,4 +557,68 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
 
         typeNames.ShouldContain("LoginProxy");
     }
+
+    // TODO #7: a C# `lock (x) {}` statement is spec-defined to lower to
+    //   Monitor.Enter(x, ref f); try {…} finally { Monitor.Exit(x); }
+    // — but the keyword carries no invocation SYNTAX, so without the synthetic-ref lowering a
+    // `lock {}` body carries NO lock effect, while an explicit Monitor.Enter(x) call already does.
+    // Fixture: Background/LockZoo.cs. Ground truth by construction.
+    [Fact]
+    public async Task Lock_statements_lift_to_synthetic_monitor_acquire_release_effects()
+    {
+        var playground = await _playgrounds.LegacyNet48Async();
+        var result = playground.Result;
+
+        // --- Extraction: IncrementUnderLock's single `lock (_gate) {}` emits a synthetic
+        //     Monitor.Enter (acquire) and Monitor.Exit (release) invocation ref, enclosed by the
+        //     method. Neither exists as invocation syntax — they come purely from the lowering.
+        var monitorRefs = result
+            .References!.Where(r =>
+                r.RefKind == "invocation"
+                && r.TargetSymbolId.Contains("System.Threading.Monitor", StringComparison.Ordinal)
+                && r.EnclosingSymbolId != null
+                && r.EnclosingSymbolId.Contains("LockZoo.IncrementUnderLock", StringComparison.Ordinal)
+            )
+            .ToArray();
+        var enter = monitorRefs.FirstOrDefault(r => r.TargetSymbolId.Contains(".Enter", StringComparison.Ordinal));
+        var exit = monitorRefs.FirstOrDefault(r => r.TargetSymbolId.Contains(".Exit", StringComparison.Ordinal));
+        enter.ShouldNotBeNull();
+        exit.ShouldNotBeNull();
+        // Release is pinned to a LATER line than acquire — the pair straddles the locked body (the
+        // lexical span the ordering work, #8, will read to prove "lock held across IO").
+        exit!.Line.ShouldBeGreaterThan(enter!.Line);
+
+        // --- Derivation: those refs become lock:acquire / lock:release effects via the EXISTING
+        //     data-driven lock rule (no rule change). Ground truth: the explicit Monitor.Enter/Exit
+        //     call in ExplicitMonitor derives the SAME effect, so synthetic and real paths agree.
+        var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
+        var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var effects = FactEffectDeriver.Derive(FactProjection.Invocations(result), rules);
+        var lockEffects = effects.Where(e => e.Provider == "lock").ToArray();
+
+        foreach (var method in new[] { "LockZoo.IncrementUnderLock", "LockZoo.SubmitUnderLock", "LockZoo.ExplicitMonitor" })
+        {
+            lockEffects.ShouldContain(
+                e => e.Operation == "acquire" && e.EnclosingSymbolId!.Contains(method, StringComparison.Ordinal),
+                $"expected a lock:acquire in {method}"
+            );
+            lockEffects.ShouldContain(
+                e => e.Operation == "release" && e.EnclosingSymbolId!.Contains(method, StringComparison.Ordinal),
+                $"expected a lock:release in {method}"
+            );
+        }
+
+        // Nested locks: BOTH `lock` statements lift -> two acquires in NestedLocks.
+        lockEffects
+            .Count(e => e.Operation == "acquire" && e.EnclosingSymbolId!.Contains("LockZoo.NestedLocks", StringComparison.Ordinal))
+            .ShouldBe(2);
+
+        // #8 setup: SubmitUnderLock holds the lock ACROSS a SOAP submit — both effects land in the
+        // same method (ordering/nesting is NOT asserted here; that is the deriver work in #8).
+        effects.ShouldContain(e =>
+            e.Provider == "soap"
+            && e.Operation == "submit"
+            && e.EnclosingSymbolId!.Contains("LockZoo.SubmitUnderLock", StringComparison.Ordinal)
+        );
+    }
 }
