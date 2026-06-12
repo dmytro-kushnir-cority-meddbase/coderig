@@ -37,6 +37,8 @@ public static class CliApplication
     // The command switch.
     private static async Task<int> DispatchAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
     {
+        if (HasUnknownFlag(args[0], args, error))
+            return 2;
         return args[0] switch
         {
             "index" => await RunIndexAsync(args, output, error, workingDirectory),
@@ -1907,6 +1909,65 @@ public static class CliApplication
     {
         var index = Array.IndexOf(args, name);
         return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
+    }
+
+    // The flags each command accepts. Option VALUES never start with "--" for any rig command
+    // (patterns, paths, ints, effect names), so any leading-"--" token that isn't listed here is a
+    // genuine typo or wrong name — rejected up front rather than silently ignored. (This is what bit
+    // `tree --depth 4`: --depth was unknown, dropped, and the tree rendered unbounded.)
+    private static readonly Dictionary<string, string[]> KnownFlagsByCommand = new(StringComparer.Ordinal)
+    {
+        ["index"] = ["--rules", "--identity", "--from", "--parallelism", "--durable"],
+        ["mine"] = ["--from", "--rules", "--identity", "--parallelism"],
+        ["runs"] = [],
+        ["di"] = [],
+        ["graph"] = [],
+        ["profile"] = [],
+        ["files"] = ["--skipped"],
+        ["symbols"] = ["--kind", "--limit"],
+        ["refs"] = ["--first-party", "--kind", "--limit"],
+        ["path"] = ["--async", "--maxdepth", "--depth"],
+        ["reaches"] = ["--async", "--rules", "--maxdepth", "--depth", "--format", "--raw", "--only", "--exclude"],
+        ["tree"] =
+        [
+            "--full",
+            "--summary",
+            "--effects",
+            "--async",
+            "--raw",
+            "--files",
+            "--signatures",
+            "--sig",
+            "--rules",
+            "--maxdepth",
+            "--depth",
+            "--only",
+            "--exclude",
+        ],
+        ["callers"] = ["--roots", "--entrypoints", "--async", "--rules", "--maxdepth", "--depth"],
+        ["derive"] = ["--limit", "--rules", "--only", "--exclude", "--format"],
+        ["dead"] = ["--limit", "--lib", "--include-dispatch", "--all", "--format", "--rules", "--root"],
+    };
+
+    // Reject the first unrecognised --flag for the command (--help/--version always allowed). Commands
+    // with no registered flag set are not guarded. Returns true (and prints guidance) on a bad flag.
+    private static bool HasUnknownFlag(string command, string[] args, TextWriter error)
+    {
+        if (!KnownFlagsByCommand.TryGetValue(command, out var known))
+            return false;
+        foreach (var a in args.Skip(1))
+        {
+            if (a.Length <= 2 || a[0] != '-' || a[1] != '-') // positional, value, or bare "--"
+                continue;
+            if (a is "--help" or "--version" || known.Contains(a))
+                continue;
+            error.WriteLine($"Unknown option '{a}' for 'rig {command}'.");
+            if (known.Length > 0)
+                error.WriteLine($"  Accepted: {string.Join(" ", known)}");
+            error.WriteLine("  Run `rig --help` for usage.");
+            return true;
+        }
+        return false;
     }
 
     // --maxdepth defaults to UNBOUNDED (int.MaxValue) — traversal runs to its natural frontier (the
