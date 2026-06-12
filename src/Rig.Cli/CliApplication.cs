@@ -1140,6 +1140,9 @@ public static class CliApplication
         // An async handoff hop (only present under --async): mark the cross-thread boundary.
         var handoff = node.EdgeKind == "handoff" ? $" ⤳handoff via {ShortName(node.HandoffVia)} [cross_thread]" : "";
         var loop = node.LoopKind is null ? "" : $" 🔁[{ShortLoop(node.LoopDetail)}]";
+        // Identical sibling edges collapsed under one parent (e.g. a generic method called once per
+        // type-arg): show the call-site count rather than N repeated "↺seen" lines.
+        var calls = node.CallSites > 1 ? $" ×{node.CallSites} calls" : "";
         var seen = node.Truncated ? " ↺seen" : "";
         // Opaque-type render rule: a matching non-root node is drawn as a leaf — its own effects still
         // print, but its subtree is suppressed (the type's internals aren't worth expanding).
@@ -1167,7 +1170,7 @@ public static class CliApplication
                 ? $"  📄 {ShortenPath(l.File)}:{l.Line}"
                 : "";
         var name = PrettyGenericName(ShortName(node.SymbolId)) + (signatures ? ShortSignature(node.SymbolId) : "");
-        var label = $"{name}{dispatch}{handoff}{loop}{seen}{opaqueTag}{cutTag}{fx}{loc}";
+        var label = $"{name}{dispatch}{handoff}{loop}{calls}{seen}{opaqueTag}{cutTag}{fx}{loc}";
         output.WriteLine(isRoot ? label : $"{prefix}{(isLast ? "└─ " : "├─ ")}{label}");
 
         if (opaque is not null)
@@ -1313,7 +1316,9 @@ public static class CliApplication
     {
         if (args.Length < 2 || args[1].StartsWith("--", StringComparison.Ordinal))
         {
-            error.WriteLine("Usage: rig callers <toPattern> [--roots|--entrypoints] [--async] [--rules <path>...] [--maxdepth|--depth <n>]");
+            error.WriteLine(
+                "Usage: rig callers <toPattern> [--roots|--entrypoints] [--async] [--rules <path>...] [--maxdepth|--depth <n>]"
+            );
             return 2;
         }
         var toPattern = args[1];

@@ -230,7 +230,12 @@ public sealed record TraceNode(
     // Provenance of the dispatch edge that reached this node from its parent: "roslyn" (exact mined
     // fact) or "heuristic" (name/arity CHA fallback). Null for non-dispatch edges. The tree renderer
     // marks heuristic hops («impl-dispatch ~heuristic») so the user knows the hop was inferred.
-    string? DispatchBasis = null
+    string? DispatchBasis = null,
+    // Number of distinct call sites under the SAME parent that resolve to this identical edge (same
+    // callee + edge kind + loop + handoff + fan-out + basis). A generic method or bodied accessor
+    // invoked N times from one parent collapses to a single child carrying N, instead of 1 expansion
+    // + N-1 "↺seen" duplicate leaves. 1 for an ordinary single-call edge.
+    int CallSites = 1
 );
 
 // A method handed off as a delegate (method-group) — a deferred/background entry point the

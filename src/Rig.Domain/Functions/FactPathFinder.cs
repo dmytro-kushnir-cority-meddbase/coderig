@@ -574,6 +574,24 @@ public static class FactPathFinder
 
             foreach (var s in Successors(n.Symbol, index, n.Receiver, n.Binding, mode))
             {
+                // Collapse identical sibling edges: a generic method or bodied accessor called N times
+                // under one parent resolves to one symbol → N edges that would render byte-identically
+                // (1 expansion + N-1 "↺seen"). Fold them into a single kid carrying a call-site count.
+                // Keyed on every field that affects the rendered line so only true duplicates merge.
+                var dup = n.Kids.FirstOrDefault(k =>
+                    k.Symbol == s.Node
+                    && k.EdgeKind == s.Kind
+                    && k.LoopKind == s.LoopKind
+                    && k.LoopDetail == s.LoopDetail
+                    && k.HandoffVia == s.HandoffVia
+                    && k.Fanout == s.Fanout
+                    && k.DispatchBasis == s.Basis
+                );
+                if (dup is not null)
+                {
+                    dup.CallSites++;
+                    continue;
+                }
                 var kid = new MutableNode(
                     s.Node,
                     s.Kind,
@@ -610,6 +628,10 @@ public static class FactPathFinder
         public readonly string? Receiver;
         public readonly IReadOnlyCollection<string>? Binding;
         public bool Truncated;
+
+        // Distinct call sites under this node's parent that produced an identical edge (collapsed
+        // siblings). Bumped instead of adding a duplicate kid; rendered as "×N calls".
+        public int CallSites = 1;
         public readonly List<MutableNode> Kids = new List<MutableNode>();
 
         public MutableNode(
@@ -650,7 +672,8 @@ public static class FactPathFinder
                 Truncated: true,
                 Fanout: n.Fanout,
                 HandoffVia: n.HandoffVia,
-                DispatchBasis: n.DispatchBasis
+                DispatchBasis: n.DispatchBasis,
+                CallSites: n.CallSites
             );
 
         var children = n.Kids.Count == 0 ? EmptyNodes : (IReadOnlyList<TraceNode>)n.Kids.Select(ToTraceNode).ToArray();
@@ -662,7 +685,8 @@ public static class FactPathFinder
             children,
             Fanout: n.Fanout,
             HandoffVia: n.HandoffVia,
-            DispatchBasis: n.DispatchBasis
+            DispatchBasis: n.DispatchBasis,
+            CallSites: n.CallSites
         );
     }
 
