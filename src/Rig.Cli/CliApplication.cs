@@ -799,12 +799,22 @@ public static class CliApplication
         var cutRules = raw
             ? Array.Empty<FactTraversalCutRule>()
             : FactTraversalCutRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var contextRules = raw
+            ? Array.Empty<FactContextDispatchRule>()
+            : FactContextDispatchRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
 
         await using var context = OpenReadContext(workingDirectory);
 
         var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, handoffRules, factoryRules);
         var graph = inputs.Graph;
-        var reachable = FactPathFinder.ReachesWithFanout(graph, fromPattern, maxDepth, mode: mode, cutRules: cutRules);
+        var reachable = FactPathFinder.ReachesWithFanout(
+            graph,
+            fromPattern,
+            maxDepth,
+            mode: mode,
+            cutRules: cutRules,
+            contextRules: contextRules
+        );
 
         var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
@@ -957,12 +967,17 @@ public static class CliApplication
         var cutRules = raw
             ? Array.Empty<FactTraversalCutRule>()
             : FactTraversalCutRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        // Context-bound dispatch rules: narrow a context-interface's fan-out to the enclosing context's
+        // family (e.g. IWorkflowState dispatch -> only the controller's own states). `--raw` bypasses.
+        var contextRules = raw
+            ? Array.Empty<FactContextDispatchRule>()
+            : FactContextDispatchRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
 
         await using var context = OpenReadContext(workingDirectory);
 
         var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, handoffRules, factoryRules);
         var graph = inputs.Graph;
-        var roots = FactPathFinder.BuildTree(graph, fromPattern, maxDepth, mode: mode, cutRules: cutRules);
+        var roots = FactPathFinder.BuildTree(graph, fromPattern, maxDepth, mode: mode, cutRules: cutRules, contextRules: contextRules);
         if (roots.Count == 0)
         {
             output.WriteLine($"No symbol matches '{fromPattern}'.");

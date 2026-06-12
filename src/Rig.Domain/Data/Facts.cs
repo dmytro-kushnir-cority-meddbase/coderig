@@ -334,6 +334,20 @@ public sealed record FactTraversalCutRule(string Pattern, string Label)
 // overloads whose arity matches the factory call's, falling back to keeping the edge when none resolve.
 public sealed record FactGenericFactoryRule(string Method, int ConstructArgIndex, string TargetMethod);
 
+// A context-bound interface-dispatch rule (codebase-specific, data-driven). Some interfaces are
+// implemented only by types each bound to a "context" type via a generic base `BindingBase<C>`, and a
+// field of the interface type on a context object can only ever hold an impl bound to THAT context.
+// E.g. IWorkflowState is implemented by state classes `AgedState : WorkflowStateBase<InvoiceDebtChase
+// .Controller>`, and an InvoiceDebtChase.Controller's `State` field only ever holds InvoiceDebtChase
+// states. A naive interface dispatch of `this.State.RegisterEvents()` fans to ALL ~14 state impls
+// across unrelated workflows; this rule narrows it to the states bound to the ENCLOSING controller.
+// `Interface` and `BindingBase` are matched as DocID substrings (e.g. "IWorkflowState",
+// "WorkflowStateBase"); the controller type is recovered from the `BindingBase{C}` base edge's type
+// argument. Recall-safe: narrowing applies only when the carried controller is a known context type
+// with a non-empty family, else the full CHA fan-out stands (so an impl reached without a matching
+// context is never wrongly dropped).
+public sealed record FactContextDispatchRule(string Interface, string BindingBase);
+
 // An invocation reference fact, with the enrichment fed to the stage-2 effect/observation derivers
 // (P1a–P1c). Replaces the positional tuple that grew past readability. Receiver/FirstArgument feed
 // resource resolution (P2a); the Enclosing* fields feed the observation deriver (P2b).

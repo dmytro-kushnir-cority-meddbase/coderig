@@ -38,10 +38,11 @@ public static class FactPathFinder
         string fromPattern,
         string toPattern,
         int maxDepth = 20,
-        TraversalMode mode = TraversalMode.SyncCut
+        TraversalMode mode = TraversalMode.SyncCut,
+        IReadOnlyList<FactContextDispatchRule>? contextRules = null
     )
     {
-        var index = BuildIndex(graph);
+        var index = BuildIndex(graph, contextRules: contextRules);
 
         // Parent links carry the edge that reached the node (for path + kind reconstruction),
         // including its enclosing-loop context so the reconstructed path can mark looped hops, the
@@ -175,10 +176,11 @@ public static class FactPathFinder
         int maxNodes = 20000,
         bool narrowDispatch = true,
         TraversalMode mode = TraversalMode.SyncCut,
-        IReadOnlyList<FactTraversalCutRule>? cutRules = null
+        IReadOnlyList<FactTraversalCutRule>? cutRules = null,
+        IReadOnlyList<FactContextDispatchRule>? contextRules = null
     )
     {
-        var index = BuildIndex(graph, narrowDispatch);
+        var index = BuildIndex(graph, narrowDispatch, contextRules);
         if (cutRules is { Count: > 0 })
         {
             index.TraversalCutRules = cutRules;
@@ -523,10 +525,11 @@ public static class FactPathFinder
         int maxDepth = 20,
         int maxNodes = 20000,
         TraversalMode mode = TraversalMode.SyncCut,
-        IReadOnlyList<FactTraversalCutRule>? cutRules = null
+        IReadOnlyList<FactTraversalCutRule>? cutRules = null,
+        IReadOnlyList<FactContextDispatchRule>? contextRules = null
     )
     {
-        var index = BuildIndex(graph);
+        var index = BuildIndex(graph, contextRules: contextRules);
         if (cutRules is { Count: > 0 })
         {
             index.TraversalCutRules = cutRules;
@@ -974,9 +977,30 @@ public static class FactPathFinder
                     return true;
             return false;
         }
+
+        // Context-bound interface dispatch (state-family narrowing). ContextInterfacePatterns holds the
+        // configured interface substrings (e.g. "IWorkflowState"); StateFamilyByController maps a context
+        // type (a "controller", normalised "T:"+stripped) to the concrete impl types bound to it via the
+        // BindingBase{C} base edge (e.g. all InvoiceDebtChase state types). Empty unless a context-dispatch
+        // rule is supplied. Used in Successors (carry the controller across the interface call) and
+        // DispatchTargets (narrow the impl fan-out to the controller's family).
+        public IReadOnlyList<string> ContextInterfacePatterns = [];
+        public readonly Dictionary<string, HashSet<string>> StateFamilyByController = new(StringComparer.Ordinal);
+
+        public bool IsContextInterface(string typeId)
+        {
+            foreach (var pattern in ContextInterfacePatterns)
+                if (typeId.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            return false;
+        }
     }
 
-    private static GraphIndex BuildIndex(FactGraphData graph, bool narrowDispatch = true)
+    private static GraphIndex BuildIndex(
+        FactGraphData graph,
+        bool narrowDispatch = true,
+        IReadOnlyList<FactContextDispatchRule>? contextRules = null
+    )
     {
         var index = new GraphIndex { NarrowDispatch = narrowDispatch };
         foreach (var edge in graph.CallEdges)
@@ -1005,6 +1029,7 @@ public static class FactPathFinder
         index.StrippedBaseEdges = TypeClosure.BuildBaseEdgeLookup(
             (graph.BaseEdges ?? new List<BaseEdge>()).Select(e => (e.SubType, e.BaseType))
         );
+        BuildContextFamilies(index, graph, contextRules);
         foreach (var fact in graph.MinedDispatch ?? new List<DispatchFact>())
         {
             if (!index.MinedDispatchBySource.TryGetValue(fact.SourceMember, out var list))
@@ -1015,6 +1040,65 @@ public static class FactPathFinder
         foreach (var method in graph.Methods)
             index.Nodes.Add(method.SymbolId);
         return index;
+    }
+
+    // Builds the context-bound dispatch maps from the configured rules: for each base edge of the form
+    // `S --base--> BindingBase{C}` (the binding base matched by substring), bind the impl S — and every
+    // transitive subtype of S — to the context type C. So a dispatch of a context-interface member carried
+    // with controller C narrows to exactly the family { S, descendants(S) } per C. No rules => no-op.
+    private static void BuildContextFamilies(GraphIndex index, FactGraphData graph, IReadOnlyList<FactContextDispatchRule>? rules)
+    {
+        if (rules is not { Count: > 0 })
+            return;
+        index.ContextInterfacePatterns = rules.Select(r => r.Interface).Distinct(StringComparer.Ordinal).ToArray();
+
+        void Bind(string controllerKey, string stateTypeId)
+        {
+            if (!index.StateFamilyByController.TryGetValue(controllerKey, out var family))
+                index.StateFamilyByController[controllerKey] = family = new HashSet<string>(StringComparer.Ordinal);
+            family.Add(stateTypeId);
+        }
+
+        foreach (var edge in graph.BaseEdges ?? new List<BaseEdge>())
+        foreach (var rule in rules)
+        {
+            if (edge.BaseType.IndexOf(rule.BindingBase, StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+            var contextArg = ExtractGenericArg(edge.BaseType);
+            if (contextArg is null)
+                continue;
+            var controllerKey = NormType(contextArg);
+            Bind(controllerKey, NormType(edge.SubType));
+            foreach (var descendant in Descendants(edge.SubType, index))
+                Bind(controllerKey, NormType(descendant));
+        }
+    }
+
+    // Normalised type key: a leading "T:" plus the generic-stripped name, matching the form ParseMethod
+    // type ids and Descendants results use, so context-family membership compares apples to apples.
+    private static string NormType(string typeId)
+    {
+        var body = typeId.StartsWith("T:", StringComparison.Ordinal) ? typeId.Substring(2) : typeId;
+        return "T:" + TypeClosure.StripGeneric(body);
+    }
+
+    // The first top-level generic argument of a DocID type, i.e. the X in "Ns.Base{X}" (DocID renders
+    // closed generics with braces). Null when there is no brace group. Honours nesting so "Base{A{B}}"
+    // returns "A{B}".
+    private static string? ExtractGenericArg(string typeId)
+    {
+        var open = typeId.IndexOf('{');
+        if (open < 0)
+            return null;
+        var depth = 0;
+        for (var i = open; i < typeId.Length; i++)
+        {
+            if (typeId[i] == '{')
+                depth++;
+            else if (typeId[i] == '}' && --depth == 0)
+                return typeId.Substring(open + 1, i - open - 1).Trim();
+        }
+        return null;
     }
 
     // Direct call edges + the interface->concrete DI dispatch hop (single shared definition so
@@ -1115,7 +1199,7 @@ public static class FactPathFinder
                     edge.LoopDetail,
                     0,
                     null,
-                    PropagateReceiver(incomingReceiver, edge, index),
+                    ContextControllerCarry(incomingReceiver, edge, index) ?? PropagateReceiver(incomingReceiver, edge, index),
                     null,
                     null,
                     outBinding
@@ -1222,6 +1306,24 @@ public static class FactPathFinder
     // to full CHA in ResolveNarrowRoot), so no real target is dropped.
     private static string? PropagateReceiver(string? incomingReceiver, CallEdge edge, GraphIndex index) =>
         IsSelfCall(incomingReceiver, edge, index) ? incomingReceiver : edge.ReceiverType;
+
+    // Context-bound dispatch carry: a call to a context-interface member (e.g. IWorkflowState.Register
+    // Events) loses the enclosing controller — its receiver is the interface-typed field (this.State),
+    // not `this`. But the carried concrete `this`-type IS the controller. When the carrier is a known
+    // controller (a context-family key), carry IT forward as the receiver so the interface dispatch
+    // narrows to the controller's own state family (DispatchTargets -> NarrowByContextFamily) instead of
+    // every implementer. Returns null (defer to PropagateReceiver) when the rule doesn't apply — recall-
+    // safe, since an unknown controller leaves the full CHA fan-out.
+    private static string? ContextControllerCarry(string? incomingReceiver, CallEdge edge, GraphIndex index)
+    {
+        if (incomingReceiver is null || index.StateFamilyByController.Count == 0)
+            return null;
+        var calleeType = ParseMethod(edge.Callee)?.TypeId;
+        if (calleeType is null || !index.IsContextInterface(calleeType))
+            return null;
+        var controllerKey = ReceiverToStrippedTypeId(incomingReceiver);
+        return controllerKey is not null && index.StateFamilyByController.ContainsKey(controllerKey) ? incomingReceiver : null;
+    }
 
     // True when `edge` is a call on the SAME object as the carrying frame (`this.M()` / `base.M()` /
     // implicit-`this` `M()`), given the carried concrete this-type `incomingReceiver`. Requires a known
@@ -1410,7 +1512,30 @@ public static class FactPathFinder
             }
         }
 
-        return NarrowByTypeArguments(targets, carriedBinding, index);
+        return NarrowByTypeArguments(NarrowByContextFamily(targets, receiverType, parsed.Value.TypeId, index), carriedBinding, index);
+    }
+
+    // Context-bound dispatch narrowing (state-family): when `method` is a context-interface member and the
+    // carried receiver is a known controller, keep only targets declared on a type in that controller's
+    // bound family (e.g. an InvoiceDebtChase.Controller's IWorkflowState dispatch -> only InvoiceDebtChase
+    // states, not the ~14 states across every workflow). Recall-safe: returns the input unchanged when no
+    // rule applies, the receiver isn't a known controller, or the filter would empty the target set.
+    private static List<(string Node, string Kind, string Basis)> NarrowByContextFamily(
+        List<(string Node, string Kind, string Basis)> targets,
+        string? receiverType,
+        string methodDeclaringTypeId,
+        GraphIndex index
+    )
+    {
+        if (index.StateFamilyByController.Count == 0 || receiverType is null || targets.Count <= 1)
+            return targets;
+        if (!index.IsContextInterface(methodDeclaringTypeId))
+            return targets;
+        var controllerKey = ReceiverToStrippedTypeId(receiverType);
+        if (controllerKey is null || !index.StateFamilyByController.TryGetValue(controllerKey, out var family))
+            return targets;
+        var filtered = targets.Where(t => ParseMethod(t.Node)?.TypeId is { } dt && family.Contains(NormType(dt))).ToList();
+        return filtered.Count > 0 ? filtered : targets;
     }
 
     // Generic-dispatch narrowing (monomorphization): given a fanned-out candidate set and the concrete

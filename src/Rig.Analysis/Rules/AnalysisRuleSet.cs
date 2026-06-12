@@ -38,7 +38,11 @@ internal sealed record AnalysisRuleSet(
     // Traversal-cut rules: nodes matching these patterns are emitted as leaves — their successors are
     // NOT walked. Unlike render rules (presentation-only), these stop the TRAVERSAL so deep infra
     // seams can't steal shallow direct-call expansions. `--raw` bypasses cuts. See FactTraversalCutRule.
-    IReadOnlyList<TraversalCutRule> TraversalCuts
+    IReadOnlyList<TraversalCutRule> TraversalCuts,
+    // Context-bound interface-dispatch rules: narrow a context-interface's dispatch fan-out to the impls
+    // bound (via a generic BindingBase<C>) to the ENCLOSING context type. Affects the call graph (tree /
+    // reaches). See FactContextDispatchRule.
+    IReadOnlyList<ContextDispatchRule> ContextDispatch
 )
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
@@ -147,6 +151,7 @@ internal sealed record AnalysisRuleSet(
             RenderOpaqueTypes = RenderOpaqueTypes.Concat(document.Render?.OpaqueTypes ?? []).ToArray(),
             GenericFactories = GenericFactories.Concat(document.GenericFactories ?? []).ToArray(),
             TraversalCuts = TraversalCuts.Concat(document.TraversalCuts ?? []).ToArray(),
+            ContextDispatch = ContextDispatch.Concat(document.ContextDispatch ?? []).ToArray(),
         };
     }
 
@@ -207,7 +212,8 @@ internal sealed record AnalysisRuleSet(
             document.Render?.CollapseSeams ?? [],
             document.Render?.OpaqueTypes ?? [],
             document.GenericFactories ?? [],
-            document.TraversalCuts ?? []
+            document.TraversalCuts ?? [],
+            document.ContextDispatch ?? []
         );
     }
 }
@@ -324,6 +330,11 @@ internal sealed record GenericFactoryRule(
     string? Id = null
 );
 
+// A context-bound interface-dispatch rule: impls of `Interface` are each bound to a context type via a
+// generic `BindingBase<C>` base, so the interface's dispatch narrows to the enclosing context's family.
+// Codebase-specific; projected to FactContextDispatchRule. `Reason`/`Id` are documentation only.
+internal sealed record ContextDispatchRule(string Interface, string BindingBase, string? Reason = null, string? Id = null);
+
 internal sealed record DiRegistrationRule(IReadOnlyList<string> Methods, string Lifetime, string RegistrationKind, string Reason)
 {
     public bool Matches(string methodName)
@@ -380,6 +391,9 @@ internal sealed class AnalysisRulesDocument
 
     // Top-level key "traversalCuts": list of {pattern, label, id?, reason?} cut rules.
     public List<TraversalCutRule>? TraversalCuts { get; set; }
+
+    // Top-level key "contextDispatch": list of {interface, bindingBase, id?, reason?} rules.
+    public List<ContextDispatchRule>? ContextDispatch { get; set; }
 }
 
 // `render` rule section — codebase-specific `rig tree` presentation rules (collapse fan-out hubs,
