@@ -339,6 +339,28 @@ public static class Reads
         return new FactGraphData(classifiedEdges, implEdges, methods, baseEdges, minedDispatch);
     }
 
+    // Call SITES (EnclosingSymbolId, FilePath, Line) that contain an EVENT read — a "read" ref whose
+    // target is an event (DocID "E:" prefix). A `someEvent += Handler` records both the event read and
+    // the handler method-group at one site, so intersecting these sites with method-group edges
+    // identifies event subscriptions (FactPathFinder.MarkEventSubscriptionHandoffs). Cheap: events are
+    // few. Used at query time so the handler subtree is treated as a deferred handoff, not a sync call.
+    public static async Task<ISet<(string Caller, string FilePath, int Line)>> EventSubscriptionSitesAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var rows = await context
+            .ReferenceFacts.Where(r => r.EnclosingSymbolId != null && r.RefKind == "read" && r.TargetSymbolId.StartsWith("E:"))
+            .Select(r => new
+            {
+                r.EnclosingSymbolId,
+                r.FilePath,
+                r.Line,
+            })
+            .ToArrayAsync(cancellationToken);
+        return rows.Select(r => (r.EnclosingSymbolId!, r.FilePath, r.Line)).ToHashSet();
+    }
+
     // Loads the exact Roslyn-mined dispatch facts (dispatch_facts) into FactGraphData.MinedDispatch.
     // Probed (not assumed): a store indexed before dispatch facts existed has no table — return null
     // so FactPathFinder degrades to the pre-mining name/arity CHA (flagged heuristic) instead of

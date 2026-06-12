@@ -807,6 +807,8 @@ public static class CliApplication
 
         var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, handoffRules, factoryRules);
         var graph = inputs.Graph;
+        if (!raw)
+            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
         var reachable = FactPathFinder.ReachesWithFanout(
             graph,
             fromPattern,
@@ -977,6 +979,10 @@ public static class CliApplication
 
         var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, handoffRules, factoryRules);
         var graph = inputs.Graph;
+        // Event subscriptions (`someEvent += Handler`) are deferred handlers, not synchronous calls —
+        // mark them as handoffs so the sync tree doesn't expand the handler as if RegisterEvents ran it.
+        if (!raw)
+            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
         var roots = FactPathFinder.BuildTree(graph, fromPattern, maxDepth, mode: mode, cutRules: cutRules, contextRules: contextRules);
         if (roots.Count == 0)
         {

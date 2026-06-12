@@ -313,6 +313,38 @@ public static class FactPathFinder
     // generic-dispatch narrowing remains the fallback there. Pure: returns a new FactGraphData with the
     // rewritten edges; Methods and type-relation edges are unchanged. Applied once after graph load so
     // tree / reaches / callers all see the collapsed graph.
+    // Marks event-subscription method-group edges (`someEvent += Handler`) as async HANDOFFS, so the
+    // synchronous traversal does NOT walk the handler as if it ran at subscription time — it runs later,
+    // when the event is raised (the deferred-handler semantics, same as a background/timer dispatcher).
+    // The subscription site is identified GENERICALLY (C# semantics, not codebase data): a `methodGroup`
+    // edge co-located (same Caller/File/Line) with an event read — a "read" ref whose target is an event
+    // (DocID "E:" prefix). A raise (`MyEvent?.Invoke`) reads the event too but has no co-located method-
+    // group, so only real += / -= subscriptions match. Reclassified edges are sync-cut by default and
+    // walked under --async (tagged "⤳ via event"). Pure: returns a new graph; --raw skips this entirely.
+    public static FactGraphData MarkEventSubscriptionHandoffs(
+        FactGraphData graph,
+        ISet<(string Caller, string FilePath, int Line)> eventSites
+    )
+    {
+        if (eventSites.Count == 0)
+            return graph;
+        var changed = false;
+        var rewritten = new List<CallEdge>(graph.CallEdges.Count);
+        foreach (var e in graph.CallEdges)
+        {
+            if (e.Kind == "methodGroup" && eventSites.Contains((e.Caller, e.FilePath, e.Line)))
+            {
+                rewritten.Add(e with { Kind = "handoff", HandoffDispatcher = e.HandoffDispatcher ?? "event" });
+                changed = true;
+            }
+            else
+            {
+                rewritten.Add(e);
+            }
+        }
+        return changed ? graph with { CallEdges = rewritten } : graph;
+    }
+
     public static FactGraphData RewriteGenericFactories(FactGraphData graph, IReadOnlyList<FactGenericFactoryRule> rules)
     {
         if (rules.Count == 0)
