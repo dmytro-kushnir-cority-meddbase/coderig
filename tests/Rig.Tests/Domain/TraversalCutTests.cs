@@ -20,22 +20,17 @@ public sealed class TraversalCutTests
 
     // --- Task A regression: shallowest-first BFS expansion ---
 
-    // Build a graph where A->Noise (first in source order), Noise->Target (deep),
-    // AND A->Target (shallow, source-order AFTER Noise), with Target->Leaf.
-    // With DFS-first-source-order, Noise is expanded first so Target is expanded under Noise;
-    // when A->Target is reached, Target is already expanded and becomes ↺seen (its subtree is
-    // dropped, losing Leaf). BFS expands A's children in source order (Noise at line 10, Target
-    // at line 20) but at the SAME DEPTH — so both are enqueued at depth 1. When Target is dequeued,
-    // it has not been expanded yet (only Noise was expanded at depth 1 since it comes first), so
-    // Target IS expanded under A as a direct child, and Noise->Target becomes ↺seen.
-    // Wait — actually let me be precise: BFS processes A first, enqueues Noise (depth 1) and
-    // Target (depth 1) in source order. When Noise is dequeued first (FIFO), it's expanded and
-    // its child Target' (Noise->Target) is enqueued at depth 2. Then the ORIGINAL Target node at
-    // depth 1 is dequeued — since Target hasn't been expanded yet, it IS expanded here with Leaf.
-    // The Noise->Target kid (depth 2) is then dequeued but Target is already expanded -> Truncated.
-    // This proves shallowest-first: Target expands at A (depth 1), not at Noise (depth 2).
+    // A->Noise (first in source order), Noise->Target (deeper), AND A->Target (shallow, source-order
+    // AFTER Noise), with Target->Leaf. The tree is built DEPTH-FIRST in render (pre-order) order, so the
+    // FIRST occurrence of a shared symbol in top-to-bottom reading order is the one expanded and every
+    // later occurrence is the "↺seen" leaf — the marker always refers to a subtree shown ABOVE it.
+    // Here `Noise` (line 10) is walked before `Target` (line 20), so `Noise->Target` is the first-read
+    // occurrence and expands (carrying Leaf); the shallow `A->Target`, rendered afterwards, becomes
+    // ↺seen. (This supersedes the earlier breadth-first "shallowest occurrence expands" rule: that kept
+    // the subtree at the least-indented point but let a ↺seen under an earlier sibling read BEFORE its
+    // expansion. First-mention-expands is the top-to-down reading contract.)
     [Fact]
-    public void BFS_expands_target_at_shallow_depth_not_stolen_by_deep_noise_seam()
+    public void Tree_expands_the_first_occurrence_in_render_order_and_marks_later_ones_seen()
     {
         var graph = Graph(
             new CallEdge("M:A", "M:Noise", "invocation", "f.cs", 10),
@@ -49,21 +44,20 @@ public sealed class TraversalCutTests
         roots.Count.ShouldBe(1);
         var a = roots[0];
 
-        // A has both Noise and Target as direct children (BFS enqueues both at depth 1).
+        // A has both Noise and Target as direct children.
         a.Children.ShouldContain(c => c.SymbolId == "M:Noise");
         a.Children.ShouldContain(c => c.SymbolId == "M:Target");
         var noise = a.Children.First(c => c.SymbolId == "M:Noise");
         var target = a.Children.First(c => c.SymbolId == "M:Target");
 
-        // Target is expanded at A (shallow depth 1) — it has Leaf as its child.
-        target.Truncated.ShouldBeFalse();
-        target.Children.ShouldContain(c => c.SymbolId == "M:Leaf");
-
-        // Noise->Target is ↺seen because Target was already expanded at A (shallower depth).
-        noise.Children.ShouldContain(c => c.SymbolId == "M:Target");
+        // Noise->Target is the FIRST occurrence in render order -> expanded, carrying Leaf.
         var noiseToTarget = noise.Children.First(c => c.SymbolId == "M:Target");
-        noiseToTarget.Truncated.ShouldBeTrue();
-        noiseToTarget.Children.ShouldBeEmpty();
+        noiseToTarget.Truncated.ShouldBeFalse();
+        noiseToTarget.Children.ShouldContain(c => c.SymbolId == "M:Leaf");
+
+        // The shallow A->Target, rendered AFTER, is the ↺seen leaf (points up to the expansion above).
+        target.Truncated.ShouldBeTrue();
+        target.Children.ShouldBeEmpty();
     }
 
     // --- Task B: traversal-cut rules ---

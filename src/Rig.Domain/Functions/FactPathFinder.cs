@@ -575,20 +575,26 @@ public static class FactPathFinder
         // Receiver/Binding are the narrowing contexts inherited from the edge that enqueued this node,
         // passed into Successors when this node is expanded so its own dispatch is narrowed correctly.
         var mutableRoots = new List<MutableNode>();
-        var queue = new Queue<MutableNode>();
+        // DEPTH-FIRST, PRE-ORDER traversal (a stack, children pushed in reverse so they pop in render
+        // order). This makes `expanded` fill in exactly top-to-bottom reading order, so the FIRST visual
+        // occurrence of a shared symbol is the one expanded and every LATER occurrence is the "↺seen"
+        // leaf — the marker always refers to a subtree already shown ABOVE it. (A breadth-first walk
+        // expanded whichever occurrence was shallowest, which could render BELOW a deeper twin, leaving
+        // the "↺seen" reading before its expansion.)
+        var stack = new Stack<MutableNode>();
 
         foreach (var root in index.Nodes.Where(n => Contains(n, fromPattern)).OrderBy(n => n, StringComparer.Ordinal))
         {
-            if (budget <= 0)
-                break;
             var node = new MutableNode(root, "entry", null, null, 0, null, null, 0, null, null);
             mutableRoots.Add(node);
-            queue.Enqueue(node);
         }
+        // Push roots reversed so the first root's whole subtree is walked before the next root's.
+        for (var i = mutableRoots.Count - 1; i >= 0; i--)
+            stack.Push(mutableRoots[i]);
 
-        while (queue.Count > 0 && budget > 0)
+        while (stack.Count > 0 && budget > 0)
         {
-            var n = queue.Dequeue();
+            var n = stack.Pop();
             budget--;
 
             // Already expanded elsewhere (cycle / shared callee), at depth cap, or out of budget:
@@ -640,8 +646,12 @@ public static class FactPathFinder
                     s.OutBinding
                 );
                 n.Kids.Add(kid);
-                queue.Enqueue(kid);
             }
+
+            // Push this node's children reversed, so the first child (render order) is popped — and thus
+            // expanded — next: a pre-order depth-first walk.
+            for (var i = n.Kids.Count - 1; i >= 0; i--)
+                stack.Push(n.Kids[i]);
         }
 
         return mutableRoots.Select(ToTraceNode).ToArray();
@@ -1251,11 +1261,16 @@ public static class FactPathFinder
         );
         var degree = dispatch.Count;
         // Dispatch SEEDS the concrete `this`-type for the target frame: resolving a virtual/interface call
-        // to `Bar.M` means the object IS a `Bar`, so the method runs with `this` : Bar. Carry that target's
-        // DECLARING type forward as the receiver (instead of null) so the dispatched-to method's own
-        // `this`-virtual self-calls narrow to it — the seed the self-call propagation then threads down.
-        // This is what collapses the post-impl-dispatch fan-outs (e.g. `Master.SetInvoiceSettings` resolved
-        // by impl-dispatch, whose inner `this.ProvideRoles()` otherwise CHA-fanned to every workflow Master).
+        // to `Bar.M` means the object IS a `Bar`, so the method runs with `this` : Bar — seed that so the
+        // dispatched-to method's own `this`-virtual self-calls narrow (collapsing post-impl-dispatch
+        // fan-outs, e.g. `Master.SetInvoiceSettings` whose inner `this.ProvideRoles()` would otherwise
+        // CHA-fan to every workflow Master). The seed is the MORE-DERIVED of the incoming concrete receiver
+        // and the target's declaring type: when the receiver that reached `current` is a subtype of the
+        // override's declaring type (a virtual call on a concrete object that INHERITS the override — e.g.
+        // a specific Cache reaching the inherited Cache.GetResults), that concrete type is the real `this`,
+        // so carrying it lets the NEXT dispatch (Cache.GetResult) narrow instead of seeding the less-derived
+        // declaring type and CHA-fanning. Falls back to the declaring type for interface/abstract dispatch
+        // where the incoming receiver isn't a concrete subtype (the original behaviour).
         foreach (var d in dispatch)
             yield return (
                 d.Node,
@@ -1266,11 +1281,27 @@ public static class FactPathFinder
                 null,
                 degree,
                 current,
-                DeclaringTypeDisplay(d.Node),
+                SeedReceiver(incomingReceiver, d.Node, index),
                 null,
                 d.Basis,
                 incomingBinding
             );
+    }
+
+    // The `this`-type to carry into a dispatched-to method `targetMethod`: the incoming concrete receiver
+    // when it is the override's declaring type or a SUBTYPE of it (the precise runtime object, more derived
+    // than the declaring type), otherwise the target's declaring type. Keeps the existing declaring-type
+    // seed for interface/abstract dispatch (incoming receiver null / an interface / an unrelated type).
+    private static string? SeedReceiver(string? incomingReceiver, string targetMethod, GraphIndex index)
+    {
+        var declDisplay = DeclaringTypeDisplay(targetMethod);
+        if (incomingReceiver is null || declDisplay is null)
+            return declDisplay;
+        var inStripped = ReceiverToStrippedTypeId(incomingReceiver);
+        var declStripped = ReceiverToStrippedTypeId(declDisplay);
+        if (inStripped is null || declStripped is null)
+            return declDisplay;
+        return AncestorOrEqual(declStripped, inStripped, index) ? incomingReceiver : declDisplay;
     }
 
     // The display-FQN form of a method's declaring type ("M:Ns.Bar.M(..)" -> "Ns.Bar"), as ResolveNarrowRoot
@@ -1451,13 +1482,9 @@ public static class FactPathFinder
         // dispatch restricts to {narrowRoot} ∪ descendants(narrowRoot) instead of every candidate.
         var narrowRoot = ResolveNarrowRoot(receiverType, parsed.Value.TypeId, index);
 
-        bool InScope(string targetMethodId)
-        {
-            if (narrowRoot is null)
-                return true;
-            var targetType = ParseMethod(targetMethodId)?.TypeId;
-            return targetType is not null && InNarrowSubtree(targetType, narrowRoot, index);
-        }
+        // Candidates are collected receiver-BLIND below; receiver-type devirtualization is applied once,
+        // as a set, by NarrowByReceiver at the end (a per-candidate filter can't tell an INHERITED
+        // ancestor override — keep — from a SHADOWED one — drop — since that is a property of the set).
 
         // 1. Mined facts: forward closure from `method`. hasMined reflects whether ANY mined edge
         // leaves the closure (pre-narrowing) — when true, the member correspondence is known exactly
@@ -1478,8 +1505,8 @@ public static class FactPathFinder
                     if (!visited.Add(target))
                         continue;
                     hasMined = true;
-                    stack.Push(target); // walk through narrowed-out intermediates to their subtypes
-                    if (InScope(target) && seen.Add(target))
+                    stack.Push(target); // walk the whole closure; NarrowByReceiver trims at the end
+                    if (seen.Add(target))
                         targets.Add((target, kind == "impl" ? "impl-dispatch" : "override-dispatch", "roslyn"));
                 }
             }
@@ -1489,10 +1516,6 @@ public static class FactPathFinder
         {
             foreach (var impl in impls)
             {
-                // Receiver narrowing for interface dispatch: when the receiver resolves to a concrete
-                // type, only that type (and its subtypes) can be the runtime impl — skip the others.
-                if (narrowRoot is not null && !InNarrowSubtree(impl, narrowRoot, index))
-                    continue;
                 if (!index.MethodsByStrippedType.TryGetValue(TypeClosure.StripGeneric(impl), out var implMethods))
                     continue;
                 foreach (var concrete in implMethods)
@@ -1526,10 +1549,10 @@ public static class FactPathFinder
             // also reaches the SAME-named OVERRIDE on every (transitive) subtype. This is what makes an
             // abstract [ClientAction] (or framework virtual like OnSave) reach the effects in its
             // concrete override. Gated on IsOverride so it doesn't dispatch to unrelated same-named
-            // (hidden) methods. When the receiver narrows, scan only the receiver's subtree (its own
-            // override + its subtypes') instead of every descendant of the declaring base.
-            var subtree = narrowRoot is not null ? NarrowSubtree(narrowRoot, index) : Descendants(parsed.Value.TypeId, index);
-            foreach (var sub in subtree)
+            // (hidden) methods. Scan every descendant of the declaring base receiver-blind; NarrowByReceiver
+            // trims to the receiver's dispatch line at the end (scanning the full set is what lets an
+            // inherited ancestor override be found — it lives between the abstract base and the receiver).
+            foreach (var sub in Descendants(parsed.Value.TypeId, index))
             {
                 if (!index.MethodsByStrippedType.TryGetValue(TypeClosure.StripGeneric(sub), out var subMethods))
                     continue;
@@ -1544,7 +1567,11 @@ public static class FactPathFinder
             }
         }
 
-        return NarrowByTypeArguments(NarrowByContextFamily(targets, receiverType, parsed.Value.TypeId, index), carriedBinding, index);
+        return NarrowByTypeArguments(
+            NarrowByContextFamily(NarrowByReceiver(targets, narrowRoot, index), receiverType, parsed.Value.TypeId, index),
+            carriedBinding,
+            index
+        );
     }
 
     // Context-bound dispatch narrowing (state-family): when `method` is a context-interface member and the
@@ -1673,13 +1700,51 @@ public static class FactPathFinder
         return false;
     }
 
-    // The narrowed dispatch subtree for a concrete receiver root: the root itself PLUS its transitive
-    // descendants (an override may live on the receiver's own type or any subtype of it).
-    private static HashSet<string> NarrowSubtree(string narrowRoot, GraphIndex index)
+    // Receiver-type devirtualization (applied to the receiver-blind candidate set as a whole): restrict
+    // dispatch to the runtime targets for a receiver that narrows to `narrowRoot`.
+    //   1. Keep candidates on the receiver's OWN subtree (root-or-descendant) — the receiver may be a
+    //      base reference to a subtype, so any subtype's override is a possible runtime target. If any
+    //      exist, that is the dispatch set (the receiver or a subtype overrides the member).
+    //   2. Otherwise the receiver INHERITS the member — keep the NEAREST ancestor override (the one it
+    //      actually runs), dropping SHADOWED further-up overrides and unrelated SIBLING branches (e.g. a
+    //      CacheFunc-derived receiver inherits CacheFunc.GetResults, never the sibling Cache.GetResults).
+    // Recall-safe: when neither yields a target (all candidates in unrelated branches — a suspect
+    // binding) the full set stands. Pure class/interface DESCENDANT GEOMETRY — matches on type identity /
+    // inheritance, never on generic type ARGUMENTS, so it is variance-agnostic (co/contravariance only
+    // affects assignability of variant interface refs, not which override a concrete receiver runs).
+    private static List<(string Node, string Kind, string Basis)> NarrowByReceiver(
+        List<(string Node, string Kind, string Basis)> targets,
+        string? narrowRoot,
+        GraphIndex index
+    )
     {
-        var set = new HashSet<string>(Descendants(narrowRoot, index), StringComparer.Ordinal) { narrowRoot };
-        return set;
+        if (narrowRoot is null || targets.Count <= 1)
+            return targets;
+
+        var subtree = targets.Where(t => ParseMethod(t.Node)?.TypeId is { } dt && InNarrowSubtree(dt, narrowRoot, index)).ToList();
+        if (subtree.Count > 0)
+            return subtree;
+
+        var ancestors = targets.Where(t => ParseMethod(t.Node)?.TypeId is { } dt && AncestorOrEqual(dt, narrowRoot, index)).ToList();
+        if (ancestors.Count == 0)
+            return targets; // no candidate on the receiver's line at all — suspect binding, keep CHA
+
+        // Among ancestor overrides, keep only the NEAREST to the receiver: one with no other ancestor
+        // candidate strictly between it and the receiver (i.e. not a strict ancestor of another kept one).
+        var nearest = ancestors
+            .Where(a =>
+                ParseMethod(a.Node)?.TypeId is { } ad
+                && !ancestors.Any(b => ParseMethod(b.Node)?.TypeId is { } bd && IsStrictAncestor(ad, bd, index))
+            )
+            .ToList();
+        return nearest.Count > 0 ? nearest : ancestors;
     }
+
+    // True when `ancestorType` is a STRICT (proper) base-edge ancestor of `descendantType` — ancestor
+    // of, and not the same (generic-stripped) type as, the descendant.
+    private static bool IsStrictAncestor(string ancestorType, string descendantType, GraphIndex index) =>
+        !string.Equals(TypeClosure.StripGeneric(ancestorType), TypeClosure.StripGeneric(descendantType), StringComparison.Ordinal)
+        && AncestorOrEqual(ancestorType, descendantType, index);
 
     private static bool InNarrowSubtree(string typeId, string narrowRoot, GraphIndex index)
     {
@@ -1701,12 +1766,23 @@ public static class FactPathFinder
     // descendant check keeps a non-descendant interface receiver on the CHA path.
     private static string? ReceiverToStrippedTypeId(string receiver)
     {
-        // Reject shapes that aren't first-party named dispatch types: anonymous/error types (leading
-        // '<'), nullable/pointer/tuple/by-ref shapes ('?' '*' ' '), and arrays ('['). These degrade to
-        // CHA via a null narrow-root.
+        // Anonymous/error type (leading '<') -> CHA.
+        if (receiver.Length == 0 || receiver[0] == '<')
+            return null;
+
+        // Remove generic argument LISTS at every nesting depth (balanced "<...>"), so a multi-arg
+        // ("Foo<A, B>") or nested-generic ("Outer<A, B>.Inner") receiver normalises to its bare dotted
+        // name ("Foo" / "Outer.Inner"). The display form renders type args as ", " (with a space) and
+        // can carry a ".Inner" suffix AFTER the ">", so a naive space-reject or substring-to-first-'<'
+        // both mishandled generic receivers — dropping narrowing for every generic type (e.g. the whole
+        // CacheBase<T,R> hierarchy). Done BEFORE the shape checks so generic-internal spaces/brackets
+        // (e.g. "Foo<int[], string>") don't disqualify an otherwise-named dispatch type.
+        receiver = RemoveGenericArguments(receiver);
+
+        // Reject the shapes that still aren't a first-party named dispatch type: nullable/pointer/by-ref/
+        // tuple (a residual space) and arrays ('['). These degrade to CHA via a null narrow-root.
         if (
             receiver.Length == 0
-            || receiver[0] == '<'
             || receiver.IndexOf('?') >= 0
             || receiver.IndexOf('*') >= 0
             || receiver.IndexOf('[') >= 0
@@ -1714,13 +1790,32 @@ public static class FactPathFinder
         )
             return null;
 
-        // Drop a generic argument list ("Foo<A,B>") down to the bare name, then strip the `n arity
-        // form too; the MethodsByStrippedType key is the generic-stripped DocID.
-        var angle = receiver.IndexOf('<');
-        if (angle > 0)
-            receiver = receiver.Substring(0, angle);
+        // Strip the `n arity form too; the MethodsByStrippedType key is the generic-stripped DocID.
         receiver = TypeClosure.StripGeneric(receiver);
         return receiver.Length == 0 ? null : "T:" + receiver;
+    }
+
+    // Removes every balanced "<...>" generic-argument list from a type display name, at any nesting
+    // depth, preserving the bare name and any nested-type suffix: "Outer<A, B>.Inner" -> "Outer.Inner".
+    private static string RemoveGenericArguments(string type)
+    {
+        if (type.IndexOf('<') < 0)
+            return type;
+        var sb = new System.Text.StringBuilder(type.Length);
+        var depth = 0;
+        foreach (var c in type)
+        {
+            if (c == '<')
+                depth++;
+            else if (c == '>')
+            {
+                if (depth > 0)
+                    depth--;
+            }
+            else if (depth == 0)
+                sb.Append(c);
+        }
+        return sb.ToString();
     }
 
     // Materialises EVERY synthetic dispatch edge in the graph — (sourceMethod -> targetMethod, kind,
