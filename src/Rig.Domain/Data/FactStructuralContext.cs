@@ -33,7 +33,9 @@ public static class FactStructuralContext
             return [];
 
         var result = new List<EnclosingInvocation>();
-        foreach (var entry in encoded.Split(ListSeparator))
+        // Guarded non-null above; netstandard2.0's string.IsNullOrEmpty lacks [NotNullWhen(false)],
+        // so the flow analysis can't see it — assert non-null rather than re-check.
+        foreach (var entry in encoded!.Split(ListSeparator))
         {
             var fields = entry.Split(FieldSeparator);
             if (fields.Length == 3)
@@ -46,5 +48,5 @@ public static class FactStructuralContext
     public static string? EncodeList(IReadOnlyList<string> values) =>
         values.Count == 0 ? null : string.Join(ListSeparator.ToString(), values);
 
-    public static IReadOnlyList<string> DecodeList(string? encoded) => string.IsNullOrEmpty(encoded) ? [] : encoded.Split(ListSeparator);
+    public static IReadOnlyList<string> DecodeList(string? encoded) => string.IsNullOrEmpty(encoded) ? [] : encoded!.Split(ListSeparator);
 }

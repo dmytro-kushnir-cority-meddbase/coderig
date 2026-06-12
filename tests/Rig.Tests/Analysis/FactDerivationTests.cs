@@ -292,7 +292,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         // Stage-1 facts must now carry the receiver's static type so the effect deriver can gate
         // receiverTypes on the real receiver instead of approximating it with the declaring type.
         var getMulti = result
-            .References.Where(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("GetMultiAsync", StringComparison.Ordinal))
+            .References!.Where(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("GetMultiAsync", StringComparison.Ordinal))
             .ToArray();
 
         getMulti.ShouldNotBeEmpty();
@@ -310,7 +310,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         // string_argument resource resolution) and its static type (for argument_type), so the
         // stage-2 effect deriver can resolve the same `resource` strings the Roslyn pass does (P2a).
         var submitBill = result
-            .References.Where(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("SubmitBill", StringComparison.Ordinal))
+            .References!.Where(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("SubmitBill", StringComparison.Ordinal))
             .ToArray();
 
         submitBill.ShouldNotBeEmpty();
@@ -326,7 +326,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var playground = await _playgrounds.EntryPointEffectsAsync();
         var result = playground.Result;
 
-        var invocations = result.References.Where(r => r.RefKind == "invocation").ToArray();
+        var invocations = result.References!.Where(r => r.RefKind == "invocation").ToArray();
 
         // looped_effect: TeamWorkflow.LoadTeamSummaryAsync reads redis inside a `foreach` —
         // `await _redis.StringGetAsync($"team:{relatedTeamId}")`. The fact must carry the nearest
@@ -360,7 +360,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
 
         // MinAPI: `app.MapGet("/minapi/teams/{id}", ...)` — already an invocation ref (P1a) carrying
         // its route literal (P1b). The fact-side MinAPI deriver (P2) reads method name + first-arg.
-        result.References.ShouldContain(r =>
+        result.References!.ShouldContain(r =>
             r.RefKind == "invocation"
             && r.TargetSymbolId.Contains("MapGet", StringComparison.Ordinal)
             && r.FirstArgumentTemplate == "/minapi/teams/{id}"
@@ -369,7 +369,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         // MVC: an attribute usage resolves to the attribute constructor and is recorded as a "ctor"
         // ref. P1d captures the attribute's first positional arg, exposing the route literals.
         // Controller-level `[Route("api/[controller]")]` enclosed by TeamsController:
-        result.References.ShouldContain(r =>
+        result.References!.ShouldContain(r =>
             r.RefKind == "ctor"
             && r.TargetSymbolId.Contains("RouteAttribute", StringComparison.Ordinal)
             && r.FirstArgumentTemplate == "api/[controller]"
@@ -378,7 +378,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         );
 
         // Method-level `[HttpGet("{id}")]`:
-        result.References.ShouldContain(r =>
+        result.References!.ShouldContain(r =>
             r.RefKind == "ctor"
             && r.TargetSymbolId.Contains("HttpGetAttribute", StringComparison.Ordinal)
             && r.FirstArgumentTemplate == "{id}"
