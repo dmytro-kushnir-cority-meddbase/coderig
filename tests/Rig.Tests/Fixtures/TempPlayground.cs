@@ -16,17 +16,11 @@ public sealed class TempPlayground : IDisposable
 
     public string SolutionPath { get; }
 
-    // Directory that holds the copied playground (and its rig.rules.json). Pass this to the
-    // fact rule providers (FactEntryPointRuleProvider / FactEffectRuleProvider) as the working
-    // directory so they pick up the playground's local rules.
     public string WorkingDirectory { get; }
 
     public static Task<TempPlayground> CreateEntryPointEffectsAsync() =>
         CreateAsync("EntryPointEffects", "EntryPointEffects.slnx", "rig-entrypoint-effects-");
 
-    // The net48 MedDBase-mimicking fixture: ClientPage pages, [ClientAction] actions,
-    // ServiceBase/IBackgroundProcess workers, LLBLGen entity ops, and the negative gate cases
-    // (a [ClientAction] method on a non-ClientPage ClientControl, a non-proxy ShowDialog).
     public static Task<TempPlayground> CreateLegacyNet48Async() =>
         CreateAsync("LegacyNet48Web", "LegacyNet48Web.slnx", "rig-legacy-net48-");
 

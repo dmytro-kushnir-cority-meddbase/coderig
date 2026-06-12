@@ -1,16 +1,12 @@
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Shouldly;
+using TUnit.Core;
 
 namespace Rig.Tests.Domain;
 
-// Unit tests for FactPathFinder.RewriteGenericFactories — generic-factory monomorphization at the
-// call edge. A call to a factory (e.g. Entity.New<Account,…>) with a CONCRETE construct type arg is
-// rewritten to point straight at the construct's method (Account.New), so the traversal skips the
-// generic plumbing the factory forwards through. Pure FactGraphData -> FactGraphData.
 public sealed class GenericFactoryRewriteTests
 {
-    // The factory + its plumbing, plus two constructs (Account, Company) each with New overloads.
     private static FactGraphData Graph(params CallEdge[] edges)
     {
         var methods = new[]
@@ -30,7 +26,7 @@ public sealed class GenericFactoryRewriteTests
     private static IReadOnlyList<string> Callees(FactGraphData g, string caller) =>
         g.CallEdges.Where(e => e.Caller == caller).Select(e => e.Callee).ToList();
 
-    [Fact]
+    [Test]
     public void Concrete_factory_call_is_rewritten_to_the_construct_method()
     {
         var g = Graph(
@@ -47,18 +43,16 @@ public sealed class GenericFactoryRewriteTests
         var rewritten = FactPathFinder.RewriteGenericFactories(g, [Rule]);
 
         var callees = Callees(rewritten, "M:N.Caller.Go");
-        callees.ShouldContain("M:N.Account.New(System.Int32)"); // pk=int -> the Int32 overload
-        callees.ShouldNotContain("M:N.Entity.New``3(``1)"); // factory edge replaced
-        callees.ShouldNotContain("M:N.Account.New(System.Guid)"); // pk-type disambiguation: not the Guid overload
-        callees.ShouldNotContain("M:N.Account.New(System.Int32,N.ITxn)"); // arity 2 — not matched
-        callees.ShouldNotContain("M:N.Company.New(System.Int32)"); // wrong construct
+        callees.ShouldContain("M:N.Account.New(System.Int32)");
+        callees.ShouldNotContain("M:N.Entity.New``3(``1)");
+        callees.ShouldNotContain("M:N.Account.New(System.Guid)");
+        callees.ShouldNotContain("M:N.Account.New(System.Int32,N.ITxn)");
+        callees.ShouldNotContain("M:N.Company.New(System.Int32)");
     }
 
-    [Fact]
+    [Test]
     public void Pk_type_disambiguates_same_arity_overloads()
     {
-        // pk = Guid -> Account.New(Guid), NOT Account.New(Int32) (both arity 1). This is the fix for the
-        // arity-only over-match (Account.New(Int32) showing under a New(Guid) caller).
         var g = Graph(
             new CallEdge(
                 "M:N.Caller.Go",
@@ -75,10 +69,9 @@ public sealed class GenericFactoryRewriteTests
         callees.ShouldBe(["M:N.Account.New(System.Guid)"]);
     }
 
-    [Fact]
+    [Test]
     public void Pk_keyword_matches_the_bcl_parameter_type()
     {
-        // The pk arg may render as a C# keyword ("int") while the overload param is "System.Int32".
         var g = Graph(
             new CallEdge("M:N.Caller.Go", "M:N.Entity.New``3(``1)", "invocation", "f.cs", 1, TypeArguments: "N.Account,int,N.AccountRecord")
         );
@@ -88,20 +81,19 @@ public sealed class GenericFactoryRewriteTests
         callees.ShouldBe(["M:N.Account.New(System.Int32)"]);
     }
 
-    [Fact]
+    [Test]
     public void Forwarded_type_parameter_is_left_intact_for_the_in_memory_fallback()
     {
-        // Inside a generic helper the type arg is a bare parameter token (no '.') — nothing to resolve.
         var g = Graph(
             new CallEdge("M:N.Caller.Go", "M:N.Entity.New``3(``1)", "invocation", "f.cs", 1, TypeArguments: "TConstruct,TPk,TRecord")
         );
 
         var rewritten = FactPathFinder.RewriteGenericFactories(g, [Rule]);
 
-        Callees(rewritten, "M:N.Caller.Go").ShouldBe(["M:N.Entity.New``3(``1)"]); // unchanged
+        Callees(rewritten, "M:N.Caller.Go").ShouldBe(["M:N.Entity.New``3(``1)"]);
     }
 
-    [Fact]
+    [Test]
     public void Non_factory_edges_are_untouched()
     {
         var g = Graph(new CallEdge("M:N.Caller.Go", "M:N.Account.New(System.Int32)", "invocation", "f.cs", 1));
@@ -111,10 +103,9 @@ public sealed class GenericFactoryRewriteTests
         Callees(rewritten, "M:N.Caller.Go").ShouldBe(["M:N.Account.New(System.Int32)"]);
     }
 
-    [Fact]
+    [Test]
     public void Unresolvable_construct_keeps_the_edge()
     {
-        // Concrete-looking but not a type with the target method in the graph -> keep the edge (sound).
         var g = Graph(
             new CallEdge(
                 "M:N.Caller.Go",
@@ -131,7 +122,7 @@ public sealed class GenericFactoryRewriteTests
         Callees(rewritten, "M:N.Caller.Go").ShouldBe(["M:N.Entity.New``3(``1)"]);
     }
 
-    [Fact]
+    [Test]
     public void No_rules_returns_the_same_graph()
     {
         var g = Graph(
@@ -148,11 +139,9 @@ public sealed class GenericFactoryRewriteTests
         FactPathFinder.RewriteGenericFactories(g, []).ShouldBeSameAs(g);
     }
 
-    [Fact]
+    [Test]
     public void Rewritten_edge_collapses_the_plumbing_in_the_tree()
     {
-        // End-to-end: Caller -> Entity.New<Account> -> (plumbing) Construct.New. After rewrite the tree
-        // goes Caller -> Account.New directly; the plumbing node is unreachable and absent.
         var methods = new[]
         {
             new MethodRef("M:N.Caller.Go", "Go", "T:N.Caller"),
@@ -170,7 +159,7 @@ public sealed class GenericFactoryRewriteTests
                 1,
                 TypeArguments: "N.Account,System.Int32,N.AccountRecord"
             ),
-            new CallEdge("M:N.Entity.New``3(``1)", "M:N.Construct.New", "invocation", "f.cs", 2), // plumbing
+            new CallEdge("M:N.Entity.New``3(``1)", "M:N.Construct.New", "invocation", "f.cs", 2),
         };
         var g = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods);
 
@@ -187,7 +176,7 @@ public sealed class GenericFactoryRewriteTests
         Walk(root);
 
         ids.ShouldContain("M:N.Account.New(System.Int32)");
-        ids.ShouldNotContain("M:N.Entity.New``3(``1)"); // plumbing bypassed
-        ids.ShouldNotContain("M:N.Construct.New"); // unreachable after rewrite
+        ids.ShouldNotContain("M:N.Entity.New``3(``1)");
+        ids.ShouldNotContain("M:N.Construct.New");
     }
 }

@@ -2,17 +2,12 @@ using System.Linq;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Shouldly;
+using TUnit.Core;
 
 namespace Rig.Tests.Domain;
 
-// Context-bound interface-dispatch narrowing: a context-interface (IState) implemented by types each
-// bound to a context (controller) via a generic base StateBase<C>. A dispatch of IState.RegisterEvents
-// from within a controller narrows to that controller's OWN state family, not every implementer.
-// Mirrors the meddbase IWorkflowState / WorkflowStateBase<Controller> pattern.
 public sealed class ContextDispatchNarrowingTests
 {
-    // Two families: C1 owns S1 (StateBase<C1>), C2 owns S2 (StateBase<C2>); both states implement IState.
-    // Root.Run -> Ck.Init (receiver Ck) -> IState.RegisterEvents (receiver IState).
     private static FactGraphData TwoFamilyGraph(string callerType)
     {
         var calls = new[]
@@ -52,17 +47,17 @@ public sealed class ContextDispatchNarrowingTests
         return found!;
     }
 
-    [Fact]
+    [Test]
     public void Dispatch_narrows_to_the_enclosing_controllers_state_family()
     {
         var roots = FactPathFinder.BuildTree(TwoFamilyGraph("C1"), "M:N.Root.Run", contextRules: StateRule);
 
         var reg = RegisterEventsNode(roots);
-        reg.Children.ShouldContain(c => c.SymbolId == "M:N.S1.RegisterEvents"); // C1's own state
-        reg.Children.ShouldNotContain(c => c.SymbolId == "M:N.S2.RegisterEvents"); // C2's state — pruned
+        reg.Children.ShouldContain(c => c.SymbolId == "M:N.S1.RegisterEvents");
+        reg.Children.ShouldNotContain(c => c.SymbolId == "M:N.S2.RegisterEvents");
     }
 
-    [Fact]
+    [Test]
     public void A_different_controller_narrows_to_its_own_family()
     {
         var roots = FactPathFinder.BuildTree(TwoFamilyGraph("C2"), "M:N.Root.Run", contextRules: StateRule);
@@ -72,13 +67,13 @@ public sealed class ContextDispatchNarrowingTests
         reg.Children.ShouldNotContain(c => c.SymbolId == "M:N.S1.RegisterEvents");
     }
 
-    [Fact]
+    [Test]
     public void Without_the_rule_dispatch_fans_to_all_implementers()
     {
-        var roots = FactPathFinder.BuildTree(TwoFamilyGraph("C1"), "M:N.Root.Run"); // no contextRules
+        var roots = FactPathFinder.BuildTree(TwoFamilyGraph("C1"), "M:N.Root.Run");
 
         var reg = RegisterEventsNode(roots);
         reg.Children.ShouldContain(c => c.SymbolId == "M:N.S1.RegisterEvents");
-        reg.Children.ShouldContain(c => c.SymbolId == "M:N.S2.RegisterEvents"); // full CHA fan-out
+        reg.Children.ShouldContain(c => c.SymbolId == "M:N.S2.RegisterEvents");
     }
 }

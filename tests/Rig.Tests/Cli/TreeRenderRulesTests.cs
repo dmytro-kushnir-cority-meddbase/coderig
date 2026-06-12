@@ -1,14 +1,10 @@
 using Rig.Cli;
 using Rig.Domain.Data;
 using Shouldly;
+using TUnit.Core;
 
 namespace Rig.Tests.Cli;
 
-// Unit tests for the codebase-specific `rig tree` render rules (collapse-seams / opaque-types).
-// These are PRESENTATION rules — they only change what the tree draws, never the reach. Driven over
-// hand-built TraceNode trees + a StringWriter, so no Roslyn / SQLite. The matcher itself
-// (FactRenderRules.Match*) is pure substring logic; the renderer (CliApplication.RenderTreeNode)
-// applies it.
 public sealed class TreeRenderRulesTests
 {
     private static TraceNode Node(string id, params TraceNode[] children) => new(id, "invocation", null, null, children);
@@ -38,7 +34,7 @@ public sealed class TreeRenderRulesTests
         return output.ToString();
     }
 
-    [Fact]
+    [Test]
     public void Empty_render_rules_match_nothing()
     {
         FactRenderRules.Empty.MatchCollapseSeam("M:Ns.IService.Startup()").ShouldBeNull();
@@ -46,29 +42,26 @@ public sealed class TreeRenderRulesTests
         FactRenderRules.Empty.IsEmpty.ShouldBeTrue();
     }
 
-    [Fact]
+    [Test]
     public void Type_pattern_matches_declaring_type_not_a_parameter_type_in_the_signature()
     {
-        // An app method that merely TAKES an Echo.ProcessId parameter must not be marked opaque by an
-        // "Echo." namespace rule — only methods DECLARED in Echo.* should match.
         var rules = new FactRenderRules([], [new FactRenderRule("Echo.", "actor framework")]);
-        rules.MatchOpaque("M:Echo.ActorContext.System(Echo.ProcessId)")!.Label.ShouldBe("actor framework"); // declared in Echo.*
-        rules.MatchOpaque("M:App.Data.ImportSubscribeMsg.#ctor(App.ImportId,Echo.ProcessId)").ShouldBeNull(); // Echo only in params
+        rules.MatchOpaque("M:Echo.ActorContext.System(Echo.ProcessId)")!.Label.ShouldBe("actor framework");
+        rules.MatchOpaque("M:App.Data.ImportSubscribeMsg.#ctor(App.ImportId,Echo.ProcessId)").ShouldBeNull();
     }
 
-    [Fact]
+    [Test]
     public void Collapse_seam_matches_the_hub_by_case_insensitive_substring()
     {
         var rules = new FactRenderRules([new FactRenderRule("IService.Startup", "service-locator")], []);
         rules.MatchCollapseSeam("M:Ns.IService.Startup()")!.Label.ShouldBe("service-locator");
-        rules.MatchCollapseSeam("M:NS.iservice.startup()")!.Label.ShouldBe("service-locator"); // case-insensitive
-        rules.MatchCollapseSeam("M:Ns.AppStartupProcesses.Startup()").ShouldBeNull(); // an impl, not the hub
+        rules.MatchCollapseSeam("M:NS.iservice.startup()")!.Label.ShouldBe("service-locator");
+        rules.MatchCollapseSeam("M:Ns.AppStartupProcesses.Startup()").ShouldBeNull();
     }
 
-    [Fact]
+    [Test]
     public void Collapse_folds_a_fanout_hubs_children_into_one_summary_line_with_effect_union()
     {
-        // IService.Startup is a hub with 3 impl children; two carry effects, one nests a deeper effect.
         var hub = Node(
             "M:Ns.IService.Startup()",
             Dispatch("M:Ns.A.Startup()", 3, Node("M:Ns.A.DoDeep()")),
@@ -79,27 +72,25 @@ public sealed class TreeRenderRulesTests
         var effects = Effects(
             ("M:Ns.A.Startup()", "💾 db:write Foo"),
             ("M:Ns.A.DoDeep()", "🔍 db:read Bar"),
-            ("M:Ns.B.Startup()", "💾 db:write Foo") // duplicate glyph — must de-dupe
+            ("M:Ns.B.Startup()", "💾 db:write Foo")
         );
 
         var output = Render(hub, rules, effects);
 
-        output.ShouldContain("IService.Startup"); // the hub still prints
+        output.ShouldContain("IService.Startup");
         output.ShouldContain("3 dispatch targets collapsed");
         output.ShouldContain("[seam: service-locator]");
         output.ShouldContain("{💾 db:write Foo}");
-        output.ShouldContain("{🔍 db:read Bar}"); // rolled up from the nested grandchild
-        output.IndexOf("💾 db:write Foo").ShouldBe(output.LastIndexOf("💾 db:write Foo")); // de-duped (appears once)
-        output.ShouldNotContain("A.Startup"); // the impl subtrees are folded away
+        output.ShouldContain("{🔍 db:read Bar}");
+        output.IndexOf("💾 db:write Foo").ShouldBe(output.LastIndexOf("💾 db:write Foo"));
+        output.ShouldNotContain("A.Startup");
         output.ShouldNotContain("DoDeep");
-        output.ShouldContain("4 lines hidden"); // 3 impls + 1 grandchild
+        output.ShouldContain("4 lines hidden");
     }
 
-    [Fact]
+    [Test]
     public void Collapse_prefers_the_precomputed_realistic_summary_over_the_truncated_subtree()
     {
-        // The rendered subtree is shallow (one ↺seen-style impl with no children), so a subtree walk
-        // would under-report. The precomputed seam-effect map (the reach-closure aggregate) must win.
         var hub = Node("M:Ns.IService.Startup()", Dispatch("M:Ns.A.Startup()", 3));
         var rules = new FactRenderRules([new FactRenderRule("IService.Startup", "service-locator")], []);
         var effects = Effects(("M:Ns.A.Startup()", "💾 db:write Foo"));
@@ -110,12 +101,12 @@ public sealed class TreeRenderRulesTests
 
         var output = Render(hub, rules, effects, seamEffects: seamEffects);
 
-        output.ShouldContain("{📥 llblgen:fetch ×42}"); // the aggregated reach-closure tally
+        output.ShouldContain("{📥 llblgen:fetch ×42}");
         output.ShouldContain("{🔍 llblgen:read ×31}");
-        output.ShouldNotContain("db:write Foo"); // the shallow subtree's effect did NOT win
+        output.ShouldNotContain("db:write Foo");
     }
 
-    [Fact]
+    [Test]
     public void Opaque_type_renders_as_a_leaf_keeping_its_own_effects_but_dropping_its_subtree()
     {
         var root = Node("M:Ns.Caller.Go()", Node("M:Ns.LinqMetaData.Build()", Node("M:Ns.Internals.Churn()")));
@@ -126,12 +117,12 @@ public sealed class TreeRenderRulesTests
 
         output.ShouldContain("LinqMetaData.Build");
         output.ShouldContain("«opaque: ORM»");
-        output.ShouldContain("{🔍 db:read Q}"); // the opaque node's OWN effect still shows
-        output.ShouldNotContain("Churn"); // subtree suppressed
+        output.ShouldContain("{🔍 db:read Q}");
+        output.ShouldNotContain("Churn");
         output.ShouldNotContain("Hidden");
     }
 
-    [Fact]
+    [Test]
     public void Raw_mode_equivalent_empty_rules_expands_everything()
     {
         var hub = Node("M:Ns.IService.Startup()", Dispatch("M:Ns.A.Startup()", 2), Dispatch("M:Ns.B.Startup()", 2));

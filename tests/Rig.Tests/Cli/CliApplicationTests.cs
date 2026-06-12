@@ -1,13 +1,13 @@
 using Rig.Cli;
 using Rig.Tests.Fixtures;
 using Shouldly;
+using TUnit.Core;
 
 namespace Rig.Tests.Cli;
 
-[Collection(RoslynIntegrationCollection.Name)]
 public sealed class CliApplicationTests
 {
-    [Fact]
+    [Test]
     public async Task No_arguments_prints_human_readable_command_summary()
     {
         var output = new StringWriter();
@@ -31,7 +31,7 @@ public sealed class CliApplicationTests
         output.ToString().ShouldContain("rig profile validate");
     }
 
-    [Fact]
+    [Test]
     public async Task Unknown_command_fails_with_actionable_error()
     {
         var output = new StringWriter();
@@ -44,7 +44,7 @@ public sealed class CliApplicationTests
         error.ToString().ShouldContain("Unknown command: wat");
     }
 
-    [Fact]
+    [Test]
     public async Task Files_requires_skipped_flag()
     {
         var output = new StringWriter();
@@ -57,7 +57,7 @@ public sealed class CliApplicationTests
         error.ToString().ShouldContain("Usage: rig files --skipped");
     }
 
-    [Fact]
+    [Test]
     public async Task Index_then_fact_commands_roundtrip_over_the_playground()
     {
         using var playground = await TempPlayground.CreateEntryPointEffectsAsync();
@@ -66,7 +66,6 @@ public sealed class CliApplicationTests
         var output = new StringWriter();
         var error = new StringWriter();
 
-        // index -> facts + DI (no entrypoints/effects/callgraph computation anymore)
         (await CliApplication.RunAsync(["index", solutionPath], output, error, workingDirectory)).ShouldBe(0);
         error.ToString().ShouldBeEmpty();
         output.ToString().ShouldContain("Run:");
@@ -75,7 +74,6 @@ public sealed class CliApplicationTests
         output.ToString().ShouldContain("DiRegistrations:");
         File.Exists(Path.Combine(workingDirectory, ".rig", "rig.db")).ShouldBeTrue();
 
-        // runs (fact counts)
         output.GetStringBuilder().Clear();
         (await CliApplication.RunAsync(["runs"], output, error, workingDirectory)).ShouldBe(0);
         output.ToString().ShouldContain("Runs");
@@ -83,33 +81,24 @@ public sealed class CliApplicationTests
         output.ToString().ShouldContain("references=");
         output.ToString().ShouldContain("di=");
 
-        // derive: effects + entry points re-derived from facts (no Roslyn re-run)
         output.GetStringBuilder().Clear();
         (await CliApplication.RunAsync(["derive"], output, error, workingDirectory)).ShouldBe(0);
         output.ToString().ShouldContain("Effects re-derived from facts:");
         output.ToString().ShouldContain("Entry points re-derived from facts:");
 
-        // di: ported to a run-agnostic fact read
         output.GetStringBuilder().Clear();
         (await CliApplication.RunAsync(["di"], output, error, workingDirectory)).ShouldBe(0);
         output.ToString().ShouldContain("DI Registrations");
         output.ToString().ShouldContain("ITeamRepository");
 
-        // files --skipped (run-agnostic diagnostic)
         output.GetStringBuilder().Clear();
         (await CliApplication.RunAsync(["files", "--skipped"], output, error, workingDirectory)).ShouldBe(0);
         output.ToString().ShouldContain("GeneratedEndpoint.g.cs");
 
-        // dead: report-only unreachable-symbol finder runs cleanly
         output.GetStringBuilder().Clear();
         (await CliApplication.RunAsync(["dead"], output, error, workingDirectory)).ShouldBe(0);
         output.ToString().ShouldContain("Dead-code candidates:");
 
-        // B1: call-site capture of generic TYPE ARGUMENTS + the first-argument member path flows all
-        // the way through a real index → SQLite → derive. The gateway fixture's ask<T>/tell rules
-        // resolve their resource to the captured type arg / routing target (not the declaring type).
-        // reaches loads effect rules from the working dir; the playground's gateway rules live next to
-        // the solution, so pass them explicitly (the index already wrote the captured columns to .rig).
         var rulesPath = Path.Combine(Path.GetDirectoryName(solutionPath)!, "rig.rules.json");
         output.GetStringBuilder().Clear();
         (
@@ -121,11 +110,8 @@ public sealed class CliApplicationTests
             )
         ).ShouldBe(0);
         var reaches = output.ToString();
-        // The ask effect appearing AT ALL proves the type_argument resolved non-null (an unresolved
-        // resource drops the effect) — i.e. the generic type arg was captured through index → derive.
         reaches.ShouldContain("gateway_ask ask");
-        reaches.ShouldContain("Team"); // the captured response type argument (PaymentGatewayResponse<…Team>)
-        // The tell effect's resource is the captured first-argument member path (the routing target).
+        reaches.ShouldContain("Team");
         reaches.ShouldContain("gateway_tell tell");
         reaches.ShouldContain("PaymentGatewayProcessDns.PaymentService");
     }
