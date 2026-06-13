@@ -7,6 +7,24 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-HostRid {
+    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+    $archPart = switch ($arch) {
+        "x64"   { "x64" }
+        "x86"   { "x86" }
+        "arm64" { "arm64" }
+        "arm"   { "arm" }
+        default { "x64" }
+    }
+    if ($IsWindows) { return "win-$archPart" }
+    if ($IsMacOS)   { return "osx-$archPart" }
+    if ($IsLinux)   { return "linux-$archPart" }
+    # Windows PowerShell 5.1 has no $IsWindows; assume Windows
+    return "win-$archPart"
+}
+
+$HostRid = Get-HostRid
+
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $solution = Join-Path $repoRoot "RuntimeIntelligenceGraph.slnx"
 $toolProject = Join-Path $repoRoot "src/Rig.Cli/Rig.Cli.csproj"
@@ -36,6 +54,8 @@ try {
     dotnet pack $toolProject `
         -c $Configuration `
         -o $packageOutput `
+        -r $HostRid `
+        -p:PublishReadyToRun=true `
         /p:PackageVersion=$ToolVersion `
         /p:Version=$ToolVersion
 

@@ -99,6 +99,25 @@ public sealed class QueryCacheTests
     }
 
     [Test]
+    public void EpSite_codec_round_trips_the_site_map()
+    {
+        var map = new Dictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>
+        {
+            [("Foo.cs", 10)] = ("echoactor", ["FrontEnd", "BackEnd"]),
+            [("Bar.cs", 20)] = ("page", null),
+        };
+
+        var back = EpSiteCacheCodec.Decode(EpSiteCacheCodec.Encode(map));
+
+        back.ShouldNotBeNull();
+        back.Count.ShouldBe(2);
+        back[("Foo.cs", 10)].Kind.ShouldBe("echoactor");
+        back[("Foo.cs", 10)].Requires.ShouldBe(["FrontEnd", "BackEnd"]);
+        back[("Bar.cs", 20)].Kind.ShouldBe("page");
+        back[("Bar.cs", 20)].Requires.ShouldBeNull();
+    }
+
+    [Test]
     public void Cache_stores_and_retrieves_across_reopen_then_invalidates_on_store_change()
     {
         var dir = Directory.CreateTempSubdirectory("rig-cache-").FullName;

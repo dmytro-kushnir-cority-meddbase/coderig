@@ -36,6 +36,10 @@ public sealed class QueryCache : IDisposable
             // nothing to pool anyway.
             var connection = new SqliteConnection($"Data Source={path};Pooling=False");
             connection.Open();
+            // A single command may hold two cache connections briefly (e.g. `rig tree` uses one for the
+            // forest and BuildEpContext opens another for the EP set). busy_timeout makes a writer wait
+            // out a transient lock instead of failing immediately; Put still catches if it ultimately can't.
+            Exec(connection, "PRAGMA busy_timeout=3000;");
             Exec(
                 connection,
                 "CREATE TABLE IF NOT EXISTS artifact_cache (key TEXT PRIMARY KEY, store_key TEXT NOT NULL, payload BLOB NOT NULL) WITHOUT ROWID;"

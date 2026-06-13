@@ -55,5 +55,58 @@ public static class TreeCacheCodec
     }
 }
 
+// The derived entry-point set as a flat, serializable list: one (file, line) site -> its EP kind and
+// capability requirements. This is the expensive, PATTERN-INDEPENDENT half of a tree/reaches/path/
+// callers query's EP rendering (it derives the whole-store EP set + classifies every handoff), so it is
+// cached once per (store + rules) and reused by every query. The pattern-dependent half (a symbol->site
+// map from the bounded graph) is cheap and rebuilt fresh each query.
+public sealed record EpSiteEntry(string File, int Line, string Kind, IReadOnlyList<string>? Requires);
+
+public sealed record EpSiteCachePayload(IReadOnlyList<EpSiteEntry> Sites);
+
+public static class EpSiteCacheCodec
+{
+    private static readonly TreeCacheJsonContext Context = new(
+        new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull }
+    );
+
+    public static byte[] Encode(IReadOnlyDictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)> sites)
+    {
+        var payload = new EpSiteCachePayload(
+            sites.Select(kv => new EpSiteEntry(kv.Key.File, kv.Key.Line, kv.Value.Kind, kv.Value.Requires)).ToArray()
+        );
+        var json = JsonSerializer.SerializeToUtf8Bytes(payload, Context.EpSiteCachePayload);
+        using var output = new MemoryStream();
+        using (var gzip = new GZipStream(output, CompressionLevel.Optimal))
+            gzip.Write(json, 0, json.Length);
+        return output.ToArray();
+    }
+
+    // Null on corruption/schema drift → treated as a cache miss (recompute).
+    public static IReadOnlyDictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>? Decode(byte[] blob)
+    {
+        try
+        {
+            using var input = new MemoryStream(blob);
+            using var gzip = new GZipStream(input, CompressionMode.Decompress);
+            using var json = new MemoryStream();
+            gzip.CopyTo(json);
+            json.Position = 0;
+            var payload = JsonSerializer.Deserialize(json, Context.EpSiteCachePayload);
+            if (payload is null)
+                return null;
+            var map = new Dictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>();
+            foreach (var s in payload.Sites)
+                map[(s.File, s.Line)] = (s.Kind, s.Requires);
+            return map;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or JsonException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+}
+
 [JsonSerializable(typeof(TreeCachePayload))]
+[JsonSerializable(typeof(EpSiteCachePayload))]
 internal partial class TreeCacheJsonContext : JsonSerializerContext { }

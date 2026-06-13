@@ -392,6 +392,9 @@ public static class CliApplication
                 + $"({stats.DispatchEdges - stats.HeuristicDispatchEdges} roslyn-mined, {stats.HeuristicDispatchEdges} heuristic), "
                 + $"{stats.Nodes} node(s) in {FormatElapsed(stopwatch.Elapsed)}"
         );
+        // Warm the pattern-independent EP-site cache now (best-effort) so the first deployment-attributed
+        // query doesn't pay the whole-store entry-point derivation. No-op without deployments.json.
+        await WarmEntryPointCacheAsync(context, workingDirectory);
         return 0;
     }
 
@@ -822,7 +825,15 @@ public static class CliApplication
             workingDirectory,
             (await Reads.ListRunsAsync(context)).FirstOrDefault()?.SolutionPath
         );
-        var pathEpContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, handoffRules, pathDeployments);
+        var pathEpContext = await BuildEpContextAsync(
+            context,
+            graph,
+            workingDirectory,
+            extraRules,
+            handoffRules,
+            pathDeployments,
+            !args.Contains("--no-cache")
+        );
 
         output.WriteLine($"Path '{fromPattern}' -> '{toPattern}' ({path.Count} nodes):");
         for (var i = 0; i < path.Count; i++)
@@ -958,7 +969,15 @@ public static class CliApplication
             workingDirectory,
             (await Reads.ListRunsAsync(context)).FirstOrDefault()?.SolutionPath
         );
-        var reachEpContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, handoffRules, reachDeployments);
+        var reachEpContext = await BuildEpContextAsync(
+            context,
+            graph,
+            workingDirectory,
+            extraRules,
+            handoffRules,
+            reachDeployments,
+            !args.Contains("--no-cache")
+        );
         var reachFromRoot = reachable.Where(kv => kv.Value.Depth == 0).Select(kv => kv.Key).FirstOrDefault();
         output.WriteLine(
             $"From: {fromPattern}{(mode == FactPathFinder.TraversalMode.AsyncInclude ? "  (--async: handoffs included)" : "")}"
@@ -1165,7 +1184,15 @@ public static class CliApplication
             workingDirectory,
             (await Reads.ListRunsAsync(context)).FirstOrDefault()?.SolutionPath
         );
-        var epContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, handoffRules, deployments);
+        var epContext = await BuildEpContextAsync(
+            context,
+            graph,
+            workingDirectory,
+            extraRules,
+            handoffRules,
+            deployments,
+            !args.Contains("--no-cache")
+        );
         timer.Lap("deployment map + entry-point derivation");
 
         effects = ApplyEffectFilters(effects, args); // --only / --exclude (e.g. --exclude throw)
@@ -1268,12 +1295,76 @@ public static class CliApplication
         string workingDirectory,
         IReadOnlyList<string> extraRules,
         IReadOnlyList<FactHandoffRule> handoffRules,
-        DeploymentMap deployments
+        DeploymentMap deployments,
+        bool useCache = true
     )
     {
         if (deployments.IsEmpty)
             return null;
 
+        // The site->kind map is the expensive, PATTERN-INDEPENDENT half — derive-or-cache it once per
+        // (store + rules). The symbol->site map below is cheap and rebuilt fresh from THIS query's graph.
+        var epSiteKind = await LoadOrDeriveEpSiteKindAsync(context, workingDirectory, extraRules, handoffRules, useCache);
+
+        var siteById = graph
+            .Methods.GroupBy(m => m.SymbolId, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => ((string?)g.First().FilePath, g.First().Line), StringComparer.Ordinal);
+
+        return new EpRenderContext(deployments, siteById, epSiteKind);
+    }
+
+    // Derive-or-load the whole-store entry-point site map: (file,line) -> (kind, capability requirements),
+    // covering both rule-detected EPs and promoted handoff origins. This is the ~6.7s cost that dominated
+    // a warm tree query, and it's a pure function of the store + effective rules (NO traversal pattern),
+    // so it's cached in .rig/cache.db keyed by (store identity + rule fingerprint) and reused by every
+    // tree/reaches/path/callers query until the next reindex or rule change. Best-effort throughout:
+    // --no-cache (useCache=false) and any SQLite/codec failure fall back to a fresh derivation.
+    private static async Task<
+        IReadOnlyDictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>
+    > LoadOrDeriveEpSiteKindAsync(
+        RigDbContext context,
+        string workingDirectory,
+        IReadOnlyList<string> extraRules,
+        IReadOnlyList<FactHandoffRule> handoffRules,
+        bool useCache
+    )
+    {
+        if (!useCache)
+            return await DeriveEpSiteKindAsync(context, workingDirectory, extraRules, handoffRules);
+
+        var rigDir = Path.Combine(workingDirectory, ".rig");
+        var storeKey = StoreKey(Path.Combine(rigDir, "rig.db"));
+        using var cache = QueryCache.Open(rigDir, storeKey);
+        var key = cache is null ? null : EpCacheKey(storeKey, RulesFingerprint.Compute(workingDirectory, extraRules));
+        if (key is not null && cache!.Get(key) is { } blob && EpSiteCacheCodec.Decode(blob) is { } hit)
+            return hit;
+
+        var derived = await DeriveEpSiteKindAsync(context, workingDirectory, extraRules, handoffRules);
+        if (key is not null)
+        {
+            try
+            {
+                cache!.Put(key, EpSiteCacheCodec.Encode(derived));
+            }
+            catch (Exception ex)
+                when (ex is System.Text.Json.JsonException or NotSupportedException or InvalidOperationException or IOException)
+            {
+                // skip caching this result
+            }
+        }
+        return derived;
+    }
+
+    // The actual whole-store EP derivation (uncached): rule EPs + class-inheritance EPs + promoted handoff
+    // origins, flattened to a (file,line)->(kind,requires) map. Pulled out of BuildEpContextAsync so both
+    // the lazy query path and the eager `rig graph` warm-up share one definition.
+    private static async Task<Dictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>> DeriveEpSiteKindAsync(
+        RigDbContext context,
+        string workingDirectory,
+        IReadOnlyList<string> extraRules,
+        IReadOnlyList<FactHandoffRule> handoffRules
+    )
+    {
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
         var epRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         var classRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(workingDirectory, extraRules);
@@ -1285,12 +1376,27 @@ public static class CliApplication
         var epSiteKind = new Dictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>();
         foreach (var e in derivedEps.Concat(PromoteHandoffOrigins(classifiedHandoffs, derivedEps)))
             epSiteKind[(e.FilePath, e.Line)] = (e.Kind, e.Requires);
+        return epSiteKind;
+    }
 
-        var siteById = graph
-            .Methods.GroupBy(m => m.SymbolId, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => ((string?)g.First().FilePath, g.First().Line), StringComparer.Ordinal);
+    // Eagerly populate the pattern-independent EP-site cache right after `rig graph` rebuilds the store,
+    // so the FIRST tree/reaches/path/callers query already finds it warm. Gated on deployments.json —
+    // projects without deployment attribution never derive the EP set, so they pay nothing. Uses the
+    // default rule set (the same a plain query uses); a --rules query just recomputes under its own key.
+    private static async Task WarmEntryPointCacheAsync(RigDbContext context, string workingDirectory)
+    {
+        if (!File.Exists(Path.Combine(workingDirectory, "deployments.json")))
+            return;
+        var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory).ToArray();
+        await LoadOrDeriveEpSiteKindAsync(context, workingDirectory, [], handoffRules, useCache: true);
+    }
 
-        return new EpRenderContext(deployments, siteById, epSiteKind);
+    // Cache key for the pattern-INDEPENDENT EP-site map: store identity + rule fingerprint only (no
+    // pattern, no traversal params), so a single derivation serves every query against the store.
+    private static string EpCacheKey(string storeKey, string rulesHash)
+    {
+        var material = $"ep|v1|{storeKey}|{rulesHash}";
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 
     // Identity of the current store for cache keying + invalidation: rig.db size + last-write time.
@@ -1692,7 +1798,15 @@ public static class CliApplication
             workingDirectory,
             (await Reads.ListRunsAsync(context)).FirstOrDefault()?.SolutionPath
         );
-        var epContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, handoffRules, deployments);
+        var epContext = await BuildEpContextAsync(
+            context,
+            graph,
+            workingDirectory,
+            extraRules,
+            handoffRules,
+            deployments,
+            !args.Contains("--no-cache")
+        );
 
         if (rootsOnly)
         {
@@ -2525,7 +2639,7 @@ public static class CliApplication
             if (args[i] == name)
                 foreach (
                     var token in args[i + 1]
-                        .Split(new[] { ',', ' ', '\t', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Split([',', ' ', '\t', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 )
                     set.Add(token);
         return set;
