@@ -111,6 +111,12 @@ public static partial class FactPathFinder
         Dictionary<(string Type, string Name), List<MethodRef>> methodsByTypeAndName
     )
     {
+        // Cheap guard FIRST: a concrete generic-factory call must carry type arguments (the construct
+        // type lives in edge.TypeArguments — see below). The overwhelming majority of call edges are
+        // non-generic, so this short-circuits before ParseMethod, whose per-edge substring allocations
+        // dominated ShapeGraph's churn. Pure reorder — the empty-TypeArguments case returned null anyway.
+        if (string.IsNullOrEmpty(edge.TypeArguments))
+            return null;
         var parsed = ParseMethod(edge.Callee);
         if (parsed is null)
             return null;
@@ -123,8 +129,6 @@ public static partial class FactPathFinder
             name = name.Substring(0, tick);
         var methodKey = parsed.Value.TypeId.Substring(2) + "." + name;
         if (!ruleByMethod.TryGetValue(methodKey, out var rule))
-            return null;
-        if (string.IsNullOrEmpty(edge.TypeArguments))
             return null;
         var construct = NthTopLevelArg(edge.TypeArguments!, rule.ConstructArgIndex);
         // Only a concrete, namespaced type can name a real construct; a bare type-parameter token
