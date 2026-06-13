@@ -118,6 +118,35 @@ public sealed class QueryCacheTests
     }
 
     [Test]
+    public void RenderSidecar_codec_round_trips_seam_effects_and_locations()
+    {
+        var seam = new Dictionary<string, List<string>>(StringComparer.Ordinal)
+        {
+            ["M:App.Hub"] = ["💾 db:read ×3", "🌐 http:get ×1"],
+            ["M:App.Hub2"] = [],
+        };
+        var locations = new Dictionary<string, (string? File, int Line)>(StringComparer.Ordinal)
+        {
+            ["M:App.Run"] = ("App/Run.cs", 12),
+            ["M:App.Missing"] = (null, 0),
+        };
+
+        var back = RenderSidecarCodec.Decode(RenderSidecarCodec.Encode(seam, locations));
+
+        back.ShouldNotBeNull();
+        back.Value.SeamEffects["M:App.Hub"].ShouldBe(["💾 db:read ×3", "🌐 http:get ×1"]);
+        back.Value.SeamEffects["M:App.Hub2"].ShouldBeEmpty();
+        back.Value.Locations["M:App.Run"].ShouldBe(("App/Run.cs", 12));
+        back.Value.Locations["M:App.Missing"].ShouldBe(((string?)null, 0));
+    }
+
+    [Test]
+    public void RenderSidecar_decode_returns_null_for_garbage()
+    {
+        RenderSidecarCodec.Decode([9, 9, 9]).ShouldBeNull();
+    }
+
+    [Test]
     public void Cache_stores_and_retrieves_across_reopen_then_invalidates_on_store_change()
     {
         var dir = Directory.CreateTempSubdirectory("rig-cache-").FullName;

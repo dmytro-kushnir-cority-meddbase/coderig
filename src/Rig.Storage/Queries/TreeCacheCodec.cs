@@ -107,6 +107,69 @@ public static class EpSiteCacheCodec
     }
 }
 
+// The RENDER sidecar: everything a `rig tree` render needs from the bounded graph that ISN'T already in
+// the forest/effects payload — so a forest cache hit can render WITHOUT reloading + shaping the graph (the
+// ~5.4s warm-query floor). Two maps, both a pure function of the same (store + rules + pattern + depth +
+// mode) the forest is keyed by, so they share the forest's invalidation:
+//   - SeamEffects: collapse-hub DocID -> the formatted effect-union lines (ComputeSeamEffects output).
+//   - Locations:   method DocID -> (file, line); serves BOTH the EP-chip site map and `--files` links.
+// Stored next to the forest under a sibling key; written on the cold/miss render path (graph in hand),
+// read on the warm path to skip the graph load entirely.
+public sealed record LocationEntry(string Symbol, string? File, int Line);
+
+public sealed record RenderSidecarPayload(Dictionary<string, string[]> SeamEffects, LocationEntry[] Locations);
+
+public static class RenderSidecarCodec
+{
+    private static readonly TreeCacheJsonContext Context = new(
+        new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull }
+    );
+
+    public static byte[] Encode(
+        IReadOnlyDictionary<string, List<string>> seamEffects,
+        IReadOnlyDictionary<string, (string? File, int Line)> locations
+    )
+    {
+        var payload = new RenderSidecarPayload(
+            seamEffects.ToDictionary(kv => kv.Key, kv => kv.Value.ToArray(), StringComparer.Ordinal),
+            locations.Select(kv => new LocationEntry(kv.Key, kv.Value.File, kv.Value.Line)).ToArray()
+        );
+        var json = JsonSerializer.SerializeToUtf8Bytes(payload, Context.RenderSidecarPayload);
+        using var output = new MemoryStream();
+        using (var gzip = new GZipStream(output, CompressionLevel.Optimal))
+            gzip.Write(json, 0, json.Length);
+        return output.ToArray();
+    }
+
+    // (seamEffects, locations) on success; null on corruption/schema drift → treated as a cache miss.
+    public static (Dictionary<string, List<string>> SeamEffects, Dictionary<string, (string? File, int Line)> Locations)? Decode(
+        byte[] blob
+    )
+    {
+        try
+        {
+            using var input = new MemoryStream(blob);
+            using var gzip = new GZipStream(input, CompressionMode.Decompress);
+            using var json = new MemoryStream();
+            gzip.CopyTo(json);
+            json.Position = 0;
+            var payload = JsonSerializer.Deserialize(json, Context.RenderSidecarPayload);
+            if (payload is null)
+                return null;
+            var seam = payload.SeamEffects.ToDictionary(kv => kv.Key, kv => kv.Value.ToList(), StringComparer.Ordinal);
+            var loc = new Dictionary<string, (string? File, int Line)>(StringComparer.Ordinal);
+            foreach (var e in payload.Locations)
+                loc[e.Symbol] = (e.File, e.Line);
+            return (seam, loc);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or JsonException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+}
+
 [JsonSerializable(typeof(TreeCachePayload))]
 [JsonSerializable(typeof(EpSiteCachePayload))]
+[JsonSerializable(typeof(RenderSidecarPayload))]
 internal partial class TreeCacheJsonContext : JsonSerializerContext { }

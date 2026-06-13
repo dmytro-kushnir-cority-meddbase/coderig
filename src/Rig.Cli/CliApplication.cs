@@ -1091,17 +1091,33 @@ public static class CliApplication
             ? null
             : TreeCacheKey(storeKey, RulesFingerprint.Compute(workingDirectory, extraRules), fromPattern, maxDepth, mode, raw);
         var cached = cacheKey is not null && cache!.Get(cacheKey) is { } blob ? TreeCacheCodec.Decode(blob) : null;
-        timer.Lap($"cache lookup (hit={cached is not null})");
+        // Render sidecar: everything render needs from the graph (seam effects + locations), keyed by the
+        // forest key PLUS the effect filters. Seam effects are derived from the FILTERED effects, and
+        // filters are deliberately absent from the forest key (effects are cached unfiltered and re-filtered
+        // per query), so the sidecar must key on them — else a differently-filtered warm query would render
+        // stale seam summaries. Locations are filter-free but ride along (negligible). No filters → a stable
+        // shared key. A sidecar hit lets the warm path skip the graph load entirely.
+        var sidecarKey = cacheKey is null ? null : cacheKey + ":sidecar:" + EffectFilterSignature(args);
+        var sidecar =
+            cached is not null && sidecarKey is not null && cache!.Get(sidecarKey) is { } scBlob ? RenderSidecarCodec.Decode(scBlob) : null;
+        timer.Lap($"cache lookup (forest={cached is not null}, sidecar={sidecar is not null})");
 
-        FactGraphData graph;
+        FactGraphData? graph = null; // stays null on a full hit (forest + sidecar) — the graph is never loaded
         IReadOnlyList<TraceNode> roots;
         IReadOnlyList<DerivedEffect> effects;
-        if (cached is not null)
+        if (cached is not null && sidecar is not null)
         {
+            // FULL HIT: forest + effects + render sidecar all cached → render without touching the graph.
             roots = cached.Forest;
             effects = cached.Effects;
-            // Rendering still needs the shaped graph (seam effects, --files locations, EP chips); load the
-            // graph-only path — no invocation scan, since the effects came from the cache.
+            timer.Lap("forest + sidecar hit (no graph load)");
+        }
+        else if (cached is not null)
+        {
+            // Forest hit but no sidecar (a pre-sidecar entry, or first run under this filter): load the
+            // shaped graph to render — the sidecar is written below so the NEXT query is a full hit.
+            roots = cached.Forest;
+            effects = cached.Effects;
             graph = await LoadShapedTraversalGraphAsync(
                 context,
                 fromPattern,
@@ -1180,19 +1196,27 @@ public static class CliApplication
 
         // Deployment attribution (opt-in via deployments.json) + EP-site lookup, so tree nodes that are
         // themselves entry points get the ▶ kind + service chip. Null when unconfigured (default tree).
+        // Locations (method DocID -> file:line): from the sidecar on a full hit, else from the graph.
+        // One map serves both the EP-chip site lookup and `--files` links.
+        IReadOnlyDictionary<string, (string? File, int Line)> locations =
+            sidecar?.Locations
+            ?? graph!
+                .Methods.GroupBy(m => m.SymbolId, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => ((string?)g.First().FilePath, g.First().Line), StringComparer.Ordinal);
+
         var deployments = await DeploymentMap.LoadAsync(
             workingDirectory,
             (await Reads.ListRunsAsync(context)).FirstOrDefault()?.SolutionPath
         );
-        var epContext = await BuildEpContextAsync(
-            context,
-            graph,
-            workingDirectory,
-            extraRules,
-            handoffRules,
-            deployments,
-            !args.Contains("--no-cache")
-        );
+        // EP context is built from `locations` (not the graph), so it works on the no-graph full-hit path.
+        // The expensive, pattern-independent site->kind map is its own cache (LoadOrDeriveEpSiteKind).
+        var epContext = deployments.IsEmpty
+            ? null
+            : new EpRenderContext(
+                deployments,
+                locations,
+                await LoadOrDeriveEpSiteKindAsync(context, workingDirectory, extraRules, handoffRules, !args.Contains("--no-cache"))
+            );
         timer.Lap("deployment map + entry-point derivation");
 
         effects = ApplyEffectFilters(effects, args); // --only / --exclude (e.g. --exclude throw)
@@ -1234,29 +1258,47 @@ public static class CliApplication
             return 0;
         }
 
-        var structuredByMethod = effects
-            .Where(e => e.EnclosingSymbolId is not null)
-            .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
-        var seamEffects = ComputeSeamEffects(
-            roots,
-            renderRules,
-            graph,
-            maxDepth,
-            mode,
-            structuredByMethod,
-            (p, o) => FactEffectEmojiProvider.For(emoji, p, o)
-        );
+        // Seam effects: from the sidecar on a full hit, else computed from the (filtered) effects + graph.
+        IReadOnlyDictionary<string, List<string>> seamEffects;
+        if (sidecar is not null)
+            seamEffects = sidecar.Value.SeamEffects;
+        else
+        {
+            var structuredByMethod = effects
+                .Where(e => e.EnclosingSymbolId is not null)
+                .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+            seamEffects = ComputeSeamEffects(
+                roots,
+                renderRules,
+                graph!,
+                maxDepth,
+                mode,
+                structuredByMethod,
+                (p, o) => FactEffectEmojiProvider.For(emoji, p, o)
+            );
+        }
 
         // `--files`: per-node definition location (relpath:line) from the loaded methods, for source links.
         // `--signatures` (alias --sig): per-node compact param signature, to tell same-named overloads apart.
         var files = args.Contains("--files");
         var signatures = args.Contains("--signatures") || args.Contains("--sig");
-        var locById = files
-            ? graph
-                .Methods.GroupBy(m => m.SymbolId)
-                .ToDictionary(g => g.Key, g => (g.First().FilePath, g.First().Line), StringComparer.Ordinal)
-            : null;
+        var locById = files ? locations : null;
+
+        // Populate the render sidecar (best-effort) so the next warm query renders with NO graph load.
+        // Only when a graph was actually loaded (cold or sidecar-miss) and caching is on.
+        if (graph is not null && sidecarKey is not null)
+        {
+            try
+            {
+                cache!.Put(sidecarKey, RenderSidecarCodec.Encode(seamEffects, locations));
+            }
+            catch (Exception ex)
+                when (ex is System.Text.Json.JsonException or NotSupportedException or InvalidOperationException or IOException)
+            {
+                // skip caching the sidecar
+            }
+        }
 
         foreach (var root in roots)
         {
@@ -2618,6 +2660,20 @@ public static class CliApplication
     // Effect selection for reaches/tree/derive: --only keeps just the listed effects, --exclude drops
     // them (exclude wins on overlap). Tokens match an effect's `provider` (e.g. "throw") or the precise
     // `provider:operation` (e.g. "llblgen:read"). Returns the input unchanged when neither flag is given.
+    // A stable signature of the effect filters (--only/--exclude) for the render-sidecar key: sorted +
+    // lowercased so token order/casing don't fragment it, empty in the common no-filter case. The seam
+    // summaries in the sidecar are a function of the FILTERED effects, so two queries that differ only by
+    // these flags must get distinct sidecars (the forest itself is filter-independent and is not affected).
+    private static string EffectFilterSignature(string[] args)
+    {
+        var only = string.Join(",", ParseList(args, "--only").Select(x => x.ToLowerInvariant()).OrderBy(x => x, StringComparer.Ordinal));
+        var exclude = string.Join(
+            ",",
+            ParseList(args, "--exclude").Select(x => x.ToLowerInvariant()).OrderBy(x => x, StringComparer.Ordinal)
+        );
+        return $"only={only};exclude={exclude}";
+    }
+
     private static IReadOnlyList<DerivedEffect> ApplyEffectFilters(IReadOnlyList<DerivedEffect> effects, string[] args)
     {
         var only = ParseList(args, "--only");
