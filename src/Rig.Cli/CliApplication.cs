@@ -1864,9 +1864,10 @@ public static class CliApplication
     // Per-service rollup of entry points: total + per-kind breakdown, in deployments.json order.
     // An EP counts in every service it is ACTIVE-IN (loaded AND capability-gated in) — so a gated
     // actor counts only in the host(s) that `provides` its required token, not in every host that
-    // merely links it. EPs whose owning project is in no service closure (tests/tools) fall into
-    // "(unattributed)". An EP loaded but gated out of every host contributes to no service (it shows
-    // as linked-inactive on its own line).
+    // merely links it. A service that LOADS an EP but is gated out of it is still listed, with a
+    // `· N linked-inactive` tail (and a 0 active count when it activates none) — so the "loaded here,
+    // doesn't run here" signal is visible in the rollup, not just on each EP line. EPs whose owning
+    // project is in no service closure (tests/tools) fall into "(unattributed)".
     private static void WriteServiceSummary(
         IEnumerable<(string Kind, string? FilePath, IReadOnlyList<string>? Requires)> eps,
         DeploymentMap deployments,
@@ -1875,6 +1876,7 @@ public static class CliApplication
     {
         var byService = new Dictionary<string, Dictionary<string, int>>(StringComparer.Ordinal);
         var totals = new Dictionary<string, int>(StringComparer.Ordinal);
+        var inactive = new Dictionary<string, int>(StringComparer.Ordinal); // loaded but gated out
         var unattributed = 0;
         foreach (var (kind, filePath, requires) in eps)
         {
@@ -1884,31 +1886,43 @@ public static class CliApplication
                 unattributed++;
                 continue;
             }
-            var svcs = deployments.ActiveServices(loaded, requires);
-            foreach (var s in svcs)
+            var active = deployments.ActiveServices(loaded, requires);
+            foreach (var s in active)
             {
                 if (!byService.TryGetValue(s, out var kinds))
                     byService[s] = kinds = new Dictionary<string, int>(StringComparer.Ordinal);
                 kinds[kind] = kinds.GetValueOrDefault(kind) + 1;
                 totals[s] = totals.GetValueOrDefault(s) + 1;
             }
+            // Services that link the EP's code but are gated out of activating it.
+            foreach (var s in loaded)
+                if (!active.Contains(s))
+                    inactive[s] = inactive.GetValueOrDefault(s) + 1;
         }
 
         output.WriteLine();
-        output.WriteLine("Entry points per deployed service (an EP counts in every service it is active-in):");
+        output.WriteLine(
+            "Entry points per deployed service (active-in; `· N linked-inactive` = loaded but gated out of that host):"
+        );
         foreach (var svc in deployments.Services)
         {
-            if (!totals.TryGetValue(svc.Name, out var total))
+            var total = totals.GetValueOrDefault(svc.Name);
+            var inactiveCount = inactive.GetValueOrDefault(svc.Name);
+            if (total == 0 && inactiveCount == 0)
                 continue;
-            var breakdown = string.Join(
-                " ",
-                byService[svc.Name]
-                    .OrderByDescending(k => k.Value)
-                    .ThenBy(k => k.Key, StringComparer.Ordinal)
-                    .Select(k => $"{k.Key}={k.Value}")
-            );
+            var breakdown =
+                total == 0
+                    ? ""
+                    : string.Join(
+                        " ",
+                        byService[svc.Name]
+                            .OrderByDescending(k => k.Value)
+                            .ThenBy(k => k.Key, StringComparer.Ordinal)
+                            .Select(k => $"{k.Key}={k.Value}")
+                    );
+            var inactiveTail = inactiveCount > 0 ? $"   · {inactiveCount} linked-inactive" : "";
             var label = svc.Kind is null ? svc.Name : $"{svc.Name} ({svc.Kind})";
-            output.WriteLine($"  {label, -46} {total, 6}   {breakdown}");
+            output.WriteLine($"  {label, -46} {total, 6}   {breakdown}{inactiveTail}");
         }
         if (unattributed > 0)
             output.WriteLine($"  {"(unattributed — tests/tools/no service)", -46} {unattributed, 6}");
