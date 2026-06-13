@@ -392,9 +392,9 @@ public static class CliApplication
                 + $"({stats.DispatchEdges - stats.HeuristicDispatchEdges} roslyn-mined, {stats.HeuristicDispatchEdges} heuristic), "
                 + $"{stats.Nodes} node(s) in {FormatElapsed(stopwatch.Elapsed)}"
         );
-        // Warm the pattern-independent EP-site cache now (best-effort) so the first deployment-attributed
-        // query doesn't pay the whole-store entry-point derivation. No-op without deployments.json.
-        await WarmEntryPointCacheAsync(context, workingDirectory);
+        // Materialize the pattern-independent EP-site set into a table now, so every later query reads it
+        // directly instead of re-deriving from the whole-store fact tables. No-op without deployments.json.
+        await MaterializeEntryPointSitesAsync(context, workingDirectory);
         return 0;
     }
 
@@ -1355,12 +1355,15 @@ public static class CliApplication
         return new EpRenderContext(deployments, siteById, epSiteKind);
     }
 
-    // Derive-or-load the whole-store entry-point site map: (file,line) -> (kind, capability requirements),
-    // covering both rule-detected EPs and promoted handoff origins. This is the ~6.7s cost that dominated
-    // a warm tree query, and it's a pure function of the store + effective rules (NO traversal pattern),
-    // so it's cached in .rig/cache.db keyed by (store identity + rule fingerprint) and reused by every
-    // tree/reaches/path/callers query until the next reindex or rule change. Best-effort throughout:
-    // --no-cache (useCache=false) and any SQLite/codec failure fall back to a fresh derivation.
+    // Load the whole-store entry-point site map: (file,line) -> (kind, capability requirements), covering
+    // both rule-detected EPs and promoted handoff origins. A pure function of the store + effective rules
+    // (NO traversal pattern). Three tiers, fastest first:
+    //   1. The entry_point_sites table `rig graph` materialized — INDEX data, read via raw ADO (no EF, no
+    //      whole-store load, no derive). Used whenever the effective rules match what graph was built with,
+    //      regardless of --no-cache (it's index data, like call_edges), so it serves the common path.
+    //   2. The .rig/cache.db query cache — for --rules queries (rule-hash mismatch on the table) when
+    //      caching is on; derives once then memoizes.
+    //   3. A live derive — --no-cache with a rule mismatch, or no materialized table yet.
     private static async Task<
         IReadOnlyDictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>
     > LoadOrDeriveEpSiteKindAsync(
@@ -1371,13 +1374,20 @@ public static class CliApplication
         bool useCache
     )
     {
+        var rulesHash = RulesFingerprint.Compute(workingDirectory, extraRules);
+
+        // Tier 1: the materialized index table (built at `rig graph` under the default rules).
+        if (await EntryPointSiteStore.LoadAsync(context, rulesHash) is { } materialized)
+            return materialized;
+
         if (!useCache)
             return await DeriveEpSiteKindAsync(context, workingDirectory, extraRules, handoffRules);
 
+        // Tier 2: query cache (handles --rules, which the table doesn't cover).
         var rigDir = Path.Combine(workingDirectory, ".rig");
         var storeKey = StoreKey(Path.Combine(rigDir, "rig.db"));
         using var cache = QueryCache.Open(rigDir, storeKey);
-        var key = cache is null ? null : EpCacheKey(storeKey, RulesFingerprint.Compute(workingDirectory, extraRules));
+        var key = cache is null ? null : EpCacheKey(storeKey, rulesHash);
         if (key is not null && cache!.Get(key) is { } blob && EpSiteCacheCodec.Decode(blob) is { } hit)
             return hit;
 
@@ -1421,16 +1431,18 @@ public static class CliApplication
         return epSiteKind;
     }
 
-    // Eagerly populate the pattern-independent EP-site cache right after `rig graph` rebuilds the store,
-    // so the FIRST tree/reaches/path/callers query already finds it warm. Gated on deployments.json —
-    // projects without deployment attribution never derive the EP set, so they pay nothing. Uses the
-    // default rule set (the same a plain query uses); a --rules query just recomputes under its own key.
-    private static async Task WarmEntryPointCacheAsync(RigDbContext context, string workingDirectory)
+    // Materialize the pattern-independent EP-site set as a first-class table right after `rig graph`
+    // rebuilds the store, so every later query reads it via raw ADO (no EF, no whole-store load, no derive)
+    // instead of paying the ~2.1s derivation. Gated on deployments.json — projects without deployment
+    // attribution never use the EP set, so they pay nothing. Built with the DEFAULT rules and stamped with
+    // their hash; a --rules query sees the mismatch and derives live under its own rules.
+    private static async Task MaterializeEntryPointSitesAsync(RigDbContext context, string workingDirectory)
     {
         if (!File.Exists(Path.Combine(workingDirectory, "deployments.json")))
             return;
         var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory).ToArray();
-        await LoadOrDeriveEpSiteKindAsync(context, workingDirectory, [], handoffRules, useCache: true);
+        var sites = await DeriveEpSiteKindAsync(context, workingDirectory, [], handoffRules);
+        await EntryPointSiteStore.PersistAsync(context, sites, RulesFingerprint.Compute(workingDirectory, []));
     }
 
     // Cache key for the pattern-INDEPENDENT EP-site map: store identity + rule fingerprint only (no
