@@ -444,9 +444,43 @@ public static class Reads
         CancellationToken cancellationToken = default
     )
     {
-        var graph = await LoadFactGraphAsync(context, handoffRules, cancellationToken).ConfigureAwait(false);
-        var handoffs = HandoffClassifier.HandoffEntryPoints(graph.CallEdges, handoffRules ?? []);
-        return handoffs.Take(limit).ToArray();
+        var rules = handoffRules ?? [];
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken).ConfigureAwait(false);
+
+        // Fast path: `rig graph` already classified every edge and persisted Kind + HandoffDispatcher into
+        // call_edges, and the handoff-EP classifier consumes ONLY the handoff + methodGroup edges (~5k of
+        // 533k). Read those directly (index-backed by IX_call_edges_Kind) instead of LoadFactGraphAsync,
+        // which re-scans ~539k reference_facts and EF-marshals every edge just to discard all but those few
+        // (~3.7s). call_edges.Kind is the SAME classification the rest of the SQL query path already trusts,
+        // so this is equivalence-preserving; the classifier still attaches kind/requires from the passed
+        // rules by HandoffDispatcher id.
+        if (
+            await StorageProbes.TableExistsAsync(connection, "call_edges", cancellationToken).ConfigureAwait(false)
+            && await StorageProbes.ColumnExistsAsync(connection, "call_edges", "HandoffDispatcher", cancellationToken).ConfigureAwait(false)
+        )
+        {
+            var edges = new List<CallEdge>();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                "SELECT FromSym, ToSym, Kind, FilePath, Line, HandoffDispatcher FROM call_edges WHERE Kind IN ('handoff', 'methodGroup');";
+            using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                edges.Add(
+                    new CallEdge(
+                        Caller: reader.GetString(0),
+                        Callee: reader.GetString(1),
+                        Kind: reader.GetString(2),
+                        FilePath: reader.IsDBNull(3) ? "" : reader.GetString(3),
+                        Line: reader.IsDBNull(4) ? 0 : reader.GetInt32(4),
+                        HandoffDispatcher: reader.IsDBNull(5) ? null : reader.GetString(5)
+                    )
+                );
+            return HandoffClassifier.HandoffEntryPoints(edges, rules).Take(limit).ToArray();
+        }
+
+        // Fallback: no materialized graph (`rig graph` not run) — derive from the full reference graph.
+        var graph = await LoadFactGraphAsync(context, rules, cancellationToken).ConfigureAwait(false);
+        return HandoffClassifier.HandoffEntryPoints(graph.CallEdges, rules).Take(limit).ToArray();
     }
 
     // Loads the facts needed by FactEntryPointDeriver: base-type edges, constructor+type symbols,

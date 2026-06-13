@@ -200,6 +200,10 @@ public static class GraphMaterializer
             .ConfigureAwait(false);
         await ExecuteAsync(connection, null, "CREATE INDEX IF NOT EXISTS IX_call_edges_ToSym ON call_edges(ToSym);", cancellationToken)
             .ConfigureAwait(false);
+        // Index on Kind so the handoff-EP read (DeriveHandoffEntryPoints) selects the ~5k handoff +
+        // methodGroup rows by index instead of scanning all ~533k call_edges.
+        await ExecuteAsync(connection, null, "CREATE INDEX IF NOT EXISTS IX_call_edges_Kind ON call_edges(Kind);", cancellationToken)
+            .ConfigureAwait(false);
 
         await ExecuteAsync(
                 connection,
