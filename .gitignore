@@ -18,3 +18,5 @@ playgrounds/eShop/**
 !playgrounds/eShop/rig.rules.json
 playgrounds/OrchardCore/**
 !playgrounds/OrchardCore/rig.rules.json
+bench/last-run.txt
+BenchmarkDotNet.Artifacts/
