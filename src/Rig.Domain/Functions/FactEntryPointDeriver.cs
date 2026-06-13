@@ -281,6 +281,9 @@ public static class FactEntryPointDeriver
 
         // handlerMethods:["*"] means "any method name" (again the WCF rule — gated by the attribute).
         var anyMethod = rule.HandlerMethods.Contains("*", StringComparer.Ordinal);
+        // Hoist the handler-name set out of the per-method loop: rule.HandlerMethods.Contains(name, cmp)
+        // is LINQ Enumerable.Contains, which allocates an enumerator on each of the ~50k calls per rule.
+        var handlerNames = anyMethod ? null : new HashSet<string>(rule.HandlerMethods, StringComparer.Ordinal);
 
         foreach (var m in handlers)
         {
@@ -288,7 +291,7 @@ public static class FactEntryPointDeriver
                 continue;
             if (closure is not null && !TypeClosure.Contains(closure, m.ContainingSymbolId))
                 continue;
-            if (!anyMethod && !rule.HandlerMethods.Contains(m.Name, StringComparer.Ordinal))
+            if (handlerNames is not null && !handlerNames.Contains(m.Name))
                 continue;
             if (rule.RequireOverride && !m.IsOverride)
                 continue;
