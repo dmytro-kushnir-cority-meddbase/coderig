@@ -126,6 +126,29 @@ ships EMPTY, so a codebase with no curated render rules always sees the raw exac
 5. **Effect/EP inventory**: `rig derive [--rules extra.json]`.
 6. **Dead code**: `rig dead` — see below.
 
+## Deployment attribution — which service hosts an entry point (`deployments.json`)
+
+Optional and opt-in: drop a `deployments.json` next to `.rig/` and every command that renders an entry
+point annotates it with the deployed **service(s)** whose process loads it. Absent the file, output is
+unchanged.
+
+- **Config** (`deployments.json`): `{ "services": [ { "name", "host": "<entry csproj, relative to the
+  solution dir>", "kind": "iis|kube|exe|…", "bootstrapsEcho": true? } ] }`. JSONC (comments + trailing
+  commas OK). Seed it from the build's own artifact manifest (e.g. a NUKE `Build.Artifacts.Spec.cs`),
+  then curate. `kind`/prod-topology is a hand-maintained overlay — the build manifest knows the csproj,
+  not which app-pool/region actually runs it.
+- **How it maps**: each service's entry csproj → transitive `<ProjectReference>` closure (via the indexed
+  solution); an EP's source file → its owning csproj → the service(s) whose closure contains it.
+- **Rendering** (the ▶ custom EP line): `▶ <kind> <route>  ⟦MedDBase (iis)⟧`, or `⟦N svcs: A, B, C +k⟧`
+  when an EP fans out to many hosts. Appears in `derive` (+ a per-service summary table, + a trailing
+  `service` column in `--format tsv`), `callers --entrypoints`/`--roots`, `tree` (root AND any EP node in
+  the body), and the `reaches`/`path` From line.
+- **Caveat — "loaded in" ≠ "runs in"**: membership is the static reference closure, an **upper bound**.
+  Shared libs (e.g. an actor/`Processes` assembly) fan out to *every* host that references them, so
+  `echoactor`/`background`/`timer`/`event` EPs show under many services even though they only **activate**
+  in the host that bootstraps the dispatcher (mark it `"bootstrapsEcho": true`). Runtime placement
+  (cluster routing, lazy spawn) is out of scope — confirm against config/logs.
+
 ## Finding dead code (`rig dead`)
 
 First-party method not reachable (forward, incl. dispatch) from any root = candidate. Roots = derived
