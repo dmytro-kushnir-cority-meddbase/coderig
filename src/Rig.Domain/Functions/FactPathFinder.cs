@@ -369,15 +369,23 @@ public static partial class FactPathFinder
                 // under one parent resolves to one symbol → N edges that would render byte-identically
                 // (1 expansion + N-1 "↺seen"). Fold them into a single kid carrying a call-site count.
                 // Keyed on every field that affects the rendered line so only true duplicates merge.
-                var dup = n.Kids.FirstOrDefault(k =>
-                    k.Symbol == s.Node
-                    && k.EdgeKind == s.Kind
-                    && k.LoopKind == s.LoopKind
-                    && k.LoopDetail == s.LoopDetail
-                    && k.HandoffVia == s.HandoffVia
-                    && k.Fanout == s.Fanout
-                    && k.DispatchBasis == s.Basis
-                );
+                // Manual scan rather than Kids.FirstOrDefault(k => ...): the lambda captures `s`, so the
+                // LINQ form heap-allocated a closure + delegate on every successor edge of every node.
+                MutableNode? dup = null;
+                foreach (var k in n.Kids)
+                    if (
+                        k.Symbol == s.Node
+                        && k.EdgeKind == s.Kind
+                        && k.LoopKind == s.LoopKind
+                        && k.LoopDetail == s.LoopDetail
+                        && k.HandoffVia == s.HandoffVia
+                        && k.Fanout == s.Fanout
+                        && k.DispatchBasis == s.Basis
+                    )
+                    {
+                        dup = k;
+                        break;
+                    }
                 if (dup is not null)
                 {
                     dup.CallSites++;
