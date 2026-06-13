@@ -131,11 +131,16 @@ public static class Reads
         }
 
         var like = $"%{pattern}%";
-        var query = context.SymbolFacts.Where(s => EF.Functions.Like(s.Name, like) || EF.Functions.Like(s.SymbolId, like));
+        // AsNoTracking is CRITICAL here (NOT a no-op like the projecting reads): this LIKE fallback
+        // materializes raw SymbolFact ENTITIES, so without it EF snapshots all 5000 rows into the change
+        // tracker — pure overhead on a read-only query, and it grows the working set for nothing.
+        var query = context.SymbolFacts.AsNoTracking().Where(s => EF.Functions.Like(s.Name, like) || EF.Functions.Like(s.SymbolId, like));
         if (kind is not null)
             query = query.Where(s => s.Kind == kind);
 
-        // Dedupe by SymbolId across runs (multi-target siblings / re-indexed projects).
+        // Dedupe by SymbolId across runs (multi-target siblings / re-indexed projects) on the CLIENT: the
+        // dup ratio is small (~2% — see docs/query-strategy.md) and this is over a bounded Take(5000), so a
+        // server-side GROUP BY would add a sort without meaningfully cutting rows; one HashSet pass is cheaper.
         var rows = await query.OrderBy(s => s.SymbolId).Take(5000).ToArrayAsync(cancellationToken);
         return rows.GroupBy(s => s.SymbolId)
             .Take(limit)
@@ -192,7 +197,9 @@ public static class Reads
         }
 
         var like = $"%{pattern}%";
-        var query = context.ReferenceFacts.Where(r => EF.Functions.Like(r.TargetSymbolId, like));
+        // AsNoTracking is CRITICAL: this fallback materializes raw ReferenceFact ENTITIES (no projection),
+        // so without it EF change-tracks every one of the `limit` rows — needless work on a read path.
+        var query = context.ReferenceFacts.AsNoTracking().Where(r => EF.Functions.Like(r.TargetSymbolId, like));
         if (firstPartyOnly)
             query = query.Where(r => r.TargetInSource);
         if (refKind is not null)
@@ -302,7 +309,12 @@ public static class Reads
             .ToArray();
 
         // Project straight to the domain record in the SELECT (EF builds it in the materializer) — no
-        // anonymous intermediate, no second client mapping pass. The dedup stays client-side on the records.
+        // anonymous intermediate, no second client mapping pass. (These are PROJECTIONS, so AsNoTracking is
+        // a no-op — EF tracks nothing but entities — kept only as an explicit read-only signal.)
+        // Dedup stays CLIENT-side deliberately: measured dup ratios are tiny (~2% methods, ≤10% on these
+        // small relation tables — see docs/query-strategy.md), so a SQL DISTINCT would sort the full result
+        // without cutting the rows marshalled; a one-pass HashSet/GroupBy over the fetched records is
+        // cheaper and exactly equivalent. Marshalling volume — not dedup — is the cost here.
         var implEdges = (
             await context
                 .TypeRelationFacts.AsNoTracking()
@@ -370,7 +382,10 @@ public static class Reads
         if (!await StorageProbes.TableExistsAsync(connection, "dispatch_facts", cancellationToken).ConfigureAwait(false))
             return null;
 
-        // Direct DispatchFact projection (no anonymous intermediate / second pass); dedup client-side.
+        // Direct DispatchFact projection (no anonymous intermediate / second pass; AsNoTracking is a no-op
+        // on a projection, kept as intent). dispatch_facts has a higher dup ratio (~25%), but it's a small
+        // table (~28k rows), so the dedup cost is negligible either way — kept CLIENT-side for consistency
+        // with the other reads rather than fragmenting into a server-side DISTINCT here.
         return (
             await context
                 .DispatchFacts.AsNoTracking()
@@ -518,6 +533,11 @@ public static class Reads
                 s.IsOverride,
             })
             .ToArrayAsync(cancellationToken);
+        // The three dedups below (methods, types, ctorRefs) run CLIENT-side by design. Measured dup ratios
+        // are tiny — methods by (file,line) is ~0.02% (43 of 217k rows, essentially defensive), types ~9%,
+        // ctorRefs ~3.6% (see docs/query-strategy.md). A server-side GROUP BY would scan + sort the full
+        // table without cutting the rows marshalled (the real cost), so it would be slower, not faster; the
+        // single client pass is the deliberate choice. The deriver also re-dedups by (file,line) downstream.
         var methods = methodRows
             .GroupBy(m => (m.FilePath, m.Line))
             .Select(g => g.First())
