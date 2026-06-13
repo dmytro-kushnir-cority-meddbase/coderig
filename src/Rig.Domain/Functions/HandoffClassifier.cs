@@ -41,7 +41,7 @@ public static class HandoffClassifier
         var consumersBySite = new Dictionary<(string, string, int), List<string>>();
         foreach (var e in edges)
         {
-            if (e.Kind is not ("invocation" or "ctor"))
+            if (e.Kind is not (EdgeKinds.Invocation or EdgeKinds.Ctor))
                 continue;
             var key = (e.Caller, e.FilePath, e.Line);
             if (!consumersBySite.TryGetValue(key, out var list))
@@ -52,7 +52,7 @@ public static class HandoffClassifier
         var result = new List<CallEdge>(edges.Count);
         foreach (var e in edges)
         {
-            if (e.Kind != "methodGroup")
+            if (e.Kind != EdgeKinds.MethodGroup)
             {
                 result.Add(e);
                 continue;
@@ -63,7 +63,7 @@ public static class HandoffClassifier
             var match = e.DelegateConsumer is not null
                 ? Match(e.DelegateConsumer, rules)
                 : MatchAtSite(consumersBySite, (e.Caller, e.FilePath, e.Line), rules);
-            result.Add(match is null ? e : e with { Kind = "handoff", HandoffDispatcher = match.Id });
+            result.Add(match is null ? e : e with { Kind = EdgeKinds.Handoff, HandoffDispatcher = match.Id });
         }
         return result;
     }
@@ -124,12 +124,15 @@ public static class HandoffClassifier
         {
             string? dispatcher = null;
             string? kind = null;
-            if (e.Kind == "handoff")
+            IReadOnlyList<string>? requires = null;
+            if (e.Kind == EdgeKinds.Handoff)
             {
                 dispatcher = e.HandoffDispatcher;
-                kind = ById(e.HandoffDispatcher, rules)?.Kind;
+                var rule = ById(e.HandoffDispatcher, rules);
+                kind = rule?.Kind;
+                requires = rule?.Requires; // capability gate inherited from the dispatcher rule
             }
-            else if (e.Kind != "methodGroup")
+            else if (e.Kind != EdgeKinds.MethodGroup)
             {
                 continue;
             }
@@ -138,7 +141,7 @@ public static class HandoffClassifier
             // A handoff classification wins over an unclassified duplicate at the same key.
             if (byKey.TryGetValue(key, out var existing) && existing.Dispatcher is not null)
                 continue;
-            byKey[key] = new HandoffEntryPoint(e.Callee, e.Caller, e.FilePath, e.Line, dispatcher, kind);
+            byKey[key] = new HandoffEntryPoint(e.Callee, e.Caller, e.FilePath, e.Line, dispatcher, kind, requires);
         }
 
         return byKey

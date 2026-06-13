@@ -99,10 +99,25 @@ public static class Writes
             progress?.Invoke($"Saved {saved}/{total} fact rows");
         }
 
-        for (var i = 0; i < symbols.Count; i++)
+        // The four fact tables share one batching policy (fixed-size flush + tracker clear, cumulative
+        // progress); only the per-row entity mapping differs. This local function captures the shared
+        // `saved`/`pending`/`total` counters so the control flow lives in exactly one place — the call
+        // sites supply just the (item, index) -> entity projection.
+        async Task AddAllAsync<TSource, TEntity>(IReadOnlyList<TSource> items, Func<TSource, int, TEntity> map)
+            where TEntity : class
         {
-            var s = symbols[i];
-            context.SymbolFacts.Add(
+            for (var i = 0; i < items.Count; i++)
+            {
+                context.Add(map(items[i], i));
+                saved++;
+                if (++pending >= FactBatchSize)
+                    await FlushAsync();
+            }
+        }
+
+        await AddAllAsync(
+            symbols,
+            (s, i) =>
                 new SymbolFactEntity
                 {
                     RunId = runId,
@@ -120,16 +135,11 @@ public static class Writes
                     DefiningAssembly = s.DefiningAssembly,
                     IsOverride = s.IsOverride,
                 }
-            );
-            saved++;
-            if (++pending >= FactBatchSize)
-                await FlushAsync();
-        }
+        );
 
-        for (var i = 0; i < references.Count; i++)
-        {
-            var r = references[i];
-            context.ReferenceFacts.Add(
+        await AddAllAsync(
+            references,
+            (r, i) =>
                 new ReferenceFactEntity
                 {
                     RunId = runId,
@@ -153,16 +163,11 @@ public static class Writes
                     DelegateConsumer = r.DelegateConsumer,
                     EnclosingScopes = r.EnclosingScopes,
                 }
-            );
-            saved++;
-            if (++pending >= FactBatchSize)
-                await FlushAsync();
-        }
+        );
 
-        for (var i = 0; i < relations.Count; i++)
-        {
-            var t = relations[i];
-            context.TypeRelationFacts.Add(
+        await AddAllAsync(
+            relations,
+            (t, i) =>
                 new TypeRelationFactEntity
                 {
                     RunId = runId,
@@ -171,16 +176,11 @@ public static class Writes
                     RelatedSymbolId = t.RelatedSymbolId,
                     RelationKind = t.RelationKind,
                 }
-            );
-            saved++;
-            if (++pending >= FactBatchSize)
-                await FlushAsync();
-        }
+        );
 
-        for (var i = 0; i < dispatch.Count; i++)
-        {
-            var d = dispatch[i];
-            context.DispatchFacts.Add(
+        await AddAllAsync(
+            dispatch,
+            (d, i) =>
                 new DispatchFactEntity
                 {
                     RunId = runId,
@@ -189,11 +189,7 @@ public static class Writes
                     TargetMember = d.TargetMember,
                     Kind = d.Kind,
                 }
-            );
-            saved++;
-            if (++pending >= FactBatchSize)
-                await FlushAsync();
-        }
+        );
 
         if (pending > 0)
             await FlushAsync();

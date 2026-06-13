@@ -11,19 +11,30 @@ internal static class EntryPointRenderer
 {
     public const string Marker = "▶";
 
-    // The deployment chip for an EP at filePath: "⟦MedDBase (iis)⟧", "⟦3 svcs: A (iis), B, C⟧",
-    // or "⟦no service⟧" when the owning project is in no service closure (tests/tools).
-    public static string DeployTag(DeploymentMap deployments, string? filePath, int cap = 3)
+    // The deployment chip for an EP at filePath, showing the services it is ACTIVE-IN (loaded AND
+    // capability-gated in): "⟦A (iis)⟧", "⟦3 svcs: A (iis), B, C⟧", or "⟦no service⟧" when the owning
+    // project is in no service closure (tests/tools). When the EP's rule `requires` tokens that some
+    // loaded services don't `provide`, those drop out of the active set and surface as a dim delta —
+    // "⟦A (iis) · 1 linked-inactive⟧" — so the "loaded here, doesn't run here" signal stays visible.
+    // `requires` null/empty (the default / ungated EP) makes active == loaded, so the chip is unchanged.
+    public static string DeployTag(DeploymentMap deployments, string? filePath, IReadOnlyList<string>? requires = null, int cap = 3)
     {
-        var svcs = deployments.ServicesForFile(filePath);
-        if (svcs.Count == 0)
+        var loaded = deployments.ServicesForFile(filePath);
+        if (loaded.Count == 0)
             return "⟦no service⟧";
 
-        var shown = string.Join(", ", svcs.Take(cap).Select(s => FormatService(deployments, s)));
-        var overflow = svcs.Count > cap ? $" +{svcs.Count - cap}" : "";
+        var active = deployments.ActiveServices(loaded, requires);
+        var inactive = loaded.Count - active.Count;
+        if (active.Count == 0)
+            // Linked into hosts but gated out of all of them — the "runs here? no, anywhere" signal.
+            return $"⟦0 active · {inactive} linked-inactive⟧";
+
+        var shown = string.Join(", ", active.Take(cap).Select(s => FormatService(deployments, s)));
+        var overflow = active.Count > cap ? $" +{active.Count - cap}" : "";
         // Lead with the count when an EP fans out to multiple services so it reads as "this runs in N hosts".
-        var lead = svcs.Count > 1 ? $"{svcs.Count} svcs: " : "";
-        return $"⟦{lead}{shown}{overflow}⟧";
+        var lead = active.Count > 1 ? $"{active.Count} svcs: " : "";
+        var inactiveDelta = inactive > 0 ? $" · {inactive} linked-inactive" : "";
+        return $"⟦{lead}{shown}{overflow}{inactiveDelta}⟧";
     }
 
     private static string FormatService(DeploymentMap deployments, string name)
@@ -34,11 +45,16 @@ internal static class EntryPointRenderer
 
     // The inline EP marker for a tree node / header: "▶ echoactor " (prefix) + " ⟦…⟧" (suffix),
     // so a node renders as "▶ echoactor SomeHandler …  ⟦MedDBase⟧". Empty strings when not an EP.
-    public static (string Prefix, string Suffix) NodeChip(DeploymentMap deployments, string? kind, string? filePath)
+    public static (string Prefix, string Suffix) NodeChip(
+        DeploymentMap deployments,
+        string? kind,
+        string? filePath,
+        IReadOnlyList<string>? requires = null
+    )
     {
         if (kind is null)
             return ("", "");
-        return ($"{Marker} {kind} ", $"  {DeployTag(deployments, filePath)}");
+        return ($"{Marker} {kind} ", $"  {DeployTag(deployments, filePath, requires)}");
     }
 
     // The two-line EP listing block (the "custom rendering"): the ▶/kind/route/deploy-chip line, then
@@ -51,10 +67,11 @@ internal static class EntryPointRenderer
         string? filePath,
         int line,
         Func<string, string> shorten,
+        IReadOnlyList<string>? requires = null,
         int kindPad = 10
     )
     {
-        output.WriteLine($"{Marker} {kind.PadRight(kindPad)} {route}  {DeployTag(deployments, filePath)}");
+        output.WriteLine($"{Marker} {kind.PadRight(kindPad)} {route}  {DeployTag(deployments, filePath, requires)}");
         if (filePath is not null)
             output.WriteLine($"     {shorten(filePath)}:{line}");
     }
@@ -66,7 +83,9 @@ internal static class EntryPointRenderer
 internal sealed record EpRenderContext(
     DeploymentMap Deployments,
     IReadOnlyDictionary<string, (string? File, int Line)> SiteById,
-    IReadOnlyDictionary<(string File, int Line), string> EpSiteKind
+    // (File, Line) -> the EP's kind AND its capability requirements, so a node/header can compute
+    // active-in (not just loaded-in) right where it renders.
+    IReadOnlyDictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)> EpSiteKind
 )
 {
     // (prefix, suffix) wrapping a node's name when it is an entry point — "▶ kind " / "  ⟦svc⟧";
@@ -75,9 +94,9 @@ internal sealed record EpRenderContext(
     {
         if (!SiteById.TryGetValue(symbolId, out var loc) || loc.File is null)
             return ("", "");
-        if (!EpSiteKind.TryGetValue((loc.File, loc.Line), out var kind))
+        if (!EpSiteKind.TryGetValue((loc.File, loc.Line), out var ep))
             return ("", "");
-        return EntryPointRenderer.NodeChip(Deployments, kind, loc.File);
+        return EntryPointRenderer.NodeChip(Deployments, ep.Kind, loc.File, ep.Requires);
     }
 
     // A header suffix for a from-symbol (reaches/path/callers roots): "▶ kind  ⟦svc⟧" when it is an
@@ -86,7 +105,8 @@ internal sealed record EpRenderContext(
     {
         if (!SiteById.TryGetValue(symbolId, out var loc) || loc.File is null)
             return "";
-        var deployTag = EntryPointRenderer.DeployTag(Deployments, loc.File);
-        return EpSiteKind.TryGetValue((loc.File, loc.Line), out var kind) ? $"{EntryPointRenderer.Marker} {kind}  {deployTag}" : deployTag;
+        if (EpSiteKind.TryGetValue((loc.File, loc.Line), out var ep))
+            return $"{EntryPointRenderer.Marker} {ep.Kind}  {EntryPointRenderer.DeployTag(Deployments, loc.File, ep.Requires)}";
+        return EntryPointRenderer.DeployTag(Deployments, loc.File);
     }
 }

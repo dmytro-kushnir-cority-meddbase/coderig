@@ -98,8 +98,8 @@ public static class Reads
         CancellationToken cancellationToken = default
     )
     {
-        var connection = await OpenConnectionAsync(context, cancellationToken).ConfigureAwait(false);
-        if (pattern.Length >= 3 && await TableExistsAsync(connection, "symbol_fts", cancellationToken).ConfigureAwait(false))
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken).ConfigureAwait(false);
+        if (pattern.Length >= 3 && await StorageProbes.TableExistsAsync(connection, "symbol_fts", cancellationToken).ConfigureAwait(false))
         {
             var hits = new List<SymbolSearchHit>();
             using var command = connection.CreateCommand();
@@ -157,8 +157,11 @@ public static class Reads
         CancellationToken cancellationToken = default
     )
     {
-        var connection = await OpenConnectionAsync(context, cancellationToken).ConfigureAwait(false);
-        if (pattern.Length >= 3 && await TableExistsAsync(connection, "ref_target_fts", cancellationToken).ConfigureAwait(false))
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken).ConfigureAwait(false);
+        if (
+            pattern.Length >= 3
+            && await StorageProbes.TableExistsAsync(connection, "ref_target_fts", cancellationToken).ConfigureAwait(false)
+        )
         {
             var hits = new List<ReferenceHit>();
             using var command = connection.CreateCommand();
@@ -206,22 +209,6 @@ public static class Reads
     }
 
     // --- raw-ADO helpers for the FTS search paths (FTS5 isn't expressible in EF LINQ) ---
-
-    private static async Task<DbConnection> OpenConnectionAsync(RigDbContext context, CancellationToken cancellationToken)
-    {
-        var connection = (DbConnection)context.Database.GetDbConnection();
-        if (connection.State != System.Data.ConnectionState.Open)
-            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        return connection;
-    }
-
-    private static async Task<bool> TableExistsAsync(DbConnection connection, string table, CancellationToken cancellationToken)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT 1 FROM sqlite_master WHERE name = $n LIMIT 1;";
-        AddParam(command, "$n", table);
-        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null;
-    }
 
     // FTS5 query for a literal substring: wrap in double quotes (a string token) and double any embedded
     // quotes, so DocID punctuation (. : ( ) etc.) is treated as content, not FTS query syntax. Trigram
@@ -276,7 +263,7 @@ public static class Reads
             .ReferenceFacts.Where(r =>
                 r.EnclosingSymbolId != null
                 && r.TargetInSource
-                && (r.RefKind == "invocation" || r.RefKind == "methodGroup" || r.RefKind == "ctor")
+                && (r.RefKind == RefKinds.Invocation || r.RefKind == RefKinds.MethodGroup || r.RefKind == RefKinds.Ctor)
             )
             .Select(r => new
             {
@@ -314,19 +301,19 @@ public static class Reads
             .ToArray();
 
         var implRows = await context
-            .TypeRelationFacts.Where(t => t.RelationKind == "interface")
+            .TypeRelationFacts.Where(t => t.RelationKind == RelationKinds.Interface)
             .Select(t => new { t.TypeSymbolId, t.RelatedSymbolId })
             .ToArrayAsync(cancellationToken);
         var implEdges = implRows.Select(t => new ImplementsEdge(t.TypeSymbolId, t.RelatedSymbolId)).Distinct().ToArray();
 
         var baseRows = await context
-            .TypeRelationFacts.Where(t => t.RelationKind == "base")
+            .TypeRelationFacts.Where(t => t.RelationKind == RelationKinds.Base)
             .Select(t => new { t.TypeSymbolId, t.RelatedSymbolId })
             .ToArrayAsync(cancellationToken);
         var baseEdges = baseRows.Select(t => new BaseEdge(t.TypeSymbolId, t.RelatedSymbolId)).Distinct().ToArray();
 
         var methodRows = await context
-            .SymbolFacts.Where(s => s.Kind == "method")
+            .SymbolFacts.Where(s => s.Kind == SymbolKinds.Method)
             .Select(s => new
             {
                 s.SymbolId,
@@ -359,7 +346,7 @@ public static class Reads
     )
     {
         var rows = await context
-            .ReferenceFacts.Where(r => r.EnclosingSymbolId != null && r.RefKind == "read" && r.TargetSymbolId.StartsWith("E:"))
+            .ReferenceFacts.Where(r => r.EnclosingSymbolId != null && r.RefKind == RefKinds.Read && r.TargetSymbolId.StartsWith("E:"))
             .Select(r => new
             {
                 r.EnclosingSymbolId,
@@ -379,7 +366,8 @@ public static class Reads
         CancellationToken cancellationToken
     )
     {
-        if (!await TableExistsAsync(context, "dispatch_facts", cancellationToken))
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken).ConfigureAwait(false);
+        if (!await StorageProbes.TableExistsAsync(connection, "dispatch_facts", cancellationToken).ConfigureAwait(false))
             return null;
 
         var rows = await context
@@ -393,20 +381,6 @@ public static class Reads
         return rows.Select(d => new DispatchFact(d.SourceMember, d.TargetMember, d.Kind)).Distinct().ToArray();
     }
 
-    private static async Task<bool> TableExistsAsync(RigDbContext context, string table, CancellationToken cancellationToken)
-    {
-        var connection = (DbConnection)context.Database.GetDbConnection();
-        if (connection.State != System.Data.ConnectionState.Open)
-            await connection.OpenAsync(cancellationToken);
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=$name LIMIT 1;";
-        var p = command.CreateParameter();
-        p.ParameterName = "$name";
-        p.Value = table;
-        command.Parameters.Add(p);
-        return await command.ExecuteScalarAsync(cancellationToken) is not null;
-    }
-
     // Loads first-party method metadata for the dead-code finder: every declared method symbol with
     // the accessibility/abstract/virtual modifiers, file/line, override flag, and a generated-file
     // heuristic. SymbolFacts are source-declared (first-party) by construction, so this is exactly the
@@ -417,7 +391,7 @@ public static class Reads
     )
     {
         var rows = await context
-            .SymbolFacts.Where(s => s.Kind == "method")
+            .SymbolFacts.Where(s => s.Kind == SymbolKinds.Method)
             .Select(s => new
             {
                 s.SymbolId,
@@ -484,13 +458,13 @@ public static class Reads
     )
     {
         var baseEdgeRows = await context
-            .TypeRelationFacts.Where(t => t.RelationKind == "base")
+            .TypeRelationFacts.Where(t => t.RelationKind == RelationKinds.Base)
             .Select(t => new { t.TypeSymbolId, t.RelatedSymbolId })
             .ToArrayAsync(cancellationToken);
         var baseEdges = baseEdgeRows.Select(t => (t.TypeSymbolId, t.RelatedSymbolId)).Distinct().ToArray();
 
         var interfaceEdgeRows = await context
-            .TypeRelationFacts.Where(t => t.RelationKind == "interface")
+            .TypeRelationFacts.Where(t => t.RelationKind == RelationKinds.Interface)
             .Select(t => new { t.TypeSymbolId, t.RelatedSymbolId })
             .ToArrayAsync(cancellationToken);
         var interfaceEdges = interfaceEdgeRows.Select(t => (t.TypeSymbolId, t.RelatedSymbolId)).Distinct().ToArray();
@@ -498,7 +472,7 @@ public static class Reads
         // All methods (not just .ctor): page EPs use the .ctor rows, class-inheritance EPs use the
         // named handler rows. IsOverride feeds RequireOverride rules (e.g. WorkflowControllerBase.OnSave).
         var methodRows = await context
-            .SymbolFacts.Where(s => s.Kind == "method")
+            .SymbolFacts.Where(s => s.Kind == SymbolKinds.Method)
             .Select(s => new
             {
                 s.SymbolId,
@@ -517,7 +491,7 @@ public static class Reads
             .ToArray();
 
         var typeRows = await context
-            .SymbolFacts.Where(s => s.Kind == "type")
+            .SymbolFacts.Where(s => s.Kind == SymbolKinds.Type)
             .Select(s => new
             {
                 s.SymbolId,
@@ -536,7 +510,7 @@ public static class Reads
         // ctor refs with RefKind="ctor" capture attribute applications (e.g. [ClientAction])
         // as well as regular constructor calls.  The deriver filters by TargetSymbolId prefix.
         var ctorRefRows = await context
-            .ReferenceFacts.Where(r => r.RefKind == "ctor" && r.EnclosingSymbolId != null)
+            .ReferenceFacts.Where(r => r.RefKind == RefKinds.Ctor && r.EnclosingSymbolId != null)
             .Select(r => new
             {
                 r.TargetSymbolId,
@@ -561,7 +535,7 @@ public static class Reads
     )
     {
         var rows = await context
-            .ReferenceFacts.Where(r => r.RefKind == "invocation")
+            .ReferenceFacts.Where(r => r.RefKind == RefKinds.Invocation)
             .Select(r => new
             {
                 r.TargetSymbolId,
@@ -607,7 +581,7 @@ public static class Reads
     )
     {
         var rows = await context
-            .ReferenceFacts.Where(r => r.RefKind == "throw" && r.EnclosingSymbolId != null)
+            .ReferenceFacts.Where(r => r.RefKind == RefKinds.Throw && r.EnclosingSymbolId != null)
             .Select(r => new
             {
                 r.TargetSymbolId,

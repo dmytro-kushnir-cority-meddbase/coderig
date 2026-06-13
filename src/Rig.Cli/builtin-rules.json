@@ -1,100 +1,11 @@
 {
   "entrypoints": {
-    "minimalApi": [
-      {
-        "method": "MapGet",
-        "httpMethod": "GET"
-      },
-      {
-        "method": "MapPost",
-        "httpMethod": "POST"
-      },
-      {
-        "method": "MapPut",
-        "httpMethod": "PUT"
-      },
-      {
-        "method": "MapDelete",
-        "httpMethod": "DELETE"
-      },
-      {
-        "method": "MapPatch",
-        "httpMethod": "PATCH"
-      }
-    ],
-    "mvcHttpAttributes": [
-      {
-        "attribute": "HttpGet",
-        "httpMethod": "GET"
-      },
-      {
-        "attribute": "HttpGetAttribute",
-        "httpMethod": "GET"
-      },
-      {
-        "attribute": "HttpPost",
-        "httpMethod": "POST"
-      },
-      {
-        "attribute": "HttpPostAttribute",
-        "httpMethod": "POST"
-      },
-      {
-        "attribute": "HttpPut",
-        "httpMethod": "PUT"
-      },
-      {
-        "attribute": "HttpPutAttribute",
-        "httpMethod": "PUT"
-      },
-      {
-        "attribute": "HttpDelete",
-        "httpMethod": "DELETE"
-      },
-      {
-        "attribute": "HttpDeleteAttribute",
-        "httpMethod": "DELETE"
-      },
-      {
-        "attribute": "HttpPatch",
-        "httpMethod": "PATCH"
-      },
-      {
-        "attribute": "HttpPatchAttribute",
-        "httpMethod": "PATCH"
-      }
-    ],
     "classInheritance": [
       {
         "id": "dotnet.fastendpoints.execute",
         "kind": "fastendpoint",
         "baseTypes": [
           "FastEndpoints.Endpoint"
-        ],
-        "routeProviderMethods": [
-          "Configure"
-        ],
-        "routeMethods": [
-          {
-            "method": "Get",
-            "httpMethod": "GET"
-          },
-          {
-            "method": "Post",
-            "httpMethod": "POST"
-          },
-          {
-            "method": "Put",
-            "httpMethod": "PUT"
-          },
-          {
-            "method": "Delete",
-            "httpMethod": "DELETE"
-          },
-          {
-            "method": "Patch",
-            "httpMethod": "PATCH"
-          }
         ],
         "handlerMethods": [
           "ExecuteAsync",
@@ -108,8 +19,6 @@
         "baseTypes": [
           "*"
         ],
-        "routeProviderMethods": [],
-        "routeMethods": [],
         "handlerMethods": [
           "*"
         ],
@@ -125,8 +34,6 @@
         "baseTypes": [
           "Microsoft.Extensions.Hosting.BackgroundService"
         ],
-        "routeProviderMethods": [],
-        "routeMethods": [],
         "handlerMethods": [
           "ExecuteAsync"
         ],
@@ -139,8 +46,6 @@
         "baseTypes": [
           "eShop.EventBus.Abstractions.IIntegrationEventHandler"
         ],
-        "routeProviderMethods": [],
-        "routeMethods": [],
         "handlerMethods": [
           "Handle"
         ],

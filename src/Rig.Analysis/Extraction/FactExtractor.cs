@@ -68,7 +68,7 @@ internal static class FactExtractor
                         continue;
                     AddSymbol(symbols, accessor, tree, AccessorNode(accessor) ?? decl);
                     if (accessor.OverriddenMethod is { } overriddenAccessor)
-                        AddDispatchFact(dispatch, dispatchSeen, overriddenAccessor, accessor, "override");
+                        AddDispatchFact(dispatch, dispatchSeen, overriddenAccessor, accessor, DispatchKinds.Override);
                 }
             }
 
@@ -76,7 +76,7 @@ internal static class FactExtractor
             // guessing). The transitive chain (A.M ← B.M ← C.M) is reconstructed by forward closure at
             // query time, so only the immediate hop is stored.
             if (symbol is IMethodSymbol { OverriddenMethod: { } overridden } overrideMethod)
-                AddDispatchFact(dispatch, dispatchSeen, overridden, overrideMethod, "override");
+                AddDispatchFact(dispatch, dispatchSeen, overridden, overrideMethod, DispatchKinds.Override);
         }
 
         // --- References -> ReferenceFact (one pass over every simple name) ---
@@ -90,14 +90,14 @@ internal static class FactExtractor
             if (refKind is null)
                 continue;
 
-            var invocation = refKind == "invocation" ? InvocationOf(name) : null;
-            var receiverType = refKind == "invocation" ? ReceiverTypeOf(name, model) : null;
+            var invocation = refKind == RefKinds.Invocation ? InvocationOf(name) : null;
+            var receiverType = refKind == RefKinds.Invocation ? ReceiverTypeOf(name, model) : null;
             var (firstArgTemplate, firstArgType, firstArgName) = FirstArgumentOf(
                 FirstArgumentExpressionOf(name, refKind, invocation),
                 model
             );
             var structural = StructuralContextOf(invocation, model);
-            var delegateConsumer = refKind == "methodGroup" ? DelegateConsumerOf(name, model) : null;
+            var delegateConsumer = refKind == RefKinds.MethodGroup ? DelegateConsumerOf(name, model) : null;
             AddReference(
                 references,
                 target,
@@ -117,7 +117,7 @@ internal static class FactExtractor
             // read/write ref above records the data-flow touch; this records the call EDGE into a bodied
             // accessor so reach walks its effects (a setter that validates/persists, a lazy getter that
             // fetches). See AddAccessorInvocations for the body-only selectivity.
-            if (target is IPropertySymbol propertyAccess && refKind is "read" or "write")
+            if (target is IPropertySymbol propertyAccess && refKind is RefKinds.Read or RefKinds.Write)
                 AddAccessorInvocations(references, propertyAccess, name, model, tree);
         }
 
@@ -129,7 +129,7 @@ internal static class FactExtractor
         foreach (var creation in root.DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>())
         {
             if (model.GetSymbolInfo(creation).Symbol is IMethodSymbol { MethodKind: MethodKind.Constructor } ctor)
-                AddReference(references, ctor, "ctor", EnclosingSymbolId(creation, model), tree, creation);
+                AddReference(references, ctor, RefKinds.Ctor, EnclosingSymbolId(creation, model), tree, creation);
         }
 
         // --- Throw sites -> "throw" refs (the thrown exception TYPE) ---
@@ -146,7 +146,7 @@ internal static class FactExtractor
             AddReference(
                 references,
                 type,
-                "throw",
+                RefKinds.Throw,
                 EnclosingSymbolId(thrown, model),
                 tree,
                 thrown,
@@ -193,14 +193,23 @@ internal static class FactExtractor
             var structural = StructuralContextOf(lockStmt, model);
 
             // acquire: at the `lock` keyword / locked expression. allowRuntime keeps the BCL ref.
-            AddReference(references, enter, "invocation", enclosing, tree, lockStmt.Expression, structural: structural, allowRuntime: true);
+            AddReference(
+                references,
+                enter,
+                RefKinds.Invocation,
+                enclosing,
+                tree,
+                lockStmt.Expression,
+                structural: structural,
+                allowRuntime: true
+            );
 
             // release: at the closing brace of the block (or the embedded statement's last line).
             var releaseLine = tree.GetLineSpan(lockStmt.Statement.Span).EndLinePosition.Line + 1;
             AddReference(
                 references,
                 exit,
-                "invocation",
+                RefKinds.Invocation,
                 enclosing,
                 tree,
                 lockStmt.Expression,
@@ -234,7 +243,7 @@ internal static class FactExtractor
             {
                 case IMethodSymbol { MethodKind: MethodKind.Ordinary } interfaceMethod:
                     if (type.FindImplementationForInterfaceMember(interfaceMethod) is IMethodSymbol impl)
-                        AddDispatchFact(dispatch, seen, interfaceMethod, impl, "impl");
+                        AddDispatchFact(dispatch, seen, interfaceMethod, impl, DispatchKinds.Impl);
                     break;
 
                 // Interface PROPERTY members resolve to the impl property's accessors — the same typed
@@ -259,7 +268,7 @@ internal static class FactExtractor
     )
     {
         if (interfaceAccessor is not null && implAccessor is not null && HasAccessorBody(implAccessor))
-            AddDispatchFact(dispatch, seen, interfaceAccessor, implAccessor, "impl");
+            AddDispatchFact(dispatch, seen, interfaceAccessor, implAccessor, DispatchKinds.Impl);
     }
 
     // Emits one deduped (Source, Target, Kind) dispatch fact keyed by OriginalDefinition DocIDs (the
@@ -367,7 +376,7 @@ internal static class FactExtractor
         // For the NON-effect ref kinds (typeUse/read/write/methodGroup) the runtime/BCL drop still
         // applies: those are pervasive pure noise (every `string`, `.Count`, `.ToString` group) with no
         // effect consumer. allowRuntime additionally keeps runtime throws (the throw site is ours).
-        var isCallFact = refKind is "invocation" or "ctor";
+        var isCallFact = refKind is RefKinds.Invocation or RefKinds.Ctor;
         if (!inSource && !allowRuntime && !isCallFact && IsRuntimeAssembly(assembly))
             return;
 
@@ -420,10 +429,10 @@ internal static class FactExtractor
         InvocationExpressionSyntax? invocation
     )
     {
-        if (refKind == "invocation")
+        if (refKind == RefKinds.Invocation)
             return invocation?.ArgumentList.Arguments.FirstOrDefault()?.Expression;
 
-        if (refKind == "ctor" && IsAttributeName(name))
+        if (refKind == RefKinds.Ctor && IsAttributeName(name))
             return name.FirstAncestorOrSelf<AttributeSyntax>()?.ArgumentList?.Arguments.FirstOrDefault()?.Expression;
 
         return null;
@@ -642,11 +651,11 @@ internal static class FactExtractor
     private static string? ClassifyReference(SimpleNameSyntax name, ISymbol target) =>
         target switch
         {
-            IMethodSymbol { MethodKind: MethodKind.Constructor } => "ctor",
-            IMethodSymbol => IsInvoked(name) ? "invocation" : "methodGroup",
-            INamedTypeSymbol or ITypeParameterSymbol => IsAttributeName(name) ? "attributeUse" : "typeUse",
-            IPropertySymbol or IFieldSymbol => IsWriteTarget(name) ? "write" : "read",
-            IEventSymbol => "read",
+            IMethodSymbol { MethodKind: MethodKind.Constructor } => RefKinds.Ctor,
+            IMethodSymbol => IsInvoked(name) ? RefKinds.Invocation : RefKinds.MethodGroup,
+            INamedTypeSymbol or ITypeParameterSymbol => IsAttributeName(name) ? RefKinds.AttributeUse : RefKinds.TypeUse,
+            IPropertySymbol or IFieldSymbol => IsWriteTarget(name) ? RefKinds.Write : RefKinds.Read,
+            IEventSymbol => RefKinds.Read,
             _ => null,
         };
 
@@ -694,9 +703,9 @@ internal static class FactExtractor
         var receiver = ReceiverTypeOf(name, model);
         var structural = StructuralContextOf(name, model);
         if (getter is not null)
-            AddReference(references, getter, "invocation", enclosing, tree, name, receiver, structural: structural);
+            AddReference(references, getter, RefKinds.Invocation, enclosing, tree, name, receiver, structural: structural);
         if (setter is not null)
-            AddReference(references, setter, "invocation", enclosing, tree, name, receiver, structural: structural);
+            AddReference(references, setter, RefKinds.Invocation, enclosing, tree, name, receiver, structural: structural);
     }
 
     // Read/write shape of a property access: a plain read -> (read); a simple `=` assignment -> (write
@@ -769,8 +778,8 @@ internal static class FactExtractor
     private static string KindOf(ISymbol symbol) =>
         symbol switch
         {
-            INamedTypeSymbol => "type",
-            IMethodSymbol => "method",
+            INamedTypeSymbol => SymbolKinds.Type,
+            IMethodSymbol => SymbolKinds.Method,
             IPropertySymbol => "property",
             IFieldSymbol => "field",
             IEventSymbol => "event",

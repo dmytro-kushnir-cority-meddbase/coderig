@@ -133,21 +133,26 @@ point annotates it with the deployed **service(s)** whose process loads it. Abse
 unchanged.
 
 - **Config** (`deployments.json`): `{ "services": [ { "name", "host": "<entry csproj, relative to the
-  solution dir>", "kind": "iis|kube|exe|…", "bootstrapsEcho": true? } ] }`. JSONC (comments + trailing
+  solution dir>", "kind": "iis|kube|exe|…", "provides": ["<token>", …]? } ] }`. JSONC (comments + trailing
   commas OK). Seed it from the build's own artifact manifest (e.g. a NUKE `Build.Artifacts.Spec.cs`),
   then curate. `kind`/prod-topology is a hand-maintained overlay — the build manifest knows the csproj,
   not which app-pool/region actually runs it.
 - **How it maps**: each service's entry csproj → transitive `<ProjectReference>` closure (via the indexed
   solution); an EP's source file → its owning csproj → the service(s) whose closure contains it.
-- **Rendering** (the ▶ custom EP line): `▶ <kind> <route>  ⟦MedDBase (iis)⟧`, or `⟦N svcs: A, B, C +k⟧`
-  when an EP fans out to many hosts. Appears in `derive` (+ a per-service summary table, + a trailing
-  `service` column in `--format tsv`), `callers --entrypoints`/`--roots`, `tree` (root AND any EP node in
-  the body), and the `reaches`/`path` From line.
-- **Caveat — "loaded in" ≠ "runs in"**: membership is the static reference closure, an **upper bound**.
-  Shared libs (e.g. an actor/`Processes` assembly) fan out to *every* host that references them, so
-  `echoactor`/`background`/`timer`/`event` EPs show under many services even though they only **activate**
-  in the host that bootstraps the dispatcher (mark it `"bootstrapsEcho": true`). Runtime placement
-  (cluster routing, lazy spawn) is out of scope — confirm against config/logs.
+- **loaded-in vs active-in (capability gate)**: closure membership is "code is *loaded* in service X", an
+  **upper bound** — shared libs fan out to every referencing host. To refine to *active-in*, a service
+  declares opaque tokens it `provides` and a rule (`handoffDispatchers` / entry-point rule in
+  `rig.rules.json`) declares tokens it `requires`; an EP is active-in a loaded service iff
+  `provides ∩ requires ≠ ∅` (ANY). No `requires` ⇒ ungated ⇒ active wherever loaded (output unchanged —
+  the gate is opt-in). Tokens are opaque to rig (a deployment convention, e.g. a startup-set id).
+- **Rendering** (the ▶ custom EP line): `▶ <kind> <route>  ⟦MedDBase (iis)⟧`, with a dim
+  `· N linked-inactive` delta when the EP links into hosts it is gated out of, or `⟦N svcs: A, B, C +k⟧`
+  for a multi-host fan-out. Appears in `derive` (+ a per-service active-in summary, + trailing `service` =
+  loaded and `activeService` = active columns in `--format tsv`), `callers --entrypoints`/`--roots`,
+  `tree` (root AND any EP node in the body), and the `reaches`/`path` From line.
+- **Out of scope**: a single rule gates all its EPs identically — a runtime `if` inside one registrar that
+  starts some actors only on one host is not expressible by rule alone; cluster routing / lazy spawn too.
+  Confirm against config/logs.
 
 ## Finding dead code (`rig dead`)
 

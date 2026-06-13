@@ -287,7 +287,10 @@ public sealed record HandoffEntryPoint(
     string FilePath,
     int Line,
     string? Dispatcher = null,
-    string? Kind = null
+    string? Kind = null,
+    // Capability tokens (from the producing dispatcher rule) a deployment must `provides` for this
+    // handoff to ACTIVATE there — active-in vs merely loaded-in. Null/empty = ungated. See DeploymentMap.
+    IReadOnlyList<string>? Requires = null
 );
 
 // A handoff-dispatcher rule (the fact-matchable projection of a `handoffDispatchers` JSON entry):
@@ -298,7 +301,16 @@ public sealed record HandoffEntryPoint(
 // is the execution-origin kind the promoted callback gets (background|timer|actor|event); Repeating
 // flags a re-firing schedule (vs one-shot). Rule data, not code — see the "detectors are data"
 // agreement; the generic matcher lives in HandoffClassifier.
-public sealed record FactHandoffRule(string Id, string Kind, IReadOnlyList<string> ConsumerPatterns, bool Repeating = false);
+public sealed record FactHandoffRule(
+    string Id,
+    string Kind,
+    IReadOnlyList<string> ConsumerPatterns,
+    bool Repeating = false,
+    // Capability tokens a deployment must `provides` (ANY-intersection) for the handoffs this dispatcher
+    // produces to be active-in that deployment. Null/empty = ungated (active wherever loaded). The
+    // tokens are opaque strings to rig — a generic per-deployment gate, not a coderig concept.
+    IReadOnlyList<string>? Requires = null
+);
 
 // Codebase-specific RENDER knowledge for `rig tree` — presentation rules, NOT analysis facts. They
 // only change what the tree DRAWS; the underlying reach is untouched and stays exact. Loaded from the
@@ -464,7 +476,7 @@ public sealed record FactObservationRules(
 );
 
 // An entry point re-derived from facts (type_relation_facts BFS + symbol_facts + reference_facts).
-// Covers the two pageModel cases: constructor-per-overload (page kind) and
+// Covers the two type-entry-point cases: constructor-per-overload (page kind) and
 // attribute-decorated methods (action kind).
 public sealed record DerivedEntryPoint(
     string Kind, // e.g. "page" or "action"
@@ -472,10 +484,13 @@ public sealed record DerivedEntryPoint(
     string Route, // e.g. "Accounts/MakePaymentComponents/Create2"
     string DisplayName, // e.g. "page PAGE Accounts/MakePaymentComponents/Create2(pkInvoice)"
     string FilePath,
-    int Line
+    int Line,
+    // Capability tokens inherited from the producing rule; a deployment activates this EP only if it
+    // `provides` one of them (active-in). Null/empty = ungated. See DeploymentMap.ActiveServices.
+    IReadOnlyList<string>? Requires = null
 );
 
-// Fact-matchable projection of a pageModel entry-point rule (from AnalysisRuleSet.PageModel).
+// Fact-matchable projection of a typeEntryPoints rule (from AnalysisRuleSet.TypeEntryPoints).
 // The generic BFS deriver (FactEntryPointDeriver) consumes these — no hardcoded type lists.
 public sealed record FactEntryPointRule(
     string Id,
@@ -485,7 +500,10 @@ public sealed record FactEntryPointRule(
     string NamespacePrefix, // strip prefix from namespace to build route (e.g. "MedDBase.Pages.")
     // When set: methods decorated with any of these attribute DocID prefixes are action entry points.
     // When null/empty: the rule emits constructor-overload page entry points instead.
-    IReadOnlyList<string> HandlerMethodAttributePrefixes
+    IReadOnlyList<string> HandlerMethodAttributePrefixes,
+    // Capability tokens a deployment must `provides` for EPs from this rule to be active-in it (active-in
+    // vs loaded-in). Null/empty = ungated. Opaque to rig; see DeploymentMap.
+    IReadOnlyList<string>? Requires = null
 );
 
 // Fact-matchable projection of a classInheritance entry-point rule (from
@@ -514,7 +532,10 @@ public sealed record FactClassInheritanceRule(
     // for the gRPC rule). Matched against the fact Signature's parameter-type tokens by simple name —
     // the discriminator that stops a baseTypes:["*"]/handlerMethods:["*"] rule from matching every
     // override. Without honoring it the gRPC rule would degrade to "every override method".
-    IReadOnlyList<string> HandlerParameterTypeSimpleNames
+    IReadOnlyList<string> HandlerParameterTypeSimpleNames,
+    // Capability tokens a deployment must `provides` for EPs from this rule to be active-in it (active-in
+    // vs loaded-in). Null/empty = ungated. Opaque to rig; see DeploymentMap.
+    IReadOnlyList<string>? Requires = null
 );
 
 // The fact-matchable projection of an effect rule — the same rule data the Roslyn pass uses

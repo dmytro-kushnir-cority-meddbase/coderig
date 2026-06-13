@@ -114,32 +114,13 @@ public sealed class SourceFileClassifierTests
         );
         document.ShouldNotBeNull();
 
-        return new AnalysisRuleSet(
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            document.Files?.Include?.Select(rule => rule.ToFileRule("include")).ToArray() ?? [],
-            document.Files?.Exclude?.Select(rule => rule.ToFileRule("exclude")).ToArray() ?? [],
-            document.Files?.TestProjectPatterns ?? [],
-            document.Projects?.Exclude ?? [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-            new Dictionary<string, string>()
-        );
+        return new AnalysisRuleSet
+        {
+            FileInclude = document.Files?.Include?.Select(rule => rule.ToFileRule("include")).ToArray() ?? [],
+            FileExclude = document.Files?.Exclude?.Select(rule => rule.ToFileRule("exclude")).ToArray() ?? [],
+            TestProjectPatterns = document.Files?.TestProjectPatterns ?? [],
+            ProjectExcludePatterns = document.Projects?.Exclude ?? [],
+        };
     }
 
     private static string SolutionPath() => Path.Combine(SolutionDirectory(), "Test.slnx");

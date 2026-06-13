@@ -3,9 +3,9 @@ using Rig.Domain.Data;
 namespace Rig.Analysis.Rules;
 
 // Bridges the internal AnalysisRuleSet to Rig.Domain's fact-layer entry-point deriver.
-// Projects the JSON pageModel rules (PageModelEntryPointRule) to the fact-matchable subset
-// (FactEntryPointRule).  Rule data stays in JSON; only generic matching infra is in C#.
-// See the "detectors are data" agreement and docs/fact-layer-refactor.md.
+// Projects the JSON typeEntryPoints rules (TypeEntryPointRule; `pageModel` is the deprecated alias) to
+// the fact-matchable subset (FactEntryPointRule).  Rule data stays in JSON; only generic matching infra
+// is in C#.  See the "detectors are data" agreement and docs/fact-layer-refactor.md.
 public static class FactEntryPointRuleProvider
 {
     // Loads entry-point rules projected for the fact deriver, rooted at <workingDirectory>.
@@ -18,7 +18,7 @@ public static class FactEntryPointRuleProvider
     {
         var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
         var ruleSet = AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths);
-        return ruleSet.PageModelEntryPoints.Select(Project).ToArray();
+        return ruleSet.TypeEntryPoints.Select(Project).ToArray();
     }
 
     // Loads the classInheritance entry-point rules projected for the fact deriver (Pattern C:
@@ -53,11 +53,12 @@ public static class FactEntryPointRuleProvider
             rule.HandlerMethods ?? [],
             rule.RequireOverride,
             attributePrefixes,
-            paramTypeSimpleNames
+            paramTypeSimpleNames,
+            rule.Requires
         );
     }
 
-    private static FactEntryPointRule Project(PageModelEntryPointRule rule)
+    private static FactEntryPointRule Project(TypeEntryPointRule rule)
     {
         // HandlerMethodAttributes in the JSON are short names or fully-qualified type names.
         // The reference_facts TargetSymbolId for an attribute ctor is the DocID, e.g.:
@@ -75,7 +76,8 @@ public static class FactEntryPointRuleProvider
             rule.DefaultMethod ?? rule.Kind.ToUpperInvariant(),
             rule.BaseTypes,
             rule.NamespacePrefix,
-            attributePrefixes
+            attributePrefixes,
+            rule.Requires
         );
     }
 

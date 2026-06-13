@@ -376,9 +376,17 @@ public static class CliApplication
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         await using var context = new RigDbContext(dbPath);
         // Classification rules flow in here so call_edges is written with Kind="handoff" baked in — the
-        // single place classification persists, read back by every SQL query path.
+        // single place classification persists, read back by every SQL query path. Generic-factory rules
+        // flow in too so the factory monomorphization is baked into call_edges (so the SQL bounding walk
+        // sees the rewritten edges the in-memory traversal does — no effect-path divergence).
         var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory).ToArray();
-        var stats = await GraphMaterializer.BuildAsync(context, handoffRules, message => output.WriteLine($"Progress: {message}"));
+        var factoryRules = FactGenericFactoryRuleProvider.LoadForWorkingDirectory(workingDirectory);
+        var stats = await GraphMaterializer.BuildAsync(
+            context,
+            handoffRules,
+            message => output.WriteLine($"Progress: {message}"),
+            factoryRules: factoryRules
+        );
         output.WriteLine(
             $"Graph: {stats.CallEdges} call edge(s), {stats.DispatchEdges} dispatch edge(s) "
                 + $"({stats.DispatchEdges - stats.HeuristicDispatchEdges} roslyn-mined, {stats.HeuristicDispatchEdges} heuristic), "
@@ -1202,9 +1210,9 @@ public static class CliApplication
             .Where(h => h.Dispatcher is not null)
             .ToList();
 
-        var epSiteKind = new Dictionary<(string File, int Line), string>();
+        var epSiteKind = new Dictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>();
         foreach (var e in derivedEps.Concat(PromoteHandoffOrigins(classifiedHandoffs, derivedEps)))
-            epSiteKind[(e.FilePath, e.Line)] = e.Kind;
+            epSiteKind[(e.FilePath, e.Line)] = (e.Kind, e.Requires);
 
         var siteById = graph
             .Methods.GroupBy(m => m.SymbolId, StringComparer.Ordinal)
@@ -1329,7 +1337,7 @@ public static class CliApplication
                 ? (children.Count > 1 ? $" «{dispatchTag} ×{children.Count} fan-out»" : $" «{dispatchTag}»")
             : "";
         // An async handoff hop (only present under --async): mark the cross-thread boundary.
-        var handoff = node.EdgeKind == "handoff" ? $" ⤳handoff via {ShortName(node.HandoffVia)} [cross_thread]" : "";
+        var handoff = node.EdgeKind == EdgeKinds.Handoff ? $" ⤳handoff via {ShortName(node.HandoffVia)} [cross_thread]" : "";
         var loop = node.LoopKind is null ? "" : $" 🔁[{ShortLoop(node.LoopDetail)}]";
         // Identical sibling edges collapsed under one parent (e.g. a generic method called once per
         // type-arg): show the call-site count rather than N repeated "↺seen" lines.
@@ -1658,7 +1666,7 @@ public static class CliApplication
         var touching = allEps
             .Where(e => reachableSites.Contains((e.FilePath, e.Line)))
             .GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line))
-            .Select(g => g.Key)
+            .Select(g => (g.Key.Kind, g.Key.Route, g.Key.FilePath, g.Key.Line, g.First().Requires))
             .OrderBy(e => e.Kind, StringComparer.Ordinal)
             .ThenBy(e => e.Route, StringComparer.Ordinal)
             .ToList();
@@ -1676,10 +1684,10 @@ public static class CliApplication
         {
             output.WriteLine($"  {kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup)
-                WriteEntryPointLine(output, deployments, e.Route, e.FilePath, e.Line);
+                WriteEntryPointLine(output, deployments, e.Route, e.FilePath, e.Line, e.Requires);
         }
         if (!deployments.IsEmpty)
-            WriteServiceSummary(touching.Select(t => (t.Kind, (string?)t.FilePath)), deployments, output);
+            WriteServiceSummary(touching.Select(t => (t.Kind, (string?)t.FilePath, t.Requires)), deployments, output);
         return 0;
     }
 
@@ -1749,17 +1757,18 @@ public static class CliApplication
             var tsvEpRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
             var tsvClassRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(workingDirectory, extraRules);
             var tsvEps = FactEntryPointDeriver.Derive(epData, tsvEpRules, tsvClassRules);
-            // Trailing `service` column (comma-joined, empty when no deployments.json) — lets tooling
-            // join entry points to the services that host them without parsing the human view.
-            foreach (var ep in tsvEps)
+            // Trailing columns (comma-joined, empty when no deployments.json): `service` = the hosts
+            // that LOAD the EP (link its code); `activeService` = the subset it is ACTIVE-IN after the
+            // capability gate (== service when the EP is ungated). `service` is kept unchanged for
+            // back-compat; tooling that wants runs-here filters on the new `activeService` column.
+            foreach (var ep in tsvEps.Concat(PromoteHandoffOrigins(classifiedHandoffs, tsvEps)))
+            {
+                var loaded = deployments.ServicesForFile(ep.FilePath);
+                var active = deployments.ActiveServices(loaded, ep.Requires);
                 output.WriteLine(
-                    $"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}\t{string.Join(",", deployments.ServicesForFile(ep.FilePath))}"
+                    $"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}\t{string.Join(",", loaded)}\t{string.Join(",", active)}"
                 );
-            // Promoted handoff origins (Phase 3) as first-class entry points, deduped against L1 EPs.
-            foreach (var ep in PromoteHandoffOrigins(classifiedHandoffs, tsvEps))
-                output.WriteLine(
-                    $"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}\t{string.Join(",", deployments.ServicesForFile(ep.FilePath))}"
-                );
+            }
             return 0;
         }
 
@@ -1799,7 +1808,7 @@ public static class CliApplication
         {
             output.WriteLine($"  {kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup.Take(limit / 4 + 1))
-                WriteEntryPointLine(output, deployments, e.Route, e.FilePath, e.Line);
+                WriteEntryPointLine(output, deployments, e.Route, e.FilePath, e.Line, e.Requires);
         }
 
         // --- Classified handoff entry points (Phase 1/3): dispatcher-consumed delegates, promoted to
@@ -1817,7 +1826,7 @@ public static class CliApplication
             output.WriteLine($"  {kindGroup.Key}: {kindGroup.Count()}");
             foreach (var h in kindGroup.Take(limit / 4 + 1))
             {
-                var tag = deployments.IsEmpty ? "" : $"  {EntryPointRenderer.DeployTag(deployments, h.FilePath)}";
+                var tag = deployments.IsEmpty ? "" : $"  {EntryPointRenderer.DeployTag(deployments, h.FilePath, h.Requires)}";
                 output.WriteLine(
                     $"      {ShortName(h.Target)}  ⤳ via {h.Dispatcher}{tag}\n          registered in {ShortName(h.RegisteredIn)}  {ShortenPath(h.FilePath)}:{h.Line}  [async_handoff]"
                 );
@@ -1827,40 +1836,55 @@ public static class CliApplication
         // The headline: entry points per deployed service (the summary table). An EP counts in every
         // service whose process loads it (shared libraries fan out to many hosts — see the chip counts).
         if (!deployments.IsEmpty)
-            WriteServiceSummary(derivedEps.Concat(origins).Select(e => (e.Kind, (string?)e.FilePath)), deployments, output);
+            WriteServiceSummary(derivedEps.Concat(origins).Select(e => (e.Kind, (string?)e.FilePath, e.Requires)), deployments, output);
         return 0;
     }
 
     // The two-line "custom" EP listing line (Format A) when deployment data exists; the plain
     // route + location otherwise. The kind is supplied by the caller's group header, so it's not
     // repeated on the line — only the ▶ marker, route, deployment chip, then the indented location.
-    private static void WriteEntryPointLine(TextWriter output, DeploymentMap deployments, string route, string filePath, int line)
+    private static void WriteEntryPointLine(
+        TextWriter output,
+        DeploymentMap deployments,
+        string route,
+        string filePath,
+        int line,
+        IReadOnlyList<string>? requires = null
+    )
     {
         if (deployments.IsEmpty)
         {
             output.WriteLine($"      {route}  {ShortenPath(filePath)}:{line}");
             return;
         }
-        output.WriteLine($"      {EntryPointRenderer.Marker} {route}  {EntryPointRenderer.DeployTag(deployments, filePath)}");
+        output.WriteLine($"      {EntryPointRenderer.Marker} {route}  {EntryPointRenderer.DeployTag(deployments, filePath, requires)}");
         output.WriteLine($"          {ShortenPath(filePath)}:{line}");
     }
 
     // Per-service rollup of entry points: total + per-kind breakdown, in deployments.json order.
-    // An EP that loads into N services is counted in all N (multi-host fan-out is real, not an error);
-    // EPs whose owning project is in no service closure (tests/tools) fall into "(unattributed)".
-    private static void WriteServiceSummary(IEnumerable<(string Kind, string? FilePath)> eps, DeploymentMap deployments, TextWriter output)
+    // An EP counts in every service it is ACTIVE-IN (loaded AND capability-gated in) — so a gated
+    // actor counts only in the host(s) that `provides` its required token, not in every host that
+    // merely links it. EPs whose owning project is in no service closure (tests/tools) fall into
+    // "(unattributed)". An EP loaded but gated out of every host contributes to no service (it shows
+    // as linked-inactive on its own line).
+    private static void WriteServiceSummary(
+        IEnumerable<(string Kind, string? FilePath, IReadOnlyList<string>? Requires)> eps,
+        DeploymentMap deployments,
+        TextWriter output
+    )
     {
         var byService = new Dictionary<string, Dictionary<string, int>>(StringComparer.Ordinal);
         var totals = new Dictionary<string, int>(StringComparer.Ordinal);
         var unattributed = 0;
-        foreach (var (kind, filePath) in eps)
+        foreach (var (kind, filePath, requires) in eps)
         {
-            var svcs = deployments.ServicesForFile(filePath);
-            if (svcs.Count == 0)
+            var loaded = deployments.ServicesForFile(filePath);
+            if (loaded.Count == 0)
             {
                 unattributed++;
                 continue;
             }
+            var svcs = deployments.ActiveServices(loaded, requires);
             foreach (var s in svcs)
             {
                 if (!byService.TryGetValue(s, out var kinds))
@@ -1871,7 +1895,7 @@ public static class CliApplication
         }
 
         output.WriteLine();
-        output.WriteLine("Entry points per deployed service (an EP counts in every service whose process loads it):");
+        output.WriteLine("Entry points per deployed service (an EP counts in every service it is active-in):");
         foreach (var svc in deployments.Services)
         {
             if (!totals.TryGetValue(svc.Name, out var total))
@@ -1910,7 +1934,7 @@ public static class CliApplication
                 continue;
             var kind = h.Kind ?? "background";
             var method = kind.ToUpperInvariant();
-            result.Add(new DerivedEntryPoint(kind, method, route, $"{kind} {method} {route}", h.FilePath, h.Line));
+            result.Add(new DerivedEntryPoint(kind, method, route, $"{kind} {method} {route}", h.FilePath, h.Line, h.Requires));
         }
         return result;
     }
@@ -2005,7 +2029,7 @@ public static class CliApplication
         // sync-cut prunes the registrar->callback edge from reach, so the callback must be a root or it
         // would be falsely flagged dead. (Constraint #1 in the handoff.)
         foreach (var edge in graph.CallEdges)
-            if (edge.Kind is "methodGroup" or "handoff")
+            if (edge.Kind is EdgeKinds.MethodGroup or EdgeKinds.Handoff)
                 roots.Add(edge.Callee);
         // Process entry points: any method named Main.
         foreach (var m in methods)

@@ -69,6 +69,66 @@ public sealed class AnalysisRuleSetTests
         rules.IsExcludedProject("Sample.AppHost").ShouldBeTrue();
     }
 
+    [Test]
+    public void TypeEntryPoints_requires_is_parsed_and_projected_to_the_fact_rule()
+    {
+        using var workspace = TempRulesWorkspace.Create(
+            """
+            {
+              "entrypoints": {
+                "typeEntryPoints": [
+                  { "id": "t1", "kind": "page", "baseTypes": ["App.PageBase"], "namespacePrefix": "App.Pages.", "requires": ["FrontEnd", "BackEnd"] }
+                ]
+              }
+            }
+            """
+        );
+
+        var projected = FactEntryPointRuleProvider.LoadForWorkingDirectory(workspace.DirectoryPath);
+
+        projected.ShouldHaveSingleItem().Requires.ShouldBe(["FrontEnd", "BackEnd"]);
+    }
+
+    [Test]
+    public void PageModel_is_a_back_compat_alias_for_typeEntryPoints()
+    {
+        // The framework-specific `pageModel` key was generalised to `typeEntryPoints`; existing configs
+        // using the old key must keep loading (merged into the same collection).
+        using var workspace = TempRulesWorkspace.Create(
+            """
+            {
+              "entrypoints": {
+                "pageModel": [
+                  { "id": "legacy", "kind": "page", "baseTypes": ["App.PageBase"], "namespacePrefix": "App.Pages." }
+                ]
+              }
+            }
+            """
+        );
+
+        var rules = AnalysisRuleSet.LoadForSolution(workspace.SolutionPath);
+
+        rules.TypeEntryPoints.ShouldHaveSingleItem().Id.ShouldBe("legacy");
+    }
+
+    [Test]
+    public void HandoffDispatcher_requires_is_parsed_and_projected()
+    {
+        using var workspace = TempRulesWorkspace.Create(
+            """
+            {
+              "handoffDispatchers": [
+                { "id": "bg", "kind": "background", "consumerPatterns": ["Schedule.#ctor"], "requires": ["FrontEnd"] }
+              ]
+            }
+            """
+        );
+
+        var projected = FactHandoffRuleProvider.LoadForWorkingDirectory(workspace.DirectoryPath);
+
+        projected.ShouldHaveSingleItem().Requires.ShouldBe(["FrontEnd"]);
+    }
+
     private sealed class TempRulesWorkspace : IDisposable
     {
         private TempRulesWorkspace(string directory, string solutionPath, string extraRulesPath)

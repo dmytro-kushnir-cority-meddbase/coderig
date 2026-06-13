@@ -30,7 +30,8 @@ public static class GraphMaterializer
         RigDbContext context,
         Domain.Data.FactHandoffRule[]? handoffRules = null,
         Action<string>? progress = null,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<Domain.Data.FactGenericFactoryRule>? factoryRules = null
     )
     {
         progress?.Invoke("Loading facts");
@@ -38,6 +39,16 @@ public static class GraphMaterializer
         // table) so the persisted Kind="handoff" + HandoffDispatcher flow to every SQL reader; the
         // in-memory oracle classifies identically by being given the same rules.
         var graph = await Reads.LoadFactGraphAsync(context, handoffRules, cancellationToken).ConfigureAwait(false);
+
+        // Bake generic-factory monomorphization into the persisted edges — the SAME RewriteGenericFactories
+        // the in-memory traversal applies via ShapeGraph. This is the EDGE-CREATING shaping (it rewrites
+        // `caller -> Factory<X>` to `caller -> X.Target`), so it MUST be in call_edges or the SQL bounding
+        // walk traverses the un-rewritten factory edge and never pulls X.Target's closure into the bounded
+        // subgraph — under-reporting reach vs the in-memory oracle (the effect-path divergence). Cut and
+        // context-dispatch shaping are deliberately NOT baked: they are traversal-time (a cut removes
+        // reach; context narrows dispatch), so leaving them out keeps call_edges a sound SUPERSET that the
+        // in-memory pass re-applies over the bounded graph. No-op when factoryRules is null/empty.
+        graph = FactPathFinder.RewriteGenericFactories(graph, factoryRules ?? []);
 
         var connection = (DbConnection)context.Database.GetDbConnection();
         if (connection.State != System.Data.ConnectionState.Open)
@@ -310,16 +321,7 @@ public static class GraphMaterializer
         CancellationToken cancellationToken
     )
     {
-        var present = false;
-        using (var probe = connection.CreateCommand())
-        {
-            probe.CommandText = $"PRAGMA table_info({table});";
-            using var reader = await probe.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
-                    present = true;
-        }
-        if (!present)
+        if (!await StorageProbes.ColumnExistsAsync(connection, table, column, cancellationToken).ConfigureAwait(false))
             await ExecuteAsync(connection, null, $"ALTER TABLE {table} ADD COLUMN {column} {type};", cancellationToken)
                 .ConfigureAwait(false);
     }

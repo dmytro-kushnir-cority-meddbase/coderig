@@ -154,7 +154,9 @@ public static class FactEntryPointDeriver
                     if (!seen.Add((ctor.FilePath, ctor.Line)))
                         continue;
                     var displayName = BuildPageDisplayName(rule, route, ctor.Signature);
-                    results.Add(new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, ctor.FilePath, ctor.Line));
+                    results.Add(
+                        new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, ctor.FilePath, ctor.Line, rule.Requires)
+                    );
                 }
             }
             else if (typeById.TryGetValue(typeId, out var typeRow))
@@ -162,7 +164,9 @@ public static class FactEntryPointDeriver
                 if (!seen.Add((typeRow.FilePath, typeRow.Line)))
                     continue;
                 var displayName = $"{rule.Kind} {rule.DefaultMethod} {route}";
-                results.Add(new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, typeRow.FilePath, typeRow.Line));
+                results.Add(
+                    new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, typeRow.FilePath, typeRow.Line, rule.Requires)
+                );
             }
         }
     }
@@ -246,7 +250,7 @@ public static class FactEntryPointDeriver
                 continue;
 
             var displayName = $"{rule.Kind} {rule.DefaultMethod} {route}";
-            results.Add(new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, r.FilePath, r.Line));
+            results.Add(new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, r.FilePath, r.Line, rule.Requires));
         }
     }
 
@@ -304,7 +308,7 @@ public static class FactEntryPointDeriver
             if (route is null)
                 continue;
             var displayName = $"{rule.Kind} {rule.DefaultMethod} {route}";
-            results.Add(new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, m.FilePath, m.Line));
+            results.Add(new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, m.FilePath, m.Line, rule.Requires));
         }
     }
 

@@ -19,8 +19,7 @@ public sealed class SqlReachabilityTests(AnalyzedPlaygrounds playgrounds)
     public async Task Sql_forward_reachability_matches_the_in_memory_oracle()
     {
         var playground = await playgrounds.LegacyNet48Async();
-        var rules = HandoffRules(playground);
-        var graph = FactProjection.GraphData(playground.Result, rules);
+        var graph = ShapedOracle(playground);
 
         await WithMaterializedStoreAsync(
             playground,
@@ -50,7 +49,7 @@ public sealed class SqlReachabilityTests(AnalyzedPlaygrounds playgrounds)
     public async Task Sql_reachability_traverses_dispatch_edges()
     {
         var playground = await playgrounds.LegacyNet48Async();
-        var graph = FactProjection.GraphData(playground.Result, HandoffRules(playground));
+        var graph = ShapedOracle(playground);
 
         var dispatchEdge = FactPathFinder.AllDispatchEdges(graph).FirstOrDefault();
         dispatchEdge.From.ShouldNotBeNull();
@@ -69,9 +68,9 @@ public sealed class SqlReachabilityTests(AnalyzedPlaygrounds playgrounds)
     public async Task Sql_reverse_reachability_recovers_a_known_caller()
     {
         var playground = await playgrounds.LegacyNet48Async();
-        var graph = FactProjection.GraphData(playground.Result, HandoffRules(playground));
+        var graph = ShapedOracle(playground);
 
-        var callEdge = FactPathFinder.AllCallEdges(graph).First(e => e.Kind != "handoff");
+        var callEdge = FactPathFinder.AllCallEdges(graph).First(e => e.Kind != EdgeKinds.Handoff);
 
         await WithMaterializedStoreAsync(
             playground,
@@ -87,8 +86,7 @@ public sealed class SqlReachabilityTests(AnalyzedPlaygrounds playgrounds)
     public async Task Sql_depth_reachability_matches_the_cha_oracle_per_mode_and_bounds_the_narrowed_oracle()
     {
         var playground = await playgrounds.LegacyNet48Async();
-        var rules = HandoffRules(playground);
-        var graph = FactProjection.GraphData(playground.Result, rules);
+        var graph = ShapedOracle(playground);
         const int maxDepth = 20;
         const FactPathFinder.TraversalMode SyncMode = FactPathFinder.TraversalMode.SyncCut;
         const FactPathFinder.TraversalMode AsyncMode = FactPathFinder.TraversalMode.AsyncInclude;
@@ -134,8 +132,7 @@ public sealed class SqlReachabilityTests(AnalyzedPlaygrounds playgrounds)
     public async Task Bounded_graph_reproduces_full_graph_reach_in_both_modes()
     {
         var playground = await playgrounds.LegacyNet48Async();
-        var rules = HandoffRules(playground);
-        var full = FactProjection.GraphData(playground.Result, rules);
+        var full = ShapedOracle(playground);
 
         await WithMaterializedStoreAsync(
             playground,
@@ -230,7 +227,7 @@ public sealed class SqlReachabilityTests(AnalyzedPlaygrounds playgrounds)
         var graph = FactProjection.GraphData(playground.Result, rules);
 
         var handoffTargets = graph
-            .CallEdges.Where(e => e.Kind is "methodGroup" or "handoff")
+            .CallEdges.Where(e => e.Kind is EdgeKinds.MethodGroup or EdgeKinds.Handoff)
             .Select(e => e.Callee)
             .ToHashSet(StringComparer.Ordinal);
 
@@ -259,9 +256,21 @@ public sealed class SqlReachabilityTests(AnalyzedPlaygrounds playgrounds)
     private static (string, int)[] Sorted(IReadOnlyDictionary<string, int> map) =>
         map.Select(kv => (kv.Key, kv.Value)).OrderBy(t => t.Key, StringComparer.Ordinal).ToArray();
 
+    private static IReadOnlyList<FactGenericFactoryRule> FactoryRules(AnalyzedPlayground playground) =>
+        FactGenericFactoryRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory);
+
+    // The in-memory oracle the SQL views are compared against: handoff-classified (FactProjection) AND
+    // generic-factory-rewritten, mirroring exactly what GraphMaterializer now bakes into call_edges.
+    private static FactGraphData ShapedOracle(AnalyzedPlayground playground) =>
+        FactPathFinder.RewriteGenericFactories(
+            FactProjection.GraphData(playground.Result, HandoffRules(playground)),
+            FactoryRules(playground)
+        );
+
     private static async Task WithMaterializedStoreAsync(AnalyzedPlayground playground, Func<RigDbContext, Task> assert)
     {
         var rules = HandoffRules(playground).ToArray();
+        var factoryRules = FactoryRules(playground);
         var directory = Path.Combine(Path.GetTempPath(), "rig-sqlreach-" + Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(directory);
         var databasePath = Path.Combine(directory, "rig.db");
@@ -270,7 +279,7 @@ public sealed class SqlReachabilityTests(AnalyzedPlaygrounds playgrounds)
             await using (var write = new RigDbContext(databasePath, pooling: false))
                 await Writes.SaveAsync(write, playground.Result);
             await using (var build = new RigDbContext(databasePath, pooling: false))
-                await GraphMaterializer.BuildAsync(build, rules);
+                await GraphMaterializer.BuildAsync(build, rules, factoryRules: factoryRules);
             await using (var read = new RigDbContext(databasePath, pooling: false))
                 await assert(read);
         }

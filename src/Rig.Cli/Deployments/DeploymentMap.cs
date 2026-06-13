@@ -3,9 +3,11 @@ using System.Text.Json;
 namespace Rig.Cli.Deployments;
 
 // A deployed service from deployments.json: a name, its entry csproj (relative to the solution dir),
-// and a best-effort host kind. `BootstrapsEcho` flags the host that initialises the Echo actor system
-// (used to refine actor/handoff EP attribution — see DeploymentMap remarks).
-internal sealed record ServiceDef(string Name, string Host, string? Kind, string? Note, bool BootstrapsEcho);
+// a best-effort host kind, and the capability tokens it `provides`. A token is an opaque string; an
+// entry point whose rule `requires` a token is ACTIVE-IN this service only when Provides intersects
+// that requirement (ANY semantics). Services that declare no `provides` activate every loaded EP
+// (ungated), so the gate is strictly opt-in. See DeploymentMap.ActiveServices.
+internal sealed record ServiceDef(string Name, string Host, string? Kind, string? Note, IReadOnlyList<string> Provides);
 
 // Maps source files to the deployed service(s) whose process loads them.
 //
@@ -26,7 +28,9 @@ internal sealed class DeploymentMap
     public IReadOnlyList<ServiceDef> Services { get; }
     public bool IsEmpty => Services.Count == 0;
 
-    private DeploymentMap(
+    // Internal (not private) so tests can construct a map directly from service defs to exercise the
+    // capability gate without standing up a solution + ProjectReference closure.
+    internal DeploymentMap(
         IReadOnlyList<ServiceDef> services,
         Dictionary<string, List<string>> projectToServices,
         (string Dir, string Project)[] projectDirs
@@ -62,6 +66,20 @@ internal sealed class DeploymentMap
             if (full.StartsWith(dir, StringComparison.OrdinalIgnoreCase))
                 return _projectToServices.TryGetValue(project, out var svcs) ? svcs : [];
         return [];
+    }
+
+    // The subset of `loadedServices` in which an entry point requiring `requires` actually ACTIVATES:
+    // a loaded service activates it iff the service `provides` at least one required token (ANY /
+    // non-empty-intersection semantics). When `requires` is null/empty the EP is ungated and active in
+    // every service that loads it — so active-in collapses to loaded-in and output is unchanged. This
+    // is the generic active-in vs loaded-in distinction; tokens are opaque (a future ALL mode would
+    // change only the predicate here). `loadedServices` is assumed to come from ServicesForFile.
+    public IReadOnlyList<string> ActiveServices(IReadOnlyList<string> loadedServices, IReadOnlyList<string>? requires)
+    {
+        if (requires is null || requires.Count == 0 || loadedServices.Count == 0)
+            return loadedServices;
+        var required = new HashSet<string>(requires, StringComparer.OrdinalIgnoreCase);
+        return loadedServices.Where(s => Service(s) is { } def && def.Provides.Any(required.Contains)).ToArray();
     }
 
     // Loads deployments.json from workingDirectory and resolves it against the indexed solution.
@@ -160,8 +178,7 @@ internal sealed class DeploymentMap
                 var host = GetString(e, "host");
                 if (name is null || host is null)
                     continue;
-                var bootstraps = e.TryGetProperty("bootstrapsEcho", out var b) && b.ValueKind == JsonValueKind.True;
-                result.Add(new ServiceDef(name, host, GetString(e, "kind"), GetString(e, "note"), bootstraps));
+                result.Add(new ServiceDef(name, host, GetString(e, "kind"), GetString(e, "note"), GetStringArray(e, "provides")));
             }
             return result;
         }
@@ -174,4 +191,11 @@ internal sealed class DeploymentMap
 
     private static string? GetString(JsonElement obj, string name) =>
         obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    private static IReadOnlyList<string> GetStringArray(JsonElement obj, string name)
+    {
+        if (!obj.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Array)
+            return [];
+        return v.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToArray();
+    }
 }

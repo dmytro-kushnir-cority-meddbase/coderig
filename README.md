@@ -97,13 +97,14 @@ is detected around the effect site:
 ## Deployment Attribution (`deployments.json`)
 
 Optional and opt-in. Drop a `deployments.json` next to `.rig/` and every command that renders an entry
-point annotates it with the deployed **service(s)** whose process loads it — a ▶ marker, the EP kind, the
+point annotates it with the deployed **service(s)** whose process runs it — a ▶ marker, the EP kind, the
 route, and a deployment chip. Without the file, output is unchanged.
 
 ```jsonc
 {
   "services": [
-    { "name": "MedDBase", "host": "src/main/MedDBase.Site/MedDBase/MedDBase.csproj", "kind": "iis", "bootstrapsEcho": true },
+    { "name": "MedDBase", "host": "src/main/MedDBase.Site/MedDBase/MedDBase.csproj", "kind": "iis", "provides": ["FrontEnd"] },
+    { "name": "DataServer", "host": "src/data-server/MedDBase.DataServer/MedDBase.DataServer.csproj", "kind": "iis", "provides": ["DataServer"] },
     { "name": "PdfService2", "host": "src/pdf2/PdfService2/PdfService2.csproj", "kind": "kube" }
   ]
 }
@@ -113,14 +114,21 @@ route, and a deployment chip. Without the file, output is unchanged.
   commas allowed). Seed it from the build's own artifact manifest, then curate `kind`/topology by hand.
 - **Mechanism** (query-side, no re-index): each service's entry csproj → transitive `<ProjectReference>`
   closure; an EP's source file → its owning csproj → the service(s) whose closure contains it.
-- **Rendering**: `▶ action SomeHandler  ⟦MedDBase (iis)⟧`, or `⟦N svcs: A, B, C +k⟧` when an EP fans out
-  to many hosts. Appears in `derive` (+ a per-service summary table and a trailing `service` TSV column),
-  `callers --entrypoints`/`--roots`, `tree` (root and any EP node in the body), and the `reaches`/`path`
-  From line.
-- **Caveat** — closure membership is "code is *loaded* in service X", an upper bound. Shared libraries fan
-  out to every referencing host, so actor/background EPs appear under many services even though they only
-  *activate* in the host that bootstraps the dispatcher (`"bootstrapsEcho": true`). Runtime placement
-  (cluster routing, lazy spawn) is out of scope.
+- **loaded-in vs active-in** — closure membership is "code is *loaded* in service X", an upper bound:
+  shared libraries fan out to every referencing host, so a background/actor EP is *linked* into many
+  services even when only one *runs* it. A **capability gate** refines this to **active-in**. A service
+  declares the opaque tokens it `provides`; an EP rule declares the tokens it `requires` (on
+  `handoffDispatchers` and entry-point rules — see `rig.rules.json`). An EP is **active-in** a loaded
+  service iff `provides ∩ requires ≠ ∅` (ANY semantics). A rule with no `requires` is ungated — active
+  wherever loaded — so the gate is strictly opt-in and ungated output is byte-identical to before.
+- **Rendering**: chips show the **active-in** service(s) plus the linked-but-inactive count as a dim
+  delta, e.g. `▶ echoactor SomeActor.Inbox  ⟦MedDBase (iis) · 1 linked-inactive⟧`, or `⟦N svcs: …⟧` for a
+  multi-host fan-out. Appears in `derive` (+ a per-service active-in summary and trailing `service` =
+  loaded / `activeService` = active TSV columns), `callers --entrypoints`/`--roots`, `tree`, and the
+  `reaches`/`path` From line.
+- Tokens are opaque to rig (a deployment convention, e.g. a startup-set id); a single rule gates all the
+  EPs it produces the same way. Sub-rule runtime branches (an `if` inside one registrar that starts some
+  actors only on one host) and cluster routing / lazy spawn are out of scope.
 
 ## Playgrounds
 
