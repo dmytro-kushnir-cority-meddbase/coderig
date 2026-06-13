@@ -1018,7 +1018,7 @@ public static class CliApplication
         if (args.Length < 2 || args[1].StartsWith("--", StringComparison.Ordinal))
         {
             error.WriteLine(
-                "Usage: rig tree <fromPattern> [--full|--summary|--effects] [--async] [--raw] [--files] [--signatures] [--rules <path>...] [--maxdepth|--depth <n>]"
+                "Usage: rig tree <fromPattern> [--full|--summary|--effects] [--async] [--raw] [--files] [--signatures] [--rules <path>...] [--maxdepth|--depth <n>] [--no-cache] [--time]"
             );
             return 2;
         }
@@ -1057,6 +1057,7 @@ public static class CliApplication
             : FactContextDispatchRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
 
         await using var context = OpenReadContext(workingDirectory);
+        var timer = new PhaseTimer(args.Contains("--time"), error);
 
         // Query cache (best-effort, opt-out via --no-cache). A `rig tree` query recomputes the call-tree
         // forest (BuildTree) AND its effects (FactEffectDeriver.Derive — the ~3.8s dominant cost); both
@@ -1071,6 +1072,7 @@ public static class CliApplication
             ? null
             : TreeCacheKey(storeKey, RulesFingerprint.Compute(workingDirectory, extraRules), fromPattern, maxDepth, mode, raw);
         var cached = cacheKey is not null && cache!.Get(cacheKey) is { } blob ? TreeCacheCodec.Decode(blob) : null;
+        timer.Lap($"cache lookup (hit={cached is not null})");
 
         FactGraphData graph;
         IReadOnlyList<TraceNode> roots;
@@ -1092,6 +1094,7 @@ public static class CliApplication
             );
             if (!raw)
                 graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+            timer.Lap("graph load + event marking (cache hit)");
         }
         else
         {
@@ -1105,12 +1108,14 @@ public static class CliApplication
                 contextRules
             );
             graph = inputs.Graph;
+            timer.Lap("graph + invocations load");
             // Event subscriptions (`someEvent += Handler`) are deferred handlers, not synchronous calls —
             // mark them as handoffs so the sync tree doesn't expand the handler as if RegisterEvents ran it.
             if (!raw)
                 graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
 
             roots = FactPathFinder.BuildTree(graph, fromPattern, maxDepth, mode: mode);
+            timer.Lap("event marking + BuildTree");
             if (roots.Count == 0)
             {
                 effects = [];
@@ -1132,6 +1137,7 @@ public static class CliApplication
                 // Cache UNFILTERED effects; --only/--exclude are applied below so they don't fragment the key.
                 if (cacheKey is not null)
                     cache!.Put(cacheKey, TreeCacheCodec.Encode(new TreeCachePayload(roots, effects)));
+                timer.Lap("derive effects + cache store");
             }
         }
 
@@ -1148,6 +1154,7 @@ public static class CliApplication
             (await Reads.ListRunsAsync(context)).FirstOrDefault()?.SolutionPath
         );
         var epContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, handoffRules, deployments);
+        timer.Lap("deployment map + entry-point derivation");
 
         effects = ApplyEffectFilters(effects, args); // --only / --exclude (e.g. --exclude throw)
 
@@ -1168,6 +1175,7 @@ public static class CliApplication
             output.WriteLine($"Effects on reachable methods: {hits.Count}");
             foreach (var g in hits.GroupBy(h => (h.Provider, h.Operation)).OrderByDescending(g => g.Count()))
                 output.WriteLine($"  {g.Count(), 4}  {g.Key.Provider} {g.Key.Operation}");
+            timer.Total();
             return 0;
         }
 
@@ -1183,6 +1191,7 @@ public static class CliApplication
             output.WriteLine($"From: {fromPattern}  ({ordered.Count} effectful method(s), source order)");
             foreach (var sym in ordered)
                 output.WriteLine($"  {ShortName(sym)}\n      {string.Join("  ", effectsByMethod[sym])}");
+            timer.Total();
             return 0;
         }
 
@@ -1233,6 +1242,8 @@ public static class CliApplication
                 epContext
             );
         }
+        timer.Lap("seam effects + render");
+        timer.Total();
         return 0;
     }
 
@@ -2435,6 +2446,7 @@ public static class CliApplication
             "--only",
             "--exclude",
             "--no-cache",
+            "--time",
         ],
         ["callers"] = ["--roots", "--entrypoints", "--async", "--raw", "--rules", "--maxdepth", "--depth"],
         ["derive"] = ["--limit", "--rules", "--only", "--exclude", "--format"],
