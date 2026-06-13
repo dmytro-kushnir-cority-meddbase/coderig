@@ -260,7 +260,8 @@ public static class Reads
         // calls still surface because the effect deriver keys them to their first-party ENCLOSING
         // method (see LoadInvocationRefsAsync, which intentionally does NOT filter).
         var callRows = await context
-            .ReferenceFacts.Where(r =>
+            .ReferenceFacts.AsNoTracking()
+            .Where(r =>
                 r.EnclosingSymbolId != null
                 && r.TargetInSource
                 && (r.RefKind == RefKinds.Invocation || r.RefKind == RefKinds.MethodGroup || r.RefKind == RefKinds.Ctor)
@@ -300,35 +301,34 @@ public static class Reads
             .Distinct()
             .ToArray();
 
-        var implRows = await context
-            .TypeRelationFacts.Where(t => t.RelationKind == RelationKinds.Interface)
-            .Select(t => new { t.TypeSymbolId, t.RelatedSymbolId })
-            .ToArrayAsync(cancellationToken);
-        var implEdges = implRows.Select(t => new ImplementsEdge(t.TypeSymbolId, t.RelatedSymbolId)).Distinct().ToArray();
+        // Project straight to the domain record in the SELECT (EF builds it in the materializer) — no
+        // anonymous intermediate, no second client mapping pass. The dedup stays client-side on the records.
+        var implEdges = (
+            await context
+                .TypeRelationFacts.AsNoTracking()
+                .Where(t => t.RelationKind == RelationKinds.Interface)
+                .Select(t => new ImplementsEdge(t.TypeSymbolId, t.RelatedSymbolId))
+                .ToArrayAsync(cancellationToken)
+        )
+            .Distinct()
+            .ToArray();
 
-        var baseRows = await context
-            .TypeRelationFacts.Where(t => t.RelationKind == RelationKinds.Base)
-            .Select(t => new { t.TypeSymbolId, t.RelatedSymbolId })
-            .ToArrayAsync(cancellationToken);
-        var baseEdges = baseRows.Select(t => new BaseEdge(t.TypeSymbolId, t.RelatedSymbolId)).Distinct().ToArray();
+        var baseEdges = (
+            await context
+                .TypeRelationFacts.AsNoTracking()
+                .Where(t => t.RelationKind == RelationKinds.Base)
+                .Select(t => new BaseEdge(t.TypeSymbolId, t.RelatedSymbolId))
+                .ToArrayAsync(cancellationToken)
+        )
+            .Distinct()
+            .ToArray();
 
         var methodRows = await context
-            .SymbolFacts.Where(s => s.Kind == SymbolKinds.Method)
-            .Select(s => new
-            {
-                s.SymbolId,
-                s.Name,
-                s.ContainingSymbolId,
-                s.IsOverride,
-                s.FilePath,
-                s.Line,
-            })
+            .SymbolFacts.AsNoTracking()
+            .Where(s => s.Kind == SymbolKinds.Method)
+            .Select(s => new MethodRef(s.SymbolId, s.Name, s.ContainingSymbolId, s.IsOverride, s.FilePath, s.Line))
             .ToArrayAsync(cancellationToken);
-        var methods = methodRows
-            .GroupBy(m => m.SymbolId)
-            .Select(g => g.First())
-            .Select(m => new MethodRef(m.SymbolId, m.Name, m.ContainingSymbolId, m.IsOverride, m.FilePath, m.Line))
-            .ToArray();
+        var methods = methodRows.GroupBy(m => m.SymbolId).Select(g => g.First()).ToArray();
 
         var classifiedEdges = HandoffClassifier.Classify(callEdges, handoffRules);
         var minedDispatch = await LoadDispatchFactsAsync(context, cancellationToken);
@@ -370,15 +370,15 @@ public static class Reads
         if (!await StorageProbes.TableExistsAsync(connection, "dispatch_facts", cancellationToken).ConfigureAwait(false))
             return null;
 
-        var rows = await context
-            .DispatchFacts.Select(d => new
-            {
-                d.SourceMember,
-                d.TargetMember,
-                d.Kind,
-            })
-            .ToArrayAsync(cancellationToken);
-        return rows.Select(d => new DispatchFact(d.SourceMember, d.TargetMember, d.Kind)).Distinct().ToArray();
+        // Direct DispatchFact projection (no anonymous intermediate / second pass); dedup client-side.
+        return (
+            await context
+                .DispatchFacts.AsNoTracking()
+                .Select(d => new DispatchFact(d.SourceMember, d.TargetMember, d.Kind))
+                .ToArrayAsync(cancellationToken)
+        )
+            .Distinct()
+            .ToArray();
     }
 
     // Loads first-party method metadata for the dead-code finder: every declared method symbol with
