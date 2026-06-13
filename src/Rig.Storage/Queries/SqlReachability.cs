@@ -586,6 +586,22 @@ public static class SqlReachability
                 cancellationToken
             )
             .ConfigureAwait(false);
+
+        // Give the planner statistics for the freshly-filled TEMP table. Without sqlite_stat1 for
+        // reach_set, SQLite assumes it is large and INVERTS every `reference_facts JOIN reach_set`: it
+        // SCANS reference_facts (millions of rows) probing the temp PK, instead of scanning the tiny
+        // reach_set (hundreds of rows) and probing IX_reference_facts_EnclosingSymbolId. ANALYZE on the
+        // temp table writes temp.sqlite_stat1 (allowed even on a Mode=ReadOnly main DB) and flips the
+        // join order — measured ~300x on the bounded reference reads. Best-effort: if it fails the
+        // queries still return correct results, just on the slower plan.
+        try
+        {
+            await ExecNonQueryAsync(connection, "ANALYZE reach_set;", null, cancellationToken).ConfigureAwait(false);
+        }
+        catch (DbException)
+        {
+            // statistics are an optimization only — ignore and run on the default plan
+        }
     }
 
     private static string EscapeLike(string value) => value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
