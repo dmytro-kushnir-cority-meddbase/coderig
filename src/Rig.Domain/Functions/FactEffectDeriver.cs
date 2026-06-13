@@ -53,27 +53,56 @@ public static class FactEffectDeriver
         // we do too (otherwise a dispatch rule with a resolvable resource would leak in as an effect).
         // Invocation rules are the default; constructor rules (MatchConstructor) match ctor refs.
         var wrapperRules = rules.Where(r => r.TargetCallsMethods is { Count: > 0 } && !r.TreatAsDispatch).ToArray();
+        // Enrich each invocation rule with a method-name HashSet and its resolved base-type closure,
+        // computed ONCE here rather than per invocation. The per-(inv x rule) hot loop below otherwise
+        // paid two heap allocations on every iteration (~invocations x rules, i.e. millions): boxing a
+        // List<string> enumerator for rule.Methods.Contains(name, comparer) — IReadOnlyList has no IList
+        // fast path — and string.Join("|", roots) to key the closure cache inside ClosureFor.
         var invocationRules = rules
             .Where(r => !r.MatchConstructor && !r.MatchThrow && !r.TreatAsDispatch && r.TargetCallsMethods is not { Count: > 0 })
+            .Select(r => (Rule: r, Methods: new HashSet<string>(r.Methods, StringComparer.Ordinal), Closure: ClosureFor(r)))
             .ToArray();
+        // Union of every invocation rule's method names — lets the per-invocation loop reject a target
+        // whose method name no rule cares about (the overwhelming majority) after allocating only the
+        // method-name substring, skipping the declaring-type substring + arity strip for non-candidates.
+        var candidateMethodNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in invocationRules)
+            candidateMethodNames.UnionWith(entry.Methods);
         var constructorRules = rules.Where(r => r.MatchConstructor && !r.TreatAsDispatch).ToArray();
         var throwRules = rules.Where(r => r.MatchThrow && !r.TreatAsDispatch).ToArray();
 
         var results = new List<DerivedEffect>();
         foreach (var inv in invocations)
         {
-            var parsed = ParseMethod(inv.Target);
-            if (parsed is null)
+            // Inlined, index-based ParseMethod with a candidate-name early-out: extract the method name
+            // first (the cheap part), reject non-candidates before touching the declaring type. Mirrors
+            // ParseMethod exactly for the accepted case.
+            var target = inv.Target;
+            if (!target.StartsWith("M:", StringComparison.Ordinal))
                 continue;
-            var (declaringType, methodName) = parsed.Value;
+            var searchEnd = target.IndexOf('(');
+            if (searchEnd < 0)
+                searchEnd = target.Length;
+            var lastDot = target.LastIndexOf('.', searchEnd - 1);
+            if (lastDot < 2)
+                continue;
+            var methodStart = lastDot + 1;
+            var methodTick = target.IndexOf('`', methodStart, searchEnd - methodStart);
+            var methodEnd = methodTick >= 0 ? methodTick : searchEnd;
+            if (methodEnd <= methodStart)
+                continue;
+            var methodName = target.Substring(methodStart, methodEnd - methodStart);
+            if (!candidateMethodNames.Contains(methodName))
+                continue; // no invocation rule names this method — skip before allocating the declaring type
+            var declaringType = StripTypeArityMarkers(target.Substring(2, lastDot - 2));
 
-            foreach (var rule in invocationRules)
+            foreach (var (rule, methods, closure) in invocationRules)
             {
                 if (providerFilter is not null && !string.Equals(rule.Provider, providerFilter, StringComparison.OrdinalIgnoreCase))
                     continue;
-                if (!rule.Methods.Contains(methodName, StringComparer.Ordinal))
+                if (!methods.Contains(methodName))
                     continue;
-                if (!TypeGateMatches(rule, declaringType, receiverType: inv.Receiver, ClosureFor(rule)))
+                if (!TypeGateMatches(rule, declaringType, receiverType: inv.Receiver, closure))
                     continue;
                 if (!ContainingGateMatches(rule, inv.Enclosing))
                     continue;
@@ -438,25 +467,27 @@ public static class FactEffectDeriver
     {
         if (!docId.StartsWith("M:", StringComparison.Ordinal))
             return null;
-        var body = docId.Substring(2);
-        var paren = body.IndexOf('(');
-        if (paren >= 0)
-            body = body.Substring(0, paren);
-        // Find last dot — this separates the declaring type from the member name.
+        // Index-based so only the two RESULT strings are allocated — this runs once per invocation
+        // (hundreds of thousands), and the prior form cut four intermediate substrings (body, body-
+        // without-params, declaringRaw, methodRaw) on every call.
+        var searchEnd = docId.IndexOf('('); // params start; everything past it is the signature
+        if (searchEnd < 0)
+            searchEnd = docId.Length;
+        // Last dot before the params separates the declaring type from the member name.
         // We do NOT strip backticks before this search; `Ns.Foo`1.Bar` has lastDot at Bar.
-        var lastDot = body.LastIndexOf('.');
-        if (lastDot < 0)
+        var lastDot = docId.LastIndexOf('.', searchEnd - 1);
+        if (lastDot < 2) // no dot in the body region (index 0/1 are the "M:" prefix)
             return null;
-        var declaringRaw = body.Substring(0, lastDot);
-        var methodRaw = body.Substring(lastDot + 1);
+        var declaringRaw = docId.Substring(2, lastDot - 2);
+        // Method name = (lastDot+1 .. searchEnd), trimmed at a method-level generic arity marker (``1).
+        var methodStart = lastDot + 1;
+        var backtick = docId.IndexOf('`', methodStart, searchEnd - methodStart);
+        var methodEnd = backtick >= 0 ? backtick : searchEnd;
+        if (methodEnd <= methodStart)
+            return null;
         // Strip generic arity markers from the declaring type (e.g. Foo`1 -> Foo, Bar`2 -> Bar).
-        // These are backtick+digits sequences on type name segments.
         var declaring = StripTypeArityMarkers(declaringRaw);
-        // Strip method-level generic arity markers (``1 style) from the method name.
-        var backtick = methodRaw.IndexOf('`');
-        var methodName = backtick >= 0 ? methodRaw.Substring(0, backtick) : methodRaw;
-        if (string.IsNullOrEmpty(methodName))
-            return null;
+        var methodName = docId.Substring(methodStart, methodEnd - methodStart);
         return (declaring, methodName);
     }
 
