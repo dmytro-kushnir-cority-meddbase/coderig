@@ -17,9 +17,18 @@ public sealed record TreeCachePayload(IReadOnlyList<TraceNode> Forest, IReadOnly
 // and deflate collapses that redundancy, so compression is "outsourced to zip" rather than hand-rolled.
 public static class TreeCacheCodec
 {
+    // Call trees nest deep, and each tree level is TWO JSON levels (the TraceNode object + its Children
+    // array), so the System.Text.Json default MaxDepth of 64 overflows at ~32 levels of call depth. Use a
+    // context built with a generous MaxDepth (and the null-skipping default). Bounded by the traversal's
+    // own --maxdepth, so this only needs to exceed any realistic call depth; deeper still throws and the
+    // caller treats the cache write as best-effort (skips it).
+    private static readonly TreeCacheJsonContext Context = new(
+        new JsonSerializerOptions { MaxDepth = 4096, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull }
+    );
+
     public static byte[] Encode(TreeCachePayload payload)
     {
-        var json = JsonSerializer.SerializeToUtf8Bytes(payload, TreeCacheJsonContext.Default.TreeCachePayload);
+        var json = JsonSerializer.SerializeToUtf8Bytes(payload, Context.TreeCachePayload);
         using var output = new MemoryStream();
         using (var gzip = new GZipStream(output, CompressionLevel.Optimal))
             gzip.Write(json, 0, json.Length);
@@ -37,7 +46,7 @@ public static class TreeCacheCodec
             using var json = new MemoryStream();
             gzip.CopyTo(json);
             json.Position = 0;
-            return JsonSerializer.Deserialize(json, TreeCacheJsonContext.Default.TreeCachePayload);
+            return JsonSerializer.Deserialize(json, Context.TreeCachePayload);
         }
         catch (Exception ex) when (ex is InvalidDataException or JsonException or NotSupportedException)
         {
@@ -46,6 +55,5 @@ public static class TreeCacheCodec
     }
 }
 
-[JsonSourceGenerationOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(TreeCachePayload))]
 internal partial class TreeCacheJsonContext : JsonSerializerContext { }

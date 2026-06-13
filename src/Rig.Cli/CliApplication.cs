@@ -1134,9 +1134,21 @@ public static class CliApplication
                     observationRules: observationRules,
                     throwRefs: inputs.ThrowRefs
                 );
-                // Cache UNFILTERED effects; --only/--exclude are applied below so they don't fragment the key.
+                // Cache UNFILTERED effects; --only/--exclude are applied below so they don't fragment the
+                // key. Best-effort: encoding a pathologically deep forest (or any IO hiccup) must never
+                // fail the query — on error we simply don't cache and the next run recomputes.
                 if (cacheKey is not null)
-                    cache!.Put(cacheKey, TreeCacheCodec.Encode(new TreeCachePayload(roots, effects)));
+                {
+                    try
+                    {
+                        cache!.Put(cacheKey, TreeCacheCodec.Encode(new TreeCachePayload(roots, effects)));
+                    }
+                    catch (Exception ex)
+                        when (ex is System.Text.Json.JsonException or NotSupportedException or InvalidOperationException or IOException)
+                    {
+                        // skip caching this result
+                    }
+                }
                 timer.Lap("derive effects + cache store");
             }
         }

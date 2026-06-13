@@ -78,6 +78,27 @@ public sealed class QueryCacheTests
     }
 
     [Test]
+    public void Codec_round_trips_a_forest_deeper_than_the_default_json_depth_limit()
+    {
+        // A call tree nesting >32 levels exceeds System.Text.Json's default MaxDepth of 64 (each tree
+        // level = 2 JSON levels). Regression for the crash that surfaced on a deep real-world tree.
+        const int depth = 200;
+        TraceNode node = new("M:Leaf", EdgeKinds.Invocation, null, null, Children: []);
+        for (var i = depth; i > 0; i--)
+            node = new($"M:N{i}", EdgeKinds.Invocation, null, null, Children: [node]);
+
+        var blob = TreeCacheCodec.Encode(new TreeCachePayload([node], []));
+        var back = TreeCacheCodec.Decode(blob);
+
+        back.ShouldNotBeNull();
+        var d = 0;
+        for (var n = back.Forest[0]; ; n = n.Children[0], d++)
+            if (n.Children.Count == 0)
+                break;
+        d.ShouldBe(depth);
+    }
+
+    [Test]
     public void Cache_stores_and_retrieves_across_reopen_then_invalidates_on_store_change()
     {
         var dir = Directory.CreateTempSubdirectory("rig-cache-").FullName;
