@@ -25,20 +25,18 @@ public static class EntryPointSiteStore
         var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken).ConfigureAwait(false);
         await using var tx = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
-        foreach (
-            var ddl in new[]
-            {
-                "DROP TABLE IF EXISTS entry_point_sites;",
-                "DROP TABLE IF EXISTS entry_point_sites_meta;",
-                "CREATE TABLE entry_point_sites(FilePath TEXT NOT NULL, Line INTEGER NOT NULL, Kind TEXT NOT NULL, Requires TEXT);",
-                "CREATE TABLE entry_point_sites_meta(RulesHash TEXT NOT NULL);",
-            }
-        )
+        // One command, four statements — Microsoft.Data.Sqlite steps a ;-delimited batch in a single
+        // ExecuteNonQuery (as ApplyReadPragmasAsync does), so the schema reset is one call, not four.
+        using (var ddl = connection.CreateCommand())
         {
-            using var cmd = connection.CreateCommand();
-            cmd.Transaction = (DbTransaction)tx;
-            cmd.CommandText = ddl;
-            await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            ddl.Transaction = (DbTransaction)tx;
+            ddl.CommandText = """
+                DROP TABLE IF EXISTS entry_point_sites;
+                DROP TABLE IF EXISTS entry_point_sites_meta;
+                CREATE TABLE entry_point_sites(FilePath TEXT NOT NULL, Line INTEGER NOT NULL, Kind TEXT NOT NULL, Requires TEXT);
+                CREATE TABLE entry_point_sites_meta(RulesHash TEXT NOT NULL);
+                """;
+            await ddl.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
         using (var meta = connection.CreateCommand())
