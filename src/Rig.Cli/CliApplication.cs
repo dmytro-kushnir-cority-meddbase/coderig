@@ -1058,20 +1058,88 @@ public static class CliApplication
 
         await using var context = OpenReadContext(workingDirectory);
 
-        var inputs = await LoadEffectReachInputsAsync(
-            context,
-            fromPattern,
-            SqlReachability.Direction.Forward,
-            handoffRules,
-            factoryRules,
-            cutRules,
-            contextRules
-        );
-        var graph = inputs.Graph;
-        // Event subscriptions (`someEvent += Handler`) are deferred handlers, not synchronous calls —
-        // mark them as handoffs so the sync tree doesn't expand the handler as if RegisterEvents ran it.
-        if (!raw)
-            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+        // Query cache (best-effort, opt-out via --no-cache). A `rig tree` query recomputes the call-tree
+        // forest (BuildTree) AND its effects (FactEffectDeriver.Derive — the ~3.8s dominant cost); both
+        // are a pure function of the store + effective rules + traversal params. Cache the pair in a
+        // separate writable `.rig/cache.db` (rig.db itself is opened read-only), so a repeat query skips
+        // both and only re-loads the cheaper graph to render. Auto-invalidates on reindex: the key embeds
+        // a store identity (rig.db size+mtime) that `rig index`/`rig graph` change. See QueryCache.
+        var rigDir = Path.Combine(workingDirectory, ".rig");
+        var storeKey = StoreKey(Path.Combine(rigDir, "rig.db"));
+        using var cache = args.Contains("--no-cache") ? null : QueryCache.Open(rigDir, storeKey);
+        var cacheKey = cache is null
+            ? null
+            : TreeCacheKey(storeKey, RulesFingerprint.Compute(workingDirectory, extraRules), fromPattern, maxDepth, mode, raw);
+        var cached = cacheKey is not null && cache!.Get(cacheKey) is { } blob ? TreeCacheCodec.Decode(blob) : null;
+
+        FactGraphData graph;
+        IReadOnlyList<TraceNode> roots;
+        IReadOnlyList<DerivedEffect> effects;
+        if (cached is not null)
+        {
+            roots = cached.Forest;
+            effects = cached.Effects;
+            // Rendering still needs the shaped graph (seam effects, --files locations, EP chips); load the
+            // graph-only path — no invocation scan, since the effects came from the cache.
+            graph = await LoadShapedTraversalGraphAsync(
+                context,
+                fromPattern,
+                SqlReachability.Direction.Forward,
+                handoffRules,
+                factoryRules,
+                cutRules,
+                contextRules
+            );
+            if (!raw)
+                graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+        }
+        else
+        {
+            var inputs = await LoadEffectReachInputsAsync(
+                context,
+                fromPattern,
+                SqlReachability.Direction.Forward,
+                handoffRules,
+                factoryRules,
+                cutRules,
+                contextRules
+            );
+            graph = inputs.Graph;
+            // Event subscriptions (`someEvent += Handler`) are deferred handlers, not synchronous calls —
+            // mark them as handoffs so the sync tree doesn't expand the handler as if RegisterEvents ran it.
+            if (!raw)
+                graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+
+            roots = FactPathFinder.BuildTree(graph, fromPattern, maxDepth, mode: mode);
+            if (roots.Count == 0)
+            {
+                effects = [];
+            }
+            else
+            {
+                // Effects per enclosing method — same derivation as `reaches` (incl. throws).
+                var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+                var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+                effects = FactEffectDeriver.Derive(
+                    inputs.Invocations,
+                    effectRules,
+                    providerFilter: null,
+                    baseEdges: BaseEdgeTuples(graph),
+                    ctorRefs: inputs.CtorRefs,
+                    observationRules: observationRules,
+                    throwRefs: inputs.ThrowRefs
+                );
+                // Cache UNFILTERED effects; --only/--exclude are applied below so they don't fragment the key.
+                if (cacheKey is not null)
+                    cache!.Put(cacheKey, TreeCacheCodec.Encode(new TreeCachePayload(roots, effects)));
+            }
+        }
+
+        if (roots.Count == 0)
+        {
+            output.WriteLine($"No symbol matches '{fromPattern}'.");
+            return 1;
+        }
 
         // Deployment attribution (opt-in via deployments.json) + EP-site lookup, so tree nodes that are
         // themselves entry points get the ▶ kind + service chip. Null when unconfigured (default tree).
@@ -1081,25 +1149,6 @@ public static class CliApplication
         );
         var epContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, handoffRules, deployments);
 
-        var roots = FactPathFinder.BuildTree(graph, fromPattern, maxDepth, mode: mode);
-        if (roots.Count == 0)
-        {
-            output.WriteLine($"No symbol matches '{fromPattern}'.");
-            return 1;
-        }
-
-        // Effects per enclosing method — same derivation as `reaches` (incl. throws).
-        var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var effects = FactEffectDeriver.Derive(
-            inputs.Invocations,
-            effectRules,
-            providerFilter: null,
-            baseEdges: BaseEdgeTuples(graph),
-            ctorRefs: inputs.CtorRefs,
-            observationRules: observationRules,
-            throwRefs: inputs.ThrowRefs
-        );
         effects = ApplyEffectFilters(effects, args); // --only / --exclude (e.g. --exclude throw)
 
         var emoji = FactEffectEmojiProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
@@ -1219,6 +1268,41 @@ public static class CliApplication
             .ToDictionary(g => g.Key, g => ((string?)g.First().FilePath, g.First().Line), StringComparer.Ordinal);
 
         return new EpRenderContext(deployments, siteById, epSiteKind);
+    }
+
+    // Identity of the current store for cache keying + invalidation: rig.db size + last-write time.
+    // `rig index` publishes a fresh db (atomic rename → new mtime/size) and `rig graph` rewrites the
+    // derived edge tables in place (mtime changes), so any reindex shifts this — old cache entries no
+    // longer match and are purged. Missing db → a constant sentinel (cache simply never hits).
+    private static string StoreKey(string dbPath)
+    {
+        try
+        {
+            var info = new FileInfo(dbPath);
+            return info.Exists ? $"{info.Length}:{info.LastWriteTimeUtc.Ticks}" : "absent";
+        }
+        catch (IOException)
+        {
+            return "absent";
+        }
+    }
+
+    // The cache key for a `rig tree` forest+effects artifact: everything the artifact is a function of —
+    // the store identity, the effective rule fingerprint, and the traversal parameters. `v1` is the
+    // payload-schema version (bump to ignore older blobs). Render-only flags (--files/--summary/--effects
+    // and --only/--exclude) are deliberately absent: they don't change the forest or the unfiltered
+    // effects, only how they're presented, so they must not fragment the cache.
+    private static string TreeCacheKey(
+        string storeKey,
+        string rulesHash,
+        string fromPattern,
+        int maxDepth,
+        FactPathFinder.TraversalMode mode,
+        bool raw
+    )
+    {
+        var material = $"tree|v1|{storeKey}|{rulesHash}|{fromPattern}|{maxDepth}|{mode}|{raw}";
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 
     // "  ▶ kind  ⟦svc⟧" suffix for a from/root symbol (reaches/path/callers roots), or "" when there is
@@ -1901,9 +1985,7 @@ public static class CliApplication
         }
 
         output.WriteLine();
-        output.WriteLine(
-            "Entry points per deployed service (active-in; `· N linked-inactive` = loaded but gated out of that host):"
-        );
+        output.WriteLine("Entry points per deployed service (active-in; `· N linked-inactive` = loaded but gated out of that host):");
         foreach (var svc in deployments.Services)
         {
             var total = totals.GetValueOrDefault(svc.Name);
@@ -2352,6 +2434,7 @@ public static class CliApplication
             "--depth",
             "--only",
             "--exclude",
+            "--no-cache",
         ],
         ["callers"] = ["--roots", "--entrypoints", "--async", "--raw", "--rules", "--maxdepth", "--depth"],
         ["derive"] = ["--limit", "--rules", "--only", "--exclude", "--format"],

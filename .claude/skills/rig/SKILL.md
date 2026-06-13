@@ -33,6 +33,7 @@ rig tree "Type.Method"                            # call tree (default: synchron
 rig tree "Type.Method" --effects --maxdepth 3     # COMPACT: only effectful methods, no skeleton (escape the 10-screen tree)
 rig tree "Type.Method" --exclude throw            # drop a noisy effect class (see Effect filtering)
 rig tree "Type.Method" --raw                      # bypass codebase render rules (see Tree render rules)
+rig tree "Type.Method" --no-cache                 # bypass the .rig/cache.db forest+effects cache (see below)
 rig callers "Type.Method" --roots                # reverse: no-predecessor candidates that reach it (heuristic; a background callback shows as its OWN root)
 rig callers "Type.Method" --entrypoints           # reverse: the RULE-DETECTED entry points (the `derive` set) that reach it — precise, no unbound-interface noise
 rig path "From.Method" "To.Method" [--async]     # one concrete path between two symbols (synchronous; --async renders the ⤳ handoff hop)
@@ -153,6 +154,15 @@ unchanged.
 - **Out of scope**: a single rule gates all its EPs identically — a runtime `if` inside one registrar that
   starts some actors only on one host is not expressible by rule alone; cluster routing / lazy spawn too.
   Confirm against config/logs.
+
+## Query cache (`rig tree`)
+
+`rig tree` caches its computed forest + effects in a separate `.rig/cache.db` (the main `rig.db` is opened
+read-only). A repeat query skips the traversal + effect derivation and only re-loads the graph to render —
+identical output, lower latency. **Auto-invalidated on reindex:** the key embeds the rule fingerprint + a
+store identity (`rig.db` size/mtime) that `rig index`/`rig graph` change, and stale rows are purged on
+open, so you never see a result from an old index. It's best-effort (any failure silently recomputes).
+Pass `--no-cache` to bypass it (e.g. when benchmarking). Safe to delete `.rig/cache.db` anytime.
 
 ## Finding dead code (`rig dead`)
 
