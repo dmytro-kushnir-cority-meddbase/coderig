@@ -38,11 +38,10 @@ public static class FactPathFinder
         string fromPattern,
         string toPattern,
         int maxDepth = 20,
-        TraversalMode mode = TraversalMode.SyncCut,
-        IReadOnlyList<FactContextDispatchRule>? contextRules = null
+        TraversalMode mode = TraversalMode.SyncCut
     )
     {
-        var index = BuildIndex(graph, contextRules: contextRules);
+        var index = BuildIndex(graph);
 
         // Parent links carry the edge that reached the node (for path + kind reconstruction),
         // including its enclosing-loop context so the reconstructed path can mark looped hops, the
@@ -154,11 +153,10 @@ public static class FactPathFinder
         int maxDepth = 20,
         int maxNodes = 20000,
         bool narrowDispatch = true,
-        TraversalMode mode = TraversalMode.SyncCut,
-        IReadOnlyList<FactTraversalCutRule>? cutRules = null
+        TraversalMode mode = TraversalMode.SyncCut
     )
     {
-        var info = ReachesWithFanout(graph, fromPattern, maxDepth, maxNodes, narrowDispatch, mode, cutRules);
+        var info = ReachesWithFanout(graph, fromPattern, maxDepth, maxNodes, narrowDispatch, mode);
         var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var kv in info)
             depthOf[kv.Key] = kv.Value.Depth;
@@ -175,17 +173,10 @@ public static class FactPathFinder
         int maxDepth = 20,
         int maxNodes = 20000,
         bool narrowDispatch = true,
-        TraversalMode mode = TraversalMode.SyncCut,
-        IReadOnlyList<FactTraversalCutRule>? cutRules = null,
-        IReadOnlyList<FactContextDispatchRule>? contextRules = null
+        TraversalMode mode = TraversalMode.SyncCut
     )
     {
-        var index = BuildIndex(graph, narrowDispatch, contextRules);
-        if (cutRules is { Count: > 0 })
-        {
-            index.TraversalCutRules = cutRules;
-            index.ApplyTraversalCuts = true;
-        }
+        var index = BuildIndex(graph, narrowDispatch);
         var info = new Dictionary<string, ReachInfo>(StringComparer.Ordinal);
         // The static receiver type of the (BFS-shortest) edge that reached each node, carried so that
         // node's own dispatch fan-out can be narrowed edge-aware when it is expanded.
@@ -343,6 +334,30 @@ public static class FactPathFinder
             }
         }
         return changed ? graph with { CallEdges = rewritten } : graph;
+    }
+
+    // The SINGLE shaping pass for the attribution/traversal commands (reaches/tree/path/callers). Applied
+    // once at graph load, direction-agnostic: (1) monomorphize generic-factory edges into the CallEdges,
+    // then (2) carry the cut + context-dispatch rules ON the graph so BuildIndex picks them up and BOTH
+    // forward (Successors) and reverse (Predecessors) traversals honour the identical shaping. This is
+    // what makes `callers` agree with `path`/`reaches` — they all walk the same shaped graph rather than
+    // each command shaping (or not) on its own. Empty rule sets => the unshaped graph (the `--raw` path,
+    // and what `dead` uses — it needs the sound CHA superset, so it never calls this).
+    public static FactGraphData ShapeGraph(
+        FactGraphData graph,
+        IReadOnlyList<FactGenericFactoryRule> factoryRules,
+        IReadOnlyList<FactTraversalCutRule> cutRules,
+        IReadOnlyList<FactContextDispatchRule> contextRules
+    )
+    {
+        var shaped = RewriteGenericFactories(graph, factoryRules);
+        if (cutRules.Count == 0 && contextRules.Count == 0)
+            return shaped;
+        return shaped with
+        {
+            CutRules = cutRules.Count > 0 ? cutRules : null,
+            ContextRules = contextRules.Count > 0 ? contextRules : null,
+        };
     }
 
     public static FactGraphData RewriteGenericFactories(FactGraphData graph, IReadOnlyList<FactGenericFactoryRule> rules)
@@ -549,24 +564,17 @@ public static class FactPathFinder
     // BFS (shallowest-first) ensures a shallow direct call is NEVER stolen by a deep infra seam that
     // happened to be expanded first in DFS source order: BFS processes nodes at increasing depth, and
     // among same-depth peers it preserves source order (Successors yields children in line order).
-    // `cutRules`: when non-null, nodes matching a traversal-cut rule are expanded as leaves — their
-    // own effects are visible but their subtree is not walked (stops reflection seams from expanding).
+    // Cut + context shaping is carried on `graph` (set by ShapeGraph at load) and applied via BuildIndex:
+    // a cut node is expanded as a leaf — its own effects are visible but its subtree is not walked.
     public static IReadOnlyList<TraceNode> BuildTree(
         FactGraphData graph,
         string fromPattern,
         int maxDepth = 20,
         int maxNodes = 20000,
-        TraversalMode mode = TraversalMode.SyncCut,
-        IReadOnlyList<FactTraversalCutRule>? cutRules = null,
-        IReadOnlyList<FactContextDispatchRule>? contextRules = null
+        TraversalMode mode = TraversalMode.SyncCut
     )
     {
-        var index = BuildIndex(graph, contextRules: contextRules);
-        if (cutRules is { Count: > 0 })
-        {
-            index.TraversalCutRules = cutRules;
-            index.ApplyTraversalCuts = true;
-        }
+        var index = BuildIndex(graph);
 
         var expanded = new HashSet<string>(StringComparer.Ordinal);
         var budget = maxNodes;
@@ -909,9 +917,17 @@ public static class FactPathFinder
 
     private static IEnumerable<string> Predecessors(string current, GraphIndex index, ReverseMaps rev)
     {
+        // Cut symmetry: a cut node yields NO successors forward (Successors `yield break`s on it), so it
+        // can never be the runtime caller/dispatcher of `current` — it must not surface as a predecessor
+        // in reverse either. Dropping it here is exactly the reverse of the forward leaf-stop, so
+        // `callers` cuts the reflection/service-locator seams at the same boundary `reaches`/`tree` do
+        // (e.g. a ProvideService<T> seam stops the reverse BFS instead of fanning to all its callers).
+        var cutting = index.ApplyTraversalCuts;
+
         if (rev.Callers.TryGetValue(current, out var direct))
             foreach (var c in direct)
-                yield return c;
+                if (!cutting || !index.IsTraversalCut(c))
+                    yield return c;
 
         // Reverse dispatch: every source method whose (forward) dispatch resolves to `current` —
         // its interface declaration, base virtual, or transitive base of the override chain. Narrowed:
@@ -923,7 +939,7 @@ public static class FactPathFinder
             var parsed = ParseMethod(current);
             var typeId = parsed?.TypeId;
             foreach (var s in sources)
-                if (typeId is null || ReverseDispatchReaches(s, typeId, index, rev))
+                if ((!cutting || !index.IsTraversalCut(s)) && (typeId is null || ReverseDispatchReaches(s, typeId, index, rev)))
                     yield return s;
         }
     }
@@ -1038,11 +1054,7 @@ public static class FactPathFinder
         }
     }
 
-    private static GraphIndex BuildIndex(
-        FactGraphData graph,
-        bool narrowDispatch = true,
-        IReadOnlyList<FactContextDispatchRule>? contextRules = null
-    )
+    private static GraphIndex BuildIndex(FactGraphData graph, bool narrowDispatch = true)
     {
         var index = new GraphIndex { NarrowDispatch = narrowDispatch };
         foreach (var edge in graph.CallEdges)
@@ -1071,7 +1083,15 @@ public static class FactPathFinder
         index.StrippedBaseEdges = TypeClosure.BuildBaseEdgeLookup(
             (graph.BaseEdges ?? new List<BaseEdge>()).Select(e => (e.SubType, e.BaseType))
         );
-        BuildContextFamilies(index, graph, contextRules);
+        BuildContextFamilies(index, graph, graph.ContextRules);
+        // Shaping carried on the graph (set once by ShapeGraph at load) drives the cut uniformly for
+        // every traversal that builds an index — forward Successors AND reverse Predecessors — so no
+        // command can accidentally walk an unshaped graph. Null/empty => no cut (the --raw / dead path).
+        if (graph.CutRules is { Count: > 0 })
+        {
+            index.TraversalCutRules = graph.CutRules;
+            index.ApplyTraversalCuts = true;
+        }
         foreach (var fact in graph.MinedDispatch ?? new List<DispatchFact>())
         {
             if (!index.MinedDispatchBySource.TryGetValue(fact.SourceMember, out var list))

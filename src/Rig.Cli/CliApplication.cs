@@ -91,7 +91,7 @@ public static class CliApplication
         output.WriteLine("  rig symbols <pattern> [--kind <k>] [--limit <n>]");
         output.WriteLine("  rig refs <pattern> [--first-party] [--kind <refkind>] [--limit <n>]");
         output.WriteLine(
-            "  rig path <fromPattern> <toPattern> [--async] [--maxdepth|--depth <n>]   (synchronous by default; --async also walks async handoff edges, tagged; --maxdepth defaults unbounded)"
+            "  rig path <fromPattern> <toPattern> [--async] [--raw] [--rules <path>...] [--maxdepth|--depth <n>]   (synchronous by default; --async also walks async handoff edges, tagged; --raw bypasses graph shaping (factory/cut/context rules); --maxdepth defaults unbounded)"
         );
         output.WriteLine(
             "  rig reaches <fromPattern> [--async] [--rules <path>...] [--maxdepth|--depth <n>] [--only <p,..>] [--exclude <p,..>] [--format tsv]   (effects reachable from an entry point; synchronous by default (handoffs cut); --async adds scheduled/cross-thread reach via handoffs in a separate ⚡bucket; --exclude throw to drop exceptions)"
@@ -100,7 +100,7 @@ public static class CliApplication
             "  rig tree <fromPattern> [--full|--summary|--effects] [--async] [--only <p,..>] [--exclude <p,..>] [--rules <path>...] [--maxdepth|--depth <n>]   (call tree from an entry point; default = synchronous paths that reach an effect; --async also crosses handoffs (marked ⤳); --effects = only effectful methods, no skeleton; --exclude throw to drop exceptions)"
         );
         output.WriteLine(
-            "  rig callers <toPattern> [--roots|--entrypoints] [--async] [--maxdepth|--depth <n>]   (reverse reachability: who reaches this method; defaults to SYNCHRONOUS only (handoffs cut), so background callbacks show as their own origins; --async also counts scheduled paths; --roots = no-predecessor candidates (heuristic); --entrypoints = RULE-DETECTED entry points that reach it (precise))"
+            "  rig callers <toPattern> [--roots|--entrypoints] [--async] [--raw] [--rules <path>...] [--maxdepth|--depth <n>]   (reverse reachability: who reaches this method; defaults to SYNCHRONOUS only (handoffs cut), so background callbacks show as their own origins; --async also counts scheduled paths; --roots = no-predecessor candidates (heuristic); --entrypoints = RULE-DETECTED entry points that reach it (precise); shaped by the same factory/cut/context rules as path/reaches/tree, --raw bypasses)"
         );
         output.WriteLine(
             "  rig derive [--rules <path>...] [--limit <n>] [--only <p,..>] [--exclude <p,..>]   (stage-2 pass over facts: effects + handoffs; --exclude throw to drop exceptions)"
@@ -447,11 +447,11 @@ public static class CliApplication
     private static RigDbContext OpenReadContext(string workingDirectory) =>
         new(Path.Combine(workingDirectory, ".rig", "rig.db"), readOnly: true);
 
-    // The call graph for a traversal command (reaches/tree/callers). When the derived edge views exist
-    // (`rig graph` has been run) it returns the BOUNDED subgraph for `pattern` in the given direction —
-    // loaded on disk via recursive CTE, sized to the result, not the 1.6GB store. Otherwise it falls
-    // back to the full in-memory EF graph (the reference path). The SAME FactPathFinder then runs over
-    // whichever graph, so the output is identical — only the load cost differs.
+    // The call graph for a traversal command (reaches/tree/path/callers). When the derived edge views
+    // exist (`rig graph` has been run) it returns the BOUNDED subgraph for `pattern` in the given
+    // direction — loaded on disk via recursive CTE, sized to the result, not the 1.6GB store. Otherwise
+    // it falls back to the full in-memory EF graph (the reference path). The SAME FactPathFinder then
+    // runs over whichever graph, so the output is identical — only the load cost differs.
     private static async Task<FactGraphData> LoadTraversalGraphAsync(
         RigDbContext context,
         string pattern,
@@ -467,6 +467,25 @@ public static class CliApplication
         return await Reads.LoadFactGraphAsync(context, handoffRules);
     }
 
+    // The SHAPED traversal graph: LoadTraversalGraphAsync + the single FactPathFinder.ShapeGraph pass
+    // (monomorphize generic factories + carry cut/context rules on the graph). EVERY attribution command
+    // — forward (path) or reverse (callers) — loads through here so they all walk the identical shaped
+    // graph; this is what keeps `callers` consistent with `path`/`reaches`. `dead` deliberately does NOT
+    // use this (it needs the sound CHA superset). Pass empty rule sets (the `--raw` path) for no shaping.
+    private static async Task<FactGraphData> LoadShapedTraversalGraphAsync(
+        RigDbContext context,
+        string pattern,
+        SqlReachability.Direction direction,
+        IReadOnlyList<FactHandoffRule> handoffRules,
+        IReadOnlyList<FactGenericFactoryRule> factoryRules,
+        IReadOnlyList<FactTraversalCutRule> cutRules,
+        IReadOnlyList<FactContextDispatchRule> contextRules
+    )
+    {
+        var graph = await LoadTraversalGraphAsync(context, pattern, direction, handoffRules);
+        return FactPathFinder.ShapeGraph(graph, factoryRules, cutRules, contextRules);
+    }
+
     // Like LoadTraversalGraphAsync, but also returns the effect-derivation inputs (invocations / ctor
     // refs / throw refs) bounded to the SAME closure — so reaches/tree don't scan every invocation in
     // the codebase. SQL path: one reach_set drives the graph + bounded inputs. EF fallback: the full
@@ -476,18 +495,22 @@ public static class CliApplication
         string pattern,
         SqlReachability.Direction direction,
         IReadOnlyList<FactHandoffRule> handoffRules,
-        IReadOnlyList<FactGenericFactoryRule>? factoryRules = null
+        IReadOnlyList<FactGenericFactoryRule>? factoryRules = null,
+        IReadOnlyList<FactTraversalCutRule>? cutRules = null,
+        IReadOnlyList<FactContextDispatchRule>? contextRules = null
     )
     {
         var inputs = await SqlReachability.HasGraphAsync(context)
             ? await SqlReachability.LoadReachInputsAsync(context, pattern, direction)
             : await LoadReachInputsFromRowsAsync(context, handoffRules);
 
-        // Monomorphize generic-factory call edges (e.g. Entity.New<Account,…> -> Account.New), collapsing
-        // the generic plumbing so tree/reaches/callers go straight to the constructed type. Edges with no
-        // concrete construct keep their plumbing (the in-memory generic-dispatch narrowing covers those).
-        if (factoryRules is { Count: > 0 })
-            inputs = inputs with { Graph = FactPathFinder.RewriteGenericFactories(inputs.Graph, factoryRules) };
+        // The single shaping pass (monomorphize generic factories + carry cut/context rules on the graph)
+        // so reaches/tree walk the same shaped graph as path/callers. Edges with no concrete construct
+        // keep their plumbing (the in-memory generic-dispatch narrowing covers those).
+        inputs = inputs with
+        {
+            Graph = FactPathFinder.ShapeGraph(inputs.Graph, factoryRules ?? [], cutRules ?? [], contextRules ?? []),
+        };
         return inputs;
     }
 
@@ -730,21 +753,49 @@ public static class CliApplication
     {
         if (args.Length < 3)
         {
-            error.WriteLine("Usage: rig path <fromPattern> <toPattern> [--async] [--maxdepth|--depth <n>]");
+            error.WriteLine("Usage: rig path <fromPattern> <toPattern> [--async] [--raw] [--rules <path>...] [--maxdepth|--depth <n>]");
             return 2;
         }
 
         var fromPattern = args[1];
         var toPattern = args[2];
         var mode = TraversalModeOf(args);
-        var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory);
+        var extraRules = new List<string>();
+        for (var i = 0; i < args.Length; i++)
+            if (args[i] == "--rules" && i + 1 < args.Length)
+            {
+                extraRules.Add(Path.GetFullPath(args[i + 1]));
+                i++;
+            }
+        var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        // `path` walks the SAME shaped graph as reaches/tree (monomorphized factories + cut/context
+        // rules) so the path it reports is consistent with what those report — a reflection seam that
+        // `tree` cuts is not silently traversed here either. `--raw` bypasses all shaping.
+        var raw = args.Contains("--raw");
+        var factoryRules = raw
+            ? Array.Empty<FactGenericFactoryRule>()
+            : FactGenericFactoryRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var cutRules = raw
+            ? Array.Empty<FactTraversalCutRule>()
+            : FactTraversalCutRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var contextRules = raw
+            ? Array.Empty<FactContextDispatchRule>()
+            : FactContextDispatchRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
 
         await using var context = OpenReadContext(workingDirectory);
         // Any path from a `from` node lies entirely within that node's forward closure, so the BOUNDED
         // forward subgraph (loaded on disk via the derived edge views, sized to the result) finds the
         // same first path as the full graph — without the 1.4M-row in-memory load. Falls back to the
         // full EF graph when `rig graph` hasn't been run. (Same pattern as reaches/tree/callers.)
-        var graph = await LoadTraversalGraphAsync(context, fromPattern, SqlReachability.Direction.Forward, handoffRules);
+        var graph = await LoadShapedTraversalGraphAsync(
+            context,
+            fromPattern,
+            SqlReachability.Direction.Forward,
+            handoffRules,
+            factoryRules,
+            cutRules,
+            contextRules
+        );
         output.WriteLine(
             $"Fact graph: {graph.CallEdges.Count} call edges, {graph.ImplementsEdges.Count} implements edges, {graph.Methods.Count} methods"
         );
@@ -805,18 +856,19 @@ public static class CliApplication
 
         await using var context = OpenReadContext(workingDirectory);
 
-        var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, handoffRules, factoryRules);
+        var inputs = await LoadEffectReachInputsAsync(
+            context,
+            fromPattern,
+            SqlReachability.Direction.Forward,
+            handoffRules,
+            factoryRules,
+            cutRules,
+            contextRules
+        );
         var graph = inputs.Graph;
         if (!raw)
             graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
-        var reachable = FactPathFinder.ReachesWithFanout(
-            graph,
-            fromPattern,
-            maxDepth,
-            mode: mode,
-            cutRules: cutRules,
-            contextRules: contextRules
-        );
+        var reachable = FactPathFinder.ReachesWithFanout(graph, fromPattern, maxDepth, mode: mode);
 
         var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
@@ -977,13 +1029,21 @@ public static class CliApplication
 
         await using var context = OpenReadContext(workingDirectory);
 
-        var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, handoffRules, factoryRules);
+        var inputs = await LoadEffectReachInputsAsync(
+            context,
+            fromPattern,
+            SqlReachability.Direction.Forward,
+            handoffRules,
+            factoryRules,
+            cutRules,
+            contextRules
+        );
         var graph = inputs.Graph;
         // Event subscriptions (`someEvent += Handler`) are deferred handlers, not synchronous calls —
         // mark them as handoffs so the sync tree doesn't expand the handler as if RegisterEvents ran it.
         if (!raw)
             graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
-        var roots = FactPathFinder.BuildTree(graph, fromPattern, maxDepth, mode: mode, cutRules: cutRules, contextRules: contextRules);
+        var roots = FactPathFinder.BuildTree(graph, fromPattern, maxDepth, mode: mode);
         if (roots.Count == 0)
         {
             output.WriteLine($"No symbol matches '{fromPattern}'.");
@@ -1004,19 +1064,11 @@ public static class CliApplication
         );
         effects = ApplyEffectFilters(effects, args); // --only / --exclude (e.g. --exclude throw)
 
-        var emoji = EffectEmoji.Load(workingDirectory);
+        var emoji = FactEffectEmojiProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         var effectsByMethod = effects
             .Where(e => e.EnclosingSymbolId is not null)
             .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
-            .ToDictionary(
-                g => g.Key,
-                g =>
-                    g.Select(e =>
-                            $"{EffectEmoji.For(emoji, e.Provider, e.Operation)} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}"
-                        )
-                        .ToList(),
-                StringComparer.Ordinal
-            );
+            .ToDictionary(g => g.Key, g => FormatEffectGroup(g, emoji), StringComparer.Ordinal);
 
         if (summary)
         {
@@ -1058,7 +1110,7 @@ public static class CliApplication
             maxDepth,
             mode,
             structuredByMethod,
-            (p, o) => EffectEmoji.For(emoji, p, o)
+            (p, o) => FactEffectEmojiProvider.For(emoji, p, o)
         );
 
         // `--files`: per-node definition location (relpath:line) from the loaded methods, for source links.
@@ -1187,12 +1239,18 @@ public static class CliApplication
         IReadOnlyList<FactTraversalCutRule>? cutRules = null
     )
     {
+        // Compute visible children first — the fan-out label must reflect how many branches are
+        // actually rendered (pruning may drop effectless children, making ×2 fan-out misleading
+        // when only 1 child survives).
+        var children = prune ? node.Children.Where(c => SubtreeHasEffect(c, effectsByMethod)).ToList() : node.Children.ToList();
+        var childPrefix = isRoot ? "" : prefix + (isLast ? "   " : "│  ");
+
         var dispatchTag = node.DispatchBasis == "heuristic" ? $"{node.EdgeKind} ~heuristic" : node.EdgeKind;
         // A folded single-impl hop shows «via IFoo» (the collapsed interface) in place of the dispatch tag.
         var dispatch =
             node.FoldedVia is not null ? $" «via {node.FoldedVia}»"
             : node.EdgeKind is "impl-dispatch" or "override-dispatch"
-                ? (node.Fanout > 1 ? $" «{dispatchTag} ×{node.Fanout} fan-out»" : $" «{dispatchTag}»")
+                ? (children.Count > 1 ? $" «{dispatchTag} ×{children.Count} fan-out»" : $" «{dispatchTag}»")
             : "";
         // An async handoff hop (only present under --async): mark the cross-thread boundary.
         var handoff = node.EdgeKind == "handoff" ? $" ⤳handoff via {ShortName(node.HandoffVia)} [cross_thread]" : "";
@@ -1221,7 +1279,7 @@ public static class CliApplication
             if (matchedCut is not null)
                 cutTag = $" «cut: {matchedCut.Label}»";
         }
-        var fx = effectsByMethod.TryGetValue(node.SymbolId, out var list) ? "  " + string.Join(" ", list.Select(e => "{" + e + "}")) : "";
+        var fx = effectsByMethod.TryGetValue(node.SymbolId, out var list) && list.Count > 0 ? "  {" + string.Join(", ", list) + "}" : "";
         var loc =
             files && locById is not null && locById.TryGetValue(node.SymbolId, out var l) && l.File is not null
                 ? $"  📄 {ShortenPath(l.File)}:{l.Line}"
@@ -1232,9 +1290,6 @@ public static class CliApplication
 
         if (opaque is not null)
             return;
-
-        var children = prune ? node.Children.Where(c => SubtreeHasEffect(c, effectsByMethod)).ToList() : node.Children.ToList();
-        var childPrefix = isRoot ? "" : prefix + (isLast ? "   " : "│  ");
 
         // Collapse-seam render rule: this node is a fan-out hub (e.g. a reflection service-locator or
         // an ORM entity-constructor factory). Fold its candidate children into ONE summary leaf —
@@ -1383,7 +1438,7 @@ public static class CliApplication
         var rootsOnly = args.Contains("--roots");
         var entrypointsOnly = args.Contains("--entrypoints");
         var mode = TraversalModeOf(args);
-        var includeHandoff = mode == FactPathFinder.TraversalMode.AsyncInclude;
+        var raw = args.Contains("--raw");
         var extraRules = new List<string>();
         for (var i = 0; i < args.Length; i++)
             if (args[i] == "--rules" && i + 1 < args.Length)
@@ -1392,34 +1447,43 @@ public static class CliApplication
                 i++;
             }
         var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        // callers walks the SAME shaped graph as path/reaches/tree — monomorphized generic factories +
+        // cut + context rules, carried on the graph and honoured SYMMETRICALLY by the reverse traversal
+        // (a cut node yields no successors forward, so it is never a predecessor in reverse). Before this,
+        // callers walked the raw call_edges and fanned reflection/service-locator seams (e.g.
+        // ProvideService<T>, ~1k callers) out to thousands of unrelated entry points — disagreeing with
+        // what `path`/`reaches` reported for the same target. `--raw` bypasses shaping (the unfiltered
+        // reverse closure, for inspecting the exact plumbing).
+        var factoryRules = raw
+            ? Array.Empty<FactGenericFactoryRule>()
+            : FactGenericFactoryRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var cutRules = raw
+            ? Array.Empty<FactTraversalCutRule>()
+            : FactTraversalCutRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var contextRules = raw
+            ? Array.Empty<FactContextDispatchRule>()
+            : FactContextDispatchRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
 
         await using var context = OpenReadContext(workingDirectory);
 
-        if (entrypointsOnly)
-            return await RunCallersEntryPointsAsync(
-                context,
-                toPattern,
-                maxDepth,
-                mode,
-                includeHandoff,
-                handoffRules,
-                extraRules,
-                workingDirectory,
-                output
-            );
+        // One shaped reverse subgraph (bounded when `rig graph` has run, else the full EF graph) drives
+        // all three callers modes — the set, the no-predecessor roots, and the rule-detected entrypoints.
+        var graph = await LoadShapedTraversalGraphAsync(
+            context,
+            toPattern,
+            SqlReachability.Direction.Reverse,
+            handoffRules,
+            factoryRules,
+            cutRules,
+            contextRules
+        );
 
-        // SQL-native traversal when the derived edge views exist: the reverse closure (+ shortest depth,
-        // + no-predecessor roots) is computed entirely in SQLite over call_edges ∪ dispatch_edges, so we
-        // skip loading the bounded subgraph into memory and running FactPathFinder.ReachedBy. Same edges,
-        // same maxDepth, same seed universe (the `nodes` table) → identical keyset. Falls back to the EF
-        // graph + in-memory ReachedBy when `rig graph` hasn't been run.
-        var useSql = await SqlReachability.HasGraphAsync(context);
+        if (entrypointsOnly)
+            return await RunCallersEntryPointsAsync(context, graph, toPattern, maxDepth, mode, handoffRules, extraRules, workingDirectory, output);
 
         if (rootsOnly)
         {
-            var roots = useSql
-                ? await SqlReachability.EntryRootsReachingAsync(context, toPattern, maxDepth, includeHandoff)
-                : FactPathFinder.EntryRootsReaching(await Reads.LoadFactGraphAsync(context, handoffRules), toPattern, maxDepth, mode: mode);
+            var roots = FactPathFinder.EntryRootsReaching(graph, toPattern, maxDepth, mode: mode);
             if (roots.Count == 0)
             {
                 output.WriteLine($"No entry-point candidates reach '{toPattern}' (or no symbol matches).");
@@ -1431,9 +1495,7 @@ public static class CliApplication
             return 0;
         }
 
-        var reachable = useSql
-            ? await SqlReachability.ReachedWithDepthAsync(context, toPattern, SqlReachability.Direction.Reverse, maxDepth, includeHandoff)
-            : FactPathFinder.ReachedBy(await Reads.LoadFactGraphAsync(context, handoffRules), toPattern, maxDepth, mode: mode);
+        var reachable = FactPathFinder.ReachedBy(graph, toPattern, maxDepth, mode: mode);
         if (reachable.Count == 0)
         {
             output.WriteLine($"No symbol matches '{toPattern}'.");
@@ -1456,24 +1518,20 @@ public static class CliApplication
     // reach the target across a handoff (scheduled). Honors --maxdepth.
     private static async Task<int> RunCallersEntryPointsAsync(
         RigDbContext context,
+        FactGraphData graph,
         string toPattern,
         int maxDepth,
         FactPathFinder.TraversalMode mode,
-        bool includeHandoff,
         IReadOnlyList<FactHandoffRule> handoffRules,
         IReadOnlyList<string> extraRules,
         string workingDirectory,
         TextWriter output
     )
     {
-        // Reverse closure of the target (every method that reaches it), as a DocID set.
-        var reachable = await SqlReachability.HasGraphAsync(context)
-            ? (
-                await SqlReachability.ReachedWithDepthAsync(context, toPattern, SqlReachability.Direction.Reverse, maxDepth, includeHandoff)
-            ).Keys.ToHashSet(StringComparer.Ordinal)
-            : FactPathFinder
-                .ReachedBy(await Reads.LoadFactGraphAsync(context, handoffRules), toPattern, maxDepth, mode: mode)
-                .Keys.ToHashSet(StringComparer.Ordinal);
+        // Reverse closure of the target (every method that reaches it) over the SAME shaped graph the
+        // caller loaded — so the rule-detected entry points are intersected with the cut-shaped reach,
+        // not the raw fan-out.
+        var reachable = FactPathFinder.ReachedBy(graph, toPattern, maxDepth, mode: mode).Keys.ToHashSet(StringComparer.Ordinal);
         if (reachable.Count == 0)
         {
             output.WriteLine($"No symbol matches '{toPattern}'.");
@@ -1817,6 +1875,59 @@ public static class CliApplication
         || targetSymbolId.IndexOf("TheoryAttribute", StringComparison.Ordinal) >= 0
         || targetSymbolId.IndexOf("TestAttribute", StringComparison.Ordinal) >= 0;
 
+    // Formats the raw effect group for one method into display strings, applying three transforms:
+    // (1) lock:acquire+release pairs on the same resource → single "🔒 lock [resource]" entry
+    //     (the pair is always emitted together and adds no information individually);
+    //     if the sole resource is Threading.Monitor the resource name is omitted (always the same).
+    // (2) identical rendered strings → deduplicated with a "×N" suffix.
+    // (3) all effects are returned as individual strings; the caller joins them inside one {…} block.
+    private static List<string> FormatEffectGroup(
+        IEnumerable<Rig.Domain.Data.DerivedEffect> effects,
+        IReadOnlyDictionary<string, string> emoji
+    )
+    {
+        var list = effects.ToList();
+
+        // Collapse lock acquire+release pairs per resource.
+        var acquiresByResource = list.Where(e => e.Provider == "lock" && e.Operation == "acquire")
+            .GroupBy(e => e.ResourceType, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key ?? "", g => g.Count(), StringComparer.OrdinalIgnoreCase);
+        var releasesByResource = list.Where(e => e.Provider == "lock" && e.Operation == "release")
+            .GroupBy(e => e.ResourceType, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key ?? "", g => g.Count(), StringComparer.OrdinalIgnoreCase);
+
+        var pairedResources = acquiresByResource
+            .Keys.Intersect(releasesByResource.Keys, StringComparer.OrdinalIgnoreCase)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var result = new List<string>();
+
+        // Emit one collapsed "lock" entry per paired resource.
+        foreach (var resource in pairedResources.OrderBy(r => r, StringComparer.OrdinalIgnoreCase))
+        {
+            var lockEmoji = FactEffectEmojiProvider.For(emoji, "lock", "held");
+            // Omit resource name when it is always Threading.Monitor — adds no information.
+            var resourceLabel = resource.Contains("Threading.Monitor", StringComparison.OrdinalIgnoreCase) ? "" : $" {ShortName(resource)}";
+            result.Add($"{lockEmoji} lock{resourceLabel}");
+        }
+
+        // Emit non-lock effects and any unpaired lock effects normally.
+        foreach (var e in list)
+        {
+            var isPaired =
+                pairedResources.Contains(e.ResourceType ?? "")
+                && (e.Provider == "lock" && (e.Operation == "acquire" || e.Operation == "release"));
+            if (isPaired)
+                continue;
+            result.Add(
+                $"{FactEffectEmojiProvider.For(emoji, e.Provider, e.Operation)} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}"
+            );
+        }
+
+        // Dedup: collapse identical strings to "label ×N".
+        return result.GroupBy(s => s, StringComparer.Ordinal).Select(g => g.Count() > 1 ? $"{g.Key} ×{g.Count()}" : g.Key).ToList();
+    }
+
     private static string ShortName(string? symbolId)
     {
         if (string.IsNullOrEmpty(symbolId))
@@ -1972,9 +2083,7 @@ public static class CliApplication
     // across IO"). Empty when the effect carries no span observation.
     private static string SpanTag(DerivedEffect effect)
     {
-        var span = (effect.Observations ?? []).FirstOrDefault(o =>
-            o.Type is "transaction_spans_effect" or "lock_held_across_effect"
-        );
+        var span = (effect.Observations ?? []).FirstOrDefault(o => o.Type is "transaction_spans_effect" or "lock_held_across_effect");
         if (span is null)
             return "";
         return span.Type == "transaction_spans_effect" ? "  ⚠ inside-open-tx" : "  ⚠ lock-held-across";
@@ -2001,7 +2110,7 @@ public static class CliApplication
         ["files"] = ["--skipped"],
         ["symbols"] = ["--kind", "--limit"],
         ["refs"] = ["--first-party", "--kind", "--limit"],
-        ["path"] = ["--async", "--maxdepth", "--depth"],
+        ["path"] = ["--async", "--raw", "--rules", "--maxdepth", "--depth"],
         ["reaches"] = ["--async", "--rules", "--maxdepth", "--depth", "--format", "--raw", "--only", "--exclude"],
         ["tree"] =
         [
@@ -2019,7 +2128,7 @@ public static class CliApplication
             "--only",
             "--exclude",
         ],
-        ["callers"] = ["--roots", "--entrypoints", "--async", "--rules", "--maxdepth", "--depth"],
+        ["callers"] = ["--roots", "--entrypoints", "--async", "--raw", "--rules", "--maxdepth", "--depth"],
         ["derive"] = ["--limit", "--rules", "--only", "--exclude", "--format"],
         ["dead"] = ["--limit", "--lib", "--include-dispatch", "--all", "--format", "--rules", "--root"],
     };

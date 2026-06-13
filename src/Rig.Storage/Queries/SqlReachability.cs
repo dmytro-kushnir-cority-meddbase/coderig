@@ -207,6 +207,8 @@ public static class SqlReachability
     // Seed selection. With the `nodes` table (built by GraphMaterializer = distinct edge endpoints ∪
     // symbol_facts methods) one indexed scan matches FactPathFinder's index.Nodes universe. Without it,
     // fall back to the four edge-column LIKEs plus symbol_facts methods (BuildReachSetAsync's seeds).
+    // Plain substring LIKE, mirroring FactPathFinder.Contains — so the bounded graph this seeds is a
+    // faithful SUPERSET for the in-memory traversal that runs over it (which re-seeds with Contains).
     private static string SeedSql(bool hasNodes) =>
         hasNodes
             ? "SELECT sym FROM nodes WHERE sym LIKE $pat ESCAPE '\\'"

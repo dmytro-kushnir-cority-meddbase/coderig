@@ -1367,5 +1367,23 @@
         "context": "lock"
       }
     ]
+  },
+  "effectEmoji": {
+    "llblgen:write": "💾",
+    "llblgen:read": "🔍",
+    "llblgen:fetch": "📥",
+    "llblgen:tx_commit": "✅",
+    "llblgen:tx_rollback": "↩️",
+    "llblgen": "🗄️",
+    "soap": "☎️",
+    "http": "🌐",
+    "queue": "📤",
+    "echo_publish": "📣",
+    "eventbus": "📡",
+    "entity_cache": "🗃️",
+    "object_store": "📦",
+    "io": "📁",
+    "throw": "⚠️",
+    "lock": "🔒"
   }
 }

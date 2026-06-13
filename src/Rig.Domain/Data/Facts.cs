@@ -201,7 +201,18 @@ public sealed record FactGraphData(
     // only as a flagged fallback for members with no mined edge (Basis="heuristic"). Null/empty =>
     // behaves like before this fact existed (pure CHA, all heuristic) — old stores and synthetic
     // test graphs degrade gracefully.
-    IReadOnlyList<DispatchFact>? MinedDispatch = null
+    IReadOnlyList<DispatchFact>? MinedDispatch = null,
+    // Graph SHAPING carried ON the graph so EVERY traversal — forward (reaches/tree/path) or reverse
+    // (callers) — honours the identical shaping, instead of each command deciding it independently (the
+    // old split where `callers` walked the raw graph and saw a different reach than `path`). Set by
+    // FactPathFinder.ShapeGraph at load. CutRules: nodes whose successors are not walked (reflection /
+    // service-locator seams) — applied symmetrically (forward: a leaf; reverse: never a predecessor).
+    // ContextRules: context-bound interface-dispatch narrowing (state-family). The generic-FACTORY
+    // rewrite needs no field — it is baked into CallEdges by ShapeGraph. Null => unshaped (the `--raw`
+    // path, and the sound CHA superset `dead` requires). Default null keeps synthetic test graphs
+    // source-compatible.
+    IReadOnlyList<FactTraversalCutRule>? CutRules = null,
+    IReadOnlyList<FactContextDispatchRule>? ContextRules = null
 );
 
 // One hop in a found path. LoopKind/LoopDetail describe the enclosing loop of the call that

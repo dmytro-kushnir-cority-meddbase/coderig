@@ -45,7 +45,11 @@ internal sealed record AnalysisRuleSet(
     IReadOnlyList<ContextDispatchRule> ContextDispatch,
     // Resource-span observation rules: flag a span-sensitive effect (soap/http/io/…) that occurs
     // lexically inside a transaction-`using` or `lock` scope (ordering/nesting). See FactResourceSpanRule.
-    IReadOnlyList<ResourceSpanObservationRule> ResourceSpanObservations
+    IReadOnlyList<ResourceSpanObservationRule> ResourceSpanObservations,
+    // Per-provider (or provider:operation) glyph override for `rig tree` / `rig reaches` rendering.
+    // Looked up as "provider:operation" first, then "provider", then "•". Lives in rig.rules.json
+    // under the "effectEmoji" key; later files override earlier entries (same cascade as all other rules).
+    IReadOnlyDictionary<string, string> EffectEmoji
 )
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
@@ -156,7 +160,21 @@ internal sealed record AnalysisRuleSet(
             GenericFactories = GenericFactories.Concat(document.GenericFactories ?? []).ToArray(),
             TraversalCuts = TraversalCuts.Concat(document.TraversalCuts ?? []).ToArray(),
             ContextDispatch = ContextDispatch.Concat(document.ContextDispatch ?? []).ToArray(),
+            EffectEmoji = MergeEmojiMap(EffectEmoji, document.EffectEmoji),
         };
+    }
+
+    private static IReadOnlyDictionary<string, string> MergeEmojiMap(
+        IReadOnlyDictionary<string, string> existing,
+        Dictionary<string, string>? incoming
+    )
+    {
+        if (incoming is null || incoming.Count == 0)
+            return existing;
+        var merged = new Dictionary<string, string>(existing, StringComparer.OrdinalIgnoreCase);
+        foreach (var kv in incoming)
+            merged[kv.Key] = kv.Value;
+        return merged;
     }
 
     public FileRule? FindIncludedFile(string relativePath)
@@ -218,7 +236,10 @@ internal sealed record AnalysisRuleSet(
             document.GenericFactories ?? [],
             document.TraversalCuts ?? [],
             document.ContextDispatch ?? [],
-            document.Observations?.ResourceSpan ?? []
+            document.Observations?.ResourceSpan ?? [],
+            document.EffectEmoji is not null
+                ? new Dictionary<string, string>(document.EffectEmoji, StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         );
     }
 }
@@ -407,6 +428,10 @@ internal sealed class AnalysisRulesDocument
 
     // Top-level key "contextDispatch": list of {interface, bindingBase, id?, reason?} rules.
     public List<ContextDispatchRule>? ContextDispatch { get; set; }
+
+    // Top-level key "effectEmoji": flat { "provider:operation": "emoji", "provider": "emoji" } map.
+    // Later-loaded files override earlier entries; builtin-rules.json carries the defaults.
+    public Dictionary<string, string>? EffectEmoji { get; set; }
 }
 
 // `render` rule section — codebase-specific `rig tree` presentation rules (collapse fan-out hubs,

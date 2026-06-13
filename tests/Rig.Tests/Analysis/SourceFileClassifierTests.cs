@@ -137,7 +137,8 @@ public sealed class SourceFileClassifierTests
             [],
             [],
             [],
-            []
+            [],
+            new Dictionary<string, string>()
         );
     }
 

@@ -86,7 +86,8 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
             .OrderBy(e => e.Route, StringComparer.Ordinal)
             .ToArray();
 
-        backend.ShouldBe(new[]
+        backend.ShouldBe(
+            new[]
             {
                 ("background", "LegacyNet48Web.Background.DataSyncProcess.Process"),
                 ("workflow", "LegacyNet48Web.Background.InvoiceWorkflowController.OnSave"),
@@ -94,7 +95,10 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
                 ("wcf", "LegacyNet48Web.Background.ClaimsService.SubmitClaim"),
                 ("pagehandler", "LegacyNet48Web.Pages.Account.Public.LegacyLogin.Initialise"),
                 ("pagehandler", "LegacyNet48Web.Pages.Account.Public.LegacyLogin.OnAction"),
-            }.OrderBy(e => e.Item2, StringComparer.Ordinal).ToArray());
+            }
+                .OrderBy(e => e.Item2, StringComparer.Ordinal)
+                .ToArray()
+        );
 
         var routes = entryPoints.Select(e => e.Route).ToArray();
         routes.ShouldNotContain(r => r.EndsWith("ServiceBase.Startup", StringComparison.Ordinal));
