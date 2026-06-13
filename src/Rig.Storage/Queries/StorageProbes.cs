@@ -18,8 +18,31 @@ internal static class StorageProbes
     {
         var connection = (DbConnection)context.Database.GetDbConnection();
         if (connection.State != System.Data.ConnectionState.Open)
+        {
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+            await ApplyReadPragmasAsync(connection, cancellationToken).ConfigureAwait(false);
+        }
         return connection;
+    }
+
+    // Tune the freshly-opened connection for the whole-store / bounded scans the query paths run against a
+    // multi-GB store. Defaults (mmap_size=0, 2 MB page cache) make every cold scan a syscall-per-page read.
+    // memory-mapped IO turns page faults into mapped reads, a bigger cache holds the hot b-tree pages, and
+    // an in-memory temp store keeps reach_set/reach_depth (and their ANALYZE stats) in RAM. All are
+    // connection-local, read-only-safe, and best-effort: a PRAGMA that doesn't take just leaves the default.
+    private static async Task ApplyReadPragmasAsync(DbConnection connection, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                "PRAGMA mmap_size=1073741824; PRAGMA cache_size=-262144; PRAGMA temp_store=MEMORY;";
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (DbException)
+        {
+            // pragmas are an optimization only — ignore and run with the defaults
+        }
     }
 
     // True when `table` exists as a real or virtual table. FTS5 virtual tables are recorded in

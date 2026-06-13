@@ -83,6 +83,12 @@ public static class GraphMaterializer
         progress?.Invoke("Building search index (FTS5 trigram)");
         await BuildSearchIndexAsync(connection, progress, cancellationToken).ConfigureAwait(false);
 
+        // Refresh whole-store statistics (sqlite_stat1) now that all derived tables + indexes exist, so the
+        // query-time planner picks the right index/join order for whole-store reads (entry-point data,
+        // dispatch facts) instead of guessing. One-time cost at graph build; query connections only read.
+        progress?.Invoke("Analyzing statistics");
+        await ExecuteAsync(connection, null, "ANALYZE;", cancellationToken).ConfigureAwait(false);
+
         return new GraphStats(callCount, dispatchCount, nodeCount, heuristicCount);
     }
 
