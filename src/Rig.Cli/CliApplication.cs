@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text;
 using Rig.Analysis;
 using Rig.Analysis.Rules;
+using Rig.Cli.Deployments;
 using Rig.Cli.Rendering;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
@@ -807,6 +808,14 @@ public static class CliApplication
             return 1;
         }
 
+        // Deployment/EP chip on the from-node (path[0]): which service(s) host this entry point.
+        // Opt-in via deployments.json; no-op otherwise.
+        var pathDeployments = await DeploymentMap.LoadAsync(
+            workingDirectory,
+            (await Reads.ListRunsAsync(context)).FirstOrDefault()?.SolutionPath
+        );
+        var pathEpContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, handoffRules, pathDeployments);
+
         output.WriteLine($"Path '{fromPattern}' -> '{toPattern}' ({path.Count} nodes):");
         for (var i = 0; i < path.Count; i++)
         {
@@ -816,7 +825,10 @@ public static class CliApplication
             if (step.DispatchBasis == "heuristic")
                 kindBase += " (heuristic)";
             var kind = step.Fanout > 1 ? $"{kindBase} ×{step.Fanout} fan-out" : kindBase;
-            var via = i == 0 ? "" : $"  [{kind}{loop}{(step.FilePath is null ? "" : $" @ {ShortenPath(step.FilePath)}:{step.Line}")}]";
+            var via =
+                i == 0
+                    ? HeaderSuffix(pathEpContext, step.SymbolId)
+                    : $"  [{kind}{loop}{(step.FilePath is null ? "" : $" @ {ShortenPath(step.FilePath)}:{step.Line}")}]";
             output.WriteLine($"  {new string(' ', i * 2)}{step.SymbolId}{via}");
         }
         return 0;
@@ -932,8 +944,17 @@ public static class CliApplication
         var direct = hits.Where(h => h.HandoffVia is null && h.Via is null).ToList();
         var fanned = hits.Where(h => h.HandoffVia is null && h.Via is not null).ToList();
 
+        // Deployment/EP chip on the From line: which service(s) host this entry point (opt-in via
+        // deployments.json; no-op otherwise). The from-root is the depth-0 reachable symbol.
+        var reachDeployments = await DeploymentMap.LoadAsync(
+            workingDirectory,
+            (await Reads.ListRunsAsync(context)).FirstOrDefault()?.SolutionPath
+        );
+        var reachEpContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, handoffRules, reachDeployments);
+        var reachFromRoot = reachable.Where(kv => kv.Value.Depth == 0).Select(kv => kv.Key).FirstOrDefault();
         output.WriteLine(
             $"From: {fromPattern}{(mode == FactPathFinder.TraversalMode.AsyncInclude ? "  (--async: handoffs included)" : "")}"
+                + (reachFromRoot is null ? "" : HeaderSuffix(reachEpContext, reachFromRoot))
         );
         output.WriteLine($"Reachable methods (<= depth {maxDepth}): {reachable.Count}");
         output.WriteLine($"Direct effects (real call paths): {direct.Count}  (fanned out under a loop: {direct.Count(h => h.Fanout > 0)})");
@@ -1043,6 +1064,15 @@ public static class CliApplication
         // mark them as handoffs so the sync tree doesn't expand the handler as if RegisterEvents ran it.
         if (!raw)
             graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+
+        // Deployment attribution (opt-in via deployments.json) + EP-site lookup, so tree nodes that are
+        // themselves entry points get the ▶ kind + service chip. Null when unconfigured (default tree).
+        var deployments = await DeploymentMap.LoadAsync(
+            workingDirectory,
+            (await Reads.ListRunsAsync(context)).FirstOrDefault()?.SolutionPath
+        );
+        var epContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, handoffRules, deployments);
+
         var roots = FactPathFinder.BuildTree(graph, fromPattern, maxDepth, mode: mode);
         if (roots.Count == 0)
         {
@@ -1142,10 +1172,53 @@ public static class CliApplication
                 files,
                 locById,
                 signatures,
-                cutRules
+                cutRules,
+                epContext
             );
         }
         return 0;
+    }
+
+    // Builds the EP-render context for a tree: the SymbolId->site map (from the loaded graph) and the
+    // site->kind map (from the SAME derived entry-point set `derive` emits, incl. promoted handoff
+    // origins). Returns null when deployments are unconfigured, so the default tree pays no cost.
+    private static async Task<EpRenderContext?> BuildEpContextAsync(
+        RigDbContext context,
+        FactGraphData graph,
+        string workingDirectory,
+        IReadOnlyList<string> extraRules,
+        IReadOnlyList<FactHandoffRule> handoffRules,
+        DeploymentMap deployments
+    )
+    {
+        if (deployments.IsEmpty)
+            return null;
+
+        var epData = await Reads.LoadFactEntryPointDataAsync(context);
+        var epRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var classRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(workingDirectory, extraRules);
+        var derivedEps = FactEntryPointDeriver.Derive(epData, epRules, classRules);
+        var classifiedHandoffs = (await Reads.DeriveHandoffEntryPointsAsync(context, int.MaxValue, handoffRules))
+            .Where(h => h.Dispatcher is not null)
+            .ToList();
+
+        var epSiteKind = new Dictionary<(string File, int Line), string>();
+        foreach (var e in derivedEps.Concat(PromoteHandoffOrigins(classifiedHandoffs, derivedEps)))
+            epSiteKind[(e.FilePath, e.Line)] = e.Kind;
+
+        var siteById = graph
+            .Methods.GroupBy(m => m.SymbolId, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => ((string?)g.First().FilePath, g.First().Line), StringComparer.Ordinal);
+
+        return new EpRenderContext(deployments, siteById, epSiteKind);
+    }
+
+    // "  ▶ kind  ⟦svc⟧" suffix for a from/root symbol (reaches/path/callers roots), or "" when there is
+    // no deployment context or the symbol has no known declaration site.
+    private static string HeaderSuffix(EpRenderContext? epContext, string symbolId)
+    {
+        var tag = epContext?.HeaderTag(symbolId);
+        return string.IsNullOrEmpty(tag) ? "" : $"  {tag}";
     }
 
     // Collapses single-target dispatch hops: when a node has exactly one child reached by impl-/override-
@@ -1236,7 +1309,10 @@ public static class CliApplication
         bool signatures = false,
         // Traversal-cut rules for the «cut» marker: a node matching a cut rule gets a visible marker
         // indicating that its subtree was cut during traversal (not just render). Null = no markers.
-        IReadOnlyList<FactTraversalCutRule>? cutRules = null
+        IReadOnlyList<FactTraversalCutRule>? cutRules = null,
+        // Deployment/EP context: when supplied, a node that is itself a rule-detected entry point is
+        // marked with the ▶ kind + service chip. Null = no EP marking (default tree).
+        EpRenderContext? epContext = null
     )
     {
         // Compute visible children first — the fan-out label must reflect how many branches are
@@ -1285,7 +1361,10 @@ public static class CliApplication
                 ? $"  📄 {ShortenPath(l.File)}:{l.Line}"
                 : "";
         var name = PrettyGenericName(ShortName(node.SymbolId)) + (signatures ? ShortSignature(node.SymbolId) : "");
-        var label = $"{name}{dispatch}{handoff}{loop}{calls}{seen}{opaqueTag}{cutTag}{fx}{loc}";
+        // EP marker: when this node is itself a rule-detected entry point, wrap its name with "▶ kind"
+        // and a trailing service chip — the same custom rendering used by derive/callers.
+        var (epPrefix, epSuffix) = epContext?.ChipFor(node.SymbolId) ?? ("", "");
+        var label = $"{epPrefix}{name}{dispatch}{handoff}{loop}{calls}{seen}{opaqueTag}{cutTag}{fx}{loc}{epSuffix}";
         output.WriteLine(isRoot ? label : $"{prefix}{(isLast ? "└─ " : "├─ ")}{label}");
 
         if (opaque is not null)
@@ -1327,7 +1406,8 @@ public static class CliApplication
                 files,
                 locById,
                 signatures,
-                cutRules
+                cutRules,
+                epContext
             );
     }
 
@@ -1479,7 +1559,25 @@ public static class CliApplication
         );
 
         if (entrypointsOnly)
-            return await RunCallersEntryPointsAsync(context, graph, toPattern, maxDepth, mode, handoffRules, extraRules, workingDirectory, output);
+            return await RunCallersEntryPointsAsync(
+                context,
+                graph,
+                toPattern,
+                maxDepth,
+                mode,
+                handoffRules,
+                extraRules,
+                workingDirectory,
+                output
+            );
+
+        // Deployment/EP context for the from-symbol annotations (opt-in via deployments.json). Null/no-op
+        // when unconfigured. Built once here for the roots + reachable listings.
+        var deployments = await DeploymentMap.LoadAsync(
+            workingDirectory,
+            (await Reads.ListRunsAsync(context)).FirstOrDefault()?.SolutionPath
+        );
+        var epContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, handoffRules, deployments);
 
         if (rootsOnly)
         {
@@ -1491,7 +1589,7 @@ public static class CliApplication
             }
             output.WriteLine($"Entry-point candidates reaching '{toPattern}': {roots.Count}");
             foreach (var r in roots)
-                output.WriteLine($"  {r}");
+                output.WriteLine($"  {r}{HeaderSuffix(epContext, r)}");
             return 0;
         }
 
@@ -1538,6 +1636,11 @@ public static class CliApplication
             return 1;
         }
 
+        var deployments = await DeploymentMap.LoadAsync(
+            workingDirectory,
+            (await Reads.ListRunsAsync(context)).FirstOrDefault()?.SolutionPath
+        );
+
         // (FilePath, Line) of every reverse-reachable method — the join key against derived EP sites.
         var methods = await Reads.LoadDeadCodeMethodsAsync(context);
         var reachableSites = methods.Where(m => reachable.Contains(m.SymbolId)).Select(m => (m.FilePath, m.Line)).ToHashSet();
@@ -1573,8 +1676,10 @@ public static class CliApplication
         {
             output.WriteLine($"  {kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup)
-                output.WriteLine($"      {e.Route}  {ShortenPath(e.FilePath)}:{e.Line}");
+                WriteEntryPointLine(output, deployments, e.Route, e.FilePath, e.Line);
         }
+        if (!deployments.IsEmpty)
+            WriteServiceSummary(touching.Select(t => (t.Kind, (string?)t.FilePath)), deployments, output);
         return 0;
     }
 
@@ -1597,6 +1702,15 @@ public static class CliApplication
         }
         var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         await using var context = OpenReadContext(workingDirectory);
+
+        // Deployment attribution (opt-in: only when deployments.json sits next to .rig). Maps each EP's
+        // source file to the deployed service(s) whose process loads it, via the indexed solution's
+        // ProjectReference graph. Empty (no-op) when the config is absent.
+        var deployments = await DeploymentMap.LoadAsync(
+            workingDirectory,
+            (await Reads.ListRunsAsync(context)).FirstOrDefault()?.SolutionPath,
+            error
+        );
 
         // Classified handoffs (background/timer/actor/event) shared by the listing, the origin-EP
         // promotion, and the TSV output — derived once from the classified call graph.
@@ -1635,11 +1749,17 @@ public static class CliApplication
             var tsvEpRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
             var tsvClassRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(workingDirectory, extraRules);
             var tsvEps = FactEntryPointDeriver.Derive(epData, tsvEpRules, tsvClassRules);
+            // Trailing `service` column (comma-joined, empty when no deployments.json) — lets tooling
+            // join entry points to the services that host them without parsing the human view.
             foreach (var ep in tsvEps)
-                output.WriteLine($"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}");
+                output.WriteLine(
+                    $"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}\t{string.Join(",", deployments.ServicesForFile(ep.FilePath))}"
+                );
             // Promoted handoff origins (Phase 3) as first-class entry points, deduped against L1 EPs.
             foreach (var ep in PromoteHandoffOrigins(classifiedHandoffs, tsvEps))
-                output.WriteLine($"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}");
+                output.WriteLine(
+                    $"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}\t{string.Join(",", deployments.ServicesForFile(ep.FilePath))}"
+                );
             return 0;
         }
 
@@ -1679,7 +1799,7 @@ public static class CliApplication
         {
             output.WriteLine($"  {kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup.Take(limit / 4 + 1))
-                output.WriteLine($"      {e.Route}  {ShortenPath(e.FilePath)}:{e.Line}");
+                WriteEntryPointLine(output, deployments, e.Route, e.FilePath, e.Line);
         }
 
         // --- Classified handoff entry points (Phase 1/3): dispatcher-consumed delegates, promoted to
@@ -1696,11 +1816,78 @@ public static class CliApplication
         {
             output.WriteLine($"  {kindGroup.Key}: {kindGroup.Count()}");
             foreach (var h in kindGroup.Take(limit / 4 + 1))
+            {
+                var tag = deployments.IsEmpty ? "" : $"  {EntryPointRenderer.DeployTag(deployments, h.FilePath)}";
                 output.WriteLine(
-                    $"      {ShortName(h.Target)}  ⤳ via {h.Dispatcher}\n          registered in {ShortName(h.RegisteredIn)}  {ShortenPath(h.FilePath)}:{h.Line}  [async_handoff]"
+                    $"      {ShortName(h.Target)}  ⤳ via {h.Dispatcher}{tag}\n          registered in {ShortName(h.RegisteredIn)}  {ShortenPath(h.FilePath)}:{h.Line}  [async_handoff]"
                 );
+            }
         }
+
+        // The headline: entry points per deployed service (the summary table). An EP counts in every
+        // service whose process loads it (shared libraries fan out to many hosts — see the chip counts).
+        if (!deployments.IsEmpty)
+            WriteServiceSummary(derivedEps.Concat(origins).Select(e => (e.Kind, (string?)e.FilePath)), deployments, output);
         return 0;
+    }
+
+    // The two-line "custom" EP listing line (Format A) when deployment data exists; the plain
+    // route + location otherwise. The kind is supplied by the caller's group header, so it's not
+    // repeated on the line — only the ▶ marker, route, deployment chip, then the indented location.
+    private static void WriteEntryPointLine(TextWriter output, DeploymentMap deployments, string route, string filePath, int line)
+    {
+        if (deployments.IsEmpty)
+        {
+            output.WriteLine($"      {route}  {ShortenPath(filePath)}:{line}");
+            return;
+        }
+        output.WriteLine($"      {EntryPointRenderer.Marker} {route}  {EntryPointRenderer.DeployTag(deployments, filePath)}");
+        output.WriteLine($"          {ShortenPath(filePath)}:{line}");
+    }
+
+    // Per-service rollup of entry points: total + per-kind breakdown, in deployments.json order.
+    // An EP that loads into N services is counted in all N (multi-host fan-out is real, not an error);
+    // EPs whose owning project is in no service closure (tests/tools) fall into "(unattributed)".
+    private static void WriteServiceSummary(IEnumerable<(string Kind, string? FilePath)> eps, DeploymentMap deployments, TextWriter output)
+    {
+        var byService = new Dictionary<string, Dictionary<string, int>>(StringComparer.Ordinal);
+        var totals = new Dictionary<string, int>(StringComparer.Ordinal);
+        var unattributed = 0;
+        foreach (var (kind, filePath) in eps)
+        {
+            var svcs = deployments.ServicesForFile(filePath);
+            if (svcs.Count == 0)
+            {
+                unattributed++;
+                continue;
+            }
+            foreach (var s in svcs)
+            {
+                if (!byService.TryGetValue(s, out var kinds))
+                    byService[s] = kinds = new Dictionary<string, int>(StringComparer.Ordinal);
+                kinds[kind] = kinds.GetValueOrDefault(kind) + 1;
+                totals[s] = totals.GetValueOrDefault(s) + 1;
+            }
+        }
+
+        output.WriteLine();
+        output.WriteLine("Entry points per deployed service (an EP counts in every service whose process loads it):");
+        foreach (var svc in deployments.Services)
+        {
+            if (!totals.TryGetValue(svc.Name, out var total))
+                continue;
+            var breakdown = string.Join(
+                " ",
+                byService[svc.Name]
+                    .OrderByDescending(k => k.Value)
+                    .ThenBy(k => k.Key, StringComparer.Ordinal)
+                    .Select(k => $"{k.Key}={k.Value}")
+            );
+            var label = svc.Kind is null ? svc.Name : $"{svc.Name} ({svc.Kind})";
+            output.WriteLine($"  {label, -46} {total, 6}   {breakdown}");
+        }
+        if (unattributed > 0)
+            output.WriteLine($"  {"(unattributed — tests/tools/no service)", -46} {unattributed, 6}");
     }
 
     // Phase-3 origin promotion: a CLASSIFIED handoff target becomes a first-class DerivedEntryPoint —

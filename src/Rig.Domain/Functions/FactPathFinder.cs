@@ -353,11 +353,7 @@ public static class FactPathFinder
         var shaped = RewriteGenericFactories(graph, factoryRules);
         if (cutRules.Count == 0 && contextRules.Count == 0)
             return shaped;
-        return shaped with
-        {
-            CutRules = cutRules.Count > 0 ? cutRules : null,
-            ContextRules = contextRules.Count > 0 ? contextRules : null,
-        };
+        return shaped with { CutRules = cutRules.Count > 0 ? cutRules : null, ContextRules = contextRules.Count > 0 ? contextRules : null };
     }
 
     public static FactGraphData RewriteGenericFactories(FactGraphData graph, IReadOnlyList<FactGenericFactoryRule> rules)
