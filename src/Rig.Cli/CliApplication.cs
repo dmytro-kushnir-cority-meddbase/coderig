@@ -2325,8 +2325,8 @@ public static class CliApplication
         // Test methods are framework-invoked roots: a ctor ref to a test attribute marks its enclosing
         // method ([Fact]/[Theory]/[Test]). Built in so `rig dead` works with no rules file.
         foreach (var cr in epData.CtorRefs)
-            if (cr.EnclosingSymbolId is not null && IsTestAttribute(cr.TargetSymbolId))
-                roots.Add(cr.EnclosingSymbolId);
+            if (cr.Enclosing is not null && IsTestAttribute(cr.Target))
+                roots.Add(cr.Enclosing);
         // User-supplied roots (--root <pattern>): every method whose SymbolId contains the pattern.
         if (rootPatterns.Count > 0)
             foreach (var m in methods)

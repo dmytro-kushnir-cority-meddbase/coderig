@@ -27,7 +27,7 @@ public static class EntryPointSiteStore
 
         // One command, four statements — Microsoft.Data.Sqlite steps a ;-delimited batch in a single
         // ExecuteNonQuery (as ApplyReadPragmasAsync does), so the schema reset is one call, not four.
-        using (var ddl = connection.CreateCommand())
+        await using (var ddl = connection.CreateCommand())
         {
             ddl.Transaction = (DbTransaction)tx;
             ddl.CommandText = """
@@ -39,7 +39,7 @@ public static class EntryPointSiteStore
             await ddl.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        using (var meta = connection.CreateCommand())
+        await using (var meta = connection.CreateCommand())
         {
             meta.Transaction = (DbTransaction)tx;
             meta.CommandText = "INSERT INTO entry_point_sites_meta(RulesHash) VALUES ($h);";
@@ -47,7 +47,7 @@ public static class EntryPointSiteStore
             await meta.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        using (var insert = connection.CreateCommand())
+        await using (var insert = connection.CreateCommand())
         {
             insert.Transaction = (DbTransaction)tx;
             insert.CommandText = "INSERT INTO entry_point_sites(FilePath, Line, Kind, Requires) VALUES ($f, $l, $k, $r);";
@@ -82,7 +82,7 @@ public static class EntryPointSiteStore
             return null;
 
         string? storedHash;
-        using (var meta = connection.CreateCommand())
+        await using (var meta = connection.CreateCommand())
         {
             meta.CommandText = "SELECT RulesHash FROM entry_point_sites_meta LIMIT 1;";
             storedHash = await meta.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
@@ -91,9 +91,9 @@ public static class EntryPointSiteStore
             return null; // built under different rules (e.g. --rules) → caller derives under its own rules
 
         var map = new Dictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>();
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = "SELECT FilePath, Line, Kind, Requires FROM entry_point_sites;";
-        using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             var file = reader.IsDBNull(0) ? "" : reader.GetString(0);

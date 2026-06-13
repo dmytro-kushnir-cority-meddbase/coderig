@@ -21,10 +21,7 @@ public static partial class FactPathFinder
     // (DocID "E:" prefix). A raise (`MyEvent?.Invoke`) reads the event too but has no co-located method-
     // group, so only real += / -= subscriptions match. Reclassified edges are sync-cut by default and
     // walked under --async (tagged "⤳ via event"). Pure: returns a new graph; --raw skips this entirely.
-    public static FactGraphData MarkEventSubscriptionHandoffs(
-        FactGraphData graph,
-        ISet<(string Caller, string FilePath, int Line)> eventSites
-    )
+    public static FactGraphData MarkEventSubscriptionHandoffs(FactGraphData graph, ISet<EventSubscriptionSite> eventSites)
     {
         if (eventSites.Count == 0)
             return graph;
@@ -32,7 +29,7 @@ public static partial class FactPathFinder
         var rewritten = new List<CallEdge>(graph.CallEdges.Count);
         foreach (var e in graph.CallEdges)
         {
-            if (e.Kind == EdgeKinds.MethodGroup && eventSites.Contains((e.Caller, e.FilePath, e.Line)))
+            if (e.Kind == EdgeKinds.MethodGroup && eventSites.Contains(new EventSubscriptionSite(e.Caller, e.FilePath, e.Line)))
             {
                 rewritten.Add(e with { Kind = "handoff", HandoffDispatcher = e.HandoffDispatcher ?? "event" });
                 changed = true;

@@ -596,7 +596,7 @@ internal static class SolutionSourceLoader
             if (compilation is null)
                 return null;
             var tempDll = Path.Combine(Path.GetTempPath(), $"rig-gen-{project.AssemblyName}-{Guid.NewGuid():N}.dll");
-            using var stream = File.Create(tempDll);
+            await using var stream = File.Create(tempDll);
             var emitResult = compilation.Emit(stream, cancellationToken: cancellationToken);
             return emitResult.Success ? tempDll : null;
         }

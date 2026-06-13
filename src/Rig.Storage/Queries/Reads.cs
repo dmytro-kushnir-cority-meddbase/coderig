@@ -32,13 +32,13 @@ public static class Reads
                 x.Reason,
                 x.Evidence
             ))
-            .ToArrayAsync(cancellationToken);
+            .ToListAsync(cancellationToken);
 
         return rows.GroupBy(d => (d.ServiceType, d.ImplementationType, d.FilePath, d.Line))
             .Select(g => g.First())
             .OrderBy(d => d.ServiceType, StringComparer.Ordinal)
             .ThenBy(d => d.ImplementationType, StringComparer.Ordinal)
-            .ToArray();
+            .ToList();
     }
 
     // Skipped source files, run-agnostic: deduped by file path across all runs.
@@ -53,12 +53,12 @@ public static class Reads
         var rows = await context
             .SourceFiles.Where(x => x.Status == "skipped")
             .Select(x => new SourceFileInfo(x.ProjectName, x.FilePath, x.Status, x.Confidence, x.Basis, x.Reason, x.Evidence))
-            .ToArrayAsync(cancellationToken);
+            .ToListAsync(cancellationToken);
 
         return rows.GroupBy(f => f.FilePath, StringComparer.Ordinal)
             .Select(g => g.First())
             .OrderBy(f => f.FilePath, StringComparer.Ordinal)
-            .ToArray();
+            .ToList();
     }
 
     public static async Task<IReadOnlyList<RunSummary>> ListRunsAsync(RigDbContext context, CancellationToken cancellationToken = default)
@@ -81,7 +81,7 @@ public static class Reads
                 run.ProjectIdentity,
                 run.SourceProjectPath
             ))
-            .ToArrayAsync(cancellationToken);
+            .ToListAsync(cancellationToken);
     }
 
     // --- Stage-3 fact queries: cross-project (all runs), DocID-keyed. No latest-run concept. ---
@@ -102,7 +102,7 @@ public static class Reads
         if (pattern.Length >= 3 && await StorageProbes.TableExistsAsync(connection, "symbol_fts", cancellationToken).ConfigureAwait(false))
         {
             var hits = new List<SymbolSearchHit>();
-            using var command = connection.CreateCommand();
+            await using var command = connection.CreateCommand();
             // symbol_fts is pre-deduped by SymbolId, so LIMIT applies directly. MATCH searches both
             // indexed columns (symbolid, name) = the two columns the LIKE OR'd. kind is UNINDEXED but
             // still filterable. ORDER BY symbolid mirrors the old OrderBy(SymbolId).
@@ -115,7 +115,7 @@ public static class Reads
             if (kind is not null)
                 AddParam(command, "$kind", kind);
             AddParam(command, "$lim", limit);
-            using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 hits.Add(
                     new SymbolSearchHit(
@@ -141,12 +141,12 @@ public static class Reads
         // Dedupe by SymbolId across runs (multi-target siblings / re-indexed projects) on the CLIENT: the
         // dup ratio is small (~2% — see docs/query-strategy.md) and this is over a bounded Take(5000), so a
         // server-side GROUP BY would add a sort without meaningfully cutting rows; one HashSet pass is cheaper.
-        var rows = await query.OrderBy(s => s.SymbolId).Take(5000).ToArrayAsync(cancellationToken);
+        var rows = await query.OrderBy(s => s.SymbolId).Take(5000).ToListAsync(cancellationToken);
         return rows.GroupBy(s => s.SymbolId)
             .Take(limit)
             .Select(g => g.First())
             .Select(s => new SymbolSearchHit(s.SymbolId, s.Kind, s.Signature, s.FilePath, s.Line, s.DefiningAssembly))
-            .ToArray();
+            .ToList();
     }
 
     // Substring reference search. When ref_target_fts exists and the pattern is >=3 chars, a trigram
@@ -169,7 +169,7 @@ public static class Reads
         )
         {
             var hits = new List<ReferenceHit>();
-            using var command = connection.CreateCommand();
+            await using var command = connection.CreateCommand();
             command.CommandText =
                 "SELECT r.TargetSymbolId, r.RefKind, r.EnclosingSymbolId, r.FilePath, r.Line, r.TargetInSource "
                 + "FROM reference_facts r "
@@ -181,7 +181,7 @@ public static class Reads
             if (refKind is not null)
                 AddParam(command, "$kind", refKind);
             AddParam(command, "$lim", limit);
-            using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 hits.Add(
                     new ReferenceHit(
@@ -210,9 +210,9 @@ public static class Reads
             .ThenBy(r => r.FilePath)
             .ThenBy(r => r.Line)
             .Take(limit)
-            .ToArrayAsync(cancellationToken);
-        return rows.Select(r => new ReferenceHit(r.TargetSymbolId, r.RefKind, r.EnclosingSymbolId, r.FilePath, r.Line, r.TargetInSource))
-            .ToArray();
+            .Select(r => new ReferenceHit(r.TargetSymbolId, r.RefKind, r.EnclosingSymbolId, r.FilePath, r.Line, r.TargetInSource))
+            .ToListAsync(cancellationToken);
+        return rows;
     }
 
     // --- raw-ADO helpers for the FTS search paths (FTS5 isn't expressible in EF LINQ) ---
@@ -273,40 +273,22 @@ public static class Reads
                 && r.TargetInSource
                 && (r.RefKind == RefKinds.Invocation || r.RefKind == RefKinds.MethodGroup || r.RefKind == RefKinds.Ctor)
             )
-            .Select(r => new
-            {
-                r.EnclosingSymbolId,
-                r.TargetSymbolId,
-                r.RefKind,
-                r.FilePath,
-                r.Line,
-                r.EnclosingLoopKind,
-                r.EnclosingLoopDetail,
-                r.ReceiverType,
-                // Call-site generic type args (e.g. Entity.New<Account,int,AccountRecord>) — they drive the
-                // generic-factory rewrite + generic-dispatch narrowing. The bounded SQL path attaches these
-                // too; without them here, this fallback silently disabled both (Construct.New CHA-fanned).
-                r.TypeArguments,
-                // The call/`new` a method-group is handed to (line-free); drives async-handoff
-                // classification for multi-line dispatcher registrations. Null on pre-existing stores.
-                r.DelegateConsumer,
-            })
-            .ToArrayAsync(cancellationToken);
-        var callEdges = callRows
             .Select(r => new CallEdge(
-                r.EnclosingSymbolId!,
-                r.TargetSymbolId,
-                r.RefKind,
-                r.FilePath,
-                r.Line,
-                r.EnclosingLoopKind,
-                r.EnclosingLoopDetail,
-                r.ReceiverType,
+                Caller: r.EnclosingSymbolId!,
+                Callee: r.TargetSymbolId,
+                Kind: r.RefKind,
+                FilePath: r.FilePath,
+                Line: r.Line,
+                LoopKind: r.EnclosingLoopKind,
+                LoopDetail: r.EnclosingLoopDetail,
+                ReceiverType: r.ReceiverType,
+                HandoffDispatcher: null,
                 TypeArguments: r.TypeArguments,
                 DelegateConsumer: r.DelegateConsumer
             ))
-            .Distinct()
-            .ToArray();
+            .ToListAsync(cancellationToken);
+
+        var callEdges = callRows.Distinct().ToList();
 
         // Project straight to the domain record in the SELECT (EF builds it in the materializer) — no
         // anonymous intermediate, no second client mapping pass. (These are PROJECTIONS, so AsNoTracking is
@@ -320,27 +302,28 @@ public static class Reads
                 .TypeRelationFacts.AsNoTracking()
                 .Where(t => t.RelationKind == RelationKinds.Interface)
                 .Select(t => new ImplementsEdge(t.TypeSymbolId, t.RelatedSymbolId))
-                .ToArrayAsync(cancellationToken)
+                .ToListAsync(cancellationToken)
         )
             .Distinct()
-            .ToArray();
+            .ToList();
 
         var baseEdges = (
             await context
                 .TypeRelationFacts.AsNoTracking()
                 .Where(t => t.RelationKind == RelationKinds.Base)
                 .Select(t => new BaseEdge(t.TypeSymbolId, t.RelatedSymbolId))
-                .ToArrayAsync(cancellationToken)
+                .ToListAsync(cancellationToken)
         )
             .Distinct()
-            .ToArray();
+            .ToList();
 
         var methodRows = await context
             .SymbolFacts.AsNoTracking()
             .Where(s => s.Kind == SymbolKinds.Method)
             .Select(s => new MethodRef(s.SymbolId, s.Name, s.ContainingSymbolId, s.IsOverride, s.FilePath, s.Line))
-            .ToArrayAsync(cancellationToken);
-        var methods = methodRows.GroupBy(m => m.SymbolId).Select(g => g.First()).ToArray();
+            .ToListAsync(cancellationToken);
+
+        var methods = methodRows.GroupBy(m => m.SymbolId).Select(g => g.First()).ToList();
 
         var classifiedEdges = HandoffClassifier.Classify(callEdges, handoffRules);
         var minedDispatch = await LoadDispatchFactsAsync(context, cancellationToken);
@@ -352,21 +335,18 @@ public static class Reads
     // the handler method-group at one site, so intersecting these sites with method-group edges
     // identifies event subscriptions (FactPathFinder.MarkEventSubscriptionHandoffs). Cheap: events are
     // few. Used at query time so the handler subtree is treated as a deferred handoff, not a sync call.
-    public static async Task<ISet<(string Caller, string FilePath, int Line)>> EventSubscriptionSitesAsync(
+    // EventSubscriptionSite lives in Rig.Domain (the shaping consumer is a Domain function).
+    public static async Task<ISet<EventSubscriptionSite>> EventSubscriptionSitesAsync(
         RigDbContext context,
         CancellationToken cancellationToken = default
     )
     {
         var rows = await context
             .ReferenceFacts.Where(r => r.EnclosingSymbolId != null && r.RefKind == RefKinds.Read && r.TargetSymbolId.StartsWith("E:"))
-            .Select(r => new
-            {
-                r.EnclosingSymbolId,
-                r.FilePath,
-                r.Line,
-            })
-            .ToArrayAsync(cancellationToken);
-        return rows.Select(r => (r.EnclosingSymbolId!, r.FilePath, r.Line)).ToHashSet();
+            .Select(r => new EventSubscriptionSite(r.EnclosingSymbolId!, r.FilePath, r.Line))
+            .ToListAsync(cancellationToken);
+
+        return rows.ToHashSet();
     }
 
     // Loads the exact Roslyn-mined dispatch facts (dispatch_facts) into FactGraphData.MinedDispatch.
@@ -390,10 +370,10 @@ public static class Reads
             await context
                 .DispatchFacts.AsNoTracking()
                 .Select(d => new DispatchFact(d.SourceMember, d.TargetMember, d.Kind))
-                .ToArrayAsync(cancellationToken)
+                .ToListAsync(cancellationToken)
         )
             .Distinct()
-            .ToArray();
+            .ToList();
     }
 
     // Loads first-party method metadata for the dead-code finder: every declared method symbol with
@@ -416,7 +396,8 @@ public static class Reads
                 s.Line,
                 s.IsOverride,
             })
-            .ToArrayAsync(cancellationToken);
+            .ToListAsync(cancellationToken);
+
         return rows.GroupBy(s => s.SymbolId, StringComparer.Ordinal)
             .Select(g => g.First())
             .Select(s => new DeadCodeFinder.MethodMeta(
@@ -428,7 +409,7 @@ public static class Reads
                 s.IsOverride,
                 IsGeneratedPath(s.FilePath)
             ))
-            .ToArray();
+            .ToList();
     }
 
     // Heuristic: a file is generated when it carries the conventional generated-source markers or the
@@ -475,10 +456,10 @@ public static class Reads
         )
         {
             var edges = new List<CallEdge>();
-            using var command = connection.CreateCommand();
+            await using var command = connection.CreateCommand();
             command.CommandText =
                 "SELECT FromSym, ToSym, Kind, FilePath, Line, HandoffDispatcher FROM call_edges WHERE Kind IN ('handoff', 'methodGroup');";
-            using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 edges.Add(
                     new CallEdge(
@@ -490,12 +471,12 @@ public static class Reads
                         HandoffDispatcher: reader.IsDBNull(5) ? null : reader.GetString(5)
                     )
                 );
-            return HandoffClassifier.HandoffEntryPoints(edges, rules).Take(limit).ToArray();
+            return HandoffClassifier.HandoffEntryPoints(edges, rules).Take(limit).ToList();
         }
 
         // Fallback: no materialized graph (`rig graph` not run) — derive from the full reference graph.
         var graph = await LoadFactGraphAsync(context, rules, cancellationToken).ConfigureAwait(false);
-        return HandoffClassifier.HandoffEntryPoints(graph.CallEdges, rules).Take(limit).ToArray();
+        return HandoffClassifier.HandoffEntryPoints(graph.CallEdges, rules).Take(limit).ToList();
     }
 
     // Loads the facts needed by FactEntryPointDeriver: base-type edges, constructor+type symbols,
@@ -509,41 +490,32 @@ public static class Reads
         var baseEdgeRows = await context
             .TypeRelationFacts.Where(t => t.RelationKind == RelationKinds.Base)
             .Select(t => new { t.TypeSymbolId, t.RelatedSymbolId })
-            .ToArrayAsync(cancellationToken);
-        var baseEdges = baseEdgeRows.Select(t => (t.TypeSymbolId, t.RelatedSymbolId)).Distinct().ToArray();
+            .ToListAsync(cancellationToken);
+        var baseEdges = baseEdgeRows.Select(t => (t.TypeSymbolId, t.RelatedSymbolId)).Distinct().ToList();
 
         var interfaceEdgeRows = await context
             .TypeRelationFacts.Where(t => t.RelationKind == RelationKinds.Interface)
             .Select(t => new { t.TypeSymbolId, t.RelatedSymbolId })
-            .ToArrayAsync(cancellationToken);
-        var interfaceEdges = interfaceEdgeRows.Select(t => (t.TypeSymbolId, t.RelatedSymbolId)).Distinct().ToArray();
+            .ToListAsync(cancellationToken);
+        var interfaceEdges = interfaceEdgeRows.Select(t => (t.TypeSymbolId, t.RelatedSymbolId)).Distinct().ToList();
 
         // All methods (not just .ctor): page EPs use the .ctor rows, class-inheritance EPs use the
         // named handler rows. IsOverride feeds RequireOverride rules (e.g. WorkflowControllerBase.OnSave).
+        // Projected straight to the MethodSymbol record server-side (every field is a direct column).
         var methodRows = await context
             .SymbolFacts.Where(s => s.Kind == SymbolKinds.Method)
-            .Select(s => new
-            {
-                s.SymbolId,
-                s.Name,
-                s.ContainingSymbolId,
-                s.Signature,
-                s.FilePath,
-                s.Line,
-                s.IsOverride,
-            })
-            .ToArrayAsync(cancellationToken);
+            .Select(s => new MethodSymbol(s.SymbolId, s.Name, s.ContainingSymbolId, s.Signature, s.FilePath, s.Line, s.IsOverride))
+            .ToListAsync(cancellationToken);
         // The three dedups below (methods, types, ctorRefs) run CLIENT-side by design. Measured dup ratios
         // are tiny — methods by (file,line) is ~0.02% (43 of 217k rows, essentially defensive), types ~9%,
         // ctorRefs ~3.6% (see docs/query-strategy.md). A server-side GROUP BY would scan + sort the full
         // table without cutting the rows marshalled (the real cost), so it would be slower, not faster; the
         // single client pass is the deliberate choice. The deriver also re-dedups by (file,line) downstream.
-        var methods = methodRows
-            .GroupBy(m => (m.FilePath, m.Line))
-            .Select(g => g.First())
-            .Select(m => (m.SymbolId, m.Name, m.ContainingSymbolId, m.Signature, m.FilePath, m.Line, m.IsOverride))
-            .ToArray();
+        var methods = methodRows.GroupBy(m => (m.FilePath, m.Line)).Select(g => g.First()).ToList();
 
+        // Types can't materialize fully server-side: IsAbstract is Modifiers.Split(' ').Contains("abstract"),
+        // and String.Split has no SQL translation. So project the raw Modifiers column, then build the
+        // TypeSymbol record client-side (after the dedup), where the Split runs in memory.
         var typeRows = await context
             .SymbolFacts.Where(s => s.Kind == SymbolKinds.Type)
             .Select(s => new
@@ -554,32 +526,27 @@ public static class Reads
                 s.Line,
                 s.Modifiers,
             })
-            .ToArrayAsync(cancellationToken);
+            .ToListAsync(cancellationToken);
         var types = typeRows
             .GroupBy(t => t.SymbolId)
             .Select(g => g.First())
-            .Select(t => (t.SymbolId, t.Namespace, t.FilePath, t.Line, IsAbstract: t.Modifiers.Split(' ').Contains("abstract")))
-            .ToArray();
+            .Select(t => new TypeSymbol(t.SymbolId, t.Namespace, t.FilePath, t.Line, t.Modifiers.Split(' ').Contains("abstract")))
+            .ToList();
 
         // ctor refs with RefKind="ctor" capture attribute applications (e.g. [ClientAction])
-        // as well as regular constructor calls.  The deriver filters by TargetSymbolId prefix.
-        var ctorRefRows = await context
-            .ReferenceFacts.Where(r => r.RefKind == RefKinds.Ctor && r.EnclosingSymbolId != null)
-            .Select(r => new
-            {
-                r.TargetSymbolId,
-                r.EnclosingSymbolId,
-                r.FilePath,
-                r.Line,
-            })
-            .ToArrayAsync(cancellationToken);
-        var ctorRefs = ctorRefRows
+        // as well as regular constructor calls.  The deriver filters by Target prefix. Projected straight
+        // to the SymbolRef record server-side; dedup by (file,line) stays client-side (tiny dup ratio).
+        var ctorRefs = (
+            await context
+                .ReferenceFacts.Where(r => r.RefKind == RefKinds.Ctor && r.EnclosingSymbolId != null)
+                .Select(r => new SymbolRef(r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line))
+                .ToListAsync(cancellationToken)
+        )
             .GroupBy(r => (r.FilePath, r.Line))
             .Select(g => g.First())
-            .Select(r => (r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line))
-            .ToArray();
+            .ToList();
 
-        return new FactEntryPointDeriver.FactEntryPointData(baseEdges, methods, types, ctorRefs!, interfaceEdges);
+        return new FactEntryPointDeriver.FactEntryPointData(baseEdges, methods, types, ctorRefs, interfaceEdges);
     }
 
     // Loads invocation reference facts for fact-based effect + observation derivation.
@@ -590,63 +557,39 @@ public static class Reads
     {
         var rows = await context
             .ReferenceFacts.Where(r => r.RefKind == RefKinds.Invocation)
-            .Select(r => new
-            {
-                r.TargetSymbolId,
-                r.EnclosingSymbolId,
-                r.FilePath,
-                r.Line,
-                r.ReceiverType,
-                r.FirstArgumentTemplate,
-                r.FirstArgumentType,
-                r.EnclosingLoopKind,
-                r.EnclosingLoopDetail,
-                r.EnclosingInvocations,
-                r.EnclosingCatchTypes,
-                r.TypeArguments,
-                r.FirstArgumentName,
-                r.EnclosingScopes,
-            })
-            .ToArrayAsync(cancellationToken);
-        return rows.Select(r => new FactInvocation(
-                r.TargetSymbolId,
-                r.EnclosingSymbolId,
-                r.FilePath,
-                r.Line,
-                r.ReceiverType,
-                r.FirstArgumentTemplate,
-                r.FirstArgumentType,
-                r.EnclosingLoopKind,
-                r.EnclosingLoopDetail,
-                r.EnclosingInvocations,
-                r.EnclosingCatchTypes,
-                r.TypeArguments,
-                r.FirstArgumentName,
-                r.EnclosingScopes
+            .Select(r => new FactInvocation(
+                Target: r.TargetSymbolId,
+                Enclosing: r.EnclosingSymbolId,
+                FilePath: r.FilePath,
+                Line: r.Line,
+                Receiver: r.ReceiverType,
+                FirstArgTemplate: r.FirstArgumentTemplate,
+                FirstArgType: r.FirstArgumentType,
+                LoopKind: r.EnclosingLoopKind,
+                LoopDetail: r.EnclosingLoopDetail,
+                EnclosingInvocations: r.EnclosingInvocations,
+                CatchTypes: r.EnclosingCatchTypes,
+                TypeArguments: r.TypeArguments,
+                FirstArgName: r.FirstArgumentName,
+                EnclosingScopes: r.EnclosingScopes
             ))
-            .ToArray();
+            .ToListAsync(cancellationToken);
+
+        return rows;
     }
 
     // Loads throw reference facts (RefKind="throw") for fact-based throw-effect derivation. Target is
     // the thrown exception type DocID ("T:Ns.Exception"); the deriver gates it like a declaring type.
-    public static async Task<IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)>> LoadThrowRefsAsync(
+    public static async Task<IReadOnlyList<SymbolRef>> LoadThrowRefsAsync(
         RigDbContext context,
         CancellationToken cancellationToken = default
     )
     {
         var rows = await context
             .ReferenceFacts.Where(r => r.RefKind == RefKinds.Throw && r.EnclosingSymbolId != null)
-            .Select(r => new
-            {
-                r.TargetSymbolId,
-                r.EnclosingSymbolId,
-                r.FilePath,
-                r.Line,
-            })
-            .ToArrayAsync(cancellationToken);
-        return rows.GroupBy(r => (r.FilePath, r.Line, r.TargetSymbolId))
-            .Select(g => g.First())
-            .Select(r => (r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line))
-            .ToArray();
+            .Select(r => new SymbolRef(Target: r.TargetSymbolId, Enclosing: r.EnclosingSymbolId, FilePath: r.FilePath, Line: r.Line))
+            .ToListAsync(cancellationToken);
+
+        return rows.GroupBy(r => (r.FilePath, r.Line, r.Target)).Select(g => g.First()).ToList();
     }
 }

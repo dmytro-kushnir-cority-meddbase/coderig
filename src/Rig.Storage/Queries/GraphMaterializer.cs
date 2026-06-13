@@ -57,7 +57,7 @@ public static class GraphMaterializer
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
 
         progress?.Invoke("Rebuilding derived edge tables");
-        using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
         await ExecuteAsync(connection, transaction, "DELETE FROM call_edges;", cancellationToken).ConfigureAwait(false);
         await ExecuteAsync(connection, transaction, "DELETE FROM dispatch_edges;", cancellationToken).ConfigureAwait(false);
@@ -142,9 +142,9 @@ public static class GraphMaterializer
             )
             .ConfigureAwait(false);
 
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = "SELECT (SELECT count(*) FROM symbol_fts), (SELECT count(*) FROM ref_target_fts);";
-        using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             progress?.Invoke($"search index: {reader.GetInt32(0)} symbols, {reader.GetInt32(1)} ref targets");
     }
@@ -166,7 +166,7 @@ public static class GraphMaterializer
                 cancellationToken
             )
             .ConfigureAwait(false);
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = "SELECT count(*) FROM nodes;";
         return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
     }
@@ -252,7 +252,7 @@ public static class GraphMaterializer
         CancellationToken cancellationToken
     )
     {
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
             "INSERT INTO call_edges (FromSym, ToSym, Kind, FilePath, Line, LoopKind, LoopDetail, ReceiverType, HandoffDispatcher) "
@@ -295,7 +295,7 @@ public static class GraphMaterializer
         CancellationToken cancellationToken
     )
     {
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = "INSERT INTO dispatch_edges (FromSym, ToSym, Kind, Basis) VALUES ($from, $to, $kind, $basis);";
         var pFrom = AddParam(command, "$from");
@@ -351,7 +351,7 @@ public static class GraphMaterializer
         CancellationToken cancellationToken
     )
     {
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = sql;
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);

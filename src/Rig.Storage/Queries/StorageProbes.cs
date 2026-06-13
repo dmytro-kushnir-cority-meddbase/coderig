@@ -34,9 +34,8 @@ internal static class StorageProbes
     {
         try
         {
-            using var command = connection.CreateCommand();
-            command.CommandText =
-                "PRAGMA mmap_size=1073741824; PRAGMA cache_size=-262144; PRAGMA temp_store=MEMORY;";
+            await using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA mmap_size=1073741824; PRAGMA cache_size=-262144; PRAGMA temp_store=MEMORY;";
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (DbException)
@@ -49,7 +48,7 @@ internal static class StorageProbes
     // sqlite_master with type='table', so the guard still matches symbol_fts / ref_target_fts.
     public static async Task<bool> TableExistsAsync(DbConnection connection, string table, CancellationToken cancellationToken)
     {
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=$name LIMIT 1;";
         var p = command.CreateParameter();
         p.ParameterName = "$name";
@@ -67,9 +66,9 @@ internal static class StorageProbes
         CancellationToken cancellationToken
     )
     {
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = $"PRAGMA table_info({table});";
-        using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
                 return true;

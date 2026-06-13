@@ -24,7 +24,7 @@ public sealed class EventSubscriptionHandoffTests
             new CallEdge("M:N.R.RegisterEvents", "M:N.H.OnX", "methodGroup", "f.cs", 10),
             new CallEdge("M:N.H.OnX", "M:N.Effect", "invocation", "f.cs", 99)
         );
-        var sites = new HashSet<(string, string, int)> { ("M:N.R.RegisterEvents", "f.cs", 10) };
+        var sites = new HashSet<EventSubscriptionSite> { new("M:N.R.RegisterEvents", "f.cs", 10) };
 
         var marked = FactPathFinder.MarkEventSubscriptionHandoffs(graph, sites);
 
@@ -40,7 +40,7 @@ public sealed class EventSubscriptionHandoffTests
     {
         var graph = Graph(new CallEdge("M:N.R.Run", "M:N.H.OnX", "methodGroup", "f.cs", 10));
 
-        var marked = FactPathFinder.MarkEventSubscriptionHandoffs(graph, new HashSet<(string, string, int)>());
+        var marked = FactPathFinder.MarkEventSubscriptionHandoffs(graph, new HashSet<EventSubscriptionSite>());
 
         var sync = FactPathFinder.BuildTree(marked, "M:N.R.Run").Single();
         sync.Children.ShouldContain(c => c.SymbolId == "M:N.H.OnX");

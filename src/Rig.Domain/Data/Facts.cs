@@ -188,6 +188,37 @@ public sealed record MethodRef(
     int Line = 0
 );
 
+// A reference to a target symbol from within an enclosing method, at a source location. Covers ctor
+// refs (RefKind="ctor": constructor calls + attribute applications) and throw refs (RefKind="throw") —
+// both feed the effect/entry-point derivers keyed by this identical (Target, Enclosing, FilePath, Line)
+// shape, and were previously two structurally-identical 4-tuples. Enclosing is null when the ref has no
+// resolved enclosing method (most callers filter those out at the query).
+public sealed record SymbolRef(string Target, string? Enclosing, string FilePath, int Line);
+
+// A declared method symbol (symbol_facts kind="method") with the metadata the entry-point deriver needs:
+// page EPs use the .ctor rows; class-inheritance EPs use the named-handler rows (IsOverride gates
+// RequireOverride rules; Signature feeds parameter-type matching). Distinct from MethodRef (the call-graph
+// descriptor) — this carries Signature and is keyed for EP derivation, not dispatch resolution.
+public sealed record MethodSymbol(
+    string SymbolId,
+    string Name,
+    string? ContainingSymbolId,
+    string Signature,
+    string FilePath,
+    int Line,
+    bool IsOverride
+);
+
+// A declared type symbol (symbol_facts kind="type") for page EPs where the class has no explicit ctor.
+// IsAbstract gates out base/abstract pages, which are never navigable entry points.
+public sealed record TypeSymbol(string SymbolId, string Namespace, string FilePath, int Line, bool IsAbstract);
+
+// A call SITE (Caller, FilePath, Line) that contains an event read — a `someEvent += Handler`. Mined by
+// Reads.EventSubscriptionSitesAsync and intersected with method-group edges by
+// FactPathFinder.MarkEventSubscriptionHandoffs so the handler subtree is treated as a deferred handoff
+// rather than a synchronous call. Lives in Domain because the shaping consumer is a Domain function.
+public sealed record EventSubscriptionSite(string Caller, string FilePath, int Line);
+
 // The fact-derived call graph loaded for cross-project path finding (stage 2 over facts).
 public sealed record FactGraphData(
     IReadOnlyList<CallEdge> CallEdges,

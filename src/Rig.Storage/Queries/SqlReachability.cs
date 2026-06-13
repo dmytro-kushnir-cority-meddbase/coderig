@@ -29,7 +29,7 @@ public static class SqlReachability
         var connection = await OpenAsync(context, cancellationToken).ConfigureAwait(false);
         if (!await StorageProbes.TableExistsAsync(connection, "call_edges", cancellationToken).ConfigureAwait(false))
             return false;
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = "SELECT EXISTS(SELECT 1 FROM call_edges LIMIT 1);";
         var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return Convert.ToInt64(result) != 0;
@@ -52,9 +52,9 @@ public static class SqlReachability
             return result;
 
         var connection = await OpenAsync(context, cancellationToken).ConfigureAwait(false);
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = BuildSetCte(command, seeds, direction, includeHandoff);
-        using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             result.Add(reader.GetString(0));
         return result;
@@ -169,7 +169,7 @@ public static class SqlReachability
         await ExecNonQueryAsync(connection, "DROP TABLE IF EXISTS reach_set;", null, cancellationToken).ConfigureAwait(false);
         await ExecNonQueryAsync(connection, "CREATE TEMP TABLE reach_set(sym TEXT PRIMARY KEY);", null, cancellationToken)
             .ConfigureAwait(false);
-        using (var insert = connection.CreateCommand())
+        await using (var insert = connection.CreateCommand())
         {
             insert.CommandText = "INSERT OR IGNORE INTO reach_set(sym) VALUES ($s);";
             var p = insert.CreateParameter();
@@ -301,8 +301,8 @@ public static class SqlReachability
     public sealed record ReachInputs(
         FactGraphData Graph,
         IReadOnlyList<FactInvocation> Invocations,
-        IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)> CtorRefs,
-        IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)> ThrowRefs
+        IReadOnlyList<SymbolRef> CtorRefs,
+        IReadOnlyList<SymbolRef> ThrowRefs
     );
 
     public static async Task<ReachInputs> LoadReachInputsAsync(
@@ -349,7 +349,7 @@ public static class SqlReachability
             .ConfigureAwait(false);
 
         // ctor refs: dedup by (FilePath, Line), matching LoadFactEntryPointDataAsync.
-        var ctorByLoc = new Dictionary<(string, int), (string, string?, string, int)>();
+        var ctorByLoc = new Dictionary<(string, int), SymbolRef>();
         await ReadAsync(
                 connection,
                 """
@@ -361,14 +361,17 @@ public static class SqlReachability
                 {
                     var file = reader.IsDBNull(2) ? "" : reader.GetString(2);
                     var line = reader.IsDBNull(3) ? 0 : reader.GetInt32(3);
-                    ctorByLoc.TryAdd((file, line), (reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1), file, line));
+                    ctorByLoc.TryAdd(
+                        (file, line),
+                        new SymbolRef(reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1), file, line)
+                    );
                 },
                 cancellationToken
             )
             .ConfigureAwait(false);
 
         // throw refs: dedup by (FilePath, Line, Target), matching LoadThrowRefsAsync.
-        var throwByKey = new Dictionary<(string, int, string), (string, string?, string, int)>();
+        var throwByKey = new Dictionary<(string, int, string), SymbolRef>();
         await ReadAsync(
                 connection,
                 """
@@ -381,7 +384,10 @@ public static class SqlReachability
                     var target = reader.GetString(0);
                     var file = reader.IsDBNull(2) ? "" : reader.GetString(2);
                     var line = reader.IsDBNull(3) ? 0 : reader.GetInt32(3);
-                    throwByKey.TryAdd((file, line, target), (target, reader.IsDBNull(1) ? null : reader.GetString(1), file, line));
+                    throwByKey.TryAdd(
+                        (file, line, target),
+                        new SymbolRef(target, reader.IsDBNull(1) ? null : reader.GetString(1), file, line)
+                    );
                 },
                 cancellationToken
             )
@@ -613,9 +619,9 @@ public static class SqlReachability
         CancellationToken cancellationToken
     )
     {
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = sql;
-        using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             onRow(reader);
     }
@@ -627,7 +633,7 @@ public static class SqlReachability
         CancellationToken cancellationToken
     )
     {
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = sql;
         configure?.Invoke(command);
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);

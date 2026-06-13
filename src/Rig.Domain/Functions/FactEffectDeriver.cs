@@ -25,9 +25,9 @@ public static class FactEffectDeriver
         IReadOnlyList<FactEffectRule> rules,
         string? providerFilter = null,
         IReadOnlyList<(string TypeId, string BaseId)>? baseEdges = null,
-        IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)>? ctorRefs = null,
+        IReadOnlyList<SymbolRef>? ctorRefs = null,
         FactObservationRules? observationRules = null,
-        IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)>? throwRefs = null
+        IReadOnlyList<SymbolRef>? throwRefs = null
     )
     {
         // Precompute a base-type closure per distinct DeclaringTypeBaseTypes set (e.g. ProxyBase).

@@ -23,24 +23,44 @@ public static class FactProjection
             .Symbols!.Where(s => s.Kind == "method")
             .GroupBy(m => (m.FilePath, m.Line))
             .Select(g => g.First())
-            .Select(m => (m.SymbolId, m.Name, m.ContainingSymbolId, m.Signature, m.FilePath, m.Line, m.IsOverride))
+            .Select(m => new MethodSymbol(
+                SymbolId: m.SymbolId,
+                Name: m.Name,
+                ContainingSymbolId: m.ContainingSymbolId,
+                Signature: m.Signature,
+                FilePath: m.FilePath,
+                Line: m.Line,
+                IsOverride: m.IsOverride
+            ))
             .ToArray();
 
         var types = result
             .Symbols!.Where(s => s.Kind == "type")
             .GroupBy(t => t.SymbolId)
             .Select(g => g.First())
-            .Select(t => (t.SymbolId, t.Namespace, t.FilePath, t.Line, IsAbstract: t.Modifiers.Split(' ').Contains("abstract")))
+            .Select(t => new TypeSymbol(
+                SymbolId: t.SymbolId,
+                Namespace: t.Namespace,
+                FilePath: t.FilePath,
+                Line: t.Line,
+                IsAbstract: t.Modifiers.Split(separator: ' ').Contains(value: "abstract")
+            ))
             .ToArray();
 
         var ctorRefs = result
             .References!.Where(r => r.RefKind == "ctor" && r.EnclosingSymbolId != null)
             .GroupBy(r => (r.FilePath, r.Line))
             .Select(g => g.First())
-            .Select(r => (r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line))
+            .Select(r => new SymbolRef(Target: r.TargetSymbolId, Enclosing: r.EnclosingSymbolId, FilePath: r.FilePath, Line: r.Line))
             .ToArray();
 
-        return new FactEntryPointDeriver.FactEntryPointData(baseEdges, methods, types, ctorRefs, interfaceEdges);
+        return new FactEntryPointDeriver.FactEntryPointData(
+            BaseEdges: baseEdges,
+            Methods: methods,
+            Types: types,
+            CtorRefs: ctorRefs,
+            InterfaceEdges: interfaceEdges
+        );
     }
 
     public static FactGraphData GraphData(AnalysisResult result, IReadOnlyList<FactHandoffRule>? handoffRules = null)
@@ -52,28 +72,28 @@ public static class FactProjection
                 && (r.RefKind == "invocation" || r.RefKind == "methodGroup" || r.RefKind == "ctor")
             )
             .Select(r => new CallEdge(
-                r.EnclosingSymbolId!,
-                r.TargetSymbolId,
-                r.RefKind,
-                r.FilePath,
-                r.Line,
-                r.EnclosingLoopKind,
-                r.EnclosingLoopDetail,
+                Caller: r.EnclosingSymbolId!,
+                Callee: r.TargetSymbolId,
+                Kind: r.RefKind,
+                FilePath: r.FilePath,
+                Line: r.Line,
+                LoopKind: r.EnclosingLoopKind,
+                LoopDetail: r.EnclosingLoopDetail,
                 DelegateConsumer: r.DelegateConsumer
             ))
             .Distinct()
             .ToArray();
-        var classifiedEdges = HandoffClassifier.Classify(callEdges, handoffRules);
+        var classifiedEdges = HandoffClassifier.Classify(edges: callEdges, rules: handoffRules);
 
         var implEdges = result
             .TypeRelations!.Where(t => t.RelationKind == "interface")
-            .Select(t => new ImplementsEdge(t.TypeSymbolId, t.RelatedSymbolId))
+            .Select(t => new ImplementsEdge(ImplType: t.TypeSymbolId, InterfaceType: t.RelatedSymbolId))
             .Distinct()
             .ToArray();
 
         var baseEdges = result
             .TypeRelations!.Where(t => t.RelationKind == "base")
-            .Select(t => new BaseEdge(t.TypeSymbolId, t.RelatedSymbolId))
+            .Select(t => new BaseEdge(SubType: t.TypeSymbolId, BaseType: t.RelatedSymbolId))
             .Distinct()
             .ToArray();
 
@@ -81,40 +101,51 @@ public static class FactProjection
             .Symbols!.Where(s => s.Kind == "method")
             .GroupBy(m => m.SymbolId)
             .Select(g => g.First())
-            .Select(m => new MethodRef(m.SymbolId, m.Name, m.ContainingSymbolId, m.IsOverride))
+            .Select(m => new MethodRef(
+                SymbolId: m.SymbolId,
+                Name: m.Name,
+                ContainingTypeId: m.ContainingSymbolId,
+                IsOverride: m.IsOverride
+            ))
             .ToArray();
 
         var minedDispatch = result.DispatchFacts?.Distinct().ToArray();
 
-        return new FactGraphData(classifiedEdges, implEdges, methods, baseEdges, minedDispatch);
+        return new FactGraphData(
+            CallEdges: classifiedEdges,
+            ImplementsEdges: implEdges,
+            Methods: methods,
+            BaseEdges: baseEdges,
+            MinedDispatch: minedDispatch
+        );
     }
 
     public static IReadOnlyList<FactInvocation> Invocations(AnalysisResult result) =>
         result
             .References!.Where(r => r.RefKind == "invocation")
             .Select(r => new FactInvocation(
-                r.TargetSymbolId,
-                r.EnclosingSymbolId,
-                r.FilePath,
-                r.Line,
-                r.ReceiverType,
-                r.FirstArgumentTemplate,
-                r.FirstArgumentType,
-                r.EnclosingLoopKind,
-                r.EnclosingLoopDetail,
-                r.EnclosingInvocations,
-                r.EnclosingCatchTypes,
-                r.TypeArguments,
-                r.FirstArgumentName,
-                r.EnclosingScopes
+                Target: r.TargetSymbolId,
+                Enclosing: r.EnclosingSymbolId,
+                FilePath: r.FilePath,
+                Line: r.Line,
+                Receiver: r.ReceiverType,
+                FirstArgTemplate: r.FirstArgumentTemplate,
+                FirstArgType: r.FirstArgumentType,
+                LoopKind: r.EnclosingLoopKind,
+                LoopDetail: r.EnclosingLoopDetail,
+                EnclosingInvocations: r.EnclosingInvocations,
+                CatchTypes: r.EnclosingCatchTypes,
+                TypeArguments: r.TypeArguments,
+                FirstArgName: r.FirstArgumentName,
+                EnclosingScopes: r.EnclosingScopes
             ))
             .ToArray();
 
-    public static IReadOnlyList<(string Target, string? Enclosing, string FilePath, int Line)> ThrowRefs(AnalysisResult result) =>
+    public static IReadOnlyList<SymbolRef> ThrowRefs(AnalysisResult result) =>
         result
             .References!.Where(r => r.RefKind == "throw" && r.EnclosingSymbolId != null)
             .GroupBy(r => (r.FilePath, r.Line, r.TargetSymbolId))
             .Select(g => g.First())
-            .Select(r => (r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line))
+            .Select(r => new SymbolRef(Target: r.TargetSymbolId, Enclosing: r.EnclosingSymbolId, FilePath: r.FilePath, Line: r.Line))
             .ToArray();
 }
