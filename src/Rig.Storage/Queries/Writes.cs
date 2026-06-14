@@ -1,5 +1,6 @@
-﻿using Microsoft.EntityFrameworkCore;
-using Rig.Domain;
+﻿using System.Security.Cryptography;
+using System.Text;
+using Microsoft.EntityFrameworkCore;
 using Rig.Domain.Data;
 using Rig.Storage.Storage;
 
@@ -77,7 +78,16 @@ public static class Writes
         context.ChangeTracker.Clear();
 
         await SaveFactsBatchedAsync(context, runId, result, progress, cancellationToken);
-        await WriteAssemblyRegistryAsync(context, result, progress, cancellationToken);
+        try
+        {
+            await WriteAssemblyRegistryAsync(context, result, progress, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            // The assembly registry is metadata (multi-solution dedup/membership). It must NEVER lose a
+            // completed fact write — degrade to a warning and leave the facts intact.
+            progress?.Invoke($"WARN: assembly registry skipped ({exception.GetType().Name}: {exception.Message})");
+        }
         return runId;
     }
 
@@ -101,35 +111,38 @@ public static class Writes
         var indexedAt = DateTimeOffset.UtcNow.ToString("O");
 
         // SymbolId -> owning assembly, so a reference is attributed to the assembly of its enclosing method.
-        var symbolAssembly = new Dictionary<string, string>(StringComparer.Ordinal);
+        var symbolAssembly = new Dictionary<string, string>(symbols.Count, StringComparer.Ordinal);
         foreach (var s in symbols)
             symbolAssembly[s.SymbolId] = s.DefiningAssembly;
 
-        var items = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        var symbolCounts = new Dictionary<string, int>(StringComparer.Ordinal);
-        var referenceCounts = new Dictionary<string, int>(StringComparer.Ordinal);
-
-        List<string> Bucket(string assembly)
+        // Stream each assembly's fact identities into an order-independent XOR+sum digest, hashing and
+        // discarding per item. O(#assemblies) retained memory — the earlier list-based version
+        // materialised millions of item strings on top of the in-memory fact arrays and OOM'd a 2M+
+        // reference store. Order-independence (XOR/+ are commutative) makes a re-mine idempotent.
+        var acc = new Dictionary<string, AssemblyAccumulator>(StringComparer.Ordinal);
+        AssemblyAccumulator For(string assembly)
         {
-            if (!items.TryGetValue(assembly, out var list))
-                items[assembly] = list = [];
-            return list;
+            if (!acc.TryGetValue(assembly, out var a))
+                acc[assembly] = a = new AssemblyAccumulator();
+            return a;
         }
 
         foreach (var s in symbols)
         {
             if (string.IsNullOrEmpty(s.DefiningAssembly))
                 continue;
-            Bucket(s.DefiningAssembly).Add("S:" + s.SymbolId);
-            symbolCounts[s.DefiningAssembly] = symbolCounts.GetValueOrDefault(s.DefiningAssembly) + 1;
+            var a = For(s.DefiningAssembly);
+            a.Fold("S:" + s.SymbolId);
+            a.Symbols++;
         }
 
         foreach (var r in references)
         {
             if (r.EnclosingSymbolId is null || !symbolAssembly.TryGetValue(r.EnclosingSymbolId, out var assembly) || string.IsNullOrEmpty(assembly))
                 continue;
-            Bucket(assembly).Add($"R:{r.TargetSymbolId}|{r.EnclosingSymbolId}|{r.Line}");
-            referenceCounts[assembly] = referenceCounts.GetValueOrDefault(assembly) + 1;
+            var a = For(assembly);
+            a.Fold($"R:{r.TargetSymbolId}|{r.EnclosingSymbolId}|{r.Line}");
+            a.References++;
         }
 
         // Re-enable change detection for this small upsert (the fact write left it off + tracker cleared).
@@ -143,9 +156,9 @@ public static class Writes
             StringComparer.Ordinal
         );
 
-        foreach (var (assembly, factItems) in items)
+        foreach (var (assembly, a) in acc)
         {
-            var hash = ProjectContentHash.Compute(factItems);
+            var hash = a.ContentHash();
             if (existing.TryGetValue(assembly, out var row))
             {
                 if (row.ContentHash != hash)
@@ -155,8 +168,8 @@ public static class Writes
                     if (!string.Equals(row.SourceSolutionPath, solutionPath, StringComparison.OrdinalIgnoreCase))
                         progress?.Invoke($"WARN: assembly '{assembly}' has divergent content across solutions ('{row.SourceSolutionPath}' vs '{solutionPath}') — possible fork; keeping latest");
                     row.ContentHash = hash;
-                    row.SymbolCount = symbolCounts.GetValueOrDefault(assembly);
-                    row.ReferenceCount = referenceCounts.GetValueOrDefault(assembly);
+                    row.SymbolCount = a.Symbols;
+                    row.ReferenceCount = a.References;
                     row.IndexedAtUtcText = indexedAt;
                 }
             }
@@ -168,8 +181,8 @@ public static class Writes
                         AssemblyName = assembly,
                         ContentHash = hash,
                         IndexedAtUtcText = indexedAt,
-                        SymbolCount = symbolCounts.GetValueOrDefault(assembly),
-                        ReferenceCount = referenceCounts.GetValueOrDefault(assembly),
+                        SymbolCount = a.Symbols,
+                        ReferenceCount = a.References,
                         SourceSolutionPath = solutionPath,
                     }
                 );
@@ -181,7 +194,38 @@ public static class Writes
 
         await context.SaveChangesAsync(cancellationToken);
         context.ChangeTracker.Clear();
-        progress?.Invoke($"Registered {items.Count} assemblies for {Path.GetFileName(solutionPath)}");
+        progress?.Invoke($"Registered {acc.Count} assemblies for {Path.GetFileName(solutionPath)}");
+    }
+
+    // Order-independent, streaming content digest of an assembly's fact identities. Each item's SHA-256 is
+    // folded by XOR (commutative) + a running 64-bit sum (catches the XOR self-cancellation of an exact
+    // duplicate pair); item count rides along. Constant memory per assembly — no item retention.
+    private sealed class AssemblyAccumulator
+    {
+        private readonly byte[] xor = new byte[32];
+        private ulong sum;
+        private long count;
+
+        public int Symbols;
+        public int References;
+
+        public void Fold(string item)
+        {
+            var hash = SHA256.HashData(Encoding.UTF8.GetBytes(item));
+            for (var i = 0; i < 32; i++)
+                xor[i] ^= hash[i];
+            sum += BitConverter.ToUInt64(hash);
+            count++;
+        }
+
+        public string ContentHash()
+        {
+            Span<byte> final = stackalloc byte[32 + sizeof(ulong) + sizeof(long)];
+            xor.CopyTo(final);
+            BitConverter.TryWriteBytes(final[32..], sum);
+            BitConverter.TryWriteBytes(final[(32 + sizeof(ulong))..], count);
+            return Convert.ToHexString(SHA256.HashData(final));
+        }
     }
 
     private const int FactBatchSize = 20_000;
