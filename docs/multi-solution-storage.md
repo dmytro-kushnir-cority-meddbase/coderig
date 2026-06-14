@@ -62,21 +62,27 @@ writes a new DB). Queries tolerate their absence on old stores via `StorageProbe
 
 ## Re-mine timing (2026-06-14, master `MedDBase.slnx`, ~320 projects)
 
-| Attempt | Parallelism | Analysis | Save | Total | Result |
+| Attempt | Flags | Analysis | Save | Total | Result |
 |---|---|---|---|---|---|
-| 1 (`b7tlce15v`) | 32 | 13m43s | — | — | **crashed in save** (registry OOM, pre-fix); no store published, live store intact |
-| 2 (`bus2vrtp1`) | 32 | 15m31s | 3m42s | **19m13s** | published; 326,872 symbols, 2,224,276 refs, **223 assemblies registered** |
+| 1 (`b7tlce15v`) | p32, +tests | 13m43s | — | — | **crashed in save** (registry OOM, pre-fix); not published, live store intact |
+| 2 (`bus2vrtp1`) | p32, +tests | 15m31s | 3m42s | **19m13s** | published; 326,872 sym / 2,224,276 refs / 223 assemblies; 846 compile errors |
+| 3 (`bxscixit5`) | **p2, --no-tests** | 24m56s | 3m40s | **28m37s** | **authoritative** (Run `e5150e37`); 327,087 sym / 2,227,527 refs / 226 assemblies; 4116 compile errors |
 
-Save is ~3.7 min at this scale (2.2M references + the streaming assembly registry). The registry no
-longer OOMs.
+Save is ~3.7 min at this scale (2.2M references + the streaming assembly registry; the registry no
+longer OOMs). `--no-tests` excluded 54 test projects (286 → 235 built).
 
-**Parallelism-32 is unreliable here.** Compilation errors swung **32 → 846** between two identical mines —
-nondeterministic races where concurrent design-time builds trample shared `bin/` outputs, so some C#
-projects intermittently fail to resolve their project references (`CS0234`/`CS0103` on first-party types
-like `MedDBase.DataServer.Core`). This is the documented `--parallelism` hazard. For an *authoritative*
-store use `--parallelism 1` or `2` (slower, but stable); `-p32` is only acceptable for a fast, partial
-"good enough" index. The F# fix is orthogonal — it removed the `MedDBase.Pathways.DSL` `CS0012` errors;
-the 846 are a different (parallelism) failure class.
+**Compile-error count is design-time-build nondeterminism, decoupled from fact quality** (3-investigator
+quorum, unanimous, 2026-06-14). Two *identical-input* p32 mines gave 32 vs 846 errors — dispositive for
+nondeterminism, not source breakage. The errors are transient transitive cascades (the F#
+`MedDBase.Pathways.DSL` metadata reference + `MedDBase.DataServer.Core` consumer binding) whose signature
+shifts run-to-run, plus `--no-tests` collateral (a kept `QA.Automation.Setup` references an excluded
+`*.Tests`). Crucially, **the extracted facts are intact regardless**: run 3 has the *highest* symbol/ref
+counts, the symbols the errors flag as "missing" (`ServletFactory`, `DataServerConfig`) resolve as real
+edges, and reverse reachability runs DataServer → ASP.NET entry points (8,959 methods). rig captures
+per-project symbols/refs from syntax even when cross-project semantic binding partially fails. So: a low
+error count is NOT a quality gate here; `-p2`/`--no-tests` is preferred for a stable, test-noise-free run,
+but chasing zero errors via rebuild+remine buys nothing for the fact graph. The F# fix is validated
+independently — **+176 references into `MedDBase.Pathways.DSL`** now resolve (were `CS0012`-dropped).
 
 ## Slices
 
