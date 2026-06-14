@@ -26,22 +26,24 @@ Full reports under [audits/2026-06-14/](audits/2026-06-14/). Eight Sonnet audits
 - **WebClient** (`System.Net.WebClient` download/upload) → `http`. `builtin-rules.json`. Verified on `PhysioTecAPI.GetPhysioTecAuthToken`.
 - **`XmlDocument.Save` / `XDocument.Save`** → `io:write`. `builtin-rules.json`. Verified on `Mirth.LabChannels.UpdateLab`.
 - **LLBLGen `UpdateMulti`/`UpdateMultiAsync`** → `llblgen:write` (mirrors `DeleteMulti`). meddbase `rig.rules.json`. Verified on `DataAccess.ExpireAll`.
+- **F2 — EP-detector rules for missing kinds.** builtin `entrypoints.classInheritance`: Web API `ApiController`/MVC `Controller` → http, ASMX `WebService`+`[WebMethod]` → soap, WebForms `Page` lifecycle → page, SignalR `Hub` → signalr. meddbase `rig.rules.json`: bespoke `MedDBase.AppCode.HubBase` → signalr, DataServer `ServletBase`/`IServlet` → http. Verified: `DownloadsController`/`FileController`/`FieldService`/`IndividualSchedule.Page_Load`/`ServletBase` now in `--entrypoints`; LegacyNet48 golden set updated (+7 Web API actions).
+- **F4 — EP convention loosening.** meddbase `rig.rules.json`: `IService` added to the `servicebase.startup` base types; `InstanceInbox` added to the Echo-inbox names. Verified: `AppStartupProcesses.Startup`, `PathwayInstance.InstanceInbox` now in `--entrypoints`. (Exact-name inbox matching is still brittle — a `*Inbox` suffix match needs rule-schema support; deferred.)
 
 ### Open findings — triage
 
 | ID | Finding | Root cause | Sev | Effort | Found on |
 |----|---------|-----------|-----|--------|----------|
 | **F1** | Delegate/lambda **body** not traced through a wrapper/monad → the effect inside is invisible | DelegateConsumer body gap (deeper than the handoff-classification fix) | **High** | High (extractor) | webhooks `httpClient.PostAsync` via `Histogram.Log1Async`; PACS `FileExt.Move/Delete` via `Try<T>.SelectMany`; documentshare `onLoginSuccess`/`saveCode`; `memo()` |
-| **F2** | `--entrypoints` misses non-`[ClientAction]` EP kinds | EP-detector rule set incomplete | **Med-High** | Low–Med (rules) | SignalR `HubBase`; Web API `ApiController`+`[Http*]`; ASMX `[WebMethod]`; `Page_Load`; DataServer `ServletBase.Serve/Validate` |
+| ~~F2~~ | ~~`--entrypoints` misses non-`[ClientAction]` EP kinds~~ | **DONE 2026-06-14** — rules added (builtin + meddbase), verified | — | — | SignalR `HubBase`; Web API `ApiController`; ASMX `[WebMethod]`; `Page_Load`; DataServer `ServletBase` |
 | **F3** | Background detector tags the **wiring** method, not the scheduled **delegate target** | `BackgroundProcessSchedule(…,Callback,…)` target not promoted to EP (Layer-2 handoff) | **Med** | Med | `CheckForZeroDebt`, `ProcessHealthcodeQueue`, `DoDueActions`, `ReferralSLAService.Worker` |
-| **F4** | Echo inbox name convention too tight; `IService` interface vs abstract `ServiceBase` FQN | rule keys on exact name `Inbox` / wrong base type | **Med** | Low (rules) | `PathwayInstance.InstanceInbox`; `AppStartupProcesses.Startup` |
+| ~~F4~~ | ~~Echo inbox name too tight; `IService` vs abstract `ServiceBase`~~ | **DONE 2026-06-14** — meddbase rules loosened, verified (suffix-match still deferred) | — | — | `PathwayInstance.InstanceInbox`; `AppStartupProcesses.Startup` |
 | **F5** | Cross-project call edges dropped | scoped-mine stitch gap | **Med** | Med (miner) | `SubmitToHealthcode → ExportQueue.*` (Core.Background not stitched to Workflows) |
 | **F6** | Silent stops at boundaries (external assembly, clientpage_proxy, cross-deployment Redis) | no seam tag emitted (= D4) | **Low-Med** | Low | `RtfPipe.Rtf.ToHtml`; Medicare dialog proxy; webhook Redis handoff |
 | **F7** | `--roots` precision noise: `P:`/`F:` roots, interface stubs, unpropagated `save:false` guard | reverse-walk heuristic + no constant propagation | **Low** | Low | filterable by prefix |
 
 **Positives confirmed**: the forward `Save()` fan-out fix (retired A1) holds AND reverse base-virtual dispatch is precise (no leak); interface dispatch resolves (`IWebhooks`→concrete); `--roots` recovers ~100% of the EPs `--entrypoints` misses.
 
-**Next trivial slice** (after the DONE rules): **F2 + F4** are low-effort rule additions (new EP kinds + loosen conventions) with high recall payoff. **F1** is the deepest and highest-impact (a tracer change) — schedule deliberately.
+**Remaining**: **F1** (delegate-body tracing) is the deepest and highest-impact (a tracer change, also unblocks C6) — schedule deliberately. **F3** (background delegate-target promotion) and **F5** (cross-project stitch) are medium. F6/F7 are low. The cheap rule slice (F2 + F4 + the four effect rules) is DONE.
 
 ---
 
@@ -75,7 +77,6 @@ Full reports under [audits/2026-06-14/](audits/2026-06-14/). Eight Sonnet audits
 ---
 
 ## Suggested first slice
-- **DONE**: the four 2026-06-14 effect-rule fixes (Flurl/WebClient/XmlDocument/UpdateMulti).
-- **Next (cheap, high recall)**: F2 + F4 — EP-detector rules for SignalR / ApiController / `[WebMethod]` / `Page_Load` / servlet, and loosen the Echo-inbox name + `IService` base conventions.
-- **Then**: F1 (delegate-body tracing) — deepest and highest-impact; it also unblocks C6 (cross-service comm detection).
-- **And**: D1 (diff/branch awareness) — prevents silently auditing the wrong code.
+- **DONE 2026-06-14**: the four effect-rule fixes (Flurl/WebClient/XmlDocument/UpdateMulti) + F2 (EP-detector rules) + F4 (convention loosening).
+- **Next**: F1 (delegate-body tracing) — deepest and highest-impact; also unblocks C6 (cross-service comm detection).
+- **Then**: F3 (background delegate-target promotion), F5 (cross-project stitch), D1 (diff/branch awareness).
