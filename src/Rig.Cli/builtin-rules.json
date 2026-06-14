@@ -51,6 +51,63 @@
         ],
         "requireOverride": false,
         "defaultMethod": "HANDLE"
+      },
+      {
+        "id": "dotnet.webapi.controller",
+        "kind": "http",
+        "baseTypes": [
+          "System.Web.Http.ApiController",
+          "System.Web.Mvc.Controller",
+          "Microsoft.AspNetCore.Mvc.ControllerBase",
+          "Microsoft.AspNetCore.Mvc.Controller"
+        ],
+        "handlerMethods": [
+          "*"
+        ],
+        "requireOverride": false,
+        "defaultMethod": "REQUEST"
+      },
+      {
+        "id": "dotnet.asmx.webmethod",
+        "kind": "soap",
+        "baseTypes": [
+          "System.Web.Services.WebService"
+        ],
+        "handlerMethods": [
+          "*"
+        ],
+        "handlerMethodAttributePrefixes": [
+          "T:System.Web.Services.WebMethodAttribute"
+        ],
+        "requireOverride": false,
+        "defaultMethod": "INVOKE"
+      },
+      {
+        "id": "dotnet.webforms.page_lifecycle",
+        "kind": "page",
+        "baseTypes": [
+          "System.Web.UI.Page"
+        ],
+        "handlerMethods": [
+          "Page_Load",
+          "Page_Init",
+          "Page_PreRender"
+        ],
+        "requireOverride": false,
+        "defaultMethod": "LOAD"
+      },
+      {
+        "id": "dotnet.signalr.hub",
+        "kind": "signalr",
+        "baseTypes": [
+          "Microsoft.AspNet.SignalR.Hub",
+          "Microsoft.AspNetCore.SignalR.Hub"
+        ],
+        "handlerMethods": [
+          "*"
+        ],
+        "requireOverride": false,
+        "defaultMethod": "INVOKE"
       }
     ]
   },

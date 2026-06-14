@@ -93,6 +93,15 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
                 ("workflow", "LegacyNet48Web.Background.InvoiceWorkflowController.OnSave"),
                 ("background", "LegacyNet48Web.Background.ReportGeneratorService.Startup"),
                 ("wcf", "LegacyNet48Web.Background.ClaimsService.SubmitClaim"),
+                // Web API controller actions — detected by the builtin dotnet.webapi.controller rule
+                // (System.Web.Http.ApiController + public methods = actions). Added with F2.
+                ("http", "LegacyNet48Web.Controllers.InvoiceController.Approve"),
+                ("http", "LegacyNet48Web.Controllers.InvoiceController.GetAll"),
+                ("http", "LegacyNet48Web.Controllers.PatientController.Create"),
+                ("http", "LegacyNet48Web.Controllers.PatientController.Delete"),
+                ("http", "LegacyNet48Web.Controllers.PatientController.GetAll"),
+                ("http", "LegacyNet48Web.Controllers.PatientController.GetById"),
+                ("http", "LegacyNet48Web.Controllers.PatientController.Update"),
                 ("pagehandler", "LegacyNet48Web.Pages.Account.Public.LegacyLogin.Initialise"),
                 ("pagehandler", "LegacyNet48Web.Pages.Account.Public.LegacyLogin.OnAction"),
             }
