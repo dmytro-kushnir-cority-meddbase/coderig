@@ -2621,7 +2621,7 @@ public static class CliApplication
     // `tree --depth 4`: --depth was unknown, dropped, and the tree rendered unbounded.)
     private static readonly Dictionary<string, string[]> KnownFlagsByCommand = new(StringComparer.Ordinal)
     {
-        ["index"] = ["--rules", "--identity", "--from", "--parallelism", "--durable"],
+        ["index"] = ["--rules", "--identity", "--from", "--parallelism", "--durable", "--merge", "--no-tests"],
         ["mine"] = ["--from", "--rules", "--identity", "--parallelism"],
         ["runs"] = [],
         ["di"] = [],
