@@ -130,6 +130,121 @@
       "reason": "httpclient_send_method"
     },
     {
+      "provider": "http",
+      "operation": "GET",
+      "methods": [
+        "GetAsync",
+        "GetStringAsync",
+        "GetJsonAsync",
+        "GetBytesAsync",
+        "GetStreamAsync"
+      ],
+      "declaringTypes": [
+        "Flurl.Http.GeneratedExtensions"
+      ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "flurl_http_get"
+    },
+    {
+      "provider": "http",
+      "operation": "POST",
+      "methods": [
+        "PostAsync",
+        "PostJsonAsync",
+        "PostStringAsync",
+        "PostUrlEncodedAsync",
+        "PostMultipartAsync"
+      ],
+      "declaringTypes": [
+        "Flurl.Http.GeneratedExtensions"
+      ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "flurl_http_post"
+    },
+    {
+      "provider": "http",
+      "operation": "send",
+      "methods": [
+        "PutJsonAsync",
+        "PutStringAsync",
+        "PatchJsonAsync",
+        "PatchStringAsync",
+        "DeleteAsync",
+        "SendAsync",
+        "SendJsonAsync",
+        "SendStringAsync",
+        "SendUrlEncodedAsync"
+      ],
+      "declaringTypes": [
+        "Flurl.Http.GeneratedExtensions"
+      ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "flurl_http_mutate"
+    },
+    {
+      "provider": "http",
+      "operation": "GET",
+      "methods": [
+        "DownloadString",
+        "DownloadStringTaskAsync",
+        "DownloadData",
+        "DownloadDataTaskAsync",
+        "DownloadFile",
+        "DownloadFileTaskAsync",
+        "OpenRead"
+      ],
+      "declaringTypes": [
+        "System.Net.WebClient"
+      ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "webclient_download"
+    },
+    {
+      "provider": "http",
+      "operation": "POST",
+      "methods": [
+        "UploadString",
+        "UploadStringTaskAsync",
+        "UploadData",
+        "UploadDataTaskAsync",
+        "UploadFile",
+        "UploadFileTaskAsync",
+        "UploadValues",
+        "OpenWrite"
+      ],
+      "declaringTypes": [
+        "System.Net.WebClient"
+      ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "webclient_upload"
+    },
+    {
+      "provider": "io",
+      "operation": "write",
+      "methods": [
+        "Save"
+      ],
+      "declaringTypes": [
+        "System.Xml.XmlDocument",
+        "System.Xml.Linq.XDocument",
+        "System.Xml.Linq.XElement"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "xml_document_save_file"
+    },
+    {
       "provider": "efcore",
       "operation": "read",
       "methods": [
