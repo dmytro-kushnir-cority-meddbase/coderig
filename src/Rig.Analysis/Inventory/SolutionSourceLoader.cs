@@ -350,8 +350,21 @@ internal static class SolutionSourceLoader
                 StringComparer.OrdinalIgnoreCase
             );
 
+            // Non-C# (F#/VB) project references can't be loaded as live C# ProjectReferences (the
+            // workspace only compiles C#), so a C# project that uses their types otherwise hits
+            // CS0012 ("type is defined in an assembly that is not referenced"). Roslyn CAN consume the
+            // referenced project's BUILT OUTPUT DLL as metadata — resolve it and add it. Gathered over
+            // the transitive in-set closure too: e.g. DataServer reaches the F# MedDBase.Pathways.DSL via
+            // the C# MedDBase.Pathways, and Roslyn project refs don't flow metadata transitively.
+            var fsharpRefDlls = inWorkspaceProjectPaths
+                .Append(result.ProjectFilePath is null ? null : Path.GetFullPath(result.ProjectFilePath))
+                .Where(p => p is not null)
+                .SelectMany(p => NonCSharpProjectReferenceDlls(p!))
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+
             var metadataRefs = allRefs
                 .Concat(siblingRefs)
+                .Concat(fsharpRefDlls)
                 .Where(File.Exists)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 // Skip DLLs whose assembly is provided by a live project reference
@@ -439,6 +452,67 @@ internal static class SolutionSourceLoader
                 continue;
             yield return Path.GetFullPath(Path.Combine(projectDir, include.Replace('\\', Path.DirectorySeparatorChar)));
         }
+    }
+
+    // Built-output DLLs of a project's NON-C# (F#/VB) <ProjectReference>s. The C# workspace can't compile
+    // those projects, so their types are invisible unless we add their compiled assembly as metadata
+    // (otherwise CS0012). Parsed from the csproj XML; the referenced project's output DLL is resolved
+    // best-effort from its bin/. Buildalyzer's project-references-off design-time build doesn't reliably
+    // surface these in result.References, so we add them explicitly.
+    internal static IEnumerable<string> NonCSharpProjectReferenceDlls(string projectFilePath)
+    {
+        var projectDir = Path.GetDirectoryName(projectFilePath) ?? "";
+        XDocument document;
+        try
+        {
+            document = XDocument.Load(projectFilePath);
+        }
+        catch
+        {
+            yield break;
+        }
+
+        foreach (var reference in document.Descendants().Where(e => e.Name.LocalName == "ProjectReference"))
+        {
+            var include = reference.Attribute("Include")?.Value;
+            if (string.IsNullOrEmpty(include))
+                continue;
+            var refPath = Path.GetFullPath(Path.Combine(projectDir, include.Replace('\\', Path.DirectorySeparatorChar)));
+            var ext = Path.GetExtension(refPath);
+            if (!ext.Equals(".fsproj", StringComparison.OrdinalIgnoreCase) && !ext.Equals(".vbproj", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (ResolveBuiltOutputDll(refPath) is { } dll)
+                yield return dll;
+        }
+    }
+
+    // Best-effort path to a project's built output DLL under bin/. Prefers a Release build, then the
+    // most-recently-written match. AssemblyName defaults to the project filename unless <AssemblyName> is set.
+    internal static string? ResolveBuiltOutputDll(string projectFilePath)
+    {
+        var projectDir = Path.GetDirectoryName(projectFilePath);
+        if (projectDir is null)
+            return null;
+        var assemblyName = Path.GetFileNameWithoutExtension(projectFilePath);
+        try
+        {
+            var declared = XDocument.Load(projectFilePath).Descendants().FirstOrDefault(e => e.Name.LocalName == "AssemblyName")?.Value;
+            if (!string.IsNullOrWhiteSpace(declared))
+                assemblyName = declared;
+        }
+        catch
+        {
+            // fall back to the filename-derived assembly name
+        }
+
+        var bin = Path.Combine(projectDir, "bin");
+        if (!Directory.Exists(bin))
+            return null;
+        return Directory
+            .EnumerateFiles(bin, assemblyName + ".dll", SearchOption.AllDirectories)
+            .OrderByDescending(path => path.Contains("Release", StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
     }
 
     // Transitive closure of a project's in-set project references (excluding the project itself),
