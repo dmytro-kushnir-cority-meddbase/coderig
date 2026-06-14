@@ -151,13 +151,22 @@ callers) collision; mode flags as unvalidated booleans (`tree --full|--summary|-
   `--orphans`(rename `--roots`)·`--entrypoints`; `dead` `--lib`→`--include-lib`, `--root`→`--from`,
   keep `--include-dispatch`/`--all`; `index`/`mine` as today.
 
-**Breaking — needs sign-off before implementing:**
-- (a) renames: `callers --roots`→`--orphans`, `dead --root`→`--from`, `dead --lib`→`--include-lib`;
-- (b) deprecate `--maxdepth`/`--sig` (alias one release, then remove);
-- (c) `index` test default — keep include-tests (`--no-tests` opts out) **or** flip to exclude-by-default
-  + `--include-tests` (recommended: tests are graph noise; changes `mine` output).
+**Breaking — approved + DONE 2026-06-14:**
+- (a) renames: `callers --roots`→`--orphans` (deprecated `--roots` alias kept), `dead --lib`→`--include-lib`
+  (deprecated `--lib` alias kept). NB: `dead --root` was **left as-is** — the `--orphans` rename already
+  removes the `--root`/`--roots` collision, and reusing `--from` (which means an entry `.csproj` in
+  `index`/`mine`) would have introduced a worse cross-command inconsistency.
+- (b) `--maxdepth`/`--sig` deprecated: dropped from help, still accepted as aliases (one release).
+- (c) `index` test default **flipped** — tests EXCLUDED by default; `--include-tests` opts back in,
+  `--no-tests` accepted as a redundant no-op alias.
+- Mode-group validation: `tree --full|--summary|--effects` and `callers --orphans|--entrypoints` reject
+  conflicting combinations up front (before store access). Tests in `CliApplicationTests`.
 
-Non-breaking (Tier-1/2 generalization + mode-group validation + the E1 `--full` bake) ships first.
+**Deferred (Tier-1 generalization — real per-command plumbing, not just whitelisting):** promoting
+`--time`/`--no-cache` (tree-only today; other query commands have no cache/timer to toggle), `--format
+text|tsv` (needs TSV emitters for `tree`/`path`/`callers`), and `--limit` (needs truncation on
+`reaches`/`tree`/`callers`) to all commands; and extending `--only`/`--exclude` to `path`/`callers`.
+These are additive and can land incrementally.
 
 ---
 

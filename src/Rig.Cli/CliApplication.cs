@@ -84,7 +84,7 @@ public static class CliApplication
         output.WriteLine();
         output.WriteLine("Usage:");
         output.WriteLine(
-            "  rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable] [--merge]   (--from = index only the entry project's non-test closure, one workspace; --durable = journaled write, default is fast atomic-publish; --merge = accumulate into an existing store for a multi-solution unified store; --no-tests = skip test projects)"
+            "  rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable] [--merge] [--include-tests]   (--from = index only the entry project's closure, one workspace; --durable = journaled write, default is fast atomic-publish; --merge = accumulate into an existing store for a multi-solution unified store; test projects are EXCLUDED by default — --include-tests keeps them)"
         );
         output.WriteLine("  rig mine <solution> --from <project.csproj> [--rules <path>...] [--identity <id>] [--parallelism <n>]");
         output.WriteLine("  rig runs");
@@ -92,16 +92,16 @@ public static class CliApplication
         output.WriteLine("  rig symbols <pattern> [--kind <k>] [--limit <n>]");
         output.WriteLine("  rig refs <pattern> [--first-party] [--kind <refkind>] [--limit <n>]");
         output.WriteLine(
-            "  rig path <fromPattern> <toPattern> [--async] [--raw] [--rules <path>...] [--maxdepth|--depth <n>]   (synchronous by default; --async also walks async handoff edges, tagged; --raw bypasses graph shaping (factory/cut/context rules); --maxdepth defaults unbounded)"
+            "  rig path <fromPattern> <toPattern> [--async] [--raw] [--rules <path>...] [--depth <n>]   (synchronous by default; --async also walks async handoff edges, tagged; --raw bypasses graph shaping (factory/cut/context rules); --depth defaults unbounded)"
         );
         output.WriteLine(
-            "  rig reaches <fromPattern> [--async] [--rules <path>...] [--maxdepth|--depth <n>] [--only <p,..>] [--exclude <p,..>] [--format tsv]   (effects reachable from an entry point; synchronous by default (handoffs cut); --async adds scheduled/cross-thread reach via handoffs in a separate ⚡bucket; --exclude throw to drop exceptions)"
+            "  rig reaches <fromPattern> [--async] [--rules <path>...] [--depth <n>] [--only <p,..>] [--exclude <p,..>] [--format tsv]   (effects reachable from an entry point; synchronous by default (handoffs cut); --async adds scheduled/cross-thread reach via handoffs in a separate ⚡bucket; --exclude throw to drop exceptions)"
         );
         output.WriteLine(
-            "  rig tree <fromPattern> [--full|--summary|--effects] [--async] [--only <p,..>] [--exclude <p,..>] [--rules <path>...] [--maxdepth|--depth <n>]   (call tree from an entry point; default = synchronous paths that reach an effect, effects inline as {tags}; --full = every reachable method with effects as call-site leaf nodes (provider:op + resource + file:line); --async also crosses handoffs (marked ⤳); --effects = only effectful methods, no skeleton; --exclude throw to drop exceptions)"
+            "  rig tree <fromPattern> [--full|--summary|--effects] [--async] [--only <p,..>] [--exclude <p,..>] [--rules <path>...] [--depth <n>]   (call tree from an entry point; default = synchronous paths that reach an effect, effects inline as {tags}; --full = every reachable method with effects (⚡) AND unresolved library calls (·) as call-site leaf nodes; --async also crosses handoffs (marked ⤳); --effects = only effectful methods, no skeleton; --exclude throw to drop exceptions)"
         );
         output.WriteLine(
-            "  rig callers <toPattern> [--roots|--entrypoints] [--async] [--raw] [--rules <path>...] [--maxdepth|--depth <n>]   (reverse reachability: who reaches this method; defaults to SYNCHRONOUS only (handoffs cut), so background callbacks show as their own origins; --async also counts scheduled paths; --roots = no-predecessor candidates (heuristic); --entrypoints = RULE-DETECTED entry points that reach it (precise); shaped by the same factory/cut/context rules as path/reaches/tree, --raw bypasses)"
+            "  rig callers <toPattern> [--orphans|--entrypoints] [--async] [--raw] [--rules <path>...] [--depth <n>]   (reverse reachability: who reaches this method; defaults to SYNCHRONOUS only (handoffs cut), so background callbacks show as their own origins; --async also counts scheduled paths; --orphans = no-predecessor candidates (heuristic); --entrypoints = RULE-DETECTED entry points that reach it (precise); shaped by the same factory/cut/context rules as path/reaches/tree, --raw bypasses)"
         );
         output.WriteLine(
             "  rig derive [--rules <path>...] [--limit <n>] [--only <p,..>] [--exclude <p,..>]   (stage-2 pass over facts: effects + handoffs; --exclude throw to drop exceptions)"
@@ -110,7 +110,7 @@ public static class CliApplication
             "  rig graph   (rebuild the derived call-graph views (call_edges + dispatch_edges) from facts; idempotent, no rescan — speeds up reaches/callers/tree/dead)"
         );
         output.WriteLine(
-            "  rig dead [--rules <path>...] [--lib] [--include-dispatch] [--all] [--root <pattern>...] [--format tsv]   (unreachable first-party methods; report-only, compiler-confirm before removing)"
+            "  rig dead [--rules <path>...] [--include-lib] [--include-dispatch] [--all] [--root <pattern>...] [--format tsv]   (unreachable first-party methods; report-only, compiler-confirm before removing)"
         );
         output.WriteLine("  rig files --skipped");
         output.WriteLine("  rig profile validate");
@@ -122,7 +122,7 @@ public static class CliApplication
         {
             error.WriteLine("Missing solution or project path.");
             error.WriteLine(
-                "Usage: rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable] [--merge] [--no-tests]"
+                "Usage: rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable] [--merge] [--include-tests]"
             );
             return 2;
         }
@@ -188,7 +188,9 @@ public static class CliApplication
                 projectIdentity: identity,
                 scopeProjectPaths: scopeProjectPaths,
                 parallelism: parallelism,
-                excludeTests: args.Contains("--no-tests")
+                // Tests are EXCLUDED by default (they add graph width, not reach). `--include-tests` opts
+                // them back in; `--no-tests` is the now-redundant former opt-out, accepted as a no-op alias.
+                excludeTests: !args.Contains("--include-tests")
             );
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException)
@@ -790,7 +792,7 @@ public static class CliApplication
     {
         if (args.Length < 3)
         {
-            error.WriteLine("Usage: rig path <fromPattern> <toPattern> [--async] [--raw] [--rules <path>...] [--maxdepth|--depth <n>]");
+            error.WriteLine("Usage: rig path <fromPattern> <toPattern> [--async] [--raw] [--rules <path>...] [--depth <n>]");
             return 2;
         }
 
@@ -886,7 +888,7 @@ public static class CliApplication
     {
         if (args.Length < 2)
         {
-            error.WriteLine("Usage: rig reaches <fromPattern> [--async] [--rules <path>...] [--maxdepth|--depth <n>] [--format tsv]");
+            error.WriteLine("Usage: rig reaches <fromPattern> [--async] [--rules <path>...] [--depth <n>] [--format tsv]");
             return 2;
         }
         var fromPattern = args[1];
@@ -1063,7 +1065,7 @@ public static class CliApplication
         if (args.Length < 2 || args[1].StartsWith("--", StringComparison.Ordinal))
         {
             error.WriteLine(
-                "Usage: rig tree <fromPattern> [--full|--summary|--effects] [--async] [--raw] [--files] [--signatures] [--rules <path>...] [--maxdepth|--depth <n>] [--no-cache] [--time]"
+                "Usage: rig tree <fromPattern> [--full|--summary|--effects] [--async] [--raw] [--files] [--signatures] [--rules <path>...] [--depth <n>] [--no-cache] [--time]"
             );
             return 2;
         }
@@ -1072,6 +1074,8 @@ public static class CliApplication
         var full = args.Contains("--full");
         var summary = args.Contains("--summary");
         var effectsOnly = args.Contains("--effects");
+        if (HasConflictingModes(args, "tree", error, "--full", "--summary", "--effects"))
+            return 2;
         var mode = TraversalModeOf(args);
         var extraRules = new List<string>();
         for (var i = 0; i < args.Length; i++)
@@ -1869,14 +1873,19 @@ public static class CliApplication
         if (args.Length < 2 || args[1].StartsWith("--", StringComparison.Ordinal))
         {
             error.WriteLine(
-                "Usage: rig callers <toPattern> [--roots|--entrypoints] [--async] [--rules <path>...] [--maxdepth|--depth <n>]"
+                "Usage: rig callers <toPattern> [--orphans|--entrypoints] [--async] [--rules <path>...] [--depth <n>]"
             );
             return 2;
         }
         var toPattern = args[1];
         var maxDepth = MaxDepthOf(args);
-        var rootsOnly = args.Contains("--roots");
+        var rootsOnly = args.Contains("--orphans") || args.Contains("--roots"); // --roots: deprecated alias
         var entrypointsOnly = args.Contains("--entrypoints");
+        if (rootsOnly && entrypointsOnly)
+        {
+            error.WriteLine("Options --orphans and --entrypoints can't be combined for 'rig callers'.");
+            return 2;
+        }
         var mode = TraversalModeOf(args);
         var raw = args.Contains("--raw");
         var extraRules = new List<string>();
@@ -2353,7 +2362,7 @@ public static class CliApplication
     private static async Task<int> RunDeadAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
     {
         var limit = int.TryParse(GetOption(args, "--limit"), out var l) ? l : 80;
-        var libMode = args.Contains("--lib");
+        var libMode = args.Contains("--include-lib") || args.Contains("--lib"); // --lib: deprecated alias
         var includeDispatch = args.Contains("--include-dispatch");
         var showAll = args.Contains("--all");
         var tsv = string.Equals(GetOption(args, "--format"), "tsv", StringComparison.OrdinalIgnoreCase);
@@ -2706,7 +2715,7 @@ public static class CliApplication
     // `tree --depth 4`: --depth was unknown, dropped, and the tree rendered unbounded.)
     private static readonly Dictionary<string, string[]> KnownFlagsByCommand = new(StringComparer.Ordinal)
     {
-        ["index"] = ["--rules", "--identity", "--from", "--parallelism", "--durable", "--merge", "--no-tests"],
+        ["index"] = ["--rules", "--identity", "--from", "--parallelism", "--durable", "--merge", "--include-tests", "--no-tests"],
         ["mine"] = ["--from", "--rules", "--identity", "--parallelism"],
         ["runs"] = [],
         ["di"] = [],
@@ -2735,9 +2744,9 @@ public static class CliApplication
             "--no-cache",
             "--time",
         ],
-        ["callers"] = ["--roots", "--entrypoints", "--async", "--raw", "--rules", "--maxdepth", "--depth"],
+        ["callers"] = ["--orphans", "--roots", "--entrypoints", "--async", "--raw", "--rules", "--maxdepth", "--depth"],
         ["derive"] = ["--limit", "--rules", "--only", "--exclude", "--format"],
-        ["dead"] = ["--limit", "--lib", "--include-dispatch", "--all", "--format", "--rules", "--root"],
+        ["dead"] = ["--limit", "--include-lib", "--lib", "--include-dispatch", "--all", "--format", "--rules", "--root"],
     };
 
     // Reject the first unrecognised --flag for the command (--help/--version always allowed). Commands
@@ -2759,6 +2768,18 @@ public static class CliApplication
             return true;
         }
         return false;
+    }
+
+    // Reject more than one flag from a mutually-exclusive mode group (e.g. tree's --full/--summary/--effects).
+    // Returns true (and prints guidance) when two or more are present.
+    private static bool HasConflictingModes(string[] args, string command, TextWriter error, params string[] group)
+    {
+        var present = group.Where(args.Contains).ToList();
+        if (present.Count <= 1)
+            return false;
+        error.WriteLine($"Options {string.Join(" and ", present)} can't be combined for 'rig {command}'.");
+        error.WriteLine("  Run `rig --help` for usage.");
+        return true;
     }
 
     // --maxdepth defaults to UNBOUNDED (int.MaxValue) — traversal runs to its natural frontier (the

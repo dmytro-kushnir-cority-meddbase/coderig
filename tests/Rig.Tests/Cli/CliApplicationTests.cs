@@ -51,6 +51,7 @@ public sealed class CliApplicationTests
     [Test]
     [Arguments("--merge")]
     [Arguments("--no-tests")]
+    [Arguments("--include-tests")]
     [Arguments("--durable")]
     public async Task Index_does_not_reject_known_flags(string flag)
     {
@@ -64,6 +65,34 @@ public sealed class CliApplicationTests
         exitCode.ShouldBe(2);
         error.ToString().ShouldNotContain("Unknown option");
         error.ToString().ShouldContain("Failed to load");
+    }
+
+    // Mutually-exclusive projection modes are rejected up front (validation runs before any store access,
+    // so these fail cleanly without a store).
+    [Test]
+    public async Task Tree_rejects_conflicting_projection_modes()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--full", "--summary"], output, error);
+
+        exitCode.ShouldBe(2);
+        error.ToString().ShouldContain("can't be combined");
+        error.ToString().ShouldContain("--full");
+        error.ToString().ShouldContain("--summary");
+    }
+
+    [Test]
+    public async Task Callers_rejects_orphans_with_entrypoints()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["callers", "X", "--orphans", "--entrypoints"], output, error);
+
+        exitCode.ShouldBe(2);
+        error.ToString().ShouldContain("--orphans and --entrypoints can't be combined");
     }
 
     [Test]
