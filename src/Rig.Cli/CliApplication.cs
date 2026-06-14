@@ -1253,14 +1253,38 @@ public static class CliApplication
             .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => FormatEffectGroup(g, emoji), StringComparer.Ordinal);
 
-        // `--full` renders effects as provenance leaf nodes (call site + line) rather than the inline tag,
-        // so precompute the per-method leaf bodies. Only built in --full; other modes never read it.
-        var effectLeavesByMethod = full
-            ? effects
+        // `--full` renders effects AND unresolved library calls as leaf nodes (call site + line), source-
+        // ordered per method, rather than the compact inline tag. Only built in --full; other modes never
+        // read it, so the extra library-call query never touches the default/compact path.
+        IReadOnlyDictionary<string, List<string>>? effectLeavesByMethod = null;
+        if (full)
+        {
+            var leafRows = new List<(string Method, int Line, string Body)>();
+            foreach (var e in effects.Where(e => e.EnclosingSymbolId is not null))
+                leafRows.Add((e.EnclosingSymbolId!, e.Line, FormatEffectLeaf(e, emoji)));
+
+            // Unresolved library calls: invocations to a referenced-assembly target that produced no effect
+            // (no rule matched). Bounded to the rendered tree's methods; subtract the effect call-sites so a
+            // call already shown as an effect leaf isn't doubled.
+            var treeMethods = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var root in roots)
+                CollectTreeMethods(root, treeMethods);
+            var effectSites = effects
                 .Where(e => e.EnclosingSymbolId is not null)
-                .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
-                .ToDictionary(g => g.Key, g => FormatEffectLeaves(g, emoji), StringComparer.Ordinal)
-            : null;
+                .Select(e => (e.EnclosingSymbolId!, e.Line))
+                .ToHashSet();
+            var libCalls = await Reads.LoadLibraryCallSitesAsync(context, treeMethods);
+            foreach (
+                var c in libCalls
+                    .Where(c => c.Enclosing is not null && !effectSites.Contains((c.Enclosing!, c.Line)))
+                    .DistinctBy(c => (c.Enclosing, c.Target, c.Line))
+            )
+                leafRows.Add((c.Enclosing!, c.Line, FormatUnresolvedLeaf(c.Target, c.FilePath, c.Line)));
+
+            effectLeavesByMethod = leafRows
+                .GroupBy(r => r.Method, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.OrderBy(r => r.Line).Select(r => r.Body).ToList(), StringComparer.Ordinal);
+        }
 
         if (summary)
         {
@@ -2487,23 +2511,26 @@ public static class CliApplication
         return result.GroupBy(s => s, StringComparer.Ordinal).Select(g => g.Count() > 1 ? $"{g.Key} ×{g.Count()}" : g.Key).ToList();
     }
 
-    // `tree --full`: render each effect as its OWN provenance leaf node — provider:op + resource + the
-    // producing call site (file:line) — instead of the compact inline {…} tag the other modes hoist onto
-    // the enclosing method. Ordered by source line so the leaves read in code order under the method; one
-    // leaf per site (no lock-pair collapse/dedup — a leaf IS a site, and the line disambiguates).
-    private static List<string> FormatEffectLeaves(
-        IEnumerable<Rig.Domain.Data.DerivedEffect> effects,
-        IReadOnlyDictionary<string, string> emoji
-    )
+    // `tree --full`: one effect rendered as its OWN provenance leaf body — glyph + provider:op + resource +
+    // the producing call site (file:line) — instead of the compact inline {…} tag the other modes hoist
+    // onto the enclosing method. The caller orders a method's leaves by source line.
+    private static string FormatEffectLeaf(Rig.Domain.Data.DerivedEffect e, IReadOnlyDictionary<string, string> emoji)
     {
-        return effects
-            .OrderBy(e => e.Line)
-            .Select(e =>
-            {
-                var loc = string.IsNullOrEmpty(e.FilePath) ? "" : $"  {ShortenPath(e.FilePath)}:{e.Line}";
-                return $"{FactEffectEmojiProvider.For(emoji, e.Provider, e.Operation)} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}{loc}";
-            })
-            .ToList();
+        var loc = string.IsNullOrEmpty(e.FilePath) ? "" : $"  {ShortenPath(e.FilePath)}:{e.Line}";
+        return $"{FactEffectEmojiProvider.For(emoji, e.Provider, e.Operation)} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}{loc}";
+    }
+
+    // `tree --full`: a library call that produced NO effect (resolved to a referenced-assembly target, but
+    // no rule matched it). Rendered as a dim leaf (· marker) so the call is visible without implying an
+    // effect — distinct from the glyph-prefixed effect leaves above.
+    private static string FormatUnresolvedLeaf(string target, string? filePath, int line)
+    {
+        var loc = string.IsNullOrEmpty(filePath) ? "" : $"  {ShortenPath(filePath)}:{line}";
+        var name = ShortName(target);
+        // ShortName keeps a leading DocID kind prefix ("M:"/"T:"/…) for a namespace-less symbol; strip it.
+        if (name.Length > 2 && name[1] == ':')
+            name = name[2..];
+        return $"· {name}{loc}";
     }
 
     private static string ShortName(string? symbolId)

@@ -1,7 +1,7 @@
 namespace Rig.Analysis.Rules;
 
 // Exposes the effect-glyph map from the rules cascade to the CLI rendering layer.
-// Lookup: "provider:operation" key first, then "provider" key, then "•" fallback.
+// Lookup: "provider:operation" key first, then "provider" key, then "⚡" fallback.
 public static class FactEffectEmojiProvider
 {
     public static IReadOnlyDictionary<string, string> LoadForWorkingDirectory(
@@ -19,6 +19,6 @@ public static class FactEffectEmojiProvider
             return glyph;
         if (map.TryGetValue(provider, out glyph))
             return glyph;
-        return "•";
+        return "⚡";
     }
 }

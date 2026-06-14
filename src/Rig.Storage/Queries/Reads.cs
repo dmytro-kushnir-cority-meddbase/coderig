@@ -578,6 +578,34 @@ public static class Reads
         return rows;
     }
 
+    // Library call SITES made by the given enclosing methods: invocations whose target is NOT in the
+    // indexed source (TargetInSource = 0) — the raw calls that reach OUT to a referenced assembly.
+    // `tree --full` renders the ones not already surfaced as effects as dimmed leaves. Chunked over
+    // enclosingIds to stay under SQLite's bound-parameter limit on large trees.
+    public static async Task<IReadOnlyList<SymbolRef>> LoadLibraryCallSitesAsync(
+        RigDbContext context,
+        IReadOnlyCollection<string> enclosingIds,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var result = new List<SymbolRef>();
+        foreach (var chunk in enclosingIds.Chunk(500))
+        {
+            var rows = await context
+                .ReferenceFacts.AsNoTracking()
+                .Where(r =>
+                    r.RefKind == RefKinds.Invocation
+                    && !r.TargetInSource
+                    && r.EnclosingSymbolId != null
+                    && chunk.Contains(r.EnclosingSymbolId)
+                )
+                .Select(r => new SymbolRef(Target: r.TargetSymbolId, Enclosing: r.EnclosingSymbolId, FilePath: r.FilePath, Line: r.Line))
+                .ToListAsync(cancellationToken);
+            result.AddRange(rows);
+        }
+        return result;
+    }
+
     // Loads throw reference facts (RefKind="throw") for fact-based throw-effect derivation. Target is
     // the thrown exception type DocID ("T:Ns.Exception"); the deriver gates it like a declaring type.
     public static async Task<IReadOnlyList<SymbolRef>> LoadThrowRefsAsync(
