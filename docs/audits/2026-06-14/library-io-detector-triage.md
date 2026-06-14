@@ -188,10 +188,13 @@ The triage above was source-grep-based; ground-truthing against the actual `rig`
 
 **Repo is multi-solution.** `MedDBase.slnx` (the mined master, ~300 projects) is *one of ~22 solutions*. It does **not** include the standalone **audits service**, **ClientDataTransformationTools**, or **sql-runner** (`rig symbols` finds `ObservationRequestHelpers`/`Xero2Client`/`CefConverter` but NOT `AuditsRepository`/`Enigma`/`TableParquetExtensions`/`SqlRunner`). So those libs can't fire until their own solutions are mined.
 
-**Two suggested rules were mis-typed** (SDK API guessed wrong) — fixed:
+**Three suggested rules were mis-typed** (SDK API guessed wrong) — fixed:
 - **OpenAI**: real type is `OpenAI.Responses.OpenAIResponseClient.CreateResponse*` (the Responses API), **not** `OpenAI.Chat.ChatClient.CompleteChat`. No `EmbeddingClient` usage. Now fires on `OpenAi.GetResponse`.
 - **CefSharp**: real calls are `ChromiumWebBrowser.Load`/`CreateBrowser` + `WebBrowserExtensions.PrintToPdfAsync`, **not** `LoadUrlAsync`/`EvaluateScriptAsync`. Now fires on `CefConverter.*`.
+- **Xero**: every live call site in `Xero2ClientIO` invokes the **interface** `Xero.NetStandard.OAuth2.Api.IAccountingApiAsync` with the `*AsyncWithHttpInfo` method surface (`GetAccountsAsyncWithHttpInfo`, `CreateInvoicesAsyncWithHttpInfo`, …) — **not** the concrete `AccountingApi` with bare names (`GetAccounts`, `CreateInvoices`). Type+method matching is exact, so the old rule never matched. Split into `xero:read` (6 `Get*`) + `xero:write` (11 `Create/Update/Delete*`); now fires 11 write + 6 read on `Xero2ClientIO`.
 
-**Correctly typed but not mined here** (calls aren't resolved refs in this store — mine-time package-resolution gap or wrapped calls): **Dapper** (`Dapper.SqlMapper`), **RestSharp** (`RestSharp.RestClient`), **Xero** (`AccountingApi`). Rules left in place; they'll fire on a mine that resolves those calls.
+**Dapper / RestSharp are NOT rule bugs and NOT a resolution gap — they have no in-scope call sites:**
+- **Dapper**: the only real Dapper API calls (`connection.ExecuteAsync/QueryAsync`) are in `src/audits/src/Audits/AuditsRepository.cs`, whose project (`Audits.csproj`) is **not** in `MedDBase.slnx` — the master includes only `Audits.Contracts.csproj`. The `using Dapper;` in `ServiceTier/OrderRequests/ObservationRequestHelpers.cs` is an unused import (no Dapper API call), so the store correctly reports 0 Dapper refs. Lights up only by mining `src/audits/audits.slnx`.
+- **RestSharp**: **zero** usage anywhere under `src` (`rig refs RestSharp` = 0; no `using RestSharp` in source). The rule has no call sites in the entire repo — dormant by design.
 
-Net firing in the current store: twilio, sendgrid, gcp_pubsub, ldap, ironpdf, script_eval, linq2db, **openai, cefsharp** (+ EventGrid). The rest await either a rule-less mining-resolution fix (Dapper/RestSharp/Xero) or mining the separate solutions (Pgp/Parquet/LibGit2Sharp).
+Net firing in the current store: twilio, sendgrid, gcp_pubsub, ldap, ironpdf, script_eval, linq2db, **openai, cefsharp, xero** (+ EventGrid). Dapper/Pgp/Parquet/LibGit2Sharp await mining their separate solutions (`audits.slnx`, `ClientDataTransformation.slnx`, `sql-runner.slnx`); RestSharp is unused.
