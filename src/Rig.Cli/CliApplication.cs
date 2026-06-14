@@ -84,7 +84,7 @@ public static class CliApplication
         output.WriteLine();
         output.WriteLine("Usage:");
         output.WriteLine(
-            "  rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable]   (--from = index only the entry project's non-test closure, one workspace; --durable = journaled write, default is fast atomic-publish)"
+            "  rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable] [--merge]   (--from = index only the entry project's non-test closure, one workspace; --durable = journaled write, default is fast atomic-publish; --merge = accumulate into an existing store for a multi-solution unified store)"
         );
         output.WriteLine("  rig mine <solution> --from <project.csproj> [--rules <path>...] [--identity <id>] [--parallelism <n>]");
         output.WriteLine("  rig runs");
@@ -122,7 +122,7 @@ public static class CliApplication
         {
             error.WriteLine("Missing solution or project path.");
             error.WriteLine(
-                "Usage: rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable]"
+                "Usage: rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable] [--merge]"
             );
             return 2;
         }
@@ -211,7 +211,11 @@ public static class CliApplication
         //   --identity set — `mine` APPENDS many per-project runs into the live DB from PARALLEL
         //                    writers, so it writes in place and MUST keep the journal (no fast pragmas).
         var durable = args.Contains("--durable");
-        var appendMode = identity is not null; // mine
+        // --merge accumulates this solution into an existing store (multi-solution unified store): append
+        // in place, dedup assemblies by content-hash via the registry, NO atomic-replace. See
+        // docs/multi-solution-storage.md.
+        var merge = args.Contains("--merge");
+        var appendMode = identity is not null || merge; // mine, or --merge into an existing store
         var fastBulkWrite = !durable && !appendMode; // optimisations on by default; opt out above
         var atomicPublish = !appendMode; // replace-via-rename for a standalone index
 
@@ -221,6 +225,23 @@ public static class CliApplication
         var dbPath = atomicPublish ? finalDbPath + ".tmp" : finalDbPath;
         if (atomicPublish)
             DeleteDbFiles(dbPath); // clear any leftover temp from a previous aborted run
+
+        if (merge)
+        {
+            // Required DB state for a merge (declare + require, never migrate): an existing store WITH
+            // the assembly registry. A pre-multi-solution store is told to re-mine, not silently altered.
+            if (!File.Exists(finalDbPath))
+            {
+                error.WriteLine("--merge requires an existing store. Run `rig index <base-solution>` first, then merge others.");
+                return 2;
+            }
+            await using var probe = new RigDbContext(finalDbPath, pooling: false, readOnly: true);
+            if (!await Writes.HasAssemblyRegistryAsync(probe))
+            {
+                error.WriteLine("Store predates multi-solution support (no assembly registry). Re-mine the base solution: rig index <base-solution>");
+                return 2;
+            }
+        }
 
         output.WriteLine(
             $"Progress: Saving run ({(fastBulkWrite ? "fast" : "durable")}{(atomicPublish ? ", atomic-publish" : ", in-place")})"

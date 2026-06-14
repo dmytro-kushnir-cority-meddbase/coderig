@@ -12,6 +12,15 @@ public static class Writes
     // which writes to a temp file and atomically renames on success — a corrupt temp is never
     // published). Callers OPT OUT (set false) for consistency: mine's in-place PARALLEL appends, or a
     // user-requested `--durable` in-place index. progress, when set, reports batched save throughput.
+    // The required state for merging into a store: the assembly registry must exist. We DON'T migrate
+    // old stores (no ALTER clutter) — a store that predates multi-solution support is required to be
+    // re-mined. EnsureCreated builds these tables on any fresh index. See docs/multi-solution-storage.md.
+    public static async Task<bool> HasAssemblyRegistryAsync(RigDbContext context, CancellationToken cancellationToken = default)
+    {
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        return await StorageProbes.TableExistsAsync(connection, "assemblies", cancellationToken);
+    }
+
     public static async Task<string> SaveAsync(
         RigDbContext context,
         AnalysisResult result,

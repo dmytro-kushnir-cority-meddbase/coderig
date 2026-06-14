@@ -93,4 +93,50 @@ public sealed class AssemblyRegistryTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    [Test]
+    public async Task Merging_a_second_solution_accumulates_assemblies_and_per_solution_membership()
+    {
+        var dir = Directory.CreateTempSubdirectory("rig-asmreg-merge-").FullName;
+        var dbPath = Path.Combine(dir, "rig.db");
+        var master = Path.Combine(dir, "Master.slnx");
+        var tail = Path.Combine(dir, "Tail.slnx");
+        try
+        {
+            // Base solution (like the master mine).
+            await using (var write = new RigDbContext(dbPath, pooling: false))
+                await Writes.SaveAsync(write, Result(master, [Symbol("M:Core.A", "Core"), Symbol("M:Shared.S", "Shared")], []));
+
+            // A second solution merged in (append, no atomic-replace): brings a new assembly (Tail) and
+            // re-references a shared one (Shared, already present from the master).
+            await using (var write = new RigDbContext(dbPath, pooling: false))
+                await Writes.SaveAsync(write, Result(tail, [Symbol("M:Tail.T", "Tail"), Symbol("M:Shared.S", "Shared")], []));
+
+            await using (var read = new RigDbContext(dbPath, pooling: false))
+            {
+                // Registry accumulated all three assemblies (Shared deduped to one row).
+                var names = await read.Assemblies.AsNoTracking().Select(a => a.AssemblyName).OrderBy(n => n).ToListAsync();
+                names.ShouldBe(["Core", "Shared", "Tail"]);
+
+                // Membership is per-solution: each solution lists exactly the assemblies it contains,
+                // including the shared one.
+                var masterMembers = await Members(read, master);
+                masterMembers.ShouldBe(["Core", "Shared"]);
+                var tailMembers = await Members(read, tail);
+                tailMembers.ShouldBe(["Shared", "Tail"]);
+            }
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+
+        static async Task<List<string>> Members(RigDbContext ctx, string solution) =>
+            await ctx
+                .SolutionMemberships.AsNoTracking()
+                .Where(m => m.SolutionPath == Path.GetFullPath(solution))
+                .Select(m => m.AssemblyName)
+                .OrderBy(n => n)
+                .ToListAsync();
+    }
 }
