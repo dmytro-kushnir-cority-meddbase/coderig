@@ -179,6 +179,56 @@ the command had been run from the source repo against a stale store.)
 
 ---
 
+## F. Validation sweep (2026-06-15) — 10 Sonnet agents, tree-vs-source
+
+Two fan-outs of 5 agents each, all ground-truthed against MedDBase source (file:line cited):
+(1) **tree-validation** over juicy endpoints — does what rig reports match the code?
+(2) **false-negative hunt** over domains that yielded no effects/EPs — what does rig miss?
+Below, **VS-Cn** = correctness defect (rig reports something WRONG), **VS-Gn** = coverage gap (rig
+MISSES something real). Severity is the agents' ground-truthed assessment.
+
+### Correctness defects (rig reports wrong / spurious)
+
+| ID | Defect | Evidence | Sev | Fix locus |
+|----|--------|----------|-----|-----------|
+| **VS-C1** | **Rx `Observable.Subscribe` phantom path** — rig inlines the Subscribe lambda as a synchronous call, so any tree through `IPersistentState.GetItem`→`AccountConfiguration.InitialiseLogger` drags in spurious transitive effects (`http:POST` audit, `gcp_pubsub:publish`) that never fire synchronously. | `AccountConfiguration.cs:210-213` (Observable.Subscribe chain) → phantom `AuditLogService.SubmitViaHttp` http:POST | **High** | Add `IObservable.Subscribe` to opaque/boundary set (like Echo `tell`) — render+traversal |
+| **VS-C2** | **Dapper `ExecuteScalar*`/`ExecuteReader*` classified as `execute` (write)** but they're READS. `AuditsRepository.Query` (a COUNT) shows spurious `dapper:execute`. *(Independently confirmed this session.)* | `AuditsRepository.cs:24` `ExecuteScalarAsync<long>` → `⚡ dapper:execute` | **Med** | `rig.rules.json` dapper rule — move ExecuteScalar*/ExecuteReader* to `query` (rules-only) |
+| **VS-C3** | **`SemaphoreSlim.WaitAsync`/`.Release` misclassified as `lock:acquire`/`lock:release`** (Monitor). An async semaphore is not a monitor lock; pollutes `lock_held_across`/`resource_span` (anchors the span at the wrong line). | `MonitorQueueBackgroundService.cs:67` WaitAsync→lock:acquire; `:111` Release→lock:release | **Med** | lock detector — distinguish SemaphoreSlim (→ `semaphore:wait/signal`) from Monitor |
+| **VS-C4** | **`XmlDocument.Save(path)` resource labelled `Xml.XmlDocument`** (the receiver) **instead of the file** — io:write fires but names the wrong resource. | `Master_HealthcodeServiceImpl.cs:1045` | Med | io rule — `XmlDocument.Save`/`XDocument.Save` resource → file/argument, not receiver_type |
+| **VS-C5** | **Flurl `PutStringAsync` → `http:send`, not `http:PUT`** — POST/GET map correctly; PUT falls through to a generic bucket, so `http:PUT` filters miss it. | `MedicareApi/DeviceRegistration/AccessRequests.cs:15` | Med | Flurl verb map — add `PutStringAsync`/`PutJsonAsync` → PUT (+ DELETE/PATCH) |
+
+### Coverage gaps (rig misses real effects / entry points)
+
+| ID | Gap | Evidence | Sev | Root cause |
+|----|-----|----------|-----|-----------|
+| **VS-G1** | **Background work scheduled via constructor-arg delegate (`new BackgroundProcessSchedule(due, MethodGroup, name)`) is NOT promoted as an entry point** — only the `SetProcessDelegate` override form is. 10 dark background EPs incl. `ProcessHealthcodeQueue` (269 effects incl. **soap:submit**), `DoDueActions` (216), `CheckForZeroDebt` (92), `RaiseMembershipSchemeInvoices` (257). Evidences open finding **F3**. | `Master_HealthcodeServiceImpl.cs:239`, `PatientContact/Master.cs:165`, +8 | **Critical** | Detector rule: method-group passed as `BackgroundProcessScheduleDelegate` ctor arg → `background` EP (flow-insensitive; rules-only) |
+| **VS-G2** | **`permission:assert` family entirely unmodeled** — `CertificateEntity.AssertRight/AssertAnyRight/AssertAccountRight`, `HasRight` (non-throwing), `PersonCache.IfCanView` (every patient load gates `CanViewPatientDemographic`). The `throw:raise CertificateAccessException` IS visible, but the Rights flag / gate semantic is not. 50+ entities. | `CertificateEntity.cs:977`, `PersonCache.cs:53`, `BillingItemEntity.cs:120` | **Critical** | New detector family (was C3) — emit `permission:assert <Rights.Flag>`; now evidenced |
+| **VS-G3** | **`config:read` family entirely unmodeled** — `Settings.*` (CallerMemberName-keyed), `ConfigurationManager.AppSettings[key]`, `AccountConfiguration.GetItem`. Feature-flag branches that gate whether SOAP submission fires are invisible. | `Settings.cs:878`, `Master_HealthcodeServiceImpl.cs:1043/1048` (`WriteToFile`/`SendToService`) | **Critical** | New detector family (was C5); key is a compile-time literal/CallerMemberName |
+| **VS-G4** | **SOAP non-Healthcode proxies unmodeled** — the soap rule is pinned to `declaringTypes:[HealthcodeWebServices]`; generic `SoapHttpClientProtocol.Invoke` isn't matched, so LabsServer (lab ordering), Mirth HL7, and Site callbacks are dark. | `LabsServer/Reference.cs:133`, `Mirth.SoapProxy.cs:87` | High | Rule with `declaringTypeBaseTypes:[SoapHttpClientProtocol]`, method `Invoke` → soap (evidences C6) |
+| **VS-G5** | **FHIR (`Hl7.Fhir.Rest.FhirClient`/`BaseFhirClient`) entirely unmodeled** — NHS GPConnect + PDS outbound calls (`TypeOperationAsync`/`GetAsync`/`SearchAsync`) are dark. | `GPConnectService.cs:99`, `Nhs.Pds/Client/ApiClient.cs:25/32` | High | New `fhir` provider rule (evidences C6) |
+| **VS-G6** | **`queue:read` unmodeled** — Redis `Enqueue`/`PublishToChannel` (write/publish) fire, but `GetAsyncQueue`/`SubscribeToChannel` (consume) have NO rule, so the whole Webhooks inbound pipeline looks like fire-and-forget HTTP. | `MonitorQueueBackgroundService.cs:76` (GetAsyncQueue), `:45` (SubscribeToChannel) | High | Add `queue:read` op to the Redis rule (asymmetric coverage) |
+| **VS-G7** | **`object_store:read` missing for generic `GetInstance<T>`/`GetObjectInstances<T>`** — the primary ObjectStore read path. Non-generic reads (`GetIndexIdentifiers`) fire; the generic ones don't — a generic-arity (`` `1 ``) DocID-matching bug. | `ObjectStore.cs:622`, `:1095` | High | rig matcher — generic-method name match must ignore the `` `1 `` arity suffix while keeping declaring-type gate |
+| **VS-G8** | **BCL filesystem types unmodeled** — `FileStream.#ctor(string,FileMode)`, `StreamReader.#ctor(string)`, `FileInfo.Delete/OpenWrite/MoveTo`, `FileStream.Read/Write`. Facts ARE indexed; no rule. `File.*` static methods fire fine. | `dfs/CheckSum.cs:16`, `SharpMessage.cs:795`, `ServerFileService.cs:57` | High | io rule — add these BCL members (rules-only) |
+| **VS-G9** | **BCL `Microsoft.Extensions.Caching.Memory.CacheExtensions.Get/Set/GetOrCreate<T>` unmodeled** — `MemoryCacheWithInvalidation` wrappers delegate to these external extension methods → no `inproc_cache:read/write`. Metafield/JobTitle/CustomisedCredit caches look read-only or absent. | `MemoryCacheWithInvalidation.cs:36-79` | High | Anchor inproc_cache effect on the first-party wrapper methods (BCL ext is unresolved) |
+| **VS-G10** | **Higher-order delegate-variable invocation drops effects** — effects attribute to the lambda DEFINITION site, not where the stored `Func<>` is invoked. `rig reaches Xero2Client.GetResult` (the sole runtime Xero dispatch) shows NO xero effects. Also `SubscriberManager.GetEndpoint` (memoized Func field) body dropped. | `Xero2Client.cs:95` `request(auth)`; `SubscriberManager.cs:27` | Med | Structural — Func-field/delegate-variable call resolution (hard; document the limit, prefer querying concrete methods) |
+| **VS-G11** | **LanguageExt functional wrappers (`Try`/`map`/`bind`) hide inner I/O** — body inside `Prelude.Try(() => …)` is a delegate handoff; `new StreamWriter(path)` + writes inside go undetected. | `LogBoxUi.cs:45` | Med | Add LanguageExt combinators to `handoffDispatchers`, or treat synchronous ones (`Try`) as inlined |
+| **VS-G12** | **Base-class dispatch `TextReader.ReadLine`/`ReadToEnd` not matched** — only `StreamReader.*`. A `StreamReader` upcast to `TextReader` loses the io:read. | `lab/Labs.Common/Logic/TDL.cs:75-84` | Med | io rule — add `TextReader.*` read methods (covers the upcast) |
+| **VS-G13** | **`DelegatingHandler.SendAsync` not traversed** — HTTP made inside a custom `LoggingHandler` is invisible to trees rooted where the handler is wired. | `Nhs.Pds/Client/LoggingHandler.cs:33` | Low | Known DelegatingHandler blind spot — document |
+| **VS-G14** | **LanguageExt `HashMap` used as a process cache not modeled** — Pathways `PersonCache.GetPerson` (`Find`/`AddOrUpdate`) looks like a pure DB read. | `Pathways.IO/Accounts/PersonCache.cs:21-30` | Med | inproc_cache rule for HashMap Find/AddOrUpdate (or accept as out-of-scope) |
+
+### Cross-cutting themes
+- **Higher-order / reactive seams** (VS-C1, VS-G10, VS-G11, VS-G13, and F3/VS-G1): the single biggest correctness theme — rig either inlines a deferred callback as synchronous (false positives, VS-C1) or can't follow a stored delegate (false negatives, VS-G10/G11). A coherent "deferred-execution boundary" model (opaque for Rx/Func-fields, inlined for synchronous combinators, promoted-EP for schedulers) would address five findings.
+- **Rule-gap vs resolution-gap:** most coverage gaps are pure **rules-only** wins (VS-G6/G8/G9 + VS-C2/C4/C5) — add/relabel rules, no engine change, no re-mine. VS-G7 is a real matcher bug (generic arity). VS-G2/G3/G4/G5 are new detector families/providers.
+- **`rig --files`/leaf paths are shortened tails** (e.g. `src/Audits/…`) not solution-root-relative (real: `src/audits/src/Audits/…`), so they can't be opened directly — every agent had to glob by basename. Worth making paths root-relative or absolute (ties to D8 quote-source).
+
+### Suggested order (by value ÷ effort)
+1. **Rules-only quick wins (no re-mine):** VS-C2 (dapper scalar), VS-C5 (Flurl PUT), VS-G6 (queue:read), VS-G8 (BCL file I/O), VS-G4 (generic SOAP), VS-C4 (XmlDocument resource). A few lines of `rig.rules.json`/builtin-rules each; re-derive at query time.
+2. **High-value detector families:** VS-G2 (permission:assert) + VS-G3 (config:read) — biggest audit value; VS-G1/F3 (background ctor-delegate EP).
+3. **Engine fixes:** VS-G7 (generic-arity match — likely small + broadly beneficial), VS-C1 + VS-C3 (boundary/primitive classification), VS-G5 (FHIR provider).
+4. **Structural/documented limits:** VS-G10/G11/G13 (deferred-execution model) — design first.
+
+---
+
 ## Suggested first slice
 - **DONE 2026-06-14**: the four effect-rule fixes (Flurl/WebClient/XmlDocument/UpdateMulti) + F2 (EP-detector rules) + F4 (convention loosening).
 - **Next**: F1 (delegate-body tracing) — deepest and highest-impact; also unblocks C6 (cross-service comm detection).
