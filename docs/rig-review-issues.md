@@ -92,7 +92,22 @@ Regression tests added: `Captures_invocations_in_query_clause_expressions` (guar
 
 ## E. Rendering & CLI ergonomics (P3 — designed 2026-06-14)
 
-### E1. `tree --full` = maximal-fidelity tree (IN PROGRESS)
+### E1. `tree --full` = maximal-fidelity tree (E1a DONE, E1b pending)
+
+**E1a — effects as provenance leaf nodes (DONE 2026-06-14, commit `tree --full: render effects…`).**
+In `--full`, each effect is promoted from the inline `{provider:op resource}` tag to its own call-site
+leaf node (`provider:op + resource + file:line`), source-ordered ahead of the call children. Verified
+live: `AuditsRepository.SubmitEvent --full` shows `dapper:execute …:15` under the method and
+`db_connection:open …:44` nested under `WithConnection`. Default/`--effects`/`--summary` keep the compact
+inline tag. Renderer-only, no re-mine; unit-tested (`TreeRenderRulesTests`).
+
+**E1b — unresolved library calls as dimmed leaves (PENDING).** Surface library invocations that resolved
+to a real target but matched no effect rule (e.g. `LanguageExt…Map`) as dimmed leaves in `--full`.
+Wrinkle: the bounded per-method invocation set can't be loaded with a naive `IN (treeMethodIds)` query —
+a large `--full` tree (`SubmitToHealthcode` ≈ 3,753 methods) exceeds SQLite's parameter limit. Correct
+shape mirrors effect handling: derive the unresolved set from the already-bounded `ReachInputs` on the
+cold path, and cache it in the render sidecar (alongside `SeamEffects`/`Locations`) so warm/cache-hit
+queries don't re-query. Gated to `--full` only, so default/compact paths are never affected.
 
 Today `tree` renders only **first-party** method nodes; a library call enters the tree **one of two ways**:
 matched by an effect rule → hoisted to an inline `{• provider:op resource}` tag on the *enclosing* method;
