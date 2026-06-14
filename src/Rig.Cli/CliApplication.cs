@@ -84,7 +84,7 @@ public static class CliApplication
         output.WriteLine();
         output.WriteLine("Usage:");
         output.WriteLine(
-            "  rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable] [--merge]   (--from = index only the entry project's non-test closure, one workspace; --durable = journaled write, default is fast atomic-publish; --merge = accumulate into an existing store for a multi-solution unified store)"
+            "  rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable] [--merge]   (--from = index only the entry project's non-test closure, one workspace; --durable = journaled write, default is fast atomic-publish; --merge = accumulate into an existing store for a multi-solution unified store; --no-tests = skip test projects)"
         );
         output.WriteLine("  rig mine <solution> --from <project.csproj> [--rules <path>...] [--identity <id>] [--parallelism <n>]");
         output.WriteLine("  rig runs");
@@ -122,7 +122,7 @@ public static class CliApplication
         {
             error.WriteLine("Missing solution or project path.");
             error.WriteLine(
-                "Usage: rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable] [--merge]"
+                "Usage: rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable] [--merge] [--no-tests]"
             );
             return 2;
         }
@@ -187,7 +187,8 @@ public static class CliApplication
                 extraRulesPaths: extraRules.Count > 0 ? extraRules : null,
                 projectIdentity: identity,
                 scopeProjectPaths: scopeProjectPaths,
-                parallelism: parallelism
+                parallelism: parallelism,
+                excludeTests: args.Contains("--no-tests")
             );
         }
         catch (InvalidOperationException exception)

@@ -32,7 +32,9 @@ internal static class SolutionSourceLoader
         // Max concurrent MSBuild design-time builds / Roslyn compilations. Null = DefaultParallelism
         // (the CPU count). The design-time builds run out-of-process with UseSharedCompilation=false
         // and emit no binaries, so concurrency is safe — this is the dominant indexing cost.
-        int? parallelism = null
+        int? parallelism = null,
+        // Drop test projects (by name convention) before their design-time build — --no-tests.
+        bool excludeTests = false
     )
     {
         var maxParallelism = Math.Max(1, parallelism ?? DefaultParallelism);
@@ -44,7 +46,7 @@ internal static class SolutionSourceLoader
         // as of May 2026.)  addProjectReferences:false loads project-to-project references
         // from their compiled DLLs rather than re-evaluating the source .csproj files.
         ReportProgress(progress, "Loading solution");
-        var workspace = await Task.Run(() => BuildWorkspace(solutionPath, progress, scopeProjectPaths, maxParallelism), cancellationToken)
+        var workspace = await Task.Run(() => BuildWorkspace(solutionPath, progress, scopeProjectPaths, maxParallelism, excludeTests), cancellationToken)
             .ConfigureAwait(false);
 
         // Wire OutputItemType="Analyzer" ProjectReferences (source generators like the ClientPage
@@ -156,7 +158,8 @@ internal static class SolutionSourceLoader
         string solutionPath,
         Action<string>? progress,
         IReadOnlySet<string>? scopeProjectPaths,
-        int parallelism
+        int parallelism,
+        bool excludeTests
     )
     {
         var logWriter = progress is null ? null : new ProgressLogWriter(progress);
@@ -194,6 +197,7 @@ internal static class SolutionSourceLoader
                     string.Equals(Path.GetExtension(pa.ProjectFile.Path.ToString()), ".csproj", StringComparison.OrdinalIgnoreCase)
                 )
                 .Where(pa => scopeProjectPaths is null || scopeProjectPaths.Contains(Path.GetFullPath(pa.ProjectFile.Path.ToString())))
+                .Where(pa => !excludeTests || !IsTestProjectPath(pa.ProjectFile.Path.ToString()))
                 .ToArray();
 
             if (scopeProjectPaths is not null)
@@ -201,6 +205,11 @@ internal static class SolutionSourceLoader
                     $"Scoped to {toBuild.Length} project(s) in the entry closure "
                         + $"(skipping {manager.Projects.Count - toBuild.Length} out-of-scope / non-C# project(s))"
                 );
+            else if (excludeTests)
+            {
+                var testCount = manager.Projects.Values.Count(pa => IsTestProjectPath(pa.ProjectFile.Path.ToString()));
+                progress?.Invoke($"Excluding {testCount} test project(s) (--no-tests)");
+            }
 
             // Design-time builds run out-of-process (MSBuild.exe) with UseSharedCompilation=false and
             // emit no binaries, so they parallelise safely — and this is the dominant indexing cost,
@@ -236,6 +245,18 @@ internal static class SolutionSourceLoader
         }
 
         return BuildWorkspaceFromResults(results, progress);
+    }
+
+    // A project is a test project by name convention (matches the CLI's --from closure heuristic):
+    // *.Tests / *.UnitTests / *.IntegrationTests, or a ".Tests." path segment. Excluded under --no-tests
+    // so test methods don't surface as entry points and test-only references don't inflate the graph.
+    internal static bool IsTestProjectPath(string projectPath)
+    {
+        var name = Path.GetFileNameWithoutExtension(projectPath);
+        return name.EndsWith("Tests", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith("UnitTests", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith("IntegrationTests", StringComparison.OrdinalIgnoreCase)
+            || name.Contains(".Tests.", StringComparison.OrdinalIgnoreCase);
     }
 
     private static AdhocWorkspace BuildWorkspaceFromResults(IReadOnlyList<IAnalyzerResult> analyzerResults, Action<string>? progress = null)
