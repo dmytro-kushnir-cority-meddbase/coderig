@@ -123,6 +123,56 @@ public sealed class TreeRenderRulesTests
     }
 
     [Test]
+    public void Full_mode_renders_effects_as_provenance_leaf_nodes_not_inline_tags()
+    {
+        var root = Node("M:Ns.Repo.SubmitEvent()", Node("M:Ns.Repo.WithConnection()"));
+        var effects = Effects(
+            ("M:Ns.Repo.SubmitEvent()", "• dapper:execute Dapper.SqlMapper"),
+            ("M:Ns.Repo.WithConnection()", "• db_connection:open SqlConnection")
+        );
+        var leaves = new Dictionary<string, List<string>>(StringComparer.Ordinal)
+        {
+            ["M:Ns.Repo.SubmitEvent()"] = ["• dapper:execute Dapper.SqlMapper  Repo.cs:15"],
+            ["M:Ns.Repo.WithConnection()"] = ["• db_connection:open SqlConnection  Repo.cs:44"],
+        };
+        var output = new StringWriter();
+        CliApplication.RenderTreeNode(
+            root,
+            prefix: "",
+            isLast: true,
+            isRoot: true,
+            effects,
+            prune: false,
+            FactRenderRules.Empty,
+            new Dictionary<string, List<string>>(StringComparer.Ordinal),
+            output,
+            full: true,
+            effectLeavesByMethod: leaves
+        );
+        var text = output.ToString();
+
+        // Effects render as their own leaf nodes carrying the call site, not as the inline {…} tag.
+        text.ShouldContain("dapper:execute Dapper.SqlMapper  Repo.cs:15");
+        text.ShouldContain("db_connection:open SqlConnection  Repo.cs:44");
+        text.ShouldNotContain("{• dapper:execute"); // inline tag suppressed in --full
+        // The effect leaf sits ABOVE the call child (effects first, then callees).
+        text.IndexOf("dapper:execute").ShouldBeLessThan(text.IndexOf("WithConnection"));
+        // The db_connection effect nests under WithConnection, not the root.
+        text.IndexOf("WithConnection").ShouldBeLessThan(text.IndexOf("db_connection:open"));
+    }
+
+    [Test]
+    public void Default_mode_keeps_the_inline_effect_tag()
+    {
+        var root = Node("M:Ns.Repo.SubmitEvent()");
+        var effects = Effects(("M:Ns.Repo.SubmitEvent()", "• dapper:execute Dapper.SqlMapper"));
+
+        var output = Render(root, FactRenderRules.Empty, effects); // full defaults to false
+
+        output.ShouldContain("{• dapper:execute Dapper.SqlMapper}");
+    }
+
+    [Test]
     public void Raw_mode_equivalent_empty_rules_expands_everything()
     {
         var hub = Node("M:Ns.IService.Startup()", Dispatch("M:Ns.A.Startup()", 2), Dispatch("M:Ns.B.Startup()", 2));

@@ -98,7 +98,7 @@ public static class CliApplication
             "  rig reaches <fromPattern> [--async] [--rules <path>...] [--maxdepth|--depth <n>] [--only <p,..>] [--exclude <p,..>] [--format tsv]   (effects reachable from an entry point; synchronous by default (handoffs cut); --async adds scheduled/cross-thread reach via handoffs in a separate ⚡bucket; --exclude throw to drop exceptions)"
         );
         output.WriteLine(
-            "  rig tree <fromPattern> [--full|--summary|--effects] [--async] [--only <p,..>] [--exclude <p,..>] [--rules <path>...] [--maxdepth|--depth <n>]   (call tree from an entry point; default = synchronous paths that reach an effect; --async also crosses handoffs (marked ⤳); --effects = only effectful methods, no skeleton; --exclude throw to drop exceptions)"
+            "  rig tree <fromPattern> [--full|--summary|--effects] [--async] [--only <p,..>] [--exclude <p,..>] [--rules <path>...] [--maxdepth|--depth <n>]   (call tree from an entry point; default = synchronous paths that reach an effect, effects inline as {tags}; --full = every reachable method with effects as call-site leaf nodes (provider:op + resource + file:line); --async also crosses handoffs (marked ⤳); --effects = only effectful methods, no skeleton; --exclude throw to drop exceptions)"
         );
         output.WriteLine(
             "  rig callers <toPattern> [--roots|--entrypoints] [--async] [--raw] [--rules <path>...] [--maxdepth|--depth <n>]   (reverse reachability: who reaches this method; defaults to SYNCHRONOUS only (handoffs cut), so background callbacks show as their own origins; --async also counts scheduled paths; --roots = no-predecessor candidates (heuristic); --entrypoints = RULE-DETECTED entry points that reach it (precise); shaped by the same factory/cut/context rules as path/reaches/tree, --raw bypasses)"
@@ -1054,8 +1054,9 @@ public static class CliApplication
     // The full first-party call TREE from an entry point over the fact graph (entrypoint-independent,
     // same edges as reaches/path — incl. interface->impl + base->override dispatch + loop context).
     // Modes mirror the legacy `callgraph`: default prunes to call paths that REACH an effect; --full
-    // prints every reachable method; --summary prints just the effect-count rollup. Effects are
-    // annotated inline ({provider:op resource}); looped edges get 🔁; cycle/shared-callee re-entry
+    // prints every reachable method AND promotes effects to call-site leaf nodes (provider:op + resource +
+    // file:line) instead of the inline tag; --summary prints just the effect-count rollup. In the compact
+    // modes effects are annotated inline ({provider:op resource}); looped edges get 🔁; cycle/shared-callee re-entry
     // is shown as "↺seen" (that method's subtree is printed under its first occurrence).
     private static async Task<int> RunTreeAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
     {
@@ -1252,6 +1253,15 @@ public static class CliApplication
             .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => FormatEffectGroup(g, emoji), StringComparer.Ordinal);
 
+        // `--full` renders effects as provenance leaf nodes (call site + line) rather than the inline tag,
+        // so precompute the per-method leaf bodies. Only built in --full; other modes never read it.
+        var effectLeavesByMethod = full
+            ? effects
+                .Where(e => e.EnclosingSymbolId is not null)
+                .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => FormatEffectLeaves(g, emoji), StringComparer.Ordinal)
+            : null;
+
         if (summary)
         {
             var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -1345,7 +1355,9 @@ public static class CliApplication
                 locById,
                 signatures,
                 cutRules,
-                epContext
+                epContext,
+                full,
+                effectLeavesByMethod
             );
         }
         timer.Lap("seam effects + render");
@@ -1612,7 +1624,12 @@ public static class CliApplication
         IReadOnlyList<FactTraversalCutRule>? cutRules = null,
         // Deployment/EP context: when supplied, a node that is itself a rule-detected entry point is
         // marked with the ▶ kind + service chip. Null = no EP marking (default tree).
-        EpRenderContext? epContext = null
+        EpRenderContext? epContext = null,
+        // `--full`: render effects as provenance leaf nodes (call site + line) BELOW each method instead of
+        // the inline {…} tag. effectLeavesByMethod carries the precomputed leaf bodies. false/null = the
+        // compact inline-tag rendering used by default/--effects/--summary.
+        bool full = false,
+        IReadOnlyDictionary<string, List<string>>? effectLeavesByMethod = null
     )
     {
         // Compute visible children first — the fan-out label must reflect how many branches are
@@ -1655,7 +1672,8 @@ public static class CliApplication
             if (matchedCut is not null)
                 cutTag = $" «cut: {matchedCut.Label}»";
         }
-        var fx = effectsByMethod.TryGetValue(node.SymbolId, out var list) && list.Count > 0 ? "  {" + string.Join(", ", list) + "}" : "";
+        // --full hoists effects out to leaf nodes (below), so the inline {…} tag is suppressed in that mode.
+        var fx = !full && effectsByMethod.TryGetValue(node.SymbolId, out var list) && list.Count > 0 ? "  {" + string.Join(", ", list) + "}" : "";
         var loc =
             files && locById is not null && locById.TryGetValue(node.SymbolId, out var l) && l.File is not null
                 ? $"  📄 {ShortenPath(l.File)}:{l.Line}"
@@ -1667,14 +1685,30 @@ public static class CliApplication
         var label = $"{epPrefix}{name}{dispatch}{handoff}{loop}{calls}{seen}{opaqueTag}{cutTag}{fx}{loc}{epSuffix}";
         output.WriteLine(isRoot ? label : $"{prefix}{(isLast ? "└─ " : "├─ ")}{label}");
 
-        if (opaque is not null)
-            return;
-
         // Collapse-seam render rule: this node is a fan-out hub (e.g. a reflection service-locator or
         // an ORM entity-constructor factory). Fold its candidate children into ONE summary leaf —
         // the union of effects reachable through them + how many lines were hidden — instead of N
-        // near-identical polymorphic subtrees that drown out the real call story.
+        // near-identical polymorphic subtrees that drown out the real call story. Computed here (ahead of
+        // the effect-leaf pass) so leaf connectors know whether a trailing seam summary line follows.
         var seam = renderRules.MatchCollapseSeam(node.SymbolId);
+
+        // --full: emit this method's effects as provenance leaf nodes (call site + line) ahead of the call
+        // children, so the effect-producing calls (e.g. ExecuteAsync) are visible rather than folded into a
+        // tag. The last leaf gets └─ only when nothing trails it — an opaque node renders no children, a
+        // collapsed seam renders exactly one summary line, otherwise the visible call children follow.
+        if (full && effectLeavesByMethod is not null && effectLeavesByMethod.TryGetValue(node.SymbolId, out var fxLeaves) && fxLeaves.Count > 0)
+        {
+            var trailing = opaque is not null ? 0 : (seam is not null && children.Count > 0 ? 1 : children.Count);
+            for (var i = 0; i < fxLeaves.Count; i++)
+            {
+                var lastLeaf = trailing == 0 && i == fxLeaves.Count - 1;
+                output.WriteLine($"{childPrefix}{(lastLeaf ? "└─ " : "├─ ")}{fxLeaves[i]}");
+            }
+        }
+
+        if (opaque is not null)
+            return;
+
         if (seam is not null && children.Count > 0)
         {
             // Lines-hidden is the rendered subtree size; the effect union is the REALISTIC reach-closure
@@ -1707,7 +1741,9 @@ public static class CliApplication
                 locById,
                 signatures,
                 cutRules,
-                epContext
+                epContext,
+                full,
+                effectLeavesByMethod
             );
     }
 
@@ -2449,6 +2485,25 @@ public static class CliApplication
 
         // Dedup: collapse identical strings to "label ×N".
         return result.GroupBy(s => s, StringComparer.Ordinal).Select(g => g.Count() > 1 ? $"{g.Key} ×{g.Count()}" : g.Key).ToList();
+    }
+
+    // `tree --full`: render each effect as its OWN provenance leaf node — provider:op + resource + the
+    // producing call site (file:line) — instead of the compact inline {…} tag the other modes hoist onto
+    // the enclosing method. Ordered by source line so the leaves read in code order under the method; one
+    // leaf per site (no lock-pair collapse/dedup — a leaf IS a site, and the line disambiguates).
+    private static List<string> FormatEffectLeaves(
+        IEnumerable<Rig.Domain.Data.DerivedEffect> effects,
+        IReadOnlyDictionary<string, string> emoji
+    )
+    {
+        return effects
+            .OrderBy(e => e.Line)
+            .Select(e =>
+            {
+                var loc = string.IsNullOrEmpty(e.FilePath) ? "" : $"  {ShortenPath(e.FilePath)}:{e.Line}";
+                return $"{FactEffectEmojiProvider.For(emoji, e.Provider, e.Operation)} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}{loc}";
+            })
+            .ToList();
     }
 
     private static string ShortName(string? symbolId)

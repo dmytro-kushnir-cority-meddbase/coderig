@@ -90,6 +90,62 @@ Regression tests added: `Captures_invocations_in_query_clause_expressions` (guar
 
 ---
 
+## E. Rendering & CLI ergonomics (P3 — designed 2026-06-14)
+
+### E1. `tree --full` = maximal-fidelity tree (IN PROGRESS)
+
+Today `tree` renders only **first-party** method nodes; a library call enters the tree **one of two ways**:
+matched by an effect rule → hoisted to an inline `{• provider:op resource}` tag on the *enclosing* method;
+unmatched → dropped entirely (no node, no tag). Two consequences a user hit this session:
+
+- The **producing call is invisible** — `dapper:execute` shows on `SubmitEvent` but the `ExecuteAsync`
+  call that caused it (and its line) is buried in the tag. Ambiguous the moment a method has >1 effect.
+- **Unresolved library calls vanish** — `LanguageExt…Map` (no effect rule) appears nowhere, in *any*
+  mode. `--full` does NOT surface it: `--full` only toggles effect-*pruning* of first-party branches
+  (`SubtreeHasEffect`), an axis orthogonal to first-party-vs-library.
+
+**Decision:** make `--full` do what the word says — the maximal-fidelity tree:
+- every reachable first-party method (current `--full`), **plus**
+- **effects as provenance leaf nodes** — `⚡ provider:op  Target.Method  file:line` at the call site,
+  source-ordered with siblings (replaces the inline tag in this mode only), **plus**
+- **unresolved library calls** (resolved to a real target, no effect rule) rendered **dimmed** as leaves.
+
+Default / `--effects` / `--summary` keep today's compact inline-tag rendering. All data needed (target
+method, file:line, receiver) is already stored — **renderer-only, no re-mine**. This folds the two
+floated flags (`--effects-as-nodes`, `--show-unresolved`) into `--full`; they do not ship separately.
+Temporal/happens-before ordering is explicitly **out of scope** (the tree is structural/lexical, not a
+trace — e.g. the `WithConnection(callback)` inversion renders `execute` above the `open` it runs after).
+
+### E2. Flag-surface unification (PROPOSED — breaking parts need sign-off)
+
+The per-command flag surface has drifted (full audit + table in commit message / session notes).
+Incoherences: dead-alias pairs (`--maxdepth`≡`--depth`, `--signatures`≡`--sig`); diagnostics
+(`--time`/`--no-cache`) stuck on `tree` only; `--format tsv` ad hoc on 3 of N commands; `--limit`
+coverage arbitrary (absent from the flood-prone `reaches`/`tree`/`callers`); the first-party/library
+axis named two ways (`refs --first-party` vs `dead --lib`); a `--root`(value, dead) / `--roots`(bool,
+callers) collision; mode flags as unvalidated booleans (`tree --full|--summary|--effects`,
+`callers --roots|--entrypoints`).
+
+**Target — three tiers, a flag means the same thing everywhere:**
+- **Tier 1 global:** `--rules`, `--format text|tsv` (default text), `--limit <n>` (default unbounded),
+  `--time`, `--no-cache` — valid on every command where sensible.
+- **Tier 2 traversal** (`path`/`reaches`/`tree`/`callers`): `--depth <n>` (canonical; `--maxdepth`
+  deprecated alias), `--async` (default sync), `--raw`, `--only`/`--exclude` (extend to `path`/`callers`).
+- **Tier 3 command-specific:** `tree` projection group (validated, mutually exclusive) default·`--full`·
+  `--summary`·`--effects` + `--signatures` (drop `--sig`) + `--files`; `callers` selector group
+  `--orphans`(rename `--roots`)·`--entrypoints`; `dead` `--lib`→`--include-lib`, `--root`→`--from`,
+  keep `--include-dispatch`/`--all`; `index`/`mine` as today.
+
+**Breaking — needs sign-off before implementing:**
+- (a) renames: `callers --roots`→`--orphans`, `dead --root`→`--from`, `dead --lib`→`--include-lib`;
+- (b) deprecate `--maxdepth`/`--sig` (alias one release, then remove);
+- (c) `index` test default — keep include-tests (`--no-tests` opts out) **or** flip to exclude-by-default
+  + `--include-tests` (recommended: tests are graph noise; changes `mine` output).
+
+Non-breaking (Tier-1/2 generalization + mode-group validation + the E1 `--full` bake) ships first.
+
+---
+
 ## Suggested first slice
 - **DONE 2026-06-14**: the four effect-rule fixes (Flurl/WebClient/XmlDocument/UpdateMulti) + F2 (EP-detector rules) + F4 (convention loosening).
 - **Next**: F1 (delegate-body tracing) — deepest and highest-impact; also unblocks C6 (cross-service comm detection).
