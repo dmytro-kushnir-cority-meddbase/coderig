@@ -40,25 +40,61 @@ public static class CliApplication
     {
         if (HasUnknownFlag(args[0], args, error))
             return 2;
-        return args[0] switch
+        try
         {
-            "index" => await RunIndexAsync(args, output, error, workingDirectory),
-            "mine" => await RunMineAsync(args, output, error, workingDirectory),
-            "runs" => await RunRunsAsync(output, workingDirectory),
-            "di" => await RunDiAsync(output, error, workingDirectory),
-            "symbols" => await RunSymbolsAsync(args, output, error, workingDirectory),
-            "refs" => await RunRefsAsync(args, output, error, workingDirectory),
-            "path" => await RunPathAsync(args, output, error, workingDirectory),
-            "tree" => await RunTreeAsync(args, output, error, workingDirectory),
-            "callers" => await RunCallersAsync(args, output, error, workingDirectory),
-            "reaches" => await RunReachesAsync(args, output, error, workingDirectory),
-            "derive" => await RunDeriveAsync(args, output, error, workingDirectory),
-            "graph" => await RunGraphAsync(output, error, workingDirectory),
-            "dead" => await RunDeadAsync(args, output, error, workingDirectory),
-            "files" => await RunFilesAsync(args, output, error, workingDirectory),
-            "profile" => await RunProfileAsync(args, output, error, workingDirectory),
-            _ => UnknownCommand(args[0], error),
-        };
+            return args[0] switch
+            {
+                "index" => await RunIndexAsync(args, output, error, workingDirectory),
+                "mine" => await RunMineAsync(args, output, error, workingDirectory),
+                "runs" => await RunRunsAsync(output, workingDirectory),
+                "di" => await RunDiAsync(output, error, workingDirectory),
+                "symbols" => await RunSymbolsAsync(args, output, error, workingDirectory),
+                "refs" => await RunRefsAsync(args, output, error, workingDirectory),
+                "path" => await RunPathAsync(args, output, error, workingDirectory),
+                "tree" => await RunTreeAsync(args, output, error, workingDirectory),
+                "callers" => await RunCallersAsync(args, output, error, workingDirectory),
+                "reaches" => await RunReachesAsync(args, output, error, workingDirectory),
+                "derive" => await RunDeriveAsync(args, output, error, workingDirectory),
+                "graph" => await RunGraphAsync(output, error, workingDirectory),
+                "dead" => await RunDeadAsync(args, output, error, workingDirectory),
+                "files" => await RunFilesAsync(args, output, error, workingDirectory),
+                "profile" => await RunProfileAsync(args, output, error, workingDirectory),
+                _ => UnknownCommand(args[0], error),
+            };
+        }
+        catch (System.Data.Common.DbException exception)
+        {
+            // A SQLite error escaping a command almost always means the store is missing (wrong cwd) or
+            // was built by an older rig (schema drift — a column/table added since). Translate the raw
+            // EF/SQLite stack trace into a clean, actionable message, mirroring how `index` already handles
+            // a bad target path.
+            return StoreError(workingDirectory, exception, error);
+        }
+    }
+
+    // Clean exit-2 message for a store that can't be read: distinguish "no store here" (wrong directory)
+    // from "older-rig schema mismatch" (re-index needed) from any other read failure.
+    private static int StoreError(string workingDirectory, System.Data.Common.DbException exception, TextWriter error)
+    {
+        var dbPath = Path.Combine(workingDirectory, ".rig", "rig.db");
+        if (!File.Exists(dbPath))
+        {
+            error.WriteLine($"No indexed store at {dbPath}.");
+            error.WriteLine("Run `rig index <solution>` here first, or cd to the directory that owns the .rig store.");
+        }
+        else if (
+            exception.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase)
+            || exception.Message.Contains("no such table", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            error.WriteLine($"The store at {dbPath} was built by an older rig (schema mismatch: {exception.Message}).");
+            error.WriteLine("Re-index with the current rig: `rig index <solution>`.");
+        }
+        else
+        {
+            error.WriteLine($"Could not read the store at {dbPath}: {exception.Message}");
+        }
+        return 2;
     }
 
     private static bool IsHelp(string arg)

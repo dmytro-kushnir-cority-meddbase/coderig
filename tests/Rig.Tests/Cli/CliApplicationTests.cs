@@ -95,6 +95,30 @@ public sealed class CliApplicationTests
         error.ToString().ShouldContain("--orphans and --entrypoints can't be combined");
     }
 
+    // A query command run where there is no .rig store (e.g. wrong directory) fails cleanly with exit 2
+    // and an actionable message, not an unhandled SqliteException stack trace.
+    [Test]
+    public async Task Query_command_without_a_store_fails_cleanly()
+    {
+        var emptyDir = Path.Combine(Path.GetTempPath(), "rig-no-store-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(emptyDir);
+        try
+        {
+            var output = new StringWriter();
+            var error = new StringWriter();
+
+            var exitCode = await CliApplication.RunAsync(["tree", "Whatever"], output, error, emptyDir);
+
+            exitCode.ShouldBe(2);
+            error.ToString().ShouldContain("No indexed store");
+            error.ToString().ShouldNotContain("SqliteException");
+        }
+        finally
+        {
+            Directory.Delete(emptyDir, recursive: true);
+        }
+    }
+
     [Test]
     public async Task Files_requires_skipped_flag()
     {

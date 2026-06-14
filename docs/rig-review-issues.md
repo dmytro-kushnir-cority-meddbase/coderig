@@ -168,6 +168,15 @@ text|tsv` (needs TSV emitters for `tree`/`path`/`callers`), and `--limit` (needs
 `reaches`/`tree`/`callers`) to all commands; and extending `--only`/`--exclude` to `path`/`callers`.
 These are additive and can land incrementally.
 
+### E3. Store-read guard (DONE 2026-06-14)
+
+A query command run with no `.rig` store (wrong directory) or against a store built by an older rig
+(schema drift, e.g. a column added since) previously threw an unhandled `SqliteException` stack trace.
+Now `DispatchAsync` catches the BCL `DbException` and emits a clean exit-2 message: "No indexed store at
+… — run `rig index` or cd to the owning directory" vs "built by an older rig (schema mismatch: …) —
+re-index". Verified live on both. (This was the root cause of the "tree reports no effects" confusion —
+the command had been run from the source repo against a stale store.)
+
 ---
 
 ## Suggested first slice
