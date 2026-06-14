@@ -179,3 +179,19 @@ Based on grep scans finding no call sites in `src/**/*.cs` (excluding test proje
 | `TikaOnDotnet.TextExtractor` | No `TikaServerClient` call sites found. |
 | `MartinCostello.SqlLocalDb` | No `ISqlLocalDbApi` call sites. Likely test infrastructure. |
 | `Azure.Security.KeyVault.*` | No `SecretClient` call sites in app code. |
+
+---
+
+## Corrections (verified against the mined store, 2026-06-14)
+
+The triage above was source-grep-based; ground-truthing against the actual `rig` store (`rig refs`/`rig symbols`) corrected two things:
+
+**Repo is multi-solution.** `MedDBase.slnx` (the mined master, ~300 projects) is *one of ~22 solutions*. It does **not** include the standalone **audits service**, **ClientDataTransformationTools**, or **sql-runner** (`rig symbols` finds `ObservationRequestHelpers`/`Xero2Client`/`CefConverter` but NOT `AuditsRepository`/`Enigma`/`TableParquetExtensions`/`SqlRunner`). So those libs can't fire until their own solutions are mined.
+
+**Two suggested rules were mis-typed** (SDK API guessed wrong) — fixed:
+- **OpenAI**: real type is `OpenAI.Responses.OpenAIResponseClient.CreateResponse*` (the Responses API), **not** `OpenAI.Chat.ChatClient.CompleteChat`. No `EmbeddingClient` usage. Now fires on `OpenAi.GetResponse`.
+- **CefSharp**: real calls are `ChromiumWebBrowser.Load`/`CreateBrowser` + `WebBrowserExtensions.PrintToPdfAsync`, **not** `LoadUrlAsync`/`EvaluateScriptAsync`. Now fires on `CefConverter.*`.
+
+**Correctly typed but not mined here** (calls aren't resolved refs in this store — mine-time package-resolution gap or wrapped calls): **Dapper** (`Dapper.SqlMapper`), **RestSharp** (`RestSharp.RestClient`), **Xero** (`AccountingApi`). Rules left in place; they'll fire on a mine that resolves those calls.
+
+Net firing in the current store: twilio, sendgrid, gcp_pubsub, ldap, ironpdf, script_eval, linq2db, **openai, cefsharp** (+ EventGrid). The rest await either a rule-less mining-resolution fix (Dapper/RestSharp/Xero) or mining the separate solutions (Pgp/Parquet/LibGit2Sharp).
