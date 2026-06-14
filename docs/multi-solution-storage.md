@@ -60,6 +60,24 @@ New tables are additive; `EnsureCreatedAsync` creates them on the next fresh ind
 writes a new DB). Queries tolerate their absence on old stores via `StorageProbes.TableExistsAsync`
 (same pattern as `symbol_fts`).
 
+## Re-mine timing (2026-06-14, master `MedDBase.slnx`, ~320 projects)
+
+| Attempt | Parallelism | Analysis | Save | Total | Result |
+|---|---|---|---|---|---|
+| 1 (`b7tlce15v`) | 32 | 13m43s | — | — | **crashed in save** (registry OOM, pre-fix); no store published, live store intact |
+| 2 (`bus2vrtp1`) | 32 | 15m31s | 3m42s | **19m13s** | published; 326,872 symbols, 2,224,276 refs, **223 assemblies registered** |
+
+Save is ~3.7 min at this scale (2.2M references + the streaming assembly registry). The registry no
+longer OOMs.
+
+**Parallelism-32 is unreliable here.** Compilation errors swung **32 → 846** between two identical mines —
+nondeterministic races where concurrent design-time builds trample shared `bin/` outputs, so some C#
+projects intermittently fail to resolve their project references (`CS0234`/`CS0103` on first-party types
+like `MedDBase.DataServer.Core`). This is the documented `--parallelism` hazard. For an *authoritative*
+store use `--parallelism 1` or `2` (slower, but stable); `-p32` is only acceptable for a fast, partial
+"good enough" index. The F# fix is orthogonal — it removed the `MedDBase.Pathways.DSL` `CS0012` errors;
+the 846 are a different (parallelism) failure class.
+
 ## Slices
 
 1. **Foundation (this slice):** `AssemblyEntity` + `SolutionMembershipEntity` schema; a deterministic
