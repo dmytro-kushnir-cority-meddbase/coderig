@@ -1,4 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using Rig.Domain;
 using Rig.Domain.Data;
 using Rig.Storage.Storage;
 
@@ -67,7 +68,111 @@ public static class Writes
         context.ChangeTracker.Clear();
 
         await SaveFactsBatchedAsync(context, runId, result, progress, cancellationToken);
+        await WriteAssemblyRegistryAsync(context, result, progress, cancellationToken);
         return runId;
+    }
+
+    // Populates the assembly registry + solution membership (docs/multi-solution-storage.md). An
+    // assembly is keyed by name and content-addressed by a digest over its emitted FACT identities
+    // (symbol DocIDs + reference target/enclosing/line), so a re-index of the same source is a no-op and
+    // a changed assembly is detected. Membership records that this solution contains the assembly.
+    // Additive: runs alongside the run-scoped fact write and does not change existing query behaviour.
+    private static async Task WriteAssemblyRegistryAsync(
+        RigDbContext context,
+        AnalysisResult result,
+        Action<string>? progress,
+        CancellationToken cancellationToken
+    )
+    {
+        var symbols = result.Symbols ?? [];
+        if (symbols.Count == 0)
+            return;
+        var references = result.References ?? [];
+        var solutionPath = Path.GetFullPath(result.SolutionPath);
+        var indexedAt = DateTimeOffset.UtcNow.ToString("O");
+
+        // SymbolId -> owning assembly, so a reference is attributed to the assembly of its enclosing method.
+        var symbolAssembly = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var s in symbols)
+            symbolAssembly[s.SymbolId] = s.DefiningAssembly;
+
+        var items = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var symbolCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var referenceCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        List<string> Bucket(string assembly)
+        {
+            if (!items.TryGetValue(assembly, out var list))
+                items[assembly] = list = [];
+            return list;
+        }
+
+        foreach (var s in symbols)
+        {
+            if (string.IsNullOrEmpty(s.DefiningAssembly))
+                continue;
+            Bucket(s.DefiningAssembly).Add("S:" + s.SymbolId);
+            symbolCounts[s.DefiningAssembly] = symbolCounts.GetValueOrDefault(s.DefiningAssembly) + 1;
+        }
+
+        foreach (var r in references)
+        {
+            if (r.EnclosingSymbolId is null || !symbolAssembly.TryGetValue(r.EnclosingSymbolId, out var assembly) || string.IsNullOrEmpty(assembly))
+                continue;
+            Bucket(assembly).Add($"R:{r.TargetSymbolId}|{r.EnclosingSymbolId}|{r.Line}");
+            referenceCounts[assembly] = referenceCounts.GetValueOrDefault(assembly) + 1;
+        }
+
+        // Re-enable change detection for this small upsert (the fact write left it off + tracker cleared).
+        context.ChangeTracker.AutoDetectChangesEnabled = true;
+        var existing = await context.Assemblies.ToDictionaryAsync(a => a.AssemblyName, cancellationToken);
+        var existingMembership = new HashSet<string>(
+            await context
+                .SolutionMemberships.Where(m => m.SolutionPath == solutionPath)
+                .Select(m => m.AssemblyName)
+                .ToListAsync(cancellationToken),
+            StringComparer.Ordinal
+        );
+
+        foreach (var (assembly, factItems) in items)
+        {
+            var hash = ProjectContentHash.Compute(factItems);
+            if (existing.TryGetValue(assembly, out var row))
+            {
+                if (row.ContentHash != hash)
+                {
+                    // Same name, divergent content. Expected for a re-mine of the same solution; a
+                    // genuine cross-solution collision (a fork) would carry a different source solution.
+                    if (!string.Equals(row.SourceSolutionPath, solutionPath, StringComparison.OrdinalIgnoreCase))
+                        progress?.Invoke($"WARN: assembly '{assembly}' has divergent content across solutions ('{row.SourceSolutionPath}' vs '{solutionPath}') — possible fork; keeping latest");
+                    row.ContentHash = hash;
+                    row.SymbolCount = symbolCounts.GetValueOrDefault(assembly);
+                    row.ReferenceCount = referenceCounts.GetValueOrDefault(assembly);
+                    row.IndexedAtUtcText = indexedAt;
+                }
+            }
+            else
+            {
+                context.Assemblies.Add(
+                    new AssemblyEntity
+                    {
+                        AssemblyName = assembly,
+                        ContentHash = hash,
+                        IndexedAtUtcText = indexedAt,
+                        SymbolCount = symbolCounts.GetValueOrDefault(assembly),
+                        ReferenceCount = referenceCounts.GetValueOrDefault(assembly),
+                        SourceSolutionPath = solutionPath,
+                    }
+                );
+            }
+
+            if (existingMembership.Add(assembly))
+                context.SolutionMemberships.Add(new SolutionMembershipEntity { SolutionPath = solutionPath, AssemblyName = assembly });
+        }
+
+        await context.SaveChangesAsync(cancellationToken);
+        context.ChangeTracker.Clear();
+        progress?.Invoke($"Registered {items.Count} assemblies for {Path.GetFileName(solutionPath)}");
     }
 
     private const int FactBatchSize = 20_000;

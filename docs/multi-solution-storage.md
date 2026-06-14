@@ -72,3 +72,20 @@ writes a new DB). Queries tolerate their absence on old stores via `StorageProbe
    (skip-by-hash also at extract time) as a follow-up.
 
 F5 closes at slice 2 (full universe in one store); slices 1/3 add efficiency and scoping.
+
+## Fork verification (2026-06-14) — no real forks on disk
+
+Concern: same assembly name + namespace in two roots with divergent source (vendored copies) would
+collide in the unified DocID space. Checked empirically:
+
+- Master store **already contains** `MMS.*` (`src/mms/MMS.NewTypes`, `MMS.Data.Linq`, `MMS.Data.Standard`)
+  and `Echo.Process` (`echo-process/Echo.Process`) source.
+- The CDT `client-data-transformation/mms/*` projects referenced by `ClientDataTransformation.slnx`
+  **do not exist on disk** — only one `MMS.Data.Standard.csproj` / `MMS.NewTypes.csproj` exists, both
+  under `src/mms`. The CDT vendored copy was consolidated into `src/mms`; the `.slnx` reference is stale.
+- `echo-process.slnx`'s extra projects are samples/tests; the core `Echo.Process` is in the master.
+
+**Verdict: no real source-level forks.** The unified store with `AssemblyName` as PK is correct as-is.
+The separate-store fork path stays as a safety net (and the write path should *detect* a same-name /
+divergent-content collision from a different solution and warn), but it isn't needed today. Corollary:
+because the `.slnx` are stale, mining must **skip `.slnx` project entries that don't resolve on disk**.
