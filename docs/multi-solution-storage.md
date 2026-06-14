@@ -84,6 +84,31 @@ error count is NOT a quality gate here; `-p2`/`--no-tests` is preferred for a st
 but chasing zero errors via rebuild+remine buys nothing for the fact graph. The F# fix is validated
 independently — **+176 references into `MedDBase.Pathways.DSL`** now resolve (were `CS0012`-dropped).
 
+## Final unified store (2026-06-14)
+
+Built end-to-end: authoritative master (`-p2 --no-tests`, Run `e5150e37`) + 11 tail solutions merged via
+`rig index <soln>.slnx --merge --no-tests` (8m33s for the tail batch). Registry (sqlite):
+
+- **247 distinct assemblies** across **12 solutions**; 253 membership rows (6 shared assemblies deduped
+  by content-hash, e.g. `Audits.Contracts` ∈ {master, audits}).
+- Per-solution: master 226, ClientDataTransformation 10, audits 8, then +1 each for sql-runner,
+  datawarehouse, DocumentManager.Mac, EventLog.UdpWatcher, APIGateway.SourceGenerator, FixBupaFiles,
+  UploadCilnicalForm, OMed, BupaFeed. ContractManagement.Site merged 0 net-new (all already present).
+- **5 tail solutions are stale and don't load** (`.slnx` references deleted projects): echo-process,
+  EventLog.ClientUI, AddressDatabaseUpdater, AutoImport, TableDumper — they now fail cleanly
+  ("Failed to load", exit 2) instead of crashing (the bad-path catch). Not recoverable without fixing
+  the solution files.
+
+**F5 closed end-to-end + cross-solution validated:** `Dapper.SqlMapper` — invisible while audits was a
+separate unmined solution — now resolves (6 refs) from `Audits.AuditsRepository`, and the `dapper`
+effect detector fires (`query: 3`, `execute: 3`). A call from any solution into another's assembly
+stitches by DocID in the one store.
+
+Shipped to get here: slice 1 (registry/membership schema + content-hash), 2a (populate at index time,
+streaming digest), 2b (`--merge` accumulate + require-on-startup), the F#/VB project-reference fix
+(metadata-DLL substitution), and `--no-tests`. **Remaining slice 3:** the `--solution <path>` query
+filter (membership data is now populated and ready for it) and extract-time skip-by-hash.
+
 ## Slices
 
 1. **Foundation (this slice):** `AssemblyEntity` + `SolutionMembershipEntity` schema; a deterministic
