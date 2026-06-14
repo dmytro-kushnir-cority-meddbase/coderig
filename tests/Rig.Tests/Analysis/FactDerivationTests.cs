@@ -289,6 +289,30 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
             .ShouldBeEmpty();
     }
 
+    // F1a: an `http_argument` rule must NOT drop the effect when the URL is a variable (the common
+    // case). It keeps the literal host/path when present, else falls back to the receiver type.
+    [Test]
+    public void Http_argument_resource_falls_back_to_receiver_when_url_is_not_a_literal()
+    {
+        var rule = new FactEffectRule(
+            "http", "POST", ["PostAsync"], ["System.Net.Http.HttpClient"], Array.Empty<string>(), Resource: "http_argument");
+
+        // Variable URL (no literal template) with a known receiver -> effect kept, resource = receiver type.
+        var variableUrl = new FactInvocation(
+            Target: "M:System.Net.Http.HttpClient.PostAsync(System.Uri,System.Net.Http.HttpContent)",
+            Enclosing: "M:App.WebhookHttpClient.Send",
+            FilePath: "WebhookHttpClient.cs",
+            Line: 46,
+            Receiver: "System.Net.Http.HttpClient");
+        var kept = FactEffectDeriver.Derive([variableUrl], [rule]).ShouldHaveSingleItem();
+        kept.Provider.ShouldBe("http");
+        kept.ResourceType.ShouldBe("System.Net.Http.HttpClient");
+
+        // A literal URL template still yields the normalized host/path (precision preserved).
+        var literalUrl = variableUrl with { FirstArgTemplate = "https://api.example.com/hook/" };
+        FactEffectDeriver.Derive([literalUrl], [rule]).ShouldHaveSingleItem().ResourceType.ShouldBe("api.example.com/hook");
+    }
+
     [Test]
     public async Task Invocation_reference_facts_carry_receiver_type()
     {

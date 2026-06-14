@@ -412,7 +412,13 @@ public static class FactEffectDeriver
             "declaring_type" => declaringType,
             "argument_type" => firstArgType,
             "string_argument" => firstArgTemplate,
-            "http_argument" => firstArgTemplate is null ? null : NormalizeHttpResource(firstArgTemplate),
+            // Prefer the literal URL host/path when the first argument is a string template; otherwise
+            // fall back to the receiver type (the HttpClient/SocketsHttpHandler instance) so the effect
+            // is NEVER dropped. URLs are built dynamically far more often than not, so the prior
+            // drop-on-non-literal hid almost all direct HttpClient I/O (codebase-wide HTTP blind spot,
+            // F1a). This deliberately diverges from the Roslyn EffectExtractor's drop-on-fail — the fact
+            // path favours recall, and `http`+receiver-type is a true, useful effect even without the host.
+            "http_argument" => firstArgTemplate is not null ? NormalizeHttpResource(firstArgTemplate) : receiver ?? declaringType,
             // ef_dbset_receiver / ef_query_root / ef_context_receiver / ef_database_facade need EF
             // receiver/DbSet shape facts the stage-1 layer doesn't carry (deferred — not used by the
             // LLBLGen/MedDBase target). Unknown or empty strategy -> null (effect dropped).

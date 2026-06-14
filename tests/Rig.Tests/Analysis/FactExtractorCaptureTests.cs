@@ -207,6 +207,39 @@ public sealed class FactExtractorCaptureTests
         Invoked("Fx.Step", "Caller.Go").ShouldBeTrue("query collection-selector invocation should be captured");
     }
 
+    // F1b: when Roslyn can't fully bind a call it resolves it to a CandidateSymbol (here forced via an
+    // arg-count mismatch; the real driver is net48 cross-assembly partial binding). The invocation edge
+    // must still be captured — dropping it silently loses effect-bearing edges (e.g. first-party FileExt.Move).
+    [Test]
+    public void Captures_invocation_resolved_only_to_a_candidate_symbol()
+    {
+        var source = """
+            namespace App
+            {
+                public static class Io
+                {
+                    public static int Move(int x) => x;
+                }
+
+                public sealed class Caller
+                {
+                    public void Go()
+                    {
+                        Io.Move(1, 2);
+                    }
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        result.References.ShouldContain(r =>
+            r.RefKind == "invocation"
+            && r.TargetSymbolId.Contains("Io.Move")
+            && r.EnclosingSymbolId != null
+            && r.EnclosingSymbolId.Contains("Caller.Go"));
+    }
+
     [Test]
     public void Interface_property_dispatch_resolves_to_bodied_impl_accessor()
     {

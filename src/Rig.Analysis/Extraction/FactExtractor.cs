@@ -82,7 +82,14 @@ internal static class FactExtractor
         // --- References -> ReferenceFact (one pass over every simple name) ---
         foreach (var name in root.DescendantNodes().OfType<SimpleNameSyntax>())
         {
-            var target = model.GetSymbolInfo(name).Symbol;
+            // Fall back to a candidate symbol when Roslyn can't fully bind. Under net48 cross-assembly
+            // partial binding (`!:` DocIDs) a real, in-source call often resolves only to a CandidateSymbol
+            // (CandidateReason.OverloadResolutionFailure et al.) — dropping it silently loses effect-bearing
+            // edges (F1b: e.g. first-party `FileExt.Move` in a monadic query). Overloads of the same method
+            // share declaring type + name (all the effect/EP rules key on), so the first candidate is a safe
+            // proxy for reachability. RoslynSymbolHelpers already does this for dispatch resolution.
+            var symbolInfo = model.GetSymbolInfo(name);
+            var target = symbolInfo.Symbol ?? symbolInfo.CandidateSymbols.FirstOrDefault();
             if (target is null || target is INamespaceSymbol)
                 continue;
 
