@@ -191,8 +191,11 @@ public static class CliApplication
                 excludeTests: args.Contains("--no-tests")
             );
         }
-        catch (InvalidOperationException exception)
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
         {
+            // IOException/FileNotFoundException: the solution/project path doesn't exist or can't be read
+            // (a clean "Failed to load" beats an uncaught stack trace). InvalidOperationException: the
+            // workspace couldn't load/bind the target.
             error.WriteLine("Failed to load solution/project for analysis.");
             error.WriteLine(exception.Message);
             error.WriteLine("Ensure the target solution has been restored and builds successfully, then retry.");

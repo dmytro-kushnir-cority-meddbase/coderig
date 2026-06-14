@@ -44,6 +44,28 @@ public sealed class CliApplicationTests
         error.ToString().ShouldContain("Unknown command: wat");
     }
 
+    // Guards the option-whitelist regression: --merge and --no-tests (and --durable) were missing from
+    // KnownFlagsByCommand["index"], so `rig index ... --merge` was rejected as an unknown option before
+    // it could run. Validation runs before solution load, so a KNOWN flag must NOT trip "Unknown option"
+    // (the command fails later for a different reason — a nonexistent solution).
+    [Test]
+    [Arguments("--merge")]
+    [Arguments("--no-tests")]
+    [Arguments("--durable")]
+    public async Task Index_does_not_reject_known_flags(string flag)
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["index", "C:/does-not-exist.slnx", flag], output, error);
+
+        // Known flag -> passes validation, then fails cleanly on the nonexistent solution (exit 2,
+        // "Failed to load") rather than being rejected up front as an unknown option.
+        exitCode.ShouldBe(2);
+        error.ToString().ShouldNotContain("Unknown option");
+        error.ToString().ShouldContain("Failed to load");
+    }
+
     [Test]
     public async Task Files_requires_skipped_flag()
     {
