@@ -150,6 +150,63 @@ public sealed class FactExtractorCaptureTests
         bumpCalls.ShouldContain(id => id.Contains("set_Value"));
     }
 
+    // Repro probe: invocations that appear directly as a LINQ query `from x in Expr()` clause
+    // (the compiler desugars Expr() into a SelectMany/Select collection-selector lambda). The PACS
+    // `MoveExternalFile` monadic `Try<T>` chain (`from __ in FileExt.Move(..)`) loses these effects.
+    [Test]
+    public void Captures_invocations_in_query_clause_expressions()
+    {
+        var source = """
+            namespace App
+            {
+                public struct Box<T> { }
+
+                // LanguageExt-shape query operators: Select/SelectMany are EXTENSION methods, not instance.
+                public static class BoxQuery
+                {
+                    public static Box<U> Select<T, U>(this Box<T> b, System.Func<T, U> f) => default;
+                    public static Box<V> SelectMany<T, U, V>(this Box<T> b, System.Func<T, Box<U>> bind, System.Func<T, U, V> proj) => default;
+                }
+
+                public static class Fx
+                {
+                    public static Box<int> Seed() => default;
+                    public static Box<int> Step() => default;
+                    public static Box<int> Wrap(System.Func<int> f) => default;
+                    public static int Direct() => 0;
+                }
+
+                public sealed class Caller
+                {
+                    public Box<int> Go() =>
+                        from a in Fx.Seed()
+                        from b in Fx.Step()
+                        select a + b;
+
+                    public Box<int> GoLambda() =>
+                        from a in Fx.Wrap(() => Fx.Direct())
+                        select a;
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        bool Invoked(string targetContains, string enclosingContains) =>
+            result.References.Any(r =>
+                r.RefKind == "invocation"
+                && r.TargetSymbolId.Contains(targetContains)
+                && r.EnclosingSymbolId is { } e && e.Contains(enclosingContains));
+
+        // Control: the query SOURCE expression (first `from`) and invocations inside an explicit lambda
+        // are captured today.
+        Invoked("Fx.Seed", "Caller.Go").ShouldBeTrue("query source expression should be captured");
+        Invoked("Fx.Direct", "Caller.GoLambda").ShouldBeTrue("invocation inside an explicit lambda should be captured");
+
+        // The gap: the collection-selector expression of a subsequent `from` clause.
+        Invoked("Fx.Step", "Caller.Go").ShouldBeTrue("query collection-selector invocation should be captured");
+    }
+
     [Test]
     public void Interface_property_dispatch_resolves_to_bodied_impl_accessor()
     {

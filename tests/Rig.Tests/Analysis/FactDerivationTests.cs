@@ -241,6 +241,54 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         authz.ShouldContain(e => e.ResourceType.EndsWith("AccessDeniedException", StringComparison.Ordinal));
     }
 
+    // Codifies the matching semantics behind the Xero/OpenAI/CefSharp effect-rule fixes (2026-06-14):
+    // each rule silently produced ZERO effects because it was typed against a guessed SDK surface.
+    // The three traps, locked in here:
+    //   (1) the declaring-type gate must match the INTERFACE the call dispatches through
+    //       (Xero `IAccountingApiAsync`), not the concrete `AccountingApi` the docs name;
+    //   (2) method matching is EXACT — `GetAccounts` does NOT match `GetAccountsAsyncWithHttpInfo`;
+    //   (3) resource:"declaring_type" resolves even when the receiver is statically unminable
+    //       (the fluent/extension/interface case) — resource:"receiver_type" would DROP the effect,
+    //       which is exactly why Flurl/OpenAI/CefSharp/Xero are all keyed on declaring_type.
+    [Test]
+    public void Effect_rule_matching_is_exact_and_declaring_type_resource_survives_unminable_receiver()
+    {
+        // A Xero-shaped call site: the app wrapper invokes the generated *interface*, async-with-http-info surface.
+        var inv = new FactInvocation(
+            Target: "M:Xero.NetStandard.OAuth2.Api.IAccountingApiAsync.CreateInvoicesAsyncWithHttpInfo(System.String)",
+            Enclosing: "M:App.Xero2ClientIO.CreateInvoices",
+            FilePath: "Xero2ClientIO.cs",
+            Line: 63,
+            Receiver: null); // fluent/interface receiver not statically minable
+
+        static FactEffectRule Rule(string[] methods, string[] declaringTypes, string resource) =>
+            new("xero", "write", methods, declaringTypes, Array.Empty<string>(), Resource: resource);
+
+        // OLD (broken) rule — concrete class + bare method name: misses on BOTH gates.
+        FactEffectDeriver
+            .Derive([inv], [Rule(["CreateInvoices"], ["Xero.NetStandard.OAuth2.Api.AccountingApi"], "declaring_type")])
+            .ShouldBeEmpty();
+
+        // Right type, wrong (non-exact) name -> still dropped.
+        FactEffectDeriver
+            .Derive([inv], [Rule(["CreateInvoices"], ["Xero.NetStandard.OAuth2.Api.IAccountingApiAsync"], "declaring_type")])
+            .ShouldBeEmpty();
+
+        // FIXED rule — interface declaring type + exact async-with-http-info name + declaring_type resource.
+        var effect = FactEffectDeriver
+            .Derive([inv], [Rule(["CreateInvoicesAsyncWithHttpInfo"], ["Xero.NetStandard.OAuth2.Api.IAccountingApiAsync"], "declaring_type")])
+            .ShouldHaveSingleItem();
+        effect.Provider.ShouldBe("xero");
+        effect.Operation.ShouldBe("write");
+        effect.ResourceType.ShouldBe("Xero.NetStandard.OAuth2.Api.IAccountingApiAsync");
+        effect.EnclosingSymbolId.ShouldNotBeNull().ShouldContain("Xero2ClientIO.CreateInvoices");
+
+        // Same correct gates but resource:"receiver_type" -> dropped, because the receiver is unminable.
+        FactEffectDeriver
+            .Derive([inv], [Rule(["CreateInvoicesAsyncWithHttpInfo"], ["Xero.NetStandard.OAuth2.Api.IAccountingApiAsync"], "receiver_type")])
+            .ShouldBeEmpty();
+    }
+
     [Test]
     public async Task Invocation_reference_facts_carry_receiver_type()
     {

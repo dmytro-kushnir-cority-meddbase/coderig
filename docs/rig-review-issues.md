@@ -34,7 +34,9 @@ Full reports under [audits/2026-06-14/](audits/2026-06-14/). Eight Sonnet audits
 
 | ID | Finding | Root cause | Sev | Effort | Found on |
 |----|---------|-----------|-----|--------|----------|
-| **F1** | Delegate/lambda **body** not traced through a wrapper/monad → the effect inside is invisible | DelegateConsumer body gap (deeper than the handoff-classification fix) | **High** | High (extractor) | webhooks `httpClient.PostAsync` via `Histogram.Log1Async`; PACS `FileExt.Move/Delete` via `Try<T>.SelectMany`; documentshare `onLoginSuccess`/`saveCode`; `memo()` |
+| ~~F1~~ | ~~Delegate/lambda **body** not traced through a wrapper/monad → effect invisible~~ | **REFUTED 2026-06-14** — lambda + query-clause bodies ARE traced; the flagship examples failed for two *other* reasons (F1a, F1b below). See investigation note. | — | — | — |
+| **F1a** | `http_argument` resource DROPS the effect whenever the URL is a variable (the common case) → codebase-wide HTTP blind spot | builtin HttpClient GET/POST/PUT/DELETE rules use `resource:"http_argument"`; `ResolveResource` returns null for a non-literal URL → effect dropped | **High** | **Low** (data: switch to `receiver_type`/declaring fallback) — but `http_argument` was deliberately drop-on-fail to match the Roslyn path, so confirm divergence | webhooks `httpClient.PostAsync`; NHS `ApiClient.GetAccessTokenAsync` (both direct, no lambda) |
+| **F1b** | Invocations whose target Roslyn resolves only to a **CandidateSymbol** (net48 `!:` partial binding) are silently dropped from the reference index | `FactExtractor` line 85 reads `GetSymbolInfo(name).Symbol` only; `RoslynSymbolHelpers` already falls back to `CandidateSymbols` — the ref walk doesn't | **Med-High** | **Med** (extractor; guard against ambiguous candidates — prefer single-candidate / mark `~heuristic`) | PACS `FileExt.Move/Delete/CreateMissingFilePathFolders` (first-party, same project, only this call class missing) |
 | ~~F2~~ | ~~`--entrypoints` misses non-`[ClientAction]` EP kinds~~ | **DONE 2026-06-14** — rules added (builtin + meddbase), verified | — | — | SignalR `HubBase`; Web API `ApiController`; ASMX `[WebMethod]`; `Page_Load`; DataServer `ServletBase` |
 | **F3** | Background detector tags the **wiring** method, not the scheduled **delegate target** | `BackgroundProcessSchedule(…,Callback,…)` target not promoted to EP (Layer-2 handoff) | **Med** | Med | `CheckForZeroDebt`, `ProcessHealthcodeQueue`, `DoDueActions`, `ReferralSLAService.Worker` |
 | ~~F4~~ | ~~Echo inbox name too tight; `IService` vs abstract `ServiceBase`~~ | **DONE 2026-06-14** — meddbase rules loosened, verified (suffix-match still deferred) | — | — | `PathwayInstance.InstanceInbox`; `AppStartupProcesses.Startup` |
@@ -44,7 +46,17 @@ Full reports under [audits/2026-06-14/](audits/2026-06-14/). Eight Sonnet audits
 
 **Positives confirmed**: the forward `Save()` fan-out fix (retired A1) holds AND reverse base-virtual dispatch is precise (no leak); interface dispatch resolves (`IWebhooks`→concrete); `--roots` recovers ~100% of the EPs `--entrypoints` misses.
 
-**Remaining**: **F1** (delegate-body tracing) is the deepest and highest-impact (a tracer change, also unblocks C6) — schedule deliberately. **F3** (background delegate-target promotion) and **F5** (cross-project stitch) are medium. F6/F7 are low. The cheap rule slice (F2 + F4 + the four effect rules) is DONE.
+**Remaining**: **F1a** (http_argument blind spot) is the cheapest high-value win — codebase-wide HTTP recall. **F1b** (candidate-symbol drop) is the genuine "deep" recall gap that the original F1 mis-described. **F3** (background delegate-target promotion) and **F5** (cross-project stitch) are medium. F6/F7 are low. The cheap rule slice (F2 + F4 + the four effect rules) is DONE.
+
+### F1 investigation (2026-06-14) — the original "delegate-body tracing" finding was a misdiagnosis
+
+Drove the two flagship F1 examples to ground truth (store + source + synthetic fixtures):
+
+- **Lambda/delegate bodies ARE traced.** `EnclosingSymbolId` walks `FirstAncestorOrSelf<MemberDeclarationSyntax>()`, so a lambda is *transparent* — its invocations attribute to the enclosing named method. Proven live: `Interpreter.MoveExternalFile` reaches `GetAbsoluteQueueFilePath`, which is called **only** inside a `Try(() => …)` lambda. Proven by construction: `FactExtractorCaptureTests.Captures_invocations_in_query_clause_expressions` — invocations in a query SOURCE expression, inside an explicit lambda, AND in a desugared `SelectMany` collection-selector are all captured (instance- and extension-method query operators both). So the premise "the effect inside is invisible" is false.
+- **Webhook `httpClient.PostAsync` → it's F1a, not a lambda gap.** Even the *direct* (non-lambda) `ApiClient.GetAccessTokenAsync` PostAsync shows 0 effects. Cause: the builtin rule's `resource:"http_argument"` drops the effect because the URL is a variable.
+- **PACS `FileExt.Move/Delete` → it's F1b.** `FileExt.*` are declared first-party symbols in the *same* mined project, but their invocations carry 0 refs while sibling `this`-calls in the same method resolve. Synthetic query-clause repro does NOT reproduce → the cause is mine-time symbol resolution: `GetSymbolInfo(name).Symbol` is null (Roslyn returns a candidate under net48 partial binding) and the ref walk discards it.
+
+Regression tests added: `Captures_invocations_in_query_clause_expressions` (guards the refuted premise) and `Effect_rule_matching_is_exact_and_declaring_type_resource_survives_unminable_receiver` (codifies the Xero/OpenAI/CefSharp matching-semantics fixes).
 
 ---
 
