@@ -23,12 +23,12 @@ public class TreeComputeBenchmarks
     private FactGraphData _rawGraph = null!; // unshaped bounded graph (input to ShapeGraph)
     private FactGraphData _shapedGraph = null!; // shaped (input to MarkEventSubscriptionHandoffs)
     private FactGraphData _markedGraph = null!; // shaped + event-marked (input to BuildTree)
-    private ISet<(string Caller, string FilePath, int Line)> _eventSites = null!;
+    private ISet<EventSubscriptionSite> _eventSites = null!;
 
     private IReadOnlyList<FactInvocation> _invocations = null!;
     private IReadOnlyList<(string, string)> _baseEdges = null!;
-    private IReadOnlyList<(string, string?, string, int)> _ctorRefs = null!;
-    private IReadOnlyList<(string, string?, string, int)> _throwRefs = null!;
+    private IReadOnlyList<SymbolRef> _ctorRefs = null!;
+    private IReadOnlyList<SymbolRef> _throwRefs = null!;
 
     private FactEntryPointDeriver.FactEntryPointData _epData = null!;
 
@@ -98,6 +98,5 @@ public class TreeComputeBenchmarks
         );
 
     [Benchmark]
-    public IReadOnlyList<DerivedEntryPoint> DeriveEntryPoints() =>
-        FactEntryPointDeriver.Derive(_epData, _epRules, _classRules);
+    public IReadOnlyList<DerivedEntryPoint> DeriveEntryPoints() => FactEntryPointDeriver.Derive(_epData, _epRules, _classRules);
 }
