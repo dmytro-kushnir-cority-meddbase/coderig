@@ -86,8 +86,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
             .OrderBy(e => e.Route, StringComparer.Ordinal)
             .ToArray();
 
-        backend.ShouldBe(
-            new[]
+        backend.ShouldBe(new[]
             {
                 ("background", "LegacyNet48Web.Background.DataSyncProcess.Process"),
                 ("workflow", "LegacyNet48Web.Background.InvoiceWorkflowController.OnSave"),
@@ -104,10 +103,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
                 ("http", "LegacyNet48Web.Controllers.PatientController.Update"),
                 ("pagehandler", "LegacyNet48Web.Pages.Account.Public.LegacyLogin.Initialise"),
                 ("pagehandler", "LegacyNet48Web.Pages.Account.Public.LegacyLogin.OnAction"),
-            }
-                .OrderBy(e => e.Item2, StringComparer.Ordinal)
-                .ToArray()
-        );
+            }.OrderBy(e => e.Item2, StringComparer.Ordinal).ToArray());
 
         var routes = entryPoints.Select(e => e.Route).ToArray();
         routes.ShouldNotContain(r => r.EndsWith("ServiceBase.Startup", StringComparison.Ordinal));
@@ -259,7 +255,8 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
             Enclosing: "M:App.Xero2ClientIO.CreateInvoices",
             FilePath: "Xero2ClientIO.cs",
             Line: 63,
-            Receiver: null); // fluent/interface receiver not statically minable
+            Receiver: null
+        ); // fluent/interface receiver not statically minable
 
         static FactEffectRule Rule(string[] methods, string[] declaringTypes, string resource) =>
             new("xero", "write", methods, declaringTypes, Array.Empty<string>(), Resource: resource);
@@ -276,7 +273,10 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
 
         // FIXED rule — interface declaring type + exact async-with-http-info name + declaring_type resource.
         var effect = FactEffectDeriver
-            .Derive([inv], [Rule(["CreateInvoicesAsyncWithHttpInfo"], ["Xero.NetStandard.OAuth2.Api.IAccountingApiAsync"], "declaring_type")])
+            .Derive(
+                [inv],
+                [Rule(["CreateInvoicesAsyncWithHttpInfo"], ["Xero.NetStandard.OAuth2.Api.IAccountingApiAsync"], "declaring_type")]
+            )
             .ShouldHaveSingleItem();
         effect.Provider.ShouldBe("xero");
         effect.Operation.ShouldBe("write");
@@ -285,7 +285,10 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
 
         // Same correct gates but resource:"receiver_type" -> dropped, because the receiver is unminable.
         FactEffectDeriver
-            .Derive([inv], [Rule(["CreateInvoicesAsyncWithHttpInfo"], ["Xero.NetStandard.OAuth2.Api.IAccountingApiAsync"], "receiver_type")])
+            .Derive(
+                [inv],
+                [Rule(["CreateInvoicesAsyncWithHttpInfo"], ["Xero.NetStandard.OAuth2.Api.IAccountingApiAsync"], "receiver_type")]
+            )
             .ShouldBeEmpty();
     }
 
@@ -295,7 +298,13 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
     public void Http_argument_resource_falls_back_to_receiver_when_url_is_not_a_literal()
     {
         var rule = new FactEffectRule(
-            "http", "POST", ["PostAsync"], ["System.Net.Http.HttpClient"], Array.Empty<string>(), Resource: "http_argument");
+            "http",
+            "POST",
+            ["PostAsync"],
+            ["System.Net.Http.HttpClient"],
+            Array.Empty<string>(),
+            Resource: "http_argument"
+        );
 
         // Variable URL (no literal template) with a known receiver -> effect kept, resource = receiver type.
         var variableUrl = new FactInvocation(
@@ -303,13 +312,17 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
             Enclosing: "M:App.WebhookHttpClient.Send",
             FilePath: "WebhookHttpClient.cs",
             Line: 46,
-            Receiver: "System.Net.Http.HttpClient");
+            Receiver: "System.Net.Http.HttpClient"
+        );
         var kept = FactEffectDeriver.Derive([variableUrl], [rule]).ShouldHaveSingleItem();
         kept.Provider.ShouldBe("http");
         kept.ResourceType.ShouldBe("System.Net.Http.HttpClient");
 
         // A literal URL template still yields the normalized host/path (precision preserved).
-        var literalUrl = variableUrl with { FirstArgTemplate = "https://api.example.com/hook/" };
+        var literalUrl = variableUrl with
+        {
+            FirstArgTemplate = "https://api.example.com/hook/",
+        };
         FactEffectDeriver.Derive([literalUrl], [rule]).ShouldHaveSingleItem().ResourceType.ShouldBe("api.example.com/hook");
     }
 

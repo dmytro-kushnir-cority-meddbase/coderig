@@ -27,12 +27,7 @@ public sealed class AssemblyRegistryTests
         var solution = Path.Combine(dir, "Test.slnx");
         try
         {
-            var symbols = new[]
-            {
-                Symbol("M:Asm.A.One", "Asm.A"),
-                Symbol("M:Asm.A.Two", "Asm.A"),
-                Symbol("M:Asm.B.Solo", "Asm.B"),
-            };
+            var symbols = new[] { Symbol("M:Asm.A.One", "Asm.A"), Symbol("M:Asm.A.Two", "Asm.A"), Symbol("M:Asm.B.Solo", "Asm.B") };
             var references = new[] { Invocation("M:Asm.B.Solo", "M:Asm.A.One") };
 
             await using (var write = new RigDbContext(dbPath, pooling: false))

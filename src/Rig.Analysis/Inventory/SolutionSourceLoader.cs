@@ -46,7 +46,10 @@ internal static class SolutionSourceLoader
         // as of May 2026.)  addProjectReferences:false loads project-to-project references
         // from their compiled DLLs rather than re-evaluating the source .csproj files.
         ReportProgress(progress, "Loading solution");
-        var workspace = await Task.Run(() => BuildWorkspace(solutionPath, progress, scopeProjectPaths, maxParallelism, excludeTests), cancellationToken)
+        var workspace = await Task.Run(
+                () => BuildWorkspace(solutionPath, progress, scopeProjectPaths, maxParallelism, excludeTests),
+                cancellationToken
+            )
             .ConfigureAwait(false);
 
         // Wire OutputItemType="Analyzer" ProjectReferences (source generators like the ClientPage

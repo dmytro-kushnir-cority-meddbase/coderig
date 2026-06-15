@@ -431,6 +431,7 @@ public static partial class FactPathFinder
         // Narrowing contexts carried to Successors when this node is expanded:
         public readonly string? Receiver;
         public readonly IReadOnlyCollection<string>? Binding;
+
         // Concrete receiver type WITH generic args of the reaching edge — RENDERING only (-> TraceNode).
         public readonly string? ReceiverConcrete;
         public bool Truncated;

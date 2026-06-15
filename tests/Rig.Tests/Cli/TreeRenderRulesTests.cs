@@ -65,10 +65,7 @@ public sealed class TreeRenderRulesTests
     public void A_generic_methods_own_arity_keeps_placeholders_when_only_the_declaring_type_is_concrete()
     {
         // Declaring type arity 2 (substituted from the receiver), method arity 1 (stays <T>).
-        var root = Node(
-            "M:App.Caller.Go()",
-            WithReceiver("M:App.QueryPipeline`2.Map``1()", "App.QueryPipeline<App.Account, App.Invoice>")
-        );
+        var root = Node("M:App.Caller.Go()", WithReceiver("M:App.QueryPipeline`2.Map``1()", "App.QueryPipeline<App.Account, App.Invoice>"));
 
         var output = Render(root, FactRenderRules.Empty, Effects());
 
@@ -80,10 +77,7 @@ public sealed class TreeRenderRulesTests
     {
         // `Outer<X>.Inner<Y>` has a trailing suffix after the first generic group: ShortName shows only
         // Inner, so mapping Outer's args would mislead — ConcreteReceiverArgs bails and placeholders stand.
-        var root = Node(
-            "M:App.Inner`1.Use()",
-            WithReceiver("M:App.Inner`1.Use()", "App.Outer<App.Account>.Inner<App.Invoice>")
-        );
+        var root = Node("M:App.Inner`1.Use()", WithReceiver("M:App.Inner`1.Use()", "App.Outer<App.Account>.Inner<App.Invoice>"));
 
         var output = Render(root, FactRenderRules.Empty, Effects());
 
@@ -94,10 +88,7 @@ public sealed class TreeRenderRulesTests
     public void An_arity_mismatch_between_receiver_and_declaring_type_keeps_placeholders()
     {
         // Receiver has 1 arg but the declaring type arity is 2 — refuse to substitute (safety).
-        var root = Node(
-            "M:App.Caller.Go()",
-            WithReceiver("M:App.QueryPipeline`2.Enumerate()", "App.QueryPipeline<App.Account>")
-        );
+        var root = Node("M:App.Caller.Go()", WithReceiver("M:App.QueryPipeline`2.Enumerate()", "App.QueryPipeline<App.Account>"));
 
         var output = Render(root, FactRenderRules.Empty, Effects());
 

@@ -19,7 +19,10 @@ public sealed class NonCSharpProjectReferenceTests
             var fsDir = Path.Combine(root, "Lib");
             Directory.CreateDirectory(fsDir);
             var fsproj = Path.Combine(fsDir, "Lib.fsproj");
-            File.WriteAllText(fsproj, "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><AssemblyName>Lib.FSharp</AssemblyName></PropertyGroup></Project>");
+            File.WriteAllText(
+                fsproj,
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><AssemblyName>Lib.FSharp</AssemblyName></PropertyGroup></Project>"
+            );
             var outDir = Path.Combine(fsDir, "bin", "Release", "netstandard2.0");
             Directory.CreateDirectory(outDir);
             var dll = Path.Combine(outDir, "Lib.FSharp.dll");

@@ -93,7 +93,9 @@ public sealed class FactExtractorCaptureTests
 
         var result = Extract(source);
 
-        var enumerate = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("QueryPipeline") && r.TargetSymbolId.Contains("Enumerate"));
+        var enumerate = result.References.Single(r =>
+            r.RefKind == "invocation" && r.TargetSymbolId.Contains("QueryPipeline") && r.TargetSymbolId.Contains("Enumerate")
+        );
         // Open form stays the original definition (for dispatch narrowing).
         enumerate.ReceiverType.ShouldBe("App.QueryPipeline<T, U>");
         // Concrete form carries the real instantiation (for rendering).
@@ -101,9 +103,7 @@ public sealed class FactExtractorCaptureTests
 
         // A non-generic receiver (string) stores no concrete form — but its callee is BCL (not in source)
         // so it is also dropped by the inSource gate; assert the gate by checking no first-party row carries it.
-        result
-            .References.Where(r => r.ReceiverTypeConcrete is not null)
-            .ShouldAllBe(r => r.TargetInSource);
+        result.References.Where(r => r.ReceiverTypeConcrete is not null).ShouldAllBe(r => r.TargetInSource);
     }
 
     [Test]
