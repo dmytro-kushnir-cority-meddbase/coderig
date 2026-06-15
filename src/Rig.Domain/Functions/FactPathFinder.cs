@@ -333,7 +333,8 @@ public static partial class FactPathFinder
         // the "↺seen" reading before its expansion.)
         var stack = new Stack<MutableNode>();
 
-        foreach (var root in index.Nodes.Where(n => Contains(n, fromPattern)).OrderBy(n => n, StringComparer.Ordinal))
+        var matched = index.Nodes.Where(n => Contains(n, fromPattern)).ToHashSet(StringComparer.Ordinal);
+        foreach (var root in matched.Where(n => !IsContainedLambdaOfMatched(n, matched)).OrderBy(n => n, StringComparer.Ordinal))
         {
             var node = new MutableNode(root, "entry", null, null, 0, null, null, 0, null, null, null, null);
             mutableRoots.Add(node);
@@ -811,4 +812,16 @@ public static partial class FactPathFinder
     }
 
     private static bool Contains(string value, string pattern) => value.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+
+    // A synthetic lambda node id is `{containerMemberId}~λ{ordinal}` (FactExtractor). When the root pattern
+    // matches a method AND its inline lambdas (e.g. `tree "Foo"` matches Foo, Foo~λ0, Foo~λ1), the lambdas
+    // are NOT independent roots: each already renders inline under its container, so re-rooting it would
+    // emit a spurious top-level `↺seen` (the container's expansion already marked it seen). Drop a matched
+    // lambda only when its container ALSO matched; a lambda whose container did not match (e.g. a promoted
+    // async-handoff entry point targeted on its own) stays a legitimate root.
+    private static bool IsContainedLambdaOfMatched(string nodeId, HashSet<string> matched)
+    {
+        var marker = nodeId.IndexOf("~λ", StringComparison.Ordinal);
+        return marker > 0 && matched.Contains(nodeId.Substring(0, marker));
+    }
 }
