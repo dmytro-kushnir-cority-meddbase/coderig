@@ -1680,7 +1680,13 @@ public static class CliApplication
         // the inline {…} tag. effectLeavesByMethod carries the precomputed leaf bodies. false/null = the
         // compact inline-tag rendering used by default/--effects/--summary.
         bool full = false,
-        IReadOnlyDictionary<string, List<string>>? effectLeavesByMethod = null
+        IReadOnlyDictionary<string, List<string>>? effectLeavesByMethod = null,
+        // Path-contextual monomorphization: the ordered, namespace-stripped CONCRETE type args the
+        // PARENT node ran under (its declaring type's instantiation). A child whose receiver is an OPEN
+        // forwarding generic (node.ReceiverArgOrdinals set, no ConcreteReceiver of its own) resolves its
+        // own placeholders by indexing these with its ordinals — so `QueryPipeline<T, U>` under
+        // `QueryResult<Account, Invoice>.Create` renders `QueryPipeline<Account, Invoice>`. Empty at roots.
+        IReadOnlyList<string>? parentConcreteArgs = null
     )
     {
         // Compute visible children first — the fan-out label must reflect how many branches are
@@ -1732,9 +1738,13 @@ public static class CliApplication
             files && locById is not null && locById.TryGetValue(node.SymbolId, out var l) && l.File is not null
                 ? $"  📄 {ShortenPath(l.File)}:{l.Line}"
                 : "";
-        var name =
-            PrettyGenericName(ShortName(node.SymbolId), ConcreteReceiverArgs(node.ConcreteReceiver))
-            + (signatures ? ShortSignature(node.SymbolId) : "");
+        // This node's concrete declaring-type args: its OWN closed receiver when it had one, else — for an
+        // open forwarding receiver — resolved by indexing the parent's concrete args with this node's
+        // ordinals (path-contextual monomorphization). Carried down to children as THEIR parent binding.
+        var concreteArgs = ConcreteReceiverArgs(node.ConcreteReceiver);
+        if (concreteArgs.Count == 0)
+            concreteArgs = ResolveOrdinalArgs(node.ReceiverArgOrdinals, parentConcreteArgs);
+        var name = PrettyGenericName(ShortName(node.SymbolId), concreteArgs) + (signatures ? ShortSignature(node.SymbolId) : "");
         // EP marker: when this node is itself a rule-detected entry point, wrap its name with "▶ kind"
         // and a trailing service chip — the same custom rendering used by derive/callers.
         var (epPrefix, epSuffix) = epContext?.ChipFor(node.SymbolId) ?? ("", "");
@@ -1804,7 +1814,8 @@ public static class CliApplication
                 cutRules,
                 epContext,
                 full,
-                effectLeavesByMethod
+                effectLeavesByMethod,
+                concreteArgs
             );
     }
 
@@ -2858,6 +2869,28 @@ public static class CliApplication
             start = i + 1;
         }
         return args;
+    }
+
+    // Path-contextual monomorphization: resolve an OPEN forwarding receiver's placeholders to concrete
+    // args by indexing the PARENT node's concrete args (`parentArgs`, already namespace-stripped) with
+    // this node's `ordinals` ("0,1" — each receiver arg's ordinal into the enclosing type's params, mined
+    // as ReferenceFact.ReceiverTypeArgOrdinals). `QueryPipeline<T, U>` with ordinals "0,1" under a parent
+    // running `QueryResult<Account, Invoice>` -> ["Account", "Invoice"]. Returns empty (placeholders stand)
+    // when there is no ordinal data, no parent binding, or any ordinal is out of the parent's arg range
+    // (defensive — a clean forwarding always indexes in range).
+    private static IReadOnlyList<string> ResolveOrdinalArgs(string? ordinals, IReadOnlyList<string>? parentArgs)
+    {
+        if (string.IsNullOrEmpty(ordinals) || parentArgs is null || parentArgs.Count == 0)
+            return [];
+        var parts = ordinals!.Split(',');
+        var resolved = new string[parts.Length];
+        for (var i = 0; i < parts.Length; i++)
+        {
+            if (!int.TryParse(parts[i], out var ordinal) || ordinal < 0 || ordinal >= parentArgs.Count)
+                return [];
+            resolved[i] = parentArgs[ordinal];
+        }
+        return resolved;
     }
 
     // Strips the namespace from every dotted type token in a C#-display type name, preserving generic

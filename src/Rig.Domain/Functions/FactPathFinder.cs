@@ -335,7 +335,7 @@ public static partial class FactPathFinder
 
         foreach (var root in index.Nodes.Where(n => Contains(n, fromPattern)).OrderBy(n => n, StringComparer.Ordinal))
         {
-            var node = new MutableNode(root, "entry", null, null, 0, null, null, 0, null, null, null);
+            var node = new MutableNode(root, "entry", null, null, 0, null, null, 0, null, null, null, null);
             mutableRoots.Add(node);
         }
         // Push roots reversed so the first root's whole subtree is walked before the next root's.
@@ -402,7 +402,8 @@ public static partial class FactPathFinder
                     s.Fanout,
                     s.OutReceiver,
                     s.OutBinding,
-                    s.OutReceiverConcrete
+                    s.OutReceiverConcrete,
+                    s.OutReceiverArgOrdinals
                 );
                 n.Kids.Add(kid);
             }
@@ -434,6 +435,9 @@ public static partial class FactPathFinder
 
         // Concrete receiver type WITH generic args of the reaching edge — RENDERING only (-> TraceNode).
         public readonly string? ReceiverConcrete;
+
+        // Open forwarding-receiver arg ordinals of the reaching edge — RENDERING only (-> TraceNode).
+        public readonly string? ReceiverArgOrdinals;
         public bool Truncated;
 
         // Distinct call sites under this node's parent that produced an identical edge (collapsed
@@ -452,7 +456,8 @@ public static partial class FactPathFinder
             int fanout,
             string? receiver,
             IReadOnlyCollection<string>? binding,
-            string? receiverConcrete
+            string? receiverConcrete,
+            string? receiverArgOrdinals
         )
         {
             Symbol = symbol;
@@ -466,6 +471,7 @@ public static partial class FactPathFinder
             Receiver = receiver;
             Binding = binding;
             ReceiverConcrete = receiverConcrete;
+            ReceiverArgOrdinals = receiverArgOrdinals;
         }
     }
 
@@ -483,7 +489,8 @@ public static partial class FactPathFinder
                 HandoffVia: n.HandoffVia,
                 DispatchBasis: n.DispatchBasis,
                 CallSites: n.CallSites,
-                ConcreteReceiver: n.ReceiverConcrete
+                ConcreteReceiver: n.ReceiverConcrete,
+                ReceiverArgOrdinals: n.ReceiverArgOrdinals
             );
 
         var children = n.Kids.Count == 0 ? EmptyNodes : (IReadOnlyList<TraceNode>)n.Kids.Select(ToTraceNode).ToArray();
@@ -497,7 +504,8 @@ public static partial class FactPathFinder
             HandoffVia: n.HandoffVia,
             DispatchBasis: n.DispatchBasis,
             CallSites: n.CallSites,
-            ConcreteReceiver: n.ReceiverConcrete
+            ConcreteReceiver: n.ReceiverConcrete,
+            ReceiverArgOrdinals: n.ReceiverArgOrdinals
         );
     }
 

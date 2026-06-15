@@ -37,6 +37,78 @@ public sealed class TreeRenderRulesTests
     private static TraceNode WithReceiver(string id, string? concreteReceiver, params TraceNode[] children) =>
         new(id, "invocation", null, null, children, ConcreteReceiver: concreteReceiver);
 
+    private static TraceNode WithOrdinals(string id, string ordinals, params TraceNode[] children) =>
+        new(id, "invocation", null, null, children, ReceiverArgOrdinals: ordinals);
+
+    [Test]
+    public void Open_forwarding_child_inherits_the_parents_concrete_binding_via_ordinals()
+    {
+        // QueryResult<Account, Invoice>.Create's body calls QueryPipeline<T, U>.Create where T,U forward
+        // QueryResult's params (ordinals "0,1") — the child has no concrete receiver of its own.
+        var root = Node(
+            "M:App.Caller.Go()",
+            WithReceiver(
+                "M:App.QueryResult`2.Create()",
+                "App.QueryResult<App.Account, App.Invoice>",
+                WithOrdinals("M:App.QueryPipeline`2.Enumerate()", "0,1")
+            )
+        );
+
+        var output = Render(root, FactRenderRules.Empty, Effects());
+
+        output.ShouldContain("QueryResult<Account, Invoice>.Create");
+        output.ShouldContain("QueryPipeline<Account, Invoice>.Enumerate");
+        output.ShouldNotContain("QueryPipeline<T, U>");
+    }
+
+    [Test]
+    public void Forwarding_ordinals_respect_argument_order()
+    {
+        // Reversed forwarding: ordinals "1,0" map the parent's args in swapped order.
+        var root = Node(
+            "M:App.Caller.Go()",
+            WithReceiver(
+                "M:App.QueryResult`2.Create()",
+                "App.QueryResult<App.Account, App.Invoice>",
+                WithOrdinals("M:App.QueryPipeline`2.Enumerate()", "1,0")
+            )
+        );
+
+        var output = Render(root, FactRenderRules.Empty, Effects());
+
+        output.ShouldContain("QueryPipeline<Invoice, Account>.Enumerate");
+    }
+
+    [Test]
+    public void Forwarding_binding_propagates_through_a_chain_of_open_generics()
+    {
+        // Account/Invoice flows root-concrete -> child(0,1) -> grandchild(0,1), each open-forwarding.
+        var root = Node(
+            "M:App.Caller.Go()",
+            WithReceiver(
+                "M:App.QueryResult`2.Create()",
+                "App.QueryResult<App.Account, App.Invoice>",
+                WithOrdinals("M:App.QueryPipeline`2.Create()", "0,1", WithOrdinals("M:App.OrderedQueryPipeline`2.Create()", "0,1"))
+            )
+        );
+
+        var output = Render(root, FactRenderRules.Empty, Effects());
+
+        output.ShouldContain("QueryPipeline<Account, Invoice>.Create");
+        output.ShouldContain("OrderedQueryPipeline<Account, Invoice>.Create");
+    }
+
+    [Test]
+    public void Open_forwarding_without_a_parent_binding_keeps_placeholders()
+    {
+        // Ordinals present but no rendered parent ran under a concrete receiver -> nothing to substitute.
+        var root = Node("M:App.Caller.Go()", WithOrdinals("M:App.QueryPipeline`2.Enumerate()", "0,1"));
+
+        var output = Render(root, FactRenderRules.Empty, Effects());
+
+        output.ShouldContain("QueryPipeline<T, U>.Enumerate");
+    }
+
     [Test]
     public void Concrete_receiver_substitutes_the_declaring_type_placeholders_in_the_label()
     {

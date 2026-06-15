@@ -49,7 +49,11 @@ public static partial class FactPathFinder
         // "Ns.QueryPipeline<Ns.Account, Ns.Invoice>" — forwarded onto the reached node for RENDERING only
         // (TraceNode.ConcreteReceiver → declaring-type placeholder substitution). Null for non-generic
         // receivers and for dispatch hops (no call-site receiver). Does NOT affect dispatch/narrowing.
-        string? OutReceiverConcrete
+        string? OutReceiverConcrete,
+        // This edge's ReceiverTypeArgOrdinals ("0,1") for an OPEN forwarding receiver — forwarded onto the
+        // reached node (TraceNode.ReceiverArgOrdinals) so the renderer can substitute its placeholders from
+        // the parent's concrete binding. Null for closed/non-generic edges and dispatch hops.
+        string? OutReceiverArgOrdinals
     )> Successors(
         string current,
         GraphIndex index,
@@ -95,7 +99,8 @@ public static partial class FactPathFinder
                         edge.HandoffDispatcher ?? "handoff",
                         null,
                         outBinding,
-                        edge.ReceiverTypeConcrete
+                        edge.ReceiverTypeConcrete,
+                        edge.ReceiverTypeArgOrdinals
                     );
                     continue;
                 }
@@ -112,7 +117,8 @@ public static partial class FactPathFinder
                     null,
                     null,
                     outBinding,
-                    edge.ReceiverTypeConcrete
+                    edge.ReceiverTypeConcrete,
+                    edge.ReceiverTypeArgOrdinals
                 );
             }
 
@@ -153,6 +159,7 @@ public static partial class FactPathFinder
                 null,
                 d.Basis,
                 incomingBinding,
+                null,
                 null
             );
     }

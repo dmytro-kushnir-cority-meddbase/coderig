@@ -25,4 +25,5 @@ public sealed class ReferenceFactEntity
     public string? ArgumentTemplates { get; set; }
     public string? ArgumentNames { get; set; }
     public string? ReceiverTypeConcrete { get; set; }
+    public string? ReceiverTypeArgOrdinals { get; set; }
 }

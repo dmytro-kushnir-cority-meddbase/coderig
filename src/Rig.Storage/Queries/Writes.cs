@@ -330,6 +330,7 @@ public static class Writes
                     ArgumentTemplates = r.ArgumentTemplates,
                     ArgumentNames = r.ArgumentNames,
                     ReceiverTypeConcrete = r.ReceiverTypeConcrete,
+                    ReceiverTypeArgOrdinals = r.ReceiverTypeArgOrdinals,
                 }
         );
 
@@ -534,6 +535,7 @@ public static class Writes
                 ArgumentTemplates  TEXT,
                 ArgumentNames      TEXT,
                 ReceiverTypeConcrete TEXT,
+                ReceiverTypeArgOrdinals TEXT,
                 PRIMARY KEY (RunId, ReferenceFactIndex)
             );
             """,

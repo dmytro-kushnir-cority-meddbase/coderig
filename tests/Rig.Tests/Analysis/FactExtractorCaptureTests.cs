@@ -134,6 +134,73 @@ public sealed class FactExtractorCaptureTests
         var enumerate = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Enumerate"));
         enumerate.ReceiverType.ShouldBe("App.QueryPipeline<T, U>");
         enumerate.ReceiverTypeConcrete.ShouldBeNull();
+        // ...but the receiver args forward Helper's params X(0), Y(0,1) — captured as ordinals so a
+        // parent node's concrete binding can be applied to these placeholders at render time.
+        enumerate.ReceiverTypeArgOrdinals.ShouldBe("0,1");
+    }
+
+    [Test]
+    public void Receiver_arg_ordinals_capture_forwarding_and_skip_concrete_or_partial_receivers()
+    {
+        var source = """
+            namespace App
+            {
+                public sealed class Account { }
+                public sealed class QueryPipeline<T, U>
+                {
+                    public void Enumerate() { }
+                }
+
+                // Reversed forwarding: receiver args are the enclosing TYPE's params in swapped order.
+                public sealed class Swapper<X, Y>
+                {
+                    public void Reversed(QueryPipeline<Y, X> pipeline) => pipeline.Enumerate();
+                }
+
+                // Partial: one concrete arg, one type param -> not a clean forwarding -> ordinals null.
+                public sealed class Partial<X>
+                {
+                    public void Run(QueryPipeline<Account, X> pipeline) => pipeline.Enumerate();
+                }
+
+                public sealed class Caller
+                {
+                    // Closed receiver: concrete is captured, ordinals stay null.
+                    public void Closed(QueryPipeline<Account, Account> pipeline) => pipeline.Enumerate();
+
+                    // METHOD type params are NOT bindable from a parent's receiver -> ordinals null.
+                    public void MethodParam<X, Y>(QueryPipeline<X, Y> pipeline) => pipeline.Enumerate();
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        Rig.Domain.Data.ReferenceFact Enumerate(string enclosing) =>
+            result.References.Single(r =>
+                r.RefKind == "invocation"
+                && r.TargetSymbolId.Contains("QueryPipeline")
+                && r.TargetSymbolId.Contains("Enumerate")
+                && r.EnclosingSymbolId!.Contains(enclosing)
+            );
+
+        // Swapper<X, Y>'s Y is type-param ordinal 1, X is 0 -> swapped order recorded faithfully as "1,0".
+        var reversed = Enumerate("Reversed");
+        reversed.ReceiverTypeArgOrdinals.ShouldBe("1,0");
+        reversed.ReceiverTypeConcrete.ShouldBeNull();
+
+        var closed = Enumerate("Closed");
+        closed.ReceiverTypeArgOrdinals.ShouldBeNull();
+        closed.ReceiverTypeConcrete.ShouldBe("App.QueryPipeline<App.Account, App.Account>");
+
+        var partial = Enumerate("Partial`1.Run");
+        partial.ReceiverTypeArgOrdinals.ShouldBeNull();
+        partial.ReceiverTypeConcrete.ShouldBeNull();
+
+        // A generic METHOD's own type params can't be bound from a receiver -> null (documented limit).
+        var methodParam = Enumerate("MethodParam");
+        methodParam.ReceiverTypeArgOrdinals.ShouldBeNull();
+        methodParam.ReceiverTypeConcrete.ShouldBeNull();
     }
 
     [Test]

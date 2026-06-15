@@ -105,6 +105,7 @@ internal static class FactExtractor
             var invocation = refKind == RefKinds.Invocation ? InvocationOf(name) : null;
             var receiverType = refKind == RefKinds.Invocation ? ReceiverTypeOf(name, model) : null;
             var receiverTypeConcrete = refKind == RefKinds.Invocation ? ReceiverTypeConcreteOf(name, model) : null;
+            var receiverTypeArgOrdinals = refKind == RefKinds.Invocation ? ReceiverTypeArgOrdinalsOf(name, model) : null;
             var (firstArgTemplate, firstArgType, firstArgName) = FirstArgumentOf(
                 FirstArgumentExpressionOf(name, refKind, invocation),
                 model
@@ -127,7 +128,8 @@ internal static class FactExtractor
                 delegateConsumer: delegateConsumer,
                 argumentTemplates: argumentTemplates,
                 argumentNames: argumentNames,
-                receiverTypeConcrete: receiverTypeConcrete
+                receiverTypeConcrete: receiverTypeConcrete,
+                receiverTypeArgOrdinals: receiverTypeArgOrdinals
             );
 
             // 18c: a method-group ASSIGNED to a delegate field/property/event (not passed as an
@@ -411,7 +413,8 @@ internal static class FactExtractor
         int? lineOverride = null,
         string? argumentTemplates = null,
         string? argumentNames = null,
-        string? receiverTypeConcrete = null
+        string? receiverTypeConcrete = null,
+        string? receiverTypeArgOrdinals = null
     )
     {
         // Generic type arguments at the CALL SITE — read from the constructed `target` BEFORE
@@ -469,7 +472,10 @@ internal static class FactExtractor
                 // callee's DECLARING type params, and only first-party nodes are rendered, so a BCL
                 // receiver (List<int>.Add) would just be dead storage. ReceiverTypeConcreteOf already
                 // returns null for non-generic / open receivers; this gate drops the BCL-callee remainder.
-                ReceiverTypeConcrete: inSource ? receiverTypeConcrete : null
+                ReceiverTypeConcrete: inSource ? receiverTypeConcrete : null,
+                // Same first-party gate and rationale as ReceiverTypeConcrete: ordinals are render-only and
+                // only first-party nodes render, so a BCL open receiver would be dead storage.
+                ReceiverTypeArgOrdinals: inSource ? receiverTypeArgOrdinals : null
             )
         );
     }
@@ -560,6 +566,34 @@ internal static class FactExtractor
         if (type is not INamedTypeSymbol named || named.TypeArguments.Length == 0 || HasTypeParameter(named))
             return null;
         return named.ToDisplayString();
+    }
+
+    // The complement of ReceiverTypeConcreteOf for an OPEN generic receiver: when the receiver is
+    // `QueryPipeline<T, U>` inside a generic body whose `T`/`U` are the ENCLOSING type's parameters,
+    // returns the ordinal of each receiver arg's containing-type type parameter, comma-joined ("0,1").
+    // RENDERING ONLY (path-contextual monomorphization): the tree walk inherits the concrete binding a
+    // PARENT node ran under and applies it to the child's placeholders via these ordinals — so
+    // `QueryPipeline<T, U>.Create` under `QueryResult<Account, Invoice>.Create` renders concretely.
+    // Returns null unless EVERY type argument is a containing-type (kind=Type) parameter — a clean
+    // forwarding receiver. A concrete arg, a method's own type parameter, or a nested/composite arg
+    // (`Dictionary<string, T>`) yields null, leaving placeholders (the concrete part isn't recoverable
+    // from the arity-synthesized `<T, U>` label). Mutually exclusive with ReceiverTypeConcreteOf.
+    private static string? ReceiverTypeArgOrdinalsOf(SimpleNameSyntax name, SemanticModel model)
+    {
+        ITypeSymbol? type = null;
+        if (name.Parent is MemberAccessExpressionSyntax member && member.Name == name)
+            type = model.GetTypeInfo(member.Expression).Type;
+        if (type is not INamedTypeSymbol named || named.TypeArguments.Length == 0)
+            return null;
+        var ordinals = new int[named.TypeArguments.Length];
+        for (var i = 0; i < named.TypeArguments.Length; i++)
+        {
+            if (named.TypeArguments[i] is ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Type } tp)
+                ordinals[i] = tp.Ordinal;
+            else
+                return null; // not a clean all-forwarding receiver — leave placeholders
+        }
+        return string.Join(",", ordinals);
     }
 
     // True when `type` is a type PARAMETER, or a constructed generic / array that contains one at any depth

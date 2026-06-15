@@ -104,7 +104,17 @@ public sealed record ReferenceFact(
     // narrowing (identity, not args); this concrete form is purely for RENDERING — it lets the tree
     // label show the real instantiation a node ran under instead of placeholder `<T, U>`. Null for
     // bare/static calls, non-invocation refs, and receivers that are already open/non-generic.
-    string? ReceiverTypeConcrete = null
+    string? ReceiverTypeConcrete = null,
+    // For an OPEN generic receiver inside a generic body — `QueryPipeline<T, U>` where T,U are the
+    // ENCLOSING type's parameters — the ordinal of the enclosing containing-type type parameter each
+    // receiver type argument equals, comma-joined ("0,1"). RENDERING ONLY (path-contextual
+    // monomorphization): lets a child node inherit the concrete binding its PARENT ran under, so
+    // `QueryPipeline<T, U>` under `QueryResult<Account, Invoice>.Create` renders `QueryPipeline<Account,
+    // Invoice>`. Mutually exclusive with ReceiverTypeConcrete for a generic receiver: concrete when the
+    // receiver is closed, ordinals when it is open-forwarding. Null unless EVERY receiver type argument
+    // is a containing-type parameter (a clean forwarding receiver); mixed/concrete/method-parameter args
+    // keep placeholders. Null for non-generic / static / non-invocation refs.
+    string? ReceiverTypeArgOrdinals = null
 );
 
 /// <summary>A base-type or implemented-interface edge between two types.</summary>
@@ -189,7 +199,14 @@ public sealed record CallEdge(
     // forwards it onto the reached node (TraceNode.ConcreteReceiver) so the tree label can substitute
     // the declaring type's `<T, U>` placeholders with these concrete args. Does NOT affect dispatch
     // (that uses the open `ReceiverType`).
-    string? ReceiverTypeConcrete = null
+    string? ReceiverTypeConcrete = null,
+    // Per-receiver-arg ordinals into the enclosing containing-type's type params for an OPEN forwarding
+    // receiver (ReferenceFact.ReceiverTypeArgOrdinals, "0,1"). RENDERING ONLY (path-contextual
+    // monomorphization): when a parent node ran under a concrete receiver, the traversal binds that
+    // declaring type's params by ordinal and applies the binding to THIS edge's open placeholders via
+    // these ordinals — so a `QueryPipeline<T, U>` child under `QueryResult<Account, Invoice>.Create`
+    // renders concretely. Mutually exclusive with ReceiverTypeConcrete; null for closed/non-generic edges.
+    string? ReceiverTypeArgOrdinals = null
 );
 
 // An "implType implements ifaceType" edge (from a type-relation fact).
@@ -335,7 +352,13 @@ public sealed record TraceNode(
     // node ran under. Null when the reaching edge had no concrete generic receiver (the common case),
     // for roots, and for dispatch hops (no call-site receiver). A node renders ONCE (first BFS path),
     // so this is THAT path's instantiation when a method is reached with several.
-    string? ConcreteReceiver = null
+    string? ConcreteReceiver = null,
+    // Per-receiver-arg ordinals into the enclosing containing-type's type params for an OPEN forwarding
+    // receiver (from CallEdge.ReceiverTypeArgOrdinals, "0,1"). RENDERING ONLY: when this node has no
+    // ConcreteReceiver of its own but its rendered PARENT ran under a concrete receiver, the renderer
+    // substitutes this node's `<T, U>` placeholders by indexing the parent's concrete args with these
+    // ordinals — path-contextual monomorphization. Null for closed/non-generic/dispatch edges.
+    string? ReceiverArgOrdinals = null
 );
 
 // A method handed off as a delegate (method-group) — a deferred/background entry point the

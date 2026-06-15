@@ -79,7 +79,11 @@ public static class FactProjection
                 Line: r.Line,
                 LoopKind: r.EnclosingLoopKind,
                 LoopDetail: r.EnclosingLoopDetail,
-                DelegateConsumer: r.DelegateConsumer
+                DelegateConsumer: r.DelegateConsumer,
+                // Render-only generic-receiver fields (do NOT set ReceiverType/TypeArguments here — those
+                // switch on dispatch narrowing and would perturb other tests using this degraded graph).
+                ReceiverTypeConcrete: r.ReceiverTypeConcrete,
+                ReceiverTypeArgOrdinals: r.ReceiverTypeArgOrdinals
             ))
             .Distinct()
             .ToArray();

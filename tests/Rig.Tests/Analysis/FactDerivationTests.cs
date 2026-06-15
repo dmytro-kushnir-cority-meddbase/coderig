@@ -1,5 +1,6 @@
 using Rig.Analysis;
 using Rig.Analysis.Rules;
+using Rig.Cli;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Tests.Fixtures;
@@ -125,6 +126,40 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
 
         reachable.Keys.ShouldContain(k => k.Contains("ReferralPane.Save", StringComparison.Ordinal));
         reachable.Keys.ShouldContain(k => k.Contains("SaveEntity", StringComparison.Ordinal));
+    }
+
+    // End-to-end path-contextual monomorphization (mine -> store -> graph -> render): a concrete entry
+    // pins QueryResult<PatientEntity, InvoiceEntity>, and its OPEN forwarding receivers (QueryPipeline,
+    // OrderedPipeline — `<T, U>` in source) render with the concrete args resolved via mined ordinals,
+    // down the whole chain. Guards the GenericPipeline.cs fixture.
+    [Test]
+    public async Task Tree_resolves_forwarded_generic_receivers_from_the_concrete_entry()
+    {
+        var playground = await playgrounds.LegacyNet48Async();
+        var graph = FactProjection.GraphData(playground.Result);
+
+        var roots = FactPathFinder.BuildTree(graph, "GenericPipelineDemo.RunConcretePipeline");
+
+        var output = new StringWriter();
+        var noEffects = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var root in roots)
+            CliApplication.RenderTreeNode(
+                root,
+                prefix: "",
+                isLast: true,
+                isRoot: true,
+                noEffects,
+                prune: false,
+                FactRenderRules.Empty,
+                noEffects,
+                output
+            );
+        var text = output.ToString();
+
+        text.ShouldContain("QueryResult<PatientEntity, InvoiceEntity>.Enumerate");
+        text.ShouldContain("QueryPipeline<PatientEntity, InvoiceEntity>.Run");
+        text.ShouldContain("OrderedPipeline<PatientEntity, InvoiceEntity>.Sort");
+        text.ShouldNotContain("QueryPipeline<T, U>");
     }
 
     [Test]
