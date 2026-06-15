@@ -1316,6 +1316,24 @@
       "reason": "legacy_asmx_soap_invoke: any generated ASMX proxy's wrapper body calls the inherited SoapHttpClientProtocol.Invoke(\"operation\", args); the first string literal IS the SOAP operation name. One base-type rule covers every WSDL proxy (Healthcode + Labs/Mirth/LabsServer), where per-method project rules only cover the ones explicitly enumerated."
     },
     {
+      "provider": "config",
+      "operation": "read",
+      "methods": [ "GetSection", "GetValue", "GetConnectionString" ],
+      "declaringTypes": [
+        "Microsoft.Extensions.Configuration.IConfiguration",
+        "Microsoft.Extensions.Configuration.IConfigurationRoot",
+        "Microsoft.Extensions.Configuration.ConfigurationManager",
+        "Microsoft.Extensions.Configuration.ConfigurationBinder",
+        "Microsoft.Extensions.Configuration.ConfigurationExtensions",
+        "System.Configuration.ConfigurationManager"
+      ],
+      "resource": "string_argument",
+      "argumentIndex": 0,
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "config_read: the configuration key / section name is the syntactic first argument of GetSection/GetValue/GetConnectionString (true even for the ConfigurationBinder extension methods — the IConfiguration receiver is not in the argument list). argumentIndex 0 reads the const-resolved list, so a const-keyed read (GetSection(Keys.Foo)) yields the value, not just a literal."
+    },
+    {
       "provider": "lock",
       "operation": "acquire",
       "methods": [ "Enter", "TryEnter", "Wait", "WaitAsync", "WaitOne", "EnterReadLock", "EnterWriteLock", "EnterUpgradeableReadLock", "AcquireReaderLock", "AcquireWriterLock" ],
