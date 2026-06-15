@@ -2714,31 +2714,80 @@ public static class CliApplication
     // like C#: "Cache`2.GetResults" -> "Cache<T, U>.GetResults",
     // "CheckAllExternalApplications``1" -> "CheckAllExternalApplications<T>". A bare name is returned
     // unchanged. (Parameter type-param REFERENCES are handled in SimplifyParamType.)
+    // DocID-form name -> readable display. Two generic shapes:
+    //   * OPEN generic backtick arity `N / ``N  ->  <T, U, …>  (placeholder type params),
+    //   * CONSTRUCTED generic braces  {Ns.A, Ns.B{Ns.C}}  ->  <A, B<C>>  (actual args, namespaces
+    //     stripped, nested handled) — so a LanguageExt `NewType{MedDBase.ChamberId,System.Int32,…}.New`
+    //     reads as `NewType<ChamberId, Int32, …>.New` instead of a wall of fully-qualified braces.
+    // Type-arg simple-naming applies only INSIDE the braces (depth>0); the outer name (already shortened
+    // by ShortName) and the trailing `.Member` keep their dots.
     private static string PrettyGenericName(string name)
     {
-        if (name.IndexOf('`') < 0)
+        if (name.IndexOf('`') < 0 && name.IndexOf('{') < 0)
             return name;
         var sb = new StringBuilder();
+        var token = new StringBuilder();
+        var depth = 0;
+
+        void FlushToken()
+        {
+            if (token.Length == 0)
+                return;
+            var t = token.ToString();
+            token.Clear();
+            // Inside a generic-arg list, drop the namespace of a type token (Ns.Ns.Type -> Type).
+            if (depth > 0)
+            {
+                var lastDot = t.LastIndexOf('.');
+                if (lastDot >= 0)
+                    t = t.Substring(lastDot + 1);
+            }
+            sb.Append(t);
+        }
+
         var i = 0;
         while (i < name.Length)
         {
-            if (name[i] == '`')
+            var c = name[i];
+            switch (c)
             {
-                i++;
-                if (i < name.Length && name[i] == '`')
+                case '`':
+                    FlushToken();
                     i++;
-                var ds = i;
-                while (i < name.Length && char.IsDigit(name[i]))
+                    if (i < name.Length && name[i] == '`')
+                        i++;
+                    var ds = i;
+                    while (i < name.Length && char.IsDigit(name[i]))
+                        i++;
+                    if (int.TryParse(name.Substring(ds, i - ds), out var n) && n > 0)
+                        sb.Append('<').Append(string.Join(", ", Enumerable.Range(0, n).Select(TypeParamName))).Append('>');
+                    break;
+                case '{':
+                    FlushToken();
+                    sb.Append('<');
+                    depth++;
                     i++;
-                if (int.TryParse(name.Substring(ds, i - ds), out var n) && n > 0)
-                    sb.Append('<').Append(string.Join(", ", Enumerable.Range(0, n).Select(TypeParamName))).Append('>');
-            }
-            else
-            {
-                sb.Append(name[i]);
-                i++;
+                    break;
+                case '}':
+                    FlushToken();
+                    sb.Append('>');
+                    depth = Math.Max(0, depth - 1);
+                    i++;
+                    break;
+                case ',':
+                    FlushToken();
+                    sb.Append(", ");
+                    i++;
+                    if (i < name.Length && name[i] == ' ')
+                        i++; // collapse an existing ", " so spacing stays single
+                    break;
+                default:
+                    token.Append(c);
+                    i++;
+                    break;
             }
         }
+        FlushToken();
         return sb.ToString();
     }
 
