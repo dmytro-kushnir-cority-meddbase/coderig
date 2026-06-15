@@ -18,7 +18,7 @@ public static class SolutionAnalyzer
         IReadOnlySet<string>? scopeProjectPaths = null,
         // Max concurrent design-time builds / compilations (null = conservative default).
         int? parallelism = null,
-        // Drop test projects (by name convention) from the indexed set — --no-tests.
+        // Drop test projects (by name convention) from the indexed set (the index default).
         bool excludeTests = false
     )
     {

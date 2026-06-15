@@ -44,15 +44,13 @@ public sealed class CliApplicationTests
         error.ToString().ShouldContain("Unknown command: wat");
     }
 
-    // Guards the option-whitelist regression: --merge and --no-tests (and --durable) were missing from
-    // KnownFlagsByCommand["index"], so `rig index ... --merge` was rejected as an unknown option before
-    // it could run. Validation runs before solution load, so a KNOWN flag must NOT trip "Unknown option"
-    // (the command fails later for a different reason — a nonexistent solution).
+    // Guards the option-whitelist regression: --merge was missing from KnownFlagsByCommand["index"],
+    // so `rig index ... --merge` was rejected as an unknown option before it could run. Validation runs
+    // before solution load, so a KNOWN flag must NOT trip "Unknown option" (the command fails later for
+    // a different reason — a nonexistent solution).
     [Test]
     [Arguments("--merge")]
-    [Arguments("--no-tests")]
     [Arguments("--include-tests")]
-    [Arguments("--durable")]
     public async Task Index_does_not_reject_known_flags(string flag)
     {
         var output = new StringWriter();
@@ -65,6 +63,23 @@ public sealed class CliApplicationTests
         exitCode.ShouldBe(2);
         error.ToString().ShouldNotContain("Unknown option");
         error.ToString().ShouldContain("Failed to load");
+    }
+
+    // --durable and --no-tests were removed from the index surface (the former dropped entirely, the
+    // latter a redundant no-op alias of the now-default test exclusion). They must now be REJECTED up
+    // front as unknown options — not silently accepted — so a stale script using them fails loudly.
+    [Test]
+    [Arguments("--durable")]
+    [Arguments("--no-tests")]
+    public async Task Index_rejects_removed_flags(string flag)
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["index", "C:/does-not-exist.slnx", flag], output, error);
+
+        exitCode.ShouldBe(2);
+        error.ToString().ShouldContain("Unknown option");
     }
 
     // Mutually-exclusive projection modes are rejected up front (validation runs before any store access,

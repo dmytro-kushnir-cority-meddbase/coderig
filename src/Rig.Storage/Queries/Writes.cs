@@ -11,8 +11,9 @@ public static class Writes
     // fastBulkWrite trades crash durability for speed (journal/fsync off). It is the DEFAULT, because
     // it is safe for a single exclusive writer producing a throwaway-until-published DB (rig index,
     // which writes to a temp file and atomically renames on success — a corrupt temp is never
-    // published). Callers OPT OUT (set false) for consistency: mine's in-place PARALLEL appends, or a
-    // user-requested `--durable` in-place index. progress, when set, reports batched save throughput.
+    // published). It is turned OFF (set false) for the in-place APPEND path that writes the live DB
+    // directly — `--merge` and mine's `--identity` (potentially parallel) appends, which must keep the
+    // journal. progress, when set, reports batched save throughput.
     // The required state for merging into a store: the assembly registry must exist. We DON'T migrate
     // old stores (no ALTER clutter) — a store that predates multi-solution support is required to be
     // re-mined. EnsureCreated builds these tables on any fresh index. See docs/multi-solution-storage.md.

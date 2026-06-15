@@ -120,7 +120,7 @@ public static class CliApplication
         output.WriteLine();
         output.WriteLine("Usage:");
         output.WriteLine(
-            "  rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable] [--merge] [--include-tests]   (--from = index only the entry project's closure, one workspace; --durable = journaled write, default is fast atomic-publish; --merge = accumulate into an existing store for a multi-solution unified store; test projects are EXCLUDED by default — --include-tests keeps them)"
+            "  rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--merge] [--include-tests]   (--from = index only the entry project's closure, one workspace; --merge = accumulate into an existing store for a multi-solution unified store; test projects are EXCLUDED by default — --include-tests keeps them)"
         );
         output.WriteLine("  rig mine <solution> --from <project.csproj> [--rules <path>...] [--identity <id>] [--parallelism <n>]");
         output.WriteLine("  rig runs");
@@ -158,7 +158,7 @@ public static class CliApplication
         {
             error.WriteLine("Missing solution or project path.");
             error.WriteLine(
-                "Usage: rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable] [--merge] [--include-tests]"
+                "Usage: rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--merge] [--include-tests]"
             );
             return 2;
         }
@@ -224,8 +224,8 @@ public static class CliApplication
                 projectIdentity: identity,
                 scopeProjectPaths: scopeProjectPaths,
                 parallelism: parallelism,
-                // Tests are EXCLUDED by default (they add graph width, not reach). `--include-tests` opts
-                // them back in; `--no-tests` is the now-redundant former opt-out, accepted as a no-op alias.
+                // Tests are EXCLUDED by default (they add graph width, not reach); `--include-tests` opts
+                // them back in.
                 excludeTests: !args.Contains("--include-tests")
             );
         }
@@ -247,18 +247,15 @@ public static class CliApplication
         // Publish model. A standalone `index` is a full REPLACE published via write-to-temp +
         // atomic rename, so a crash can't tear the live store (and the previous index survives a
         // failed re-index). Fast/durability-off pragmas are the DEFAULT here — a corrupt temp is
-        // never published, so there's nothing to protect with a journal. Two opt-outs to the safe,
-        // durable, journaled path:
-        //   --durable      — user asks for a consistent in-the-clear write (still atomic-published).
-        //   --identity set — `mine` APPENDS many per-project runs into the live DB from PARALLEL
-        //                    writers, so it writes in place and MUST keep the journal (no fast pragmas).
-        var durable = args.Contains("--durable");
+        // never published, so there's nothing to protect with a journal. The sole exception is the
+        // APPEND path (`--merge`, or `mine`'s `--identity`): it writes IN PLACE into the live DB from
+        // (potentially parallel) writers, so it MUST keep the journal — no fast pragmas, no atomic swap.
         // --merge accumulates this solution into an existing store (multi-solution unified store): append
         // in place, dedup assemblies by content-hash via the registry, NO atomic-replace. See
         // docs/multi-solution-storage.md.
         var merge = args.Contains("--merge");
         var appendMode = identity is not null || merge; // mine, or --merge into an existing store
-        var fastBulkWrite = !durable && !appendMode; // optimisations on by default; opt out above
+        var fastBulkWrite = !appendMode; // fast pragmas on the standalone atomic-publish path
         var atomicPublish = !appendMode; // replace-via-rename for a standalone index
 
         var storeDirectory = Path.Combine(workingDirectory, ".rig");
@@ -886,10 +883,7 @@ public static class CliApplication
 
         // Deployment/EP chip on the from-node (path[0]): which service(s) host this entry point.
         // Opt-in via deployments.json; no-op otherwise.
-        var pathDeployments = await DeploymentMap.LoadAsync(
-            workingDirectory,
-            (await Reads.ListRunsAsync(context)).FirstOrDefault()?.SolutionPath
-        );
+        var pathDeployments = await DeploymentMap.LoadAsync(workingDirectory, await PrimaryDeploymentSolutionPathAsync(context));
         var pathEpContext = await BuildEpContextAsync(
             context,
             graph,
@@ -1030,10 +1024,7 @@ public static class CliApplication
 
         // Deployment/EP chip on the From line: which service(s) host this entry point (opt-in via
         // deployments.json; no-op otherwise). The from-root is the depth-0 reachable symbol.
-        var reachDeployments = await DeploymentMap.LoadAsync(
-            workingDirectory,
-            (await Reads.ListRunsAsync(context)).FirstOrDefault()?.SolutionPath
-        );
+        var reachDeployments = await DeploymentMap.LoadAsync(workingDirectory, await PrimaryDeploymentSolutionPathAsync(context));
         var reachEpContext = await BuildEpContextAsync(
             context,
             graph,
@@ -1272,10 +1263,7 @@ public static class CliApplication
                 .Methods.GroupBy(m => m.SymbolId, StringComparer.Ordinal)
                 .ToDictionary(g => g.Key, g => ((string?)g.First().FilePath, g.First().Line), StringComparer.Ordinal);
 
-        var deployments = await DeploymentMap.LoadAsync(
-            workingDirectory,
-            (await Reads.ListRunsAsync(context)).FirstOrDefault()?.SolutionPath
-        );
+        var deployments = await DeploymentMap.LoadAsync(workingDirectory, await PrimaryDeploymentSolutionPathAsync(context));
         // EP context is built from `locations` (not the graph), so it works on the no-graph full-hit path.
         // The expensive, pattern-independent site->kind map is its own cache (LoadOrDeriveEpSiteKind).
         var epContext = deployments.IsEmpty
@@ -1985,10 +1973,7 @@ public static class CliApplication
 
         // Deployment/EP context for the from-symbol annotations (opt-in via deployments.json). Null/no-op
         // when unconfigured. Built once here for the roots + reachable listings.
-        var deployments = await DeploymentMap.LoadAsync(
-            workingDirectory,
-            (await Reads.ListRunsAsync(context)).FirstOrDefault()?.SolutionPath
-        );
+        var deployments = await DeploymentMap.LoadAsync(workingDirectory, await PrimaryDeploymentSolutionPathAsync(context));
         var epContext = await BuildEpContextAsync(
             context,
             graph,
@@ -2056,10 +2041,7 @@ public static class CliApplication
             return 1;
         }
 
-        var deployments = await DeploymentMap.LoadAsync(
-            workingDirectory,
-            (await Reads.ListRunsAsync(context)).FirstOrDefault()?.SolutionPath
-        );
+        var deployments = await DeploymentMap.LoadAsync(workingDirectory, await PrimaryDeploymentSolutionPathAsync(context));
 
         // (FilePath, Line) of every reverse-reachable method — the join key against derived EP sites.
         var methods = await Reads.LoadDeadCodeMethodsAsync(context);
@@ -2126,11 +2108,7 @@ public static class CliApplication
         // Deployment attribution (opt-in: only when deployments.json sits next to .rig). Maps each EP's
         // source file to the deployed service(s) whose process loads it, via the indexed solution's
         // ProjectReference graph. Empty (no-op) when the config is absent.
-        var deployments = await DeploymentMap.LoadAsync(
-            workingDirectory,
-            (await Reads.ListRunsAsync(context)).FirstOrDefault()?.SolutionPath,
-            error
-        );
+        var deployments = await DeploymentMap.LoadAsync(workingDirectory, await PrimaryDeploymentSolutionPathAsync(context), error);
 
         // Classified handoffs (background/timer/actor/event) shared by the listing, the origin-EP
         // promotion, and the TSV output — derived once from the classified call graph.
@@ -2936,13 +2914,22 @@ public static class CliApplication
         return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
     }
 
+    // The solution to resolve deployments.json against: the run with the MOST symbols — the primary/root
+    // solution (e.g. MedDBase.slnx at the monorepo root), NOT ListRunsAsync().FirstOrDefault() (which is
+    // newest-first). In a multi-solution `--merge` store the newest run is whatever sub-solution was
+    // merged last, sitting in a subdirectory; deployments.json host paths are relative to the root
+    // solution's directory, so resolving against a sub-solution makes every host "not found". The
+    // max-symbol run is the real root in practice. Null when the store has no runs.
+    private static async Task<string?> PrimaryDeploymentSolutionPathAsync(RigDbContext context) =>
+        (await Reads.ListRunsAsync(context)).OrderByDescending(r => r.SymbolCount).FirstOrDefault()?.SolutionPath;
+
     // The flags each command accepts. Option VALUES never start with "--" for any rig command
     // (patterns, paths, ints, effect names), so any leading-"--" token that isn't listed here is a
     // genuine typo or wrong name — rejected up front rather than silently ignored. (This is what bit
     // `tree --depth 4`: --depth was unknown, dropped, and the tree rendered unbounded.)
     private static readonly Dictionary<string, string[]> KnownFlagsByCommand = new(StringComparer.Ordinal)
     {
-        ["index"] = ["--rules", "--identity", "--from", "--parallelism", "--durable", "--merge", "--include-tests", "--no-tests"],
+        ["index"] = ["--rules", "--identity", "--from", "--parallelism", "--merge", "--include-tests"],
         ["mine"] = ["--from", "--rules", "--identity", "--parallelism"],
         ["runs"] = [],
         ["di"] = [],
