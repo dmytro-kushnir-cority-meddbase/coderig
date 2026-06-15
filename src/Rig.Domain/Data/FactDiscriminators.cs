@@ -40,6 +40,7 @@ public static class DispatchKinds
 {
     public const string Impl = "impl"; // interface method -> implementing member
     public const string Override = "override"; // base/virtual method -> overriding member
+    public const string DelegateBind = "delegate_bind"; // delegate field/property/event slot -> bound target (18c)
 }
 
 // type_relation_facts.RelationKind.

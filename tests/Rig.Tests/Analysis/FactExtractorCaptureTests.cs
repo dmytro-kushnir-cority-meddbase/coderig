@@ -176,6 +176,64 @@ public sealed class FactExtractorCaptureTests
         inline.EnclosingSymbolId!.ShouldContain("Caller.Go");
     }
 
+    // 18c part 1: a method-group ASSIGNED to a delegate field/property (not passed as an argument)
+    // is a binding — the delegate-as-degenerate-interface "registration". Emit a delegate_bind
+    // dispatch fact (slot -> bound target) so the seam resolver can later resolve `_handler()` to it.
+    [Test]
+    public void Method_group_assigned_to_a_delegate_field_emits_a_delegate_bind_dispatch_fact()
+    {
+        var source = """
+            namespace App
+            {
+                public static class Worker { public static void DoWork() { } }
+
+                public sealed class Host
+                {
+                    private System.Action _handler;
+                    private System.Action Prop { get; set; }
+
+                    public void Wire()
+                    {
+                        _handler = Worker.DoWork;     // assignment binding
+                        Prop = Worker.DoWork;          // property binding
+                    }
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        result.Dispatch.ShouldContain(d =>
+            d.Kind == "delegate_bind" && d.SourceMember.Contains("Host._handler") && d.TargetMember.Contains("Worker.DoWork"));
+        result.Dispatch.ShouldContain(d =>
+            d.Kind == "delegate_bind" && d.SourceMember.Contains("Host.Prop") && d.TargetMember.Contains("Worker.DoWork"));
+    }
+
+    // 18c part 2: invoking a delegate slot (`_handler()`) emits an invocation edge to the SLOT so the
+    // seam resolver can dispatch it to the bound target via the delegate_bind fact. Without this the
+    // call is only a field READ and the target is invisible.
+    [Test]
+    public void Delegate_slot_invocation_emits_an_invocation_edge_to_the_slot()
+    {
+        var source = """
+            namespace App
+            {
+                public sealed class Host
+                {
+                    private System.Action _handler;
+                    public void Run() { _handler(); }
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        result.References.ShouldContain(r =>
+            r.RefKind == "invocation"
+            && r.TargetSymbolId.Contains("Host._handler")
+            && r.EnclosingSymbolId != null && r.EnclosingSymbolId.Contains("Host.Run"));
+    }
+
     [Test]
     public void Captures_bodied_property_accessor_calls_and_skips_auto_properties()
     {

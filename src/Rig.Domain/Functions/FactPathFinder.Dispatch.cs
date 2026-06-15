@@ -325,6 +325,16 @@ public static partial class FactPathFinder
     {
         var targets = new List<(string Node, string Kind, string Basis)>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        // 18c delegate seam: a delegate SLOT (field/property/event) dispatches to its bound target(s)
+        // via delegate_bind facts — the delegate-as-degenerate-interface hop. Resolved here, BEFORE the
+        // method-parse, because a slot is a field/property/event DocID (not a method) and would
+        // otherwise early-return. Multiple bindings -> multiple targets (like a multi-impl interface).
+        if (index.MinedDispatchBySource.TryGetValue(method, out var bindings))
+            foreach (var (target, kind) in bindings)
+                if (kind == DispatchKinds.DelegateBind && seen.Add(target))
+                    targets.Add((target, "delegate-dispatch", "roslyn"));
+
         var parsed = ParseMethod(method);
         if (parsed is null)
             return targets;

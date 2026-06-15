@@ -128,6 +128,16 @@ internal static class FactExtractor
                 argumentNames: argumentNames
             );
 
+            // 18c: a method-group ASSIGNED to a delegate field/property/event (not passed as an
+            // argument — that's the 18b handoff) is a binding. Emit a delegate_bind dispatch fact
+            // (slot -> bound target) so the seam resolver can resolve `slot()` to its target.
+            if (refKind == RefKinds.MethodGroup && DelegateBindSlotOf(name, model) is { } slot)
+            {
+                var resolvedTarget = target is IMethodSymbol bound ? (bound.ReducedFrom ?? bound).OriginalDefinition : target.OriginalDefinition;
+                if (resolvedTarget.GetDocumentationCommentId() is { } boundId && dispatchSeen.Add((slot, boundId, DispatchKinds.DelegateBind)))
+                    dispatch.Add(new DispatchFact(slot, boundId, DispatchKinds.DelegateBind));
+            }
+
             // A property/indexer access is, semantically, a call to its get_/set_ accessor. The
             // read/write ref above records the data-flow touch; this records the call EDGE into a bodied
             // accessor so reach walks its effects (a setter that validates/persists, a lazy getter that
@@ -145,6 +155,28 @@ internal static class FactExtractor
         {
             if (model.GetSymbolInfo(creation).Symbol is IMethodSymbol { MethodKind: MethodKind.Constructor } ctor)
                 AddReference(references, ctor, RefKinds.Ctor, EnclosingSymbolId(creation, model, lambdaIds), tree, creation);
+        }
+
+        // --- 18c: delegate-slot INVOCATIONS -> an invocation edge to the SLOT ---
+        // `_handler()` / `Prop()` invokes a delegate via its slot's (field/property/event) Invoke; the
+        // SimpleName pass only records a field READ, so the call target is otherwise invisible. Emit an
+        // invocation edge enclosing -> slot so the seam resolver can dispatch the slot to its bound
+        // target(s) via the delegate_bind facts (the delegate-as-degenerate-interface hop).
+        foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            if (DelegateSlotDocId(model.GetSymbolInfo(invocation.Expression).Symbol) is not { } slot)
+                continue;
+            references.Add(
+                new ReferenceFact(
+                    TargetSymbolId: slot,
+                    RefKind: RefKinds.Invocation,
+                    EnclosingSymbolId: EnclosingSymbolId(invocation, model, lambdaIds),
+                    TargetAssembly: model.Compilation.AssemblyName ?? "",
+                    TargetInSource: true,
+                    FilePath: tree.FilePath,
+                    Line: tree.GetLineSpan(invocation.Span).StartLinePosition.Line + 1
+                )
+            );
         }
 
         // --- Throw sites -> "throw" refs (the thrown exception TYPE) ---
@@ -712,6 +744,50 @@ internal static class FactExtractor
             return symbol?.OriginalDefinition.GetDocumentationCommentId();
         return (method.ReducedFrom ?? method).OriginalDefinition.GetDocumentationCommentId();
     }
+
+    // 18c: the delegate FIELD/PROPERTY/EVENT a method-group is assigned to (the bind SLOT), or null
+    // when the method-group is not a delegate assignment (it's a call argument — 18b handoff — or
+    // something else). Walks the same transparent wrappers as DelegateConsumerOf, but stops at an
+    // assignment (`slot = handler` / `slot += handler`) or an initializer (`Action _h = handler;`);
+    // an Argument/ArgumentList means it's an argument, not a bind, so it returns null.
+    private static string? DelegateBindSlotOf(SimpleNameSyntax name, SemanticModel model)
+    {
+        foreach (var ancestor in name.Ancestors())
+        {
+            switch (ancestor)
+            {
+                case AssignmentExpressionSyntax assign:
+                    return DelegateSlotDocId(model.GetSymbolInfo(assign.Left).Symbol);
+                case EqualsValueClauseSyntax equals:
+                    return equals.Parent switch
+                    {
+                        VariableDeclaratorSyntax v => DelegateSlotDocId(model.GetDeclaredSymbol(v)),
+                        PropertyDeclarationSyntax p => DelegateSlotDocId(model.GetDeclaredSymbol(p)),
+                        _ => null,
+                    };
+                case MemberAccessExpressionSyntax:
+                case MemberBindingExpressionSyntax:
+                case ConditionalAccessExpressionSyntax:
+                case ParenthesizedExpressionSyntax:
+                case CastExpressionSyntax:
+                    continue;
+                default:
+                    return null;
+            }
+        }
+        return null;
+    }
+
+    // The DocID of a delegate-typed slot symbol (field/property of delegate type, or any event — events
+    // are always delegate-typed), or null for any other symbol. The bind source the seam resolver keys on.
+    private static string? DelegateSlotDocId(ISymbol? symbol) =>
+        symbol switch
+        {
+            IFieldSymbol { Type.TypeKind: TypeKind.Delegate } field => field.GetDocumentationCommentId(),
+            IPropertySymbol { Type.TypeKind: TypeKind.Delegate } prop => prop.GetDocumentationCommentId(),
+            IEventSymbol e => e.GetDocumentationCommentId(),
+            _ => null,
+        };
 
     private static string? ClassifyReference(SimpleNameSyntax name, ISymbol target) =>
         target switch
