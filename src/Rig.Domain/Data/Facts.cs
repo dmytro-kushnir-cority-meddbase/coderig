@@ -87,7 +87,16 @@ public sealed record ReferenceFact(
     // observation (P2b ordering/nesting): a network/IO effect nested in a transaction-`using` or a
     // `lock` is held across that effect ("transaction spans a network call" / "lock held across IO").
     // Null when the invocation is not inside any using/lock. Decode with FactStructuralContext.
-    string? EnclosingScopes = null
+    string? EnclosingScopes = null,
+    // ALL positional arguments' string templates and member/identifier name paths, index-aligned with
+    // the call's argument list, each serialized as a JSON string?[] (comma-safe — unlike the
+    // TypeArguments comma-join, an argument string literal can itself contain commas). Feed the
+    // nth-argument resource resolution (FactEffectRule.ArgumentIndex) for resources past position 0
+    // (e.g. CertificateEntity.HasRight(cert, Rights.X.Y, txn) — the right is arg 1). Null for
+    // non-invocation refs and zero-arg calls. Index 0 mirrors FirstArgumentTemplate/Name (kept as the
+    // unindexed fast path so the existing derivation is byte-for-byte unchanged).
+    string? ArgumentTemplates = null,
+    string? ArgumentNames = null
 );
 
 /// <summary>A base-type or implemented-interface edge between two types.</summary>
@@ -450,7 +459,11 @@ public sealed record FactInvocation(
     string? FirstArgName = null,
     // Enclosing held-resource scope chain (using/lock), innermost-first. Feeds the resource_span
     // observation. Decode with FactStructuralContext.DecodeScopes. See ReferenceFact.EnclosingScopes.
-    string? EnclosingScopes = null
+    string? EnclosingScopes = null,
+    // ALL arguments' string templates / member-identifier names as JSON string?[] (see
+    // ReferenceFact.ArgumentTemplates/ArgumentNames). Feed nth-argument resource resolution.
+    string? ArgumentTemplates = null,
+    string? ArgumentNames = null
 );
 
 // An effect re-derived from the reference index by matching an invocation target against the
@@ -634,5 +647,11 @@ public sealed record FactEffectRule(
     // pins the constructed entity to position 0, so the effect resolves to that one type at the
     // concrete call site (entity_cache:read Account) rather than the CHA-fanned per-entity aggregate.
     // Only consulted when Resource == "type_argument".
-    int? TypeArgumentIndex = null
+    int? TypeArgumentIndex = null,
+    // Selects ONE positional argument (0-based) for the `string_argument` / `argument_name` resource
+    // instead of the first. Null = argument 0 (the existing first-argument fast path). Lets a rule pull
+    // a resource that lives past position 0 — e.g. CertificateEntity.HasRight(cert, Rights.X.Y, txn)
+    // exposes the permission right at arg 1 via `resource:argument_name, argumentIndex:1`. Resolved
+    // from the JSON ArgumentNames/ArgumentTemplates lists. Only consulted for those two strategies.
+    int? ArgumentIndex = null
 );

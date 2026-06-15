@@ -1,3 +1,6 @@
+using System.Buffers;
+using System.Text;
+using System.Text.Json;
 using Rig.Domain.Data;
 
 namespace Rig.Domain.Functions;
@@ -118,7 +121,10 @@ public static class FactEffectDeriver
                     declaringType,
                     inv.TypeArguments,
                     inv.FirstArgName,
-                    rule.TypeArgumentIndex
+                    rule.TypeArgumentIndex,
+                    inv.ArgumentTemplates,
+                    inv.ArgumentNames,
+                    rule.ArgumentIndex
                 );
                 if (string.IsNullOrWhiteSpace(resource))
                     continue; // matched, but the resource is unresolvable — no effect; let a later rule try
@@ -183,7 +189,10 @@ public static class FactEffectDeriver
                         "",
                         inv.TypeArguments,
                         inv.FirstArgName,
-                        rule.TypeArgumentIndex
+                        rule.TypeArgumentIndex,
+                        inv.ArgumentTemplates,
+                        inv.ArgumentNames,
+                        rule.ArgumentIndex
                     );
                     if (string.IsNullOrWhiteSpace(resource))
                         continue;
@@ -387,7 +396,10 @@ public static class FactEffectDeriver
         string declaringType,
         string? typeArguments,
         string? firstArgName,
-        int? typeArgumentIndex = null
+        int? typeArgumentIndex = null,
+        string? argumentTemplates = null,
+        string? argumentNames = null,
+        int? argumentIndex = null
     )
     {
         return strategy switch
@@ -404,14 +416,18 @@ public static class FactEffectDeriver
             // tuple/generic arg (e.g. `(ChamberId, int)` or `Foo<A, B>`) never mis-splits a position.
             "type_argument" => typeArgumentIndex is null ? typeArguments : NthTypeArgument(typeArguments, typeArgumentIndex.Value),
             // The first argument's member/identifier path — the routing target / discriminator, e.g.
-            // the ProcessId DNS constant `tell(PaymentGatewayProcessDns.AccountService, msg)`.
-            "argument_name" => firstArgName,
+            // the ProcessId DNS constant `tell(PaymentGatewayProcessDns.AccountService, msg)`. With
+            // argumentIndex set, the nth argument's name instead (e.g. the Rights.* permission at arg 1
+            // of CertificateEntity.HasRight(cert, Rights.X.Y, txn)).
+            "argument_name" => argumentIndex is null ? firstArgName : NthJsonString(argumentNames, argumentIndex.Value),
             // The invocation target's declaring type — independent of how it's called. Needed for
             // statically-imported helpers that have no receiver (e.g. `using static LanguageExt.Prelude;`
             // then a bare `failwith(...)`), where receiver_type resolves to null and drops the effect.
             "declaring_type" => declaringType,
             "argument_type" => firstArgType,
-            "string_argument" => firstArgTemplate,
+            // The first argument's string template (literal/interpolated). With argumentIndex set, the
+            // nth argument's template instead (e.g. a Flurl path segment past position 0).
+            "string_argument" => argumentIndex is null ? firstArgTemplate : NthJsonString(argumentTemplates, argumentIndex.Value),
             // Prefer the literal URL host/path when the first argument is a string template; otherwise
             // fall back to the receiver type (the HttpClient/SocketsHttpHandler instance) so the effect
             // is NEVER dropped. URLs are built dynamically far more often than not, so the prior
@@ -454,6 +470,62 @@ public static class FactEffectDeriver
             }
         }
         return position == index ? typeArguments.Substring(start).Trim() : null;
+    }
+
+    // Buffer ceiling for the zero-allocation path: a JSON arg list this size or smaller is UTF-8
+    // encoded into a stack buffer; anything larger borrows from the array pool. 1 KiB comfortably
+    // covers the real shape (a handful of short argument tokens) while bounding stack use.
+    private const int StackJsonBytes = 1024;
+
+    // The Nth (0-based) element of a JSON string?[] (the ArgumentTemplates/ArgumentNames lists mined
+    // per call site). JSON, not a comma-join, because an argument string literal can itself contain
+    // commas. We read only the index-th element with a Utf8JsonReader instead of materializing the
+    // whole array, and encode over a stack buffer for the common small case. Null/blank input, a
+    // malformed array, an out-of-range index, or a JSON null at that position -> null (effect dropped,
+    // like any unresolved resource).
+    private static string? NthJsonString(string? jsonArray, int index)
+    {
+        if (string.IsNullOrEmpty(jsonArray) || index < 0)
+            return null;
+
+        var maxBytes = Encoding.UTF8.GetMaxByteCount(jsonArray!.Length);
+        byte[]? rented = null;
+        Span<byte> buffer = maxBytes <= StackJsonBytes ? stackalloc byte[StackJsonBytes] : (rented = ArrayPool<byte>.Shared.Rent(maxBytes));
+        try
+        {
+            var written = Encoding.UTF8.GetBytes(jsonArray, buffer);
+            return NthJsonStringElement(buffer[..written], index);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        finally
+        {
+            if (rented is not null)
+                ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    // Read the index-th element of a flat JSON string array as a string (JSON null or a non-string
+    // token at that position -> null). Defensively skips any nested array/object so a malformed
+    // payload can't desync the position count.
+    private static string? NthJsonStringElement(ReadOnlySpan<byte> utf8Json, int index)
+    {
+        var reader = new Utf8JsonReader(utf8Json);
+        if (!reader.Read() || reader.TokenType != JsonTokenType.StartArray)
+            return null;
+
+        var position = 0;
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+        {
+            if (position == index)
+                return reader.TokenType == JsonTokenType.String ? reader.GetString() : null;
+            if (reader.TokenType is JsonTokenType.StartArray or JsonTokenType.StartObject)
+                reader.Skip();
+            position++;
+        }
+        return null;
     }
 
     // Strip the scheme and surrounding slashes from an HTTP resource (port of

@@ -67,6 +67,44 @@ public sealed class FactExtractorCaptureTests
     }
 
     [Test]
+    public void Captures_all_argument_names_and_templates_as_json_lists()
+    {
+        var source = """
+            namespace App
+            {
+                public static class Rights { public static class Account { public static int CanViewAccounts => 1; } }
+                public static class Cert { public static bool HasRight(int a, int right, int t) => true; }
+                public static class Api { public static void Get(string path, int x) { } }
+
+                public sealed class Caller
+                {
+                    public void Go(int account, int txn)
+                    {
+                        Cert.HasRight(account, Rights.Account.CanViewAccounts, txn);
+                        Api.Get("client", 1);
+                    }
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        // The permission-shape call: the right is a member path at argument 1 (NOT the first argument).
+        var hasRight = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Cert.HasRight"));
+        var names = System.Text.Json.JsonSerializer.Deserialize<string?[]>(hasRight.ArgumentNames!)!;
+        names.Length.ShouldBe(3);
+        names[0].ShouldBe("account");
+        names[1].ShouldBe("Rights.Account.CanViewAccounts");
+        names[2].ShouldBe("txn");
+
+        // A string-literal argument is captured in the templates list at its position.
+        var get = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Api.Get"));
+        System.Text.Json.JsonSerializer.Deserialize<string?[]>(get.ArgumentTemplates!)![0].ShouldBe("client");
+        // arg 0 of Api.Get is a literal, not a member/identifier -> JSON null in the names list.
+        System.Text.Json.JsonSerializer.Deserialize<string?[]>(get.ArgumentNames!)![0].ShouldBeNull();
+    }
+
+    [Test]
     public void Captures_bodied_property_accessor_calls_and_skips_auto_properties()
     {
         var source = """

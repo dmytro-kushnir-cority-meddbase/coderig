@@ -22,4 +22,6 @@ public sealed class ReferenceFactEntity
     public string? FirstArgumentName { get; set; }
     public string? DelegateConsumer { get; set; }
     public string? EnclosingScopes { get; set; }
+    public string? ArgumentTemplates { get; set; }
+    public string? ArgumentNames { get; set; }
 }

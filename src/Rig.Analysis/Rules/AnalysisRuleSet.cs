@@ -340,7 +340,10 @@ internal sealed record EffectRule(
     IReadOnlyList<string>? TargetCallsMethods = null,
     // Selects ONE top-level position (0-based) of the comma-joined type_argument resource instead of
     // the whole combo. Null = whole combo. See FactEffectRule.TypeArgumentIndex.
-    int? TypeArgumentIndex = null
+    int? TypeArgumentIndex = null,
+    // Selects a positional argument (0-based) for the string_argument/argument_name resource instead
+    // of the first. Null = argument 0. See FactEffectRule.ArgumentIndex.
+    int? ArgumentIndex = null
 );
 
 // A curated async-handoff dispatcher: when its consuming ctor/method is handed a method-group, the

@@ -320,6 +320,8 @@ public static class Writes
                     FirstArgumentName = r.FirstArgumentName,
                     DelegateConsumer = r.DelegateConsumer,
                     EnclosingScopes = r.EnclosingScopes,
+                    ArgumentTemplates = r.ArgumentTemplates,
+                    ArgumentNames = r.ArgumentNames,
                 }
         );
 
@@ -521,6 +523,8 @@ public static class Writes
                 FirstArgumentName  TEXT,
                 DelegateConsumer   TEXT,
                 EnclosingScopes    TEXT,
+                ArgumentTemplates  TEXT,
+                ArgumentNames      TEXT,
                 PRIMARY KEY (RunId, ReferenceFactIndex)
             );
             """,

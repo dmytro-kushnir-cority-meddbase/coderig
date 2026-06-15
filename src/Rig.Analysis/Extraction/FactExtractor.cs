@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -103,6 +104,7 @@ internal static class FactExtractor
                 FirstArgumentExpressionOf(name, refKind, invocation),
                 model
             );
+            var (argumentTemplates, argumentNames) = ArgumentListOf(refKind, invocation);
             var structural = StructuralContextOf(invocation, model);
             var delegateConsumer = refKind == RefKinds.MethodGroup ? DelegateConsumerOf(name, model) : null;
             AddReference(
@@ -117,7 +119,9 @@ internal static class FactExtractor
                 firstArgType,
                 structural,
                 firstArgumentName: firstArgName,
-                delegateConsumer: delegateConsumer
+                delegateConsumer: delegateConsumer,
+                argumentTemplates: argumentTemplates,
+                argumentNames: argumentNames
             );
 
             // A property/indexer access is, semantically, a call to its get_/set_ accessor. The
@@ -355,7 +359,9 @@ internal static class FactExtractor
         bool allowRuntime = false,
         string? firstArgumentName = null,
         string? delegateConsumer = null,
-        int? lineOverride = null
+        int? lineOverride = null,
+        string? argumentTemplates = null,
+        string? argumentNames = null
     )
     {
         // Generic type arguments at the CALL SITE — read from the constructed `target` BEFORE
@@ -406,9 +412,39 @@ internal static class FactExtractor
                 TypeArguments: typeArguments,
                 FirstArgumentName: firstArgumentName,
                 DelegateConsumer: delegateConsumer,
-                EnclosingScopes: structural.EnclosingScopes
+                EnclosingScopes: structural.EnclosingScopes,
+                ArgumentTemplates: argumentTemplates,
+                ArgumentNames: argumentNames
             )
         );
+    }
+
+    // All positional arguments' string templates (literal/interpolated, via GetStringTemplate — the
+    // same shape FirstArgumentOf captures for arg 0) and member/identifier name paths, index-aligned
+    // with the call's argument list and each serialized as a JSON string?[]. JSON (not the
+    // TypeArguments comma-join) because an argument string literal can itself contain commas, which a
+    // top-level-comma split would mis-segment; the deriver reads back the index-th element over a
+    // stack buffer (FactEffectDeriver.NthJsonString). Feeds nth-argument resource resolution
+    // (FactEffectRule.ArgumentIndex). Returns (null, null) for non-invocation refs and zero-arg calls.
+    private static (string? Templates, string? Names) ArgumentListOf(string refKind, InvocationExpressionSyntax? invocation)
+    {
+        if (refKind != RefKinds.Invocation || invocation is null)
+            return (null, null);
+
+        var arguments = invocation.ArgumentList.Arguments;
+        if (arguments.Count == 0)
+            return (null, null);
+
+        var templates = new string?[arguments.Count];
+        var names = new string?[arguments.Count];
+        for (var i = 0; i < arguments.Count; i++)
+        {
+            var expression = arguments[i].Expression;
+            templates[i] = expression.GetStringTemplate();
+            names[i] = expression is MemberAccessExpressionSyntax or IdentifierNameSyntax ? expression.ToString() : null;
+        }
+
+        return (JsonSerializer.Serialize(templates), JsonSerializer.Serialize(names));
     }
 
     // Static type of an invocation's receiver: `a.Foo()` -> type of `a` (open-generic FQN).

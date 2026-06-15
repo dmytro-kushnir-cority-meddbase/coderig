@@ -571,7 +571,9 @@ public static class Reads
                 CatchTypes: r.EnclosingCatchTypes,
                 TypeArguments: r.TypeArguments,
                 FirstArgName: r.FirstArgumentName,
-                EnclosingScopes: r.EnclosingScopes
+                EnclosingScopes: r.EnclosingScopes,
+                ArgumentTemplates: r.ArgumentTemplates,
+                ArgumentNames: r.ArgumentNames
             ))
             .ToListAsync(cancellationToken);
 

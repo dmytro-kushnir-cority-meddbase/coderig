@@ -322,12 +322,15 @@ public static class SqlReachability
                 """
                 SELECT r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.ReceiverType,
                        r.FirstArgumentTemplate, r.FirstArgumentType, r.EnclosingLoopKind, r.EnclosingLoopDetail,
-                       r.EnclosingInvocations, r.EnclosingCatchTypes, r.TypeArguments, r.FirstArgumentName
+                       r.EnclosingInvocations, r.EnclosingCatchTypes, r.TypeArguments, r.FirstArgumentName,
+                       r.ArgumentTemplates, r.ArgumentNames
                 FROM reference_facts r JOIN reach_set s ON r.EnclosingSymbolId = s.sym
                 WHERE r.RefKind = 'invocation';
                 """,
                 reader =>
                     invocations.Add(
+                        // Positional through FirstArgName (index 12); the new nth-argument lists are
+                        // appended as NAMED args because EnclosingScopes (param 13) is skipped on this path.
                         new FactInvocation(
                             reader.GetString(0),
                             reader.IsDBNull(1) ? null : reader.GetString(1),
@@ -341,7 +344,9 @@ public static class SqlReachability
                             reader.IsDBNull(9) ? null : reader.GetString(9),
                             reader.IsDBNull(10) ? null : reader.GetString(10),
                             reader.IsDBNull(11) ? null : reader.GetString(11),
-                            reader.IsDBNull(12) ? null : reader.GetString(12)
+                            reader.IsDBNull(12) ? null : reader.GetString(12),
+                            ArgumentTemplates: reader.IsDBNull(13) ? null : reader.GetString(13),
+                            ArgumentNames: reader.IsDBNull(14) ? null : reader.GetString(14)
                         )
                     ),
                 cancellationToken
