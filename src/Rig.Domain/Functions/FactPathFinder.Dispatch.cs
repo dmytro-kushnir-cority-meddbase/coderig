@@ -45,15 +45,11 @@ public static partial class FactPathFinder
         // edge adds no concrete type args (the common case — most edges forward type parameters or are
         // non-generic), so threading it costs no allocation on those.
         IReadOnlyCollection<string>? OutBinding,
-        // The CONCRETE receiver type WITH generic args of THIS edge (CallEdge.ReceiverTypeConcrete) — e.g.
-        // "Ns.QueryPipeline<Ns.Account, Ns.Invoice>" — forwarded onto the reached node for RENDERING only
-        // (TraceNode.ConcreteReceiver → declaring-type placeholder substitution). Null for non-generic
-        // receivers and for dispatch hops (no call-site receiver). Does NOT affect dispatch/narrowing.
-        string? OutReceiverConcrete,
-        // This edge's ReceiverTypeArgOrdinals ("0,1") for an OPEN forwarding receiver — forwarded onto the
-        // reached node (TraceNode.ReceiverArgOrdinals) so the renderer can substitute its placeholders from
-        // the parent's concrete binding. Null for closed/non-generic edges and dispatch hops.
-        string? OutReceiverArgOrdinals
+        // THIS edge's generic monomorphization bindings (CallEdge.DeclaringTypeArgBinding /
+        // MethodTypeArgBinding) — forwarded onto the reached node for RENDERING only (TraceNode label
+        // substitution). Null for dispatch hops (no call-site) and non-generic callees.
+        string? OutDeclaringBinding,
+        string? OutMethodBinding
     )> Successors(
         string current,
         GraphIndex index,
@@ -99,8 +95,8 @@ public static partial class FactPathFinder
                         edge.HandoffDispatcher ?? "handoff",
                         null,
                         outBinding,
-                        edge.ReceiverTypeConcrete,
-                        edge.ReceiverTypeArgOrdinals
+                        edge.DeclaringTypeArgBinding,
+                        edge.MethodTypeArgBinding
                     );
                     continue;
                 }
@@ -117,8 +113,8 @@ public static partial class FactPathFinder
                     null,
                     null,
                     outBinding,
-                    edge.ReceiverTypeConcrete,
-                    edge.ReceiverTypeArgOrdinals
+                    edge.DeclaringTypeArgBinding,
+                    edge.MethodTypeArgBinding
                 );
             }
 

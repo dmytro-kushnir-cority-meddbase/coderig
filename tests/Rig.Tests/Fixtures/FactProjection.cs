@@ -80,10 +80,10 @@ public static class FactProjection
                 LoopKind: r.EnclosingLoopKind,
                 LoopDetail: r.EnclosingLoopDetail,
                 DelegateConsumer: r.DelegateConsumer,
-                // Render-only generic-receiver fields (do NOT set ReceiverType/TypeArguments here — those
-                // switch on dispatch narrowing and would perturb other tests using this degraded graph).
-                ReceiverTypeConcrete: r.ReceiverTypeConcrete,
-                ReceiverTypeArgOrdinals: r.ReceiverTypeArgOrdinals
+                // Render-only generic monomorphization bindings (do NOT set ReceiverType/TypeArguments here —
+                // those switch on dispatch narrowing and would perturb other tests using this degraded graph).
+                DeclaringTypeArgBinding: r.DeclaringTypeArgBinding,
+                MethodTypeArgBinding: r.MethodTypeArgBinding
             ))
             .Distinct()
             .ToArray();

@@ -104,8 +104,6 @@ internal static class FactExtractor
 
             var invocation = refKind == RefKinds.Invocation ? InvocationOf(name) : null;
             var receiverType = refKind == RefKinds.Invocation ? ReceiverTypeOf(name, model) : null;
-            var receiverTypeConcrete = refKind == RefKinds.Invocation ? ReceiverTypeConcreteOf(name, model) : null;
-            var receiverTypeArgOrdinals = refKind == RefKinds.Invocation ? ReceiverTypeArgOrdinalsOf(name, model) : null;
             var (firstArgTemplate, firstArgType, firstArgName) = FirstArgumentOf(
                 FirstArgumentExpressionOf(name, refKind, invocation),
                 model
@@ -127,9 +125,7 @@ internal static class FactExtractor
                 firstArgumentName: firstArgName,
                 delegateConsumer: delegateConsumer,
                 argumentTemplates: argumentTemplates,
-                argumentNames: argumentNames,
-                receiverTypeConcrete: receiverTypeConcrete,
-                receiverTypeArgOrdinals: receiverTypeArgOrdinals
+                argumentNames: argumentNames
             );
 
             // 18c: a method-group ASSIGNED to a delegate field/property/event (not passed as an
@@ -412,9 +408,7 @@ internal static class FactExtractor
         string? delegateConsumer = null,
         int? lineOverride = null,
         string? argumentTemplates = null,
-        string? argumentNames = null,
-        string? receiverTypeConcrete = null,
-        string? receiverTypeArgOrdinals = null
+        string? argumentNames = null
     )
     {
         // Generic type arguments at the CALL SITE — read from the constructed `target` BEFORE
@@ -422,6 +416,15 @@ internal static class FactExtractor
         var typeArguments = target is IMethodSymbol { TypeArguments.Length: > 0 } generic
             ? string.Join(",", generic.TypeArguments.Select(t => t.ToDisplayString()))
             : null;
+
+        // Generic monomorphization bindings (RENDERING only) — see ReferenceFact. The DECLARING binding is
+        // the callee's containing-type instantiation at this site (receiver/qualifier for a call, the
+        // constructed type for a ctor); the METHOD binding is the callee's own type args. Each position is
+        // encoded C:/T:/M:/? so the renderer can resolve forwarded params against the parent's binding.
+        var constructed = target as IMethodSymbol;
+        var declaringContainer = (constructed?.ReducedFrom ?? constructed)?.ContainingType;
+        var declaringTypeArgBinding = GenericArgBinding(declaringContainer?.TypeArguments);
+        var methodTypeArgBinding = GenericArgBinding(constructed?.TypeArguments);
 
         // For constructors, point the reference at the constructor's containing type's ctor DocID;
         // for everything else use the symbol's own DocID. Reduced extension methods resolve to the
@@ -468,14 +471,11 @@ internal static class FactExtractor
                 EnclosingScopes: structural.EnclosingScopes,
                 ArgumentTemplates: argumentTemplates,
                 ArgumentNames: argumentNames,
-                // Store the concrete receiver ONLY for first-party callees: the dotted args bind the
-                // callee's DECLARING type params, and only first-party nodes are rendered, so a BCL
-                // receiver (List<int>.Add) would just be dead storage. ReceiverTypeConcreteOf already
-                // returns null for non-generic / open receivers; this gate drops the BCL-callee remainder.
-                ReceiverTypeConcrete: inSource ? receiverTypeConcrete : null,
-                // Same first-party gate and rationale as ReceiverTypeConcrete: ordinals are render-only and
-                // only first-party nodes render, so a BCL open receiver would be dead storage.
-                ReceiverTypeArgOrdinals: inSource ? receiverTypeArgOrdinals : null
+                // First-party gate: only first-party nodes are rendered, so a BCL callee's binding (List<int>
+                // .Add) would be dead storage. C: concrete tokens still carry BCL type NAMES — that's fine,
+                // they appear as the substituted args of a first-party generic.
+                DeclaringTypeArgBinding: inSource ? declaringTypeArgBinding : null,
+                MethodTypeArgBinding: inSource ? methodTypeArgBinding : null
             )
         );
     }
@@ -544,56 +544,29 @@ internal static class FactExtractor
         return null;
     }
 
-    // The CONCRETE receiver type WITH its generic arguments (NO OriginalDefinition) — e.g.
-    // "Ns.QueryPipeline<Ns.Account, Ns.Invoice>" where ReceiverTypeOf returns the open "Ns.QueryPipeline<T, U>".
-    // Returns null when it does NOT differ from the open form (non-generic receiver, or an open-typed
-    // receiver inside a generic body whose args are still type PARAMETERS) — so only genuinely-instantiated
-    // generic receivers are captured. RENDERING ONLY: feeds TraceNode.ConcreteReceiver so the tree label can
-    // show the real instantiation; dispatch still narrows on the open ReceiverType (identity, not args).
-    private static string? ReceiverTypeConcreteOf(SimpleNameSyntax name, SemanticModel model)
+    // Encodes a callee's generic type arguments at the call site into the RENDERING binding (see
+    // ReferenceFact.DeclaringTypeArgBinding / MethodTypeArgBinding): a JSON string[] of per-position tokens,
+    //   "C:<fqn>" concrete · "T:<ord>" enclosing-TYPE param · "M:<ord>" enclosing-METHOD param · "?" composite.
+    // T:/M: tokens are emitted purely from each arg's TypeParameterKind + Ordinal — no symbol identity needed,
+    // because the renderer resolves them against the PARENT node's declaring/method concretes (whose param
+    // spaces are exactly the enclosing method's containing type + the enclosing method itself). Returns null
+    // for a null/empty arg list (non-generic). A `Seq<T>`-style composite arg yields "?" (placeholder kept).
+    private static string? GenericArgBinding(System.Collections.Immutable.ImmutableArray<ITypeSymbol>? args)
     {
-        ITypeSymbol? type = null;
-        if (name.Parent is MemberAccessExpressionSyntax member && member.Name == name)
-            type = model.GetTypeInfo(member.Expression).Type;
-        else if (name.Parent is MemberBindingExpressionSyntax binding && binding.Parent is ConditionalAccessExpressionSyntax conditional)
-            type = model.GetTypeInfo(conditional.Expression).Type;
-
-        // Capture only a CONSTRUCTED generic type whose args are all real types. A non-generic receiver has
-        // nothing to substitute; an OPEN one inside a generic body still has type-PARAMETER args (e.g.
-        // `QueryPipeline<X, Y>` in `Helper<X, Y>`) which render concretely-looking but are placeholders —
-        // and crucially differ from OriginalDefinition's own param names (T, U), so a naive text compare
-        // would wrongly keep them. HasTypeParameter is the precise gate.
-        if (type is not INamedTypeSymbol named || named.TypeArguments.Length == 0 || HasTypeParameter(named))
+        if (args is not { Length: > 0 } list)
             return null;
-        return named.ToDisplayString();
-    }
-
-    // The complement of ReceiverTypeConcreteOf for an OPEN generic receiver: when the receiver is
-    // `QueryPipeline<T, U>` inside a generic body whose `T`/`U` are the ENCLOSING type's parameters,
-    // returns the ordinal of each receiver arg's containing-type type parameter, comma-joined ("0,1").
-    // RENDERING ONLY (path-contextual monomorphization): the tree walk inherits the concrete binding a
-    // PARENT node ran under and applies it to the child's placeholders via these ordinals — so
-    // `QueryPipeline<T, U>.Create` under `QueryResult<Account, Invoice>.Create` renders concretely.
-    // Returns null unless EVERY type argument is a containing-type (kind=Type) parameter — a clean
-    // forwarding receiver. A concrete arg, a method's own type parameter, or a nested/composite arg
-    // (`Dictionary<string, T>`) yields null, leaving placeholders (the concrete part isn't recoverable
-    // from the arity-synthesized `<T, U>` label). Mutually exclusive with ReceiverTypeConcreteOf.
-    private static string? ReceiverTypeArgOrdinalsOf(SimpleNameSyntax name, SemanticModel model)
-    {
-        ITypeSymbol? type = null;
-        if (name.Parent is MemberAccessExpressionSyntax member && member.Name == name)
-            type = model.GetTypeInfo(member.Expression).Type;
-        if (type is not INamedTypeSymbol named || named.TypeArguments.Length == 0)
-            return null;
-        var ordinals = new int[named.TypeArguments.Length];
-        for (var i = 0; i < named.TypeArguments.Length; i++)
+        var tokens = new string[list.Length];
+        for (var i = 0; i < list.Length; i++)
         {
-            if (named.TypeArguments[i] is ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Type } tp)
-                ordinals[i] = tp.Ordinal;
-            else
-                return null; // not a clean all-forwarding receiver — leave placeholders
+            tokens[i] = list[i] switch
+            {
+                ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Method } m => $"M:{m.Ordinal}",
+                ITypeParameterSymbol t => $"T:{t.Ordinal}",
+                var concrete when !HasTypeParameter(concrete) => $"C:{concrete.ToDisplayString()}",
+                _ => "?",
+            };
         }
-        return string.Join(",", ordinals);
+        return System.Text.Json.JsonSerializer.Serialize(tokens);
     }
 
     // True when `type` is a type PARAMETER, or a constructed generic / array that contains one at any depth

@@ -34,23 +34,33 @@ public sealed class TreeRenderRulesTests
         return output.ToString();
     }
 
-    private static TraceNode WithReceiver(string id, string? concreteReceiver, params TraceNode[] children) =>
-        new(id, "invocation", null, null, children, ConcreteReceiver: concreteReceiver);
-
-    private static TraceNode WithOrdinals(string id, string ordinals, params TraceNode[] children) =>
-        new(id, "invocation", null, null, children, ReceiverArgOrdinals: ordinals);
+    // A node carrying generic monomorphization bindings (JSON C:/T:/M: token arrays), as the mine produces.
+    private static TraceNode Bind(string id, string? declaring, string? method, params TraceNode[] children) =>
+        new(id, "invocation", null, null, children, DeclaringTypeArgBinding: declaring, MethodTypeArgBinding: method);
 
     [Test]
-    public void Open_forwarding_child_inherits_the_parents_concrete_binding_via_ordinals()
+    public void Concrete_declaring_binding_substitutes_the_declaring_type_placeholders()
+    {
+        var root = Node("M:App.Caller.Go()", Bind("M:App.QueryPipeline`2.Enumerate()", """["C:App.Account","C:App.Invoice"]""", null));
+
+        var output = Render(root, FactRenderRules.Empty, Effects());
+
+        output.ShouldContain("QueryPipeline<Account, Invoice>.Enumerate");
+        output.ShouldNotContain("QueryPipeline<T, U>");
+    }
+
+    [Test]
+    public void Open_forwarding_child_inherits_the_parents_instantiation_via_T_tokens()
     {
         // QueryResult<Account, Invoice>.Create's body calls QueryPipeline<T, U>.Create where T,U forward
-        // QueryResult's params (ordinals "0,1") — the child has no concrete receiver of its own.
+        // QueryResult's TYPE params (tokens T:0, T:1) — the child carries no concrete of its own.
         var root = Node(
             "M:App.Caller.Go()",
-            WithReceiver(
+            Bind(
                 "M:App.QueryResult`2.Create()",
-                "App.QueryResult<App.Account, App.Invoice>",
-                WithOrdinals("M:App.QueryPipeline`2.Enumerate()", "0,1")
+                """["C:App.Account","C:App.Invoice"]""",
+                null,
+                Bind("M:App.QueryPipeline`2.Enumerate()", """["T:0","T:1"]""", null)
             )
         );
 
@@ -62,15 +72,15 @@ public sealed class TreeRenderRulesTests
     }
 
     [Test]
-    public void Forwarding_ordinals_respect_argument_order()
+    public void Forwarding_tokens_respect_argument_order()
     {
-        // Reversed forwarding: ordinals "1,0" map the parent's args in swapped order.
         var root = Node(
             "M:App.Caller.Go()",
-            WithReceiver(
+            Bind(
                 "M:App.QueryResult`2.Create()",
-                "App.QueryResult<App.Account, App.Invoice>",
-                WithOrdinals("M:App.QueryPipeline`2.Enumerate()", "1,0")
+                """["C:App.Account","C:App.Invoice"]""",
+                null,
+                Bind("M:App.QueryPipeline`2.Enumerate()", """["T:1","T:0"]""", null)
             )
         );
 
@@ -80,15 +90,42 @@ public sealed class TreeRenderRulesTests
     }
 
     [Test]
-    public void Forwarding_binding_propagates_through_a_chain_of_open_generics()
+    public void Method_arity_substitutes_from_the_method_binding_including_M_token_forwarding()
     {
-        // Account/Invoice flows root-concrete -> child(0,1) -> grandchild(0,1), each open-forwarding.
+        // The real static-factory shape: QueryResult.Create<Entity, Account> (declaring C:, method C:) whose
+        // body calls QueryPipeline<RRecord(M:1), TColumn(T:1)>.Create<TEntity(M:0), RRecord(M:1)>.
         var root = Node(
             "M:App.Caller.Go()",
-            WithReceiver(
+            Bind(
+                "M:App.QueryResult`2.Create``2()",
+                """["C:App.Account","C:App.Row"]""",
+                """["C:App.Entity","C:App.Account"]""",
+                Bind("M:App.QueryPipeline`2.Create``2()", """["M:1","T:1"]""", """["M:0","M:1"]""")
+            )
+        );
+
+        var output = Render(root, FactRenderRules.Empty, Effects());
+
+        output.ShouldContain("QueryResult<Account, Row>.Create<Entity, Account>");
+        // M:1 -> parent method arg[1]=Account, T:1 -> parent declaring arg[1]=Row; method M:0->Entity, M:1->Account.
+        output.ShouldContain("QueryPipeline<Account, Row>.Create<Entity, Account>");
+    }
+
+    [Test]
+    public void Binding_propagates_through_a_chain_of_open_generics()
+    {
+        var root = Node(
+            "M:App.Caller.Go()",
+            Bind(
                 "M:App.QueryResult`2.Create()",
-                "App.QueryResult<App.Account, App.Invoice>",
-                WithOrdinals("M:App.QueryPipeline`2.Create()", "0,1", WithOrdinals("M:App.OrderedQueryPipeline`2.Create()", "0,1"))
+                """["C:App.Account","C:App.Invoice"]""",
+                null,
+                Bind(
+                    "M:App.QueryPipeline`2.Create()",
+                    """["T:0","T:1"]""",
+                    null,
+                    Bind("M:App.OrderedQueryPipeline`2.Create()", """["T:0","T:1"]""", null)
+                )
             )
         );
 
@@ -99,10 +136,10 @@ public sealed class TreeRenderRulesTests
     }
 
     [Test]
-    public void Open_forwarding_without_a_parent_binding_keeps_placeholders()
+    public void Forwarding_without_a_parent_binding_keeps_placeholders()
     {
-        // Ordinals present but no rendered parent ran under a concrete receiver -> nothing to substitute.
-        var root = Node("M:App.Caller.Go()", WithOrdinals("M:App.QueryPipeline`2.Enumerate()", "0,1"));
+        // T-tokens present but no parent instantiation to resolve them against -> nothing to substitute.
+        var root = Node("M:App.Caller.Go()", Bind("M:App.QueryPipeline`2.Enumerate()", """["T:0","T:1"]""", null));
 
         var output = Render(root, FactRenderRules.Empty, Effects());
 
@@ -110,21 +147,7 @@ public sealed class TreeRenderRulesTests
     }
 
     [Test]
-    public void Concrete_receiver_substitutes_the_declaring_type_placeholders_in_the_label()
-    {
-        var root = Node(
-            "M:App.Caller.Go()",
-            WithReceiver("M:App.QueryPipeline`2.Enumerate()", "App.QueryPipeline<App.Account, App.Invoice>")
-        );
-
-        var output = Render(root, FactRenderRules.Empty, Effects());
-
-        output.ShouldContain("QueryPipeline<Account, Invoice>.Enumerate");
-        output.ShouldNotContain("QueryPipeline<T, U>");
-    }
-
-    [Test]
-    public void Without_a_concrete_receiver_the_label_keeps_open_placeholders()
+    public void Without_a_binding_the_label_keeps_open_placeholders()
     {
         var root = Node("M:App.Caller.Go()", Node("M:App.QueryPipeline`2.Enumerate()"));
 
@@ -134,10 +157,10 @@ public sealed class TreeRenderRulesTests
     }
 
     [Test]
-    public void A_generic_methods_own_arity_keeps_placeholders_when_only_the_declaring_type_is_concrete()
+    public void Method_arity_keeps_placeholders_when_only_the_declaring_binding_is_present()
     {
-        // Declaring type arity 2 (substituted from the receiver), method arity 1 (stays <T>).
-        var root = Node("M:App.Caller.Go()", WithReceiver("M:App.QueryPipeline`2.Map``1()", "App.QueryPipeline<App.Account, App.Invoice>"));
+        // Declaring arity 2 substituted; the generic method's own arity 1 has no binding -> stays <T>.
+        var root = Node("M:App.Caller.Go()", Bind("M:App.QueryPipeline`2.Map``1()", """["C:App.Account","C:App.Invoice"]""", null));
 
         var output = Render(root, FactRenderRules.Empty, Effects());
 
@@ -145,26 +168,34 @@ public sealed class TreeRenderRulesTests
     }
 
     [Test]
-    public void A_nested_or_qualified_concrete_receiver_falls_back_to_placeholders()
+    public void An_arity_mismatch_between_binding_and_declaring_type_keeps_placeholders()
     {
-        // `Outer<X>.Inner<Y>` has a trailing suffix after the first generic group: ShortName shows only
-        // Inner, so mapping Outer's args would mislead — ConcreteReceiverArgs bails and placeholders stand.
-        var root = Node("M:App.Inner`1.Use()", WithReceiver("M:App.Inner`1.Use()", "App.Outer<App.Account>.Inner<App.Invoice>"));
-
-        var output = Render(root, FactRenderRules.Empty, Effects());
-
-        output.ShouldContain("Inner<T>.Use");
-    }
-
-    [Test]
-    public void An_arity_mismatch_between_receiver_and_declaring_type_keeps_placeholders()
-    {
-        // Receiver has 1 arg but the declaring type arity is 2 — refuse to substitute (safety).
-        var root = Node("M:App.Caller.Go()", WithReceiver("M:App.QueryPipeline`2.Enumerate()", "App.QueryPipeline<App.Account>"));
+        // Binding has 1 arg but the declaring type arity is 2 — refuse to substitute (safety).
+        var root = Node("M:App.Caller.Go()", Bind("M:App.QueryPipeline`2.Enumerate()", """["C:App.Account"]""", null));
 
         var output = Render(root, FactRenderRules.Empty, Effects());
 
         output.ShouldContain("QueryPipeline<T, U>.Enumerate");
+    }
+
+    [Test]
+    public void An_unresolvable_token_keeps_only_that_positions_placeholder()
+    {
+        // "?" (a composite like Seq<T>) and an out-of-range forward both leave their slot as a placeholder,
+        // while the resolvable position is substituted — a partial binding still helps.
+        var root = Node(
+            "M:App.Caller.Go()",
+            Bind(
+                "M:App.QueryResult`2.Create()",
+                """["C:App.Account","C:App.Invoice"]""",
+                null,
+                Bind("M:App.QueryPipeline`2.Enumerate()", """["T:0","?"]""", null)
+            )
+        );
+
+        var output = Render(root, FactRenderRules.Empty, Effects());
+
+        output.ShouldContain("QueryPipeline<Account, U>.Enumerate");
     }
 
     [Test]

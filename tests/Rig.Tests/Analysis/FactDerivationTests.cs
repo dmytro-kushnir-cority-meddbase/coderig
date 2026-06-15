@@ -128,24 +128,15 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         reachable.Keys.ShouldContain(k => k.Contains("SaveEntity", StringComparison.Ordinal));
     }
 
-    // End-to-end path-contextual monomorphization (mine -> store -> graph -> render): a concrete entry
-    // pins QueryResult<PatientEntity, InvoiceEntity>, and its OPEN forwarding receivers (QueryPipeline,
-    // OrderedPipeline — `<T, U>` in source) render with the concrete args resolved via mined ordinals,
-    // down the whole chain. Guards the GenericPipeline.cs fixture.
-    [Test]
-    public async Task Tree_resolves_forwarded_generic_receivers_from_the_concrete_entry()
+    // End-to-end generic monomorphization (mine -> store -> graph -> render). Guards GenericPipeline.cs.
+    private static string RenderTree(FactGraphData graph, string fromPattern)
     {
-        var playground = await playgrounds.LegacyNet48Async();
-        var graph = FactProjection.GraphData(playground.Result);
-
-        var roots = FactPathFinder.BuildTree(graph, "GenericPipelineDemo.RunConcretePipeline");
-
         var output = new StringWriter();
         var noEffects = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        foreach (var root in roots)
+        foreach (var root in FactPathFinder.BuildTree(graph, fromPattern))
             CliApplication.RenderTreeNode(
                 root,
-                prefix: "",
+                "",
                 isLast: true,
                 isRoot: true,
                 noEffects,
@@ -154,12 +145,39 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
                 noEffects,
                 output
             );
-        var text = output.ToString();
+        return output.ToString();
+    }
+
+    // INSTANCE forwarding: a concrete entry pins QueryResult<PatientEntity, InvoiceEntity>, and its OPEN
+    // forwarding receivers (QueryPipeline, OrderedPipeline — `<T, U>` in source) render concretely down the
+    // chain. The .#ctor nodes resolve too (declaring binding comes from the constructed containing type).
+    [Test]
+    public async Task Tree_resolves_forwarded_instance_generic_receivers_from_the_concrete_entry()
+    {
+        var graph = FactProjection.GraphData((await playgrounds.LegacyNet48Async()).Result);
+
+        var text = RenderTree(graph, "GenericPipelineDemo.RunConcretePipeline");
 
         text.ShouldContain("QueryResult<PatientEntity, InvoiceEntity>.Enumerate");
         text.ShouldContain("QueryPipeline<PatientEntity, InvoiceEntity>.Run");
         text.ShouldContain("OrderedPipeline<PatientEntity, InvoiceEntity>.Sort");
         text.ShouldNotContain("QueryPipeline<T, U>");
+    }
+
+    // STATIC-FACTORY + generic-method monomorphization (the MedDBase QueryResult/QueryPipeline.Create shape):
+    // no value receiver — concretes flow through method type-argument inference and a mix of forwarded TYPE
+    // (TColumn) and METHOD (RRecord) params. The whole static chain must monomorphize, methods included.
+    [Test]
+    public async Task Tree_monomorphizes_a_static_factory_chain_through_method_type_args()
+    {
+        var graph = FactProjection.GraphData((await playgrounds.LegacyNet48Async()).Result);
+
+        var text = RenderTree(graph, "StaticPipelineDemo.RunStaticPipeline");
+
+        text.ShouldContain("StaticResult<InvoiceEntity, PatientEntity>.Build<DataAdapter, InvoiceEntity>");
+        text.ShouldContain("StaticPipeline<InvoiceEntity, PatientEntity>.Build<DataAdapter, InvoiceEntity>");
+        text.ShouldContain("StaticOrderedPipeline<InvoiceEntity, PatientEntity>.Sort<DataAdapter>");
+        text.ShouldNotContain("StaticPipeline<T");
     }
 
     [Test]

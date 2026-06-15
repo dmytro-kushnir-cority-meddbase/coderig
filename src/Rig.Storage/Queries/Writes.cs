@@ -329,8 +329,8 @@ public static class Writes
                     EnclosingScopes = r.EnclosingScopes,
                     ArgumentTemplates = r.ArgumentTemplates,
                     ArgumentNames = r.ArgumentNames,
-                    ReceiverTypeConcrete = r.ReceiverTypeConcrete,
-                    ReceiverTypeArgOrdinals = r.ReceiverTypeArgOrdinals,
+                    DeclaringTypeArgBinding = r.DeclaringTypeArgBinding,
+                    MethodTypeArgBinding = r.MethodTypeArgBinding,
                 }
         );
 
@@ -534,8 +534,8 @@ public static class Writes
                 EnclosingScopes    TEXT,
                 ArgumentTemplates  TEXT,
                 ArgumentNames      TEXT,
-                ReceiverTypeConcrete TEXT,
-                ReceiverTypeArgOrdinals TEXT,
+                DeclaringTypeArgBinding TEXT,
+                MethodTypeArgBinding TEXT,
                 PRIMARY KEY (RunId, ReferenceFactIndex)
             );
             """,

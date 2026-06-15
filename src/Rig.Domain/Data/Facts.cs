@@ -97,24 +97,23 @@ public sealed record ReferenceFact(
     // unindexed fast path so the existing derivation is byte-for-byte unchanged).
     string? ArgumentTemplates = null,
     string? ArgumentNames = null,
-    // CONCRETE static type of the invocation receiver at this site, WITH its generic type arguments
-    // (e.g. "Ns.QueryPipeline<Ns.PersonDataFieldDefinition, Ns.DefinitionAndRangeDto>"), captured only
-    // when it DIFFERS from the open-definition `ReceiverType` (so non-generic / open-typed receivers
-    // store null — most edges). ReceiverType stays the open form (`QueryPipeline<T, U>`) for dispatch
-    // narrowing (identity, not args); this concrete form is purely for RENDERING — it lets the tree
-    // label show the real instantiation a node ran under instead of placeholder `<T, U>`. Null for
-    // bare/static calls, non-invocation refs, and receivers that are already open/non-generic.
-    string? ReceiverTypeConcrete = null,
-    // For an OPEN generic receiver inside a generic body — `QueryPipeline<T, U>` where T,U are the
-    // ENCLOSING type's parameters — the ordinal of the enclosing containing-type type parameter each
-    // receiver type argument equals, comma-joined ("0,1"). RENDERING ONLY (path-contextual
-    // monomorphization): lets a child node inherit the concrete binding its PARENT ran under, so
-    // `QueryPipeline<T, U>` under `QueryResult<Account, Invoice>.Create` renders `QueryPipeline<Account,
-    // Invoice>`. Mutually exclusive with ReceiverTypeConcrete for a generic receiver: concrete when the
-    // receiver is closed, ordinals when it is open-forwarding. Null unless EVERY receiver type argument
-    // is a containing-type parameter (a clean forwarding receiver); mixed/concrete/method-parameter args
-    // keep placeholders. Null for non-generic / static / non-invocation refs.
-    string? ReceiverTypeArgOrdinals = null
+    // --- Generic monomorphization bindings (RENDERING ONLY) — let the tree label show the real
+    //     instantiation (`QueryPipeline<Account, Invoice>.Create<Entity, Account>`) instead of the
+    //     arity-synthesized `<T, U>` placeholders, propagated down a call chain of static factories,
+    //     generic methods, and instance calls alike. Each is a JSON string[] of per-position tokens:
+    //       "C:Ns.Type<…>" — a CONCRETE type at the call site (namespace-stripped at render),
+    //       "T:n"          — the n-th type parameter of the ENCLOSING method's containing TYPE,
+    //       "M:n"          — the n-th type parameter of the ENCLOSING method itself,
+    //       "?"            — unresolvable (a composite like `Seq<T>`); that position keeps its placeholder.
+    //     The renderer resolves T:/M: tokens against the PARENT node's already-resolved declaring/method
+    //     concretes (a concrete entry seeds the chain with C: tokens; inner forwarding hops carry T:/M:).
+    //     Both null for non-generic callees and BCL callees (gated by inSource — only first-party renders). ---
+    // The callee's DECLARING TYPE instantiation at the call site (from target.ContainingType.TypeArguments):
+    // the receiver/qualifier type's args for an instance/static call, the constructed type for a ctor.
+    string? DeclaringTypeArgBinding = null,
+    // The callee's own METHOD type arguments at the call site (from the constructed method's TypeArguments;
+    // explicit or inferred). Null for non-generic methods.
+    string? MethodTypeArgBinding = null
 );
 
 /// <summary>A base-type or implemented-interface edge between two types.</summary>
@@ -193,20 +192,13 @@ public sealed record CallEdge(
     // method-groups that are not a call argument, and on stores indexed before this fact existed (the
     // classifier falls back to same-line co-location there).
     string? DelegateConsumer = null,
-    // The CONCRETE receiver type WITH generic args (ReferenceFact.ReceiverTypeConcrete) — the real
-    // instantiation the call ran on (e.g. "Ns.QueryPipeline<Ns.Account, Ns.Invoice>"), null when the
-    // receiver is non-generic / open-typed / absent. Carried purely for RENDERING: the traversal
-    // forwards it onto the reached node (TraceNode.ConcreteReceiver) so the tree label can substitute
-    // the declaring type's `<T, U>` placeholders with these concrete args. Does NOT affect dispatch
-    // (that uses the open `ReceiverType`).
-    string? ReceiverTypeConcrete = null,
-    // Per-receiver-arg ordinals into the enclosing containing-type's type params for an OPEN forwarding
-    // receiver (ReferenceFact.ReceiverTypeArgOrdinals, "0,1"). RENDERING ONLY (path-contextual
-    // monomorphization): when a parent node ran under a concrete receiver, the traversal binds that
-    // declaring type's params by ordinal and applies the binding to THIS edge's open placeholders via
-    // these ordinals — so a `QueryPipeline<T, U>` child under `QueryResult<Account, Invoice>.Create`
-    // renders concretely. Mutually exclusive with ReceiverTypeConcrete; null for closed/non-generic edges.
-    string? ReceiverTypeArgOrdinals = null
+    // Generic monomorphization bindings (RENDERING only) — the callee's declaring-type and own-method
+    // type-arg tokens at this call site (ReferenceFact.DeclaringTypeArgBinding / MethodTypeArgBinding,
+    // JSON string[] of C:/T:/M:/? tokens). Carried onto the reached node so the renderer can resolve the
+    // forwarded T:/M: positions against the parent node's instantiation and substitute the label's
+    // declaring + method arity placeholders. Do NOT affect dispatch (that uses the open `ReceiverType`).
+    string? DeclaringTypeArgBinding = null,
+    string? MethodTypeArgBinding = null
 );
 
 // An "implType implements ifaceType" edge (from a type-relation fact).
@@ -346,19 +338,12 @@ public sealed record TraceNode(
     // target, that lone interface hop is collapsed into its impl, and this carries the folded-away
     // interface's short name for a "«via IFoo»" marker. Null when the node was not folded.
     string? FoldedVia = null,
-    // The CONCRETE receiver type WITH generic args of the edge that reached this node (from
-    // CallEdge.ReceiverTypeConcrete) — e.g. "Ns.QueryPipeline<Ns.Account, Ns.Invoice>". Lets the tree
-    // renderer substitute the declaring type's `<T, U>` placeholders with the real instantiation this
-    // node ran under. Null when the reaching edge had no concrete generic receiver (the common case),
-    // for roots, and for dispatch hops (no call-site receiver). A node renders ONCE (first BFS path),
-    // so this is THAT path's instantiation when a method is reached with several.
-    string? ConcreteReceiver = null,
-    // Per-receiver-arg ordinals into the enclosing containing-type's type params for an OPEN forwarding
-    // receiver (from CallEdge.ReceiverTypeArgOrdinals, "0,1"). RENDERING ONLY: when this node has no
-    // ConcreteReceiver of its own but its rendered PARENT ran under a concrete receiver, the renderer
-    // substitutes this node's `<T, U>` placeholders by indexing the parent's concrete args with these
-    // ordinals — path-contextual monomorphization. Null for closed/non-generic/dispatch edges.
-    string? ReceiverArgOrdinals = null
+    // Generic monomorphization bindings (from CallEdge): the callee's declaring-type and own-method
+    // type-arg tokens (JSON string[] of C:/T:/M:/?) at the call site that reached this node. RENDERING
+    // ONLY: the renderer resolves T:/M: tokens against the PARENT node's resolved instantiation and
+    // substitutes both arity groups of this node's label. Null for dispatch hops / non-generic callees.
+    string? DeclaringTypeArgBinding = null,
+    string? MethodTypeArgBinding = null
 );
 
 // A method handed off as a delegate (method-group) — a deferred/background entry point the

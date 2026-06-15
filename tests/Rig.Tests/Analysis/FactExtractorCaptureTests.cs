@@ -67,7 +67,7 @@ public sealed class FactExtractorCaptureTests
     }
 
     [Test]
-    public void Captures_concrete_receiver_type_when_it_differs_from_the_open_definition()
+    public void Declaring_type_arg_binding_records_concrete_and_forwarded_receiver_args()
     {
         var source = """
             namespace App
@@ -82,94 +82,13 @@ public sealed class FactExtractorCaptureTests
 
                 public sealed class Caller
                 {
-                    public void Go(QueryPipeline<Account, Invoice> pipeline, string plain)
-                    {
-                        pipeline.Enumerate();   // generic receiver -> concrete captured
-                        plain.Trim();           // non-generic receiver -> null
-                    }
-                }
-            }
-            """;
-
-        var result = Extract(source);
-
-        var enumerate = result.References.Single(r =>
-            r.RefKind == "invocation" && r.TargetSymbolId.Contains("QueryPipeline") && r.TargetSymbolId.Contains("Enumerate")
-        );
-        // Open form stays the original definition (for dispatch narrowing).
-        enumerate.ReceiverType.ShouldBe("App.QueryPipeline<T, U>");
-        // Concrete form carries the real instantiation (for rendering).
-        enumerate.ReceiverTypeConcrete.ShouldBe("App.QueryPipeline<App.Account, App.Invoice>");
-
-        // A non-generic receiver (string) stores no concrete form — but its callee is BCL (not in source)
-        // so it is also dropped by the inSource gate; assert the gate by checking no first-party row carries it.
-        result.References.Where(r => r.ReceiverTypeConcrete is not null).ShouldAllBe(r => r.TargetInSource);
-    }
-
-    [Test]
-    public void Open_typed_generic_receiver_inside_a_generic_body_captures_no_concrete_form()
-    {
-        // Inside Helper<X, Y> the receiver `pipeline` is QueryPipeline<X, Y> — still type PARAMETERS, so the
-        // concrete form equals the open form and nothing is captured (placeholders are correct there).
-        var source = """
-            namespace App
-            {
-                public sealed class QueryPipeline<T, U>
-                {
-                    public void Enumerate() { }
+                    public void Concrete(QueryPipeline<Account, Invoice> pipeline) => pipeline.Enumerate();
                 }
 
-                public sealed class Helper<X, Y>
-                {
-                    public void Run(QueryPipeline<X, Y> pipeline)
-                    {
-                        pipeline.Enumerate();
-                    }
-                }
-            }
-            """;
-
-        var result = Extract(source);
-
-        var enumerate = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Enumerate"));
-        enumerate.ReceiverType.ShouldBe("App.QueryPipeline<T, U>");
-        enumerate.ReceiverTypeConcrete.ShouldBeNull();
-        // ...but the receiver args forward Helper's params X(0), Y(0,1) — captured as ordinals so a
-        // parent node's concrete binding can be applied to these placeholders at render time.
-        enumerate.ReceiverTypeArgOrdinals.ShouldBe("0,1");
-    }
-
-    [Test]
-    public void Receiver_arg_ordinals_capture_forwarding_and_skip_concrete_or_partial_receivers()
-    {
-        var source = """
-            namespace App
-            {
-                public sealed class Account { }
-                public sealed class QueryPipeline<T, U>
-                {
-                    public void Enumerate() { }
-                }
-
-                // Reversed forwarding: receiver args are the enclosing TYPE's params in swapped order.
+                // Forwarding receiver: args are the enclosing TYPE's params, swapped (Y=1, X=0).
                 public sealed class Swapper<X, Y>
                 {
                     public void Reversed(QueryPipeline<Y, X> pipeline) => pipeline.Enumerate();
-                }
-
-                // Partial: one concrete arg, one type param -> not a clean forwarding -> ordinals null.
-                public sealed class Partial<X>
-                {
-                    public void Run(QueryPipeline<Account, X> pipeline) => pipeline.Enumerate();
-                }
-
-                public sealed class Caller
-                {
-                    // Closed receiver: concrete is captured, ordinals stay null.
-                    public void Closed(QueryPipeline<Account, Account> pipeline) => pipeline.Enumerate();
-
-                    // METHOD type params are NOT bindable from a parent's receiver -> ordinals null.
-                    public void MethodParam<X, Y>(QueryPipeline<X, Y> pipeline) => pipeline.Enumerate();
                 }
             }
             """;
@@ -184,23 +103,70 @@ public sealed class FactExtractorCaptureTests
                 && r.EnclosingSymbolId!.Contains(enclosing)
             );
 
-        // Swapper<X, Y>'s Y is type-param ordinal 1, X is 0 -> swapped order recorded faithfully as "1,0".
-        var reversed = Enumerate("Reversed");
-        reversed.ReceiverTypeArgOrdinals.ShouldBe("1,0");
-        reversed.ReceiverTypeConcrete.ShouldBeNull();
+        // Open form stays the original definition (for dispatch narrowing); the binding carries rendering.
+        var concrete = Enumerate("Concrete");
+        concrete.ReceiverType.ShouldBe("App.QueryPipeline<T, U>");
+        concrete.DeclaringTypeArgBinding.ShouldBe("""["C:App.Account","C:App.Invoice"]""");
+        concrete.MethodTypeArgBinding.ShouldBeNull(); // Enumerate is non-generic
 
-        var closed = Enumerate("Closed");
-        closed.ReceiverTypeArgOrdinals.ShouldBeNull();
-        closed.ReceiverTypeConcrete.ShouldBe("App.QueryPipeline<App.Account, App.Account>");
+        // Forwarded params encode as enclosing-TYPE ordinals in source order: Y is T:1, X is T:0.
+        Enumerate("Reversed").DeclaringTypeArgBinding.ShouldBe("""["T:1","T:0"]""");
 
-        var partial = Enumerate("Partial`1.Run");
-        partial.ReceiverTypeArgOrdinals.ShouldBeNull();
-        partial.ReceiverTypeConcrete.ShouldBeNull();
+        // Binding is gated to first-party callees only (only first-party nodes render).
+        result.References.Where(r => r.DeclaringTypeArgBinding is not null).ShouldAllBe(r => r.TargetInSource);
+    }
 
-        // A generic METHOD's own type params can't be bound from a receiver -> null (documented limit).
-        var methodParam = Enumerate("MethodParam");
-        methodParam.ReceiverTypeArgOrdinals.ShouldBeNull();
-        methodParam.ReceiverTypeConcrete.ShouldBeNull();
+    [Test]
+    public void Method_type_arg_binding_records_static_factory_and_generic_method_args()
+    {
+        // Mirrors the MedDBase QueryResult/QueryPipeline static-factory shape: a static generic method whose
+        // body forwards a mix of the enclosing TYPE param (TColumn) and its own METHOD param (RRecord).
+        var source = """
+            namespace App
+            {
+                public sealed class Account { }
+                public sealed class Row { }
+
+                public sealed class QueryPipeline<TRecord, TColumn>
+                {
+                    public static QueryPipeline<RRecord, TColumn> Create<TEntity, RRecord>() => null;
+                }
+
+                public sealed class QueryResult<TRecord, TColumn>
+                {
+                    public static QueryResult<RRecord, TColumn> Create<TEntity, RRecord>() =>
+                        QueryPipeline<RRecord, TColumn>.Create<TEntity, RRecord>() == null ? null : null;
+                }
+
+                public sealed class Caller
+                {
+                    public void Go() => QueryResult<Account, Row>.Create<Account, Account>();
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        Rig.Domain.Data.ReferenceFact Create(string enclosing) =>
+            result.References.Single(r =>
+                r.RefKind == "invocation"
+                && r.TargetSymbolId.Contains("QueryPipeline")
+                && r.TargetSymbolId.Contains("Create")
+                && r.EnclosingSymbolId!.Contains(enclosing)
+            );
+
+        // The ENTRY call pins concretes: QueryResult<Account, Row>.Create<Account, Account>.
+        var entry = result.References.Single(r =>
+            r.TargetSymbolId.Contains("QueryResult") && r.TargetSymbolId.Contains("Create") && r.EnclosingSymbolId!.Contains("Caller.Go")
+        );
+        entry.DeclaringTypeArgBinding.ShouldBe("""["C:App.Account","C:App.Row"]""");
+        entry.MethodTypeArgBinding.ShouldBe("""["C:App.Account","C:App.Account"]""");
+
+        // The INNER static call forwards: declaring QueryPipeline<RRecord(M:1), TColumn(T:1)>, method <TEntity
+        // (M:0), RRecord(M:1)> — exactly the tokens the renderer resolves against the parent's instantiation.
+        var inner = Create("QueryResult");
+        inner.DeclaringTypeArgBinding.ShouldBe("""["M:1","T:1"]""");
+        inner.MethodTypeArgBinding.ShouldBe("""["M:0","M:1"]""");
     }
 
     [Test]

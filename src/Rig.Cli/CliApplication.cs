@@ -1681,12 +1681,11 @@ public static class CliApplication
         // compact inline-tag rendering used by default/--effects/--summary.
         bool full = false,
         IReadOnlyDictionary<string, List<string>>? effectLeavesByMethod = null,
-        // Path-contextual monomorphization: the ordered, namespace-stripped CONCRETE type args the
-        // PARENT node ran under (its declaring type's instantiation). A child whose receiver is an OPEN
-        // forwarding generic (node.ReceiverArgOrdinals set, no ConcreteReceiver of its own) resolves its
-        // own placeholders by indexing these with its ordinals — so `QueryPipeline<T, U>` under
-        // `QueryResult<Account, Invoice>.Create` renders `QueryPipeline<Account, Invoice>`. Empty at roots.
-        IReadOnlyList<string>? parentConcreteArgs = null
+        // Path-contextual monomorphization: the PARENT node's resolved concrete instantiation — its
+        // declaring-type args and its own-method args. A child resolves its forwarded T:/M: binding tokens
+        // against these, so a chain of static factories / generic methods renders concretely. Null at roots.
+        IReadOnlyList<string?>? parentDeclaringConcrete = null,
+        IReadOnlyList<string?>? parentMethodConcrete = null
     )
     {
         // Compute visible children first — the fan-out label must reflect how many branches are
@@ -1738,13 +1737,18 @@ public static class CliApplication
             files && locById is not null && locById.TryGetValue(node.SymbolId, out var l) && l.File is not null
                 ? $"  📄 {ShortenPath(l.File)}:{l.Line}"
                 : "";
-        // This node's concrete declaring-type args: its OWN closed receiver when it had one, else — for an
-        // open forwarding receiver — resolved by indexing the parent's concrete args with this node's
-        // ordinals (path-contextual monomorphization). Carried down to children as THEIR parent binding.
-        var concreteArgs = ConcreteReceiverArgs(node.ConcreteReceiver);
-        if (concreteArgs.Count == 0)
-            concreteArgs = ResolveOrdinalArgs(node.ReceiverArgOrdinals, parentConcreteArgs);
-        var name = PrettyGenericName(ShortName(node.SymbolId), concreteArgs) + (signatures ? ShortSignature(node.SymbolId) : "");
+        // This node's concrete instantiation (declaring-type args + own-method args), resolved from its
+        // monomorphization bindings against the PARENT's resolved instantiation — path-contextual
+        // monomorphization. Carried down to children as THEIR parent binding so a forwarding chain resolves.
+        var (declaringConcrete, methodConcrete) = ResolveNodeInstantiation(
+            node.DeclaringTypeArgBinding,
+            node.MethodTypeArgBinding,
+            parentDeclaringConcrete,
+            parentMethodConcrete
+        );
+        var name =
+            PrettyGenericName(ShortName(node.SymbolId), declaringConcrete, methodConcrete)
+            + (signatures ? ShortSignature(node.SymbolId) : "");
         // EP marker: when this node is itself a rule-detected entry point, wrap its name with "▶ kind"
         // and a trailing service chip — the same custom rendering used by derive/callers.
         var (epPrefix, epSuffix) = epContext?.ChipFor(node.SymbolId) ?? ("", "");
@@ -1815,7 +1819,8 @@ public static class CliApplication
                 epContext,
                 full,
                 effectLeavesByMethod,
-                concreteArgs
+                declaringConcrete,
+                methodConcrete
             );
     }
 
@@ -2717,24 +2722,26 @@ public static class CliApplication
     //     reads as `NewType<ChamberId, Int32, …>.New` instead of a wall of fully-qualified braces.
     // Type-arg simple-naming applies only INSIDE the braces (depth>0); the outer name (already shortened
     // by ShortName) and the trailing `.Member` keep their dots.
-    private static string PrettyGenericName(string name) => PrettyGenericName(name, []);
+    private static string PrettyGenericName(string name) => PrettyGenericName(name, null, null);
 
-    // `concreteArgs` (when non-empty) are the ordered, namespace-stripped generic type arguments of the
-    // CONCRETE receiver the node ran under (from TraceNode.ConcreteReceiver, e.g. ["Account", "Invoice"]).
-    // They substitute the DECLARING TYPE's open `<T, U>` placeholders so the label reads as the real
-    // instantiation — `QueryPipeline<Account, Invoice>.Enumerate` instead of `QueryPipeline<T, U>.Enumerate`.
-    // Substitution applies ONLY to the FIRST arity expansion (the declaring type's `N), and only when its
-    // arity matches the receiver's arg count; a generic METHOD's own arity (a later ``M) keeps placeholders
-    // (its concrete args aren't the receiver's). The constructed-brace form ({Ns.A,Ns.B}) is already concrete
-    // and never reaches the arity branch, so it is unaffected.
-    private static string PrettyGenericName(string name, IReadOnlyList<string> concreteArgs)
+    // `declaringArgs` / `methodArgs` (when non-null) are the ordered, namespace-stripped concrete type
+    // arguments the node ran under — resolved from the generic monomorphization bindings (see
+    // ResolveNodeInstantiation). They substitute the label's two arity expansions: the declaring type's
+    // `N (declaringArgs) and a generic method's own ``M (methodArgs) — e.g. `QueryPipeline<Account, Invoice>
+    // .Create<Entity, Account>` instead of `QueryPipeline<T, U>.Create<T, U>`. A null list or per-position
+    // null keeps that slot's placeholder. The constructed-brace form ({Ns.A,Ns.B}) is already concrete and
+    // never reaches the arity branch, so it is unaffected.
+    private static string PrettyGenericName(string name, IReadOnlyList<string?>? declaringArgs, IReadOnlyList<string?>? methodArgs)
     {
         if (name.IndexOf('`') < 0 && name.IndexOf('{') < 0)
             return name;
         var sb = new StringBuilder();
         var token = new StringBuilder();
         var depth = 0;
-        var declaringAritySubstituted = false;
+        // Arity expansions appear in order: the FIRST is the declaring type's `N (substitute declaringArgs),
+        // the SECOND is a generic method's own ``M (substitute methodArgs). A per-position null arg keeps
+        // that slot's placeholder (T/U/V), so a partial binding still resolves the positions it knows.
+        var arityGroup = 0;
 
         void FlushToken()
         {
@@ -2776,15 +2783,19 @@ public static class CliApplication
                             sb.Append(TypeParamName(n)); // `0 -> T, `1 -> U
                         else if (n > 0)
                         {
-                            // First arity = the declaring type's: substitute the concrete receiver args when
-                            // they match its arity. Later arities (a generic method's own) keep placeholders.
-                            var useConcrete = !declaringAritySubstituted && concreteArgs.Count == n;
-                            declaringAritySubstituted = true;
+                            // First arity group = the declaring type's, second = a generic method's own.
+                            var args =
+                                arityGroup == 0 ? declaringArgs
+                                : arityGroup == 1 ? methodArgs
+                                : null;
+                            arityGroup++;
+                            var usable = args is not null && args.Count == n;
                             sb.Append('<')
                                 .Append(
-                                    useConcrete
-                                        ? string.Join(", ", concreteArgs)
-                                        : string.Join(", ", Enumerable.Range(0, n).Select(TypeParamName))
+                                    string.Join(
+                                        ", ",
+                                        Enumerable.Range(0, n).Select(k => usable && args![k] is { } v ? v : TypeParamName(k))
+                                    )
                                 )
                                 .Append('>');
                         }
@@ -2819,76 +2830,60 @@ public static class CliApplication
         return sb.ToString();
     }
 
-    // The ordered, namespace-stripped generic type ARGUMENTS of a concrete receiver display name, for
-    // substituting a node's declaring-type `<T, U>` placeholders (PrettyGenericName). Returns empty unless
-    // the receiver is exactly `Name<...>` — a SINGLE top-level generic group that runs to the end of the
-    // string. A nested/qualified receiver (`Outer<X>.Inner<Y>`) or one with a trailing suffix is rejected
-    // (returns empty → placeholders stand), because ShortName shows only the innermost type and mapping the
-    // wrong group's args would mislead. "Ns.QueryPipeline<Ns.Account, Other.Invoice>" -> ["Account", "Invoice"].
-    private static IReadOnlyList<string> ConcreteReceiverArgs(string? receiver)
+    // Path-contextual monomorphization: resolve this node's concrete instantiation — (declaring-type args,
+    // own-method args) — from its mined bindings against the PARENT node's resolved instantiation. Each
+    // binding is a JSON string[] of C:/T:/M:/? tokens (see ReferenceFact). A "C:" token is the concrete type
+    // (namespace-stripped); a "T:n"/"M:n" token forwards the parent's n-th declaring/method concrete; "?" or
+    // an out-of-range/missing forward yields null (that position keeps its placeholder). Returns (null, null)
+    // for non-generic callees. The arrays it returns become the children's parent instantiation.
+    private static (IReadOnlyList<string?>? Declaring, IReadOnlyList<string?>? Method) ResolveNodeInstantiation(
+        string? declaringBinding,
+        string? methodBinding,
+        IReadOnlyList<string?>? parentDeclaring,
+        IReadOnlyList<string?>? parentMethod
+    ) =>
+        (
+            ResolveBindingTokens(declaringBinding, parentDeclaring, parentMethod),
+            ResolveBindingTokens(methodBinding, parentDeclaring, parentMethod)
+        );
+
+    private static IReadOnlyList<string?>? ResolveBindingTokens(
+        string? bindingJson,
+        IReadOnlyList<string?>? parentDeclaring,
+        IReadOnlyList<string?>? parentMethod
+    )
     {
-        if (string.IsNullOrEmpty(receiver))
-            return [];
-        var r = receiver!;
-        var open = r.IndexOf('<');
-        if (open < 0 || r[^1] != '>')
-            return [];
-
-        // The '<' at `open` must enclose all the way to the final '>': scan depth from it and require it to
-        // return to 0 exactly at the last char (else there's a trailing ".Inner<…>" / suffix — bail).
-        var depth = 0;
-        for (var i = open; i < r.Length; i++)
+        if (string.IsNullOrEmpty(bindingJson))
+            return null;
+        string[]? tokens;
+        try
         {
-            if (r[i] == '<')
-                depth++;
-            else if (r[i] == '>' && --depth == 0)
-            {
-                if (i != r.Length - 1)
-                    return [];
-                break;
-            }
+            tokens = System.Text.Json.JsonSerializer.Deserialize<string[]>(bindingJson!);
         }
-
-        var inner = r.Substring(open + 1, r.Length - 1 - (open + 1));
-        var args = new List<string>();
-        depth = 0;
-        var start = 0;
-        for (var i = 0; i <= inner.Length; i++)
+        catch (System.Text.Json.JsonException)
         {
-            if (i < inner.Length)
-            {
-                var c = inner[i];
-                if (c is '<' or '(' or '[')
-                    depth++;
-                else if (c is '>' or ')' or ']')
-                    depth--;
-                if (!(c == ',' && depth == 0))
-                    continue;
-            }
-            args.Add(StripTypeNamespaces(inner.Substring(start, i - start).Trim()));
-            start = i + 1;
+            return null;
         }
-        return args;
-    }
+        if (tokens is null || tokens.Length == 0)
+            return null;
 
-    // Path-contextual monomorphization: resolve an OPEN forwarding receiver's placeholders to concrete
-    // args by indexing the PARENT node's concrete args (`parentArgs`, already namespace-stripped) with
-    // this node's `ordinals` ("0,1" — each receiver arg's ordinal into the enclosing type's params, mined
-    // as ReferenceFact.ReceiverTypeArgOrdinals). `QueryPipeline<T, U>` with ordinals "0,1" under a parent
-    // running `QueryResult<Account, Invoice>` -> ["Account", "Invoice"]. Returns empty (placeholders stand)
-    // when there is no ordinal data, no parent binding, or any ordinal is out of the parent's arg range
-    // (defensive — a clean forwarding always indexes in range).
-    private static IReadOnlyList<string> ResolveOrdinalArgs(string? ordinals, IReadOnlyList<string>? parentArgs)
-    {
-        if (string.IsNullOrEmpty(ordinals) || parentArgs is null || parentArgs.Count == 0)
-            return [];
-        var parts = ordinals!.Split(',');
-        var resolved = new string[parts.Length];
-        for (var i = 0; i < parts.Length; i++)
+        static string? Forward(IReadOnlyList<string?>? parent, string ordinalText) =>
+            int.TryParse(ordinalText, out var ord) && parent is not null && ord >= 0 && ord < parent.Count ? parent[ord] : null;
+
+        var resolved = new string?[tokens.Length];
+        for (var i = 0; i < tokens.Length; i++)
         {
-            if (!int.TryParse(parts[i], out var ordinal) || ordinal < 0 || ordinal >= parentArgs.Count)
-                return [];
-            resolved[i] = parentArgs[ordinal];
+            var tok = tokens[i];
+            resolved[i] =
+                tok.Length < 2
+                    ? null
+                    : tok[0] switch
+                    {
+                        'C' => StripTypeNamespaces(tok.Substring(2)),
+                        'T' => Forward(parentDeclaring, tok.Substring(2)),
+                        'M' => Forward(parentMethod, tok.Substring(2)),
+                        _ => null,
+                    };
         }
         return resolved;
     }
