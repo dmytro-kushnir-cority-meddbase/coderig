@@ -2235,11 +2235,18 @@ public static class CliApplication
 
         output.WriteLine();
         output.WriteLine($"Entry points re-derived from facts: {derivedEps.Count}");
+        var perKindSample = limit / 4 + 1;
         foreach (var kindGroup in derivedEps.GroupBy(e => e.Kind).OrderByDescending(g => g.Count()))
         {
             output.WriteLine($"  {kindGroup.Key}: {kindGroup.Count()}");
-            foreach (var e in kindGroup.Take(limit / 4 + 1))
+            foreach (var e in kindGroup.Take(perKindSample))
                 WriteEntryPointLine(output, deployments, e.Route, e.FilePath, e.Line, e.Requires);
+            // The per-kind listing is a SAMPLE (readability). Say so when truncated, so a grep over this
+            // output is never silently a false negative — the full set is in `--format tsv` (or raise --limit).
+            if (kindGroup.Count() > perKindSample)
+                output.WriteLine(
+                    $"      … +{kindGroup.Count() - perKindSample} more {kindGroup.Key} (sample shown; `rig derive --format tsv` lists all)"
+                );
         }
 
         // --- Classified handoff entry points (Phase 1/3): dispatcher-consumed delegates, promoted to
@@ -2255,13 +2262,17 @@ public static class CliApplication
         foreach (var kindGroup in classifiedHandoffs.GroupBy(h => h.Kind).OrderByDescending(g => g.Count()))
         {
             output.WriteLine($"  {kindGroup.Key}: {kindGroup.Count()}");
-            foreach (var h in kindGroup.Take(limit / 4 + 1))
+            foreach (var h in kindGroup.Take(perKindSample))
             {
                 var tag = deployments.IsEmpty ? "" : $"  {EntryPointRenderer.DeployTag(deployments, h.FilePath, h.Requires)}";
                 output.WriteLine(
                     $"      {ShortName(h.Target)}  ⤳ via {h.Dispatcher}{tag}\n          registered in {ShortName(h.RegisteredIn)}  {ShortenPath(h.FilePath)}:{h.Line}  [async_handoff]"
                 );
             }
+            if (kindGroup.Count() > perKindSample)
+                output.WriteLine(
+                    $"      … +{kindGroup.Count() - perKindSample} more {kindGroup.Key} (sample shown; `rig derive --format tsv` lists all)"
+                );
         }
 
         // The headline: entry points per deployed service (the summary table). An EP counts in every

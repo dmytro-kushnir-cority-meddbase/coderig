@@ -1,8 +1,16 @@
 # Bug: `rig derive` omits an entry point that `rig tree` labels `▶ action`
 
-**Status:** Open  
+**Status:** RESOLVED — NOT a derivation miss. `RefreshMedicareVerificationInfoPanel` IS a correctly-derived
+action entry point (confirmed in `rig derive --format tsv` and `rig tree`'s fresh `--no-cache` chip; there
+are 5,486 action EPs). The original hypothesis (a predecessor pre-filter in `FactEntryPointDeriver`) is
+WRONG — `DeriveActions` has no caller/predecessor gate. The real cause: the **human-readable `rig derive`
+output prints only a per-kind SAMPLE** (`Take(limit/4 + 1)`) with no truncation marker, so `rig derive |
+grep <name>` is a silent false negative for any EP past the sample. Fix: derive now prints a `… +N more
+<kind> (sample shown; rig derive --format tsv lists all)` line when a kind is truncated. For a complete,
+greppable list use `rig derive --format tsv`. No EP-derivation change.
+
 **Repro DB:** `C:\Git\meddbase-analysis`  
-**Affected commands:** `rig derive`, `rig callers --entrypoints`
+**Affected commands:** `rig derive` (default output only)
 
 ---
 
