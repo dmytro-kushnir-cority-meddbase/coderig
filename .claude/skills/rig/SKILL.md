@@ -59,6 +59,13 @@ Patterns are case-insensitive substring matches over DocIDs (`M:Ns.Type.Method(a
   ~heuristic»`, path: `[impl-dispatch (heuristic)]`, reaches: `~heuristic` suffix; TSV: trailing
   `dispatchBasis` column). ~99% correct — verify before relying on such a path.
 - **`tree` children are in source order** (call-site line ≈ eager-inline execution order), deterministic.
+- **Generic labels show the REAL instantiation, not `<T, U>`.** When a node is reached from a concrete
+  entry, `tree` monomorphizes the declaring-type AND generic-method args down the call chain —
+  `QueryPipeline<PersonDataFieldDefinition, PersonDataFieldDefinitionColumn>.Create<DefinitionAndRangeDto,
+  …>` instead of `QueryPipeline<T, U>.Create<T, U>`. Works through static factories, generic methods, and
+  lambda bodies (`skip: i => Create(…)`). A position stays a placeholder (`T`/`U`) only when its type is
+  genuinely unknown on that path — no concrete entry pinned it, or it crosses an **impl-dispatch** hop
+  (interface→impl dispatch carries no type binding). The arity is always real (`Foo\`2` → `<T, U>`).
 - **Effect filtering** — `--only <list>` keeps just those, `--exclude <list>` drops them (exclude wins).
   The list is comma- **or** whitespace-separated and repeatable; tokens match `provider` (`throw`) or
   `provider:operation` (`llblgen:read`). Headline use: **`--exclude throw`** to hide exceptions.
