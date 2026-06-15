@@ -221,6 +221,18 @@ MISSES something real). Severity is the agents' ground-truthed assessment.
 - **Rule-gap vs resolution-gap:** most coverage gaps are pure **rules-only** wins (VS-G6/G8/G9 + VS-C2/C4/C5) — add/relabel rules, no engine change, no re-mine. VS-G7 is a real matcher bug (generic arity). VS-G2/G3/G4/G5 are new detector families/providers.
 - **`rig --files`/leaf paths are shortened tails** (e.g. `src/Audits/…`) not solution-root-relative (real: `src/audits/src/Audits/…`), so they can't be opened directly — every agent had to glob by basename. Worth making paths root-relative or absolute (ties to D8 quote-source).
 
+### Quick-win batch — DONE 2026-06-15 (rules-only, verified live)
+- **VS-C5** Flurl `Put*`/`Patch*`/`Delete*` split out of the `send` bucket → `http:PUT/PATCH/DELETE` (builtin-rules.json). Verified `http:PUT` on `AccessRequests.ExecuteActivateDeviceRequest`.
+- **VS-C3** SemaphoreSlim removed from the Monitor `lock` rules and retagged `async_lock:acquire/release` (🔐) — detector kept, just no longer conflated with Monitor; added to `lock_held_across` excludeProviders. Verified on `MonitorQueueBackgroundService`.
+- **VS-G6** Redis consume (`GetAsyncQueue`/`Dequeue`/`Subscribe*`) → `queue:read` (meddbase rig.rules.json). Verified `queue:read` at `MonitorQueueBackgroundService.cs:76`.
+- **VS-G8** BCL filesystem: `FileStream` added to stream read/write; `FileInfo` write/read/delete rules; `TextReader`/`TextWriter` added (also covers **VS-G12** base-class dispatch). Verified `io:delete`/`io:write` on `SharpAttachment.Save`.
+
+**Not done (need engine, NOT rules-only):**
+- **VS-C2 dropped** — ExecuteScalar genuinely ambiguous (`INSERT … SELECT SCOPE_IDENTITY()` is a scalar write); can't classify without SQL parsing. Stays `execute`.
+- **VS-C4** XmlDocument-resource → needs a literal/constant resource strategy (only `declaring_type`/`receiver_type`/`*_argument` exist).
+- **VS-G4** generic SOAP → effect rules match `declaringTypes` exact/prefix only; needs base-type matching for `SoapHttpClientProtocol.Invoke` (or enumerate each proxy type).
+- **VS-G7 reclassified** — the missed `object_store:read` on generic `GetInstance``1` is NOT the arity suffix (the deriver already strips `` `N `` at match time, FactEffectDeriver.cs:90); root cause still open, needs its own dig.
+
 ### Suggested order (by value ÷ effort)
 1. **Rules-only quick wins (no re-mine):** VS-C2 (dapper scalar), VS-C5 (Flurl PUT), VS-G6 (queue:read), VS-G8 (BCL file I/O), VS-G4 (generic SOAP), VS-C4 (XmlDocument resource). A few lines of `rig.rules.json`/builtin-rules each; re-derive at query time.
 2. **High-value detector families:** VS-G2 (permission:assert) + VS-G3 (config:read) — biggest audit value; VS-G1/F3 (background ctor-delegate EP).

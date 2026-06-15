@@ -224,13 +224,53 @@
     },
     {
       "provider": "http",
+      "operation": "PUT",
+      "methods": [
+        "PutAsync",
+        "PutJsonAsync",
+        "PutStringAsync"
+      ],
+      "declaringTypes": [
+        "Flurl.Http.GeneratedExtensions"
+      ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "flurl_http_put"
+    },
+    {
+      "provider": "http",
+      "operation": "PATCH",
+      "methods": [
+        "PatchJsonAsync",
+        "PatchStringAsync"
+      ],
+      "declaringTypes": [
+        "Flurl.Http.GeneratedExtensions"
+      ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "flurl_http_patch"
+    },
+    {
+      "provider": "http",
+      "operation": "DELETE",
+      "methods": [
+        "DeleteAsync"
+      ],
+      "declaringTypes": [
+        "Flurl.Http.GeneratedExtensions"
+      ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "flurl_http_delete"
+    },
+    {
+      "provider": "http",
       "operation": "send",
       "methods": [
-        "PutJsonAsync",
-        "PutStringAsync",
-        "PatchJsonAsync",
-        "PatchStringAsync",
-        "DeleteAsync",
         "SendAsync",
         "SendJsonAsync",
         "SendStringAsync",
@@ -242,7 +282,7 @@
       "resource": "declaring_type",
       "confidence": "high",
       "basis": "compilation",
-      "reason": "flurl_http_mutate"
+      "reason": "flurl_http_send"
     },
     {
       "provider": "http",
@@ -1149,7 +1189,7 @@
       "provider": "io",
       "operation": "write",
       "methods": [ "Write", "WriteAsync", "WriteLine", "WriteLineAsync", "Flush", "FlushAsync" ],
-      "declaringTypes": [ "System.IO.StreamWriter", "System.IO.BinaryWriter" ],
+      "declaringTypes": [ "System.IO.StreamWriter", "System.IO.BinaryWriter", "System.IO.FileStream", "System.IO.TextWriter" ],
       "resource": "declaring_type",
       "confidence": "medium",
       "basis": "compilation+profile",
@@ -1159,17 +1199,47 @@
       "provider": "io",
       "operation": "read",
       "methods": [ "Read", "ReadAsync", "ReadLine", "ReadLineAsync", "ReadToEnd", "ReadToEndAsync" ],
-      "declaringTypes": [ "System.IO.StreamReader", "System.IO.BinaryReader" ],
+      "declaringTypes": [ "System.IO.StreamReader", "System.IO.BinaryReader", "System.IO.FileStream", "System.IO.TextReader" ],
       "resource": "declaring_type",
       "confidence": "medium",
       "basis": "compilation+profile",
       "reason": "stream_read"
     },
     {
+      "provider": "io",
+      "operation": "write",
+      "methods": [ "OpenWrite", "MoveTo", "CopyTo", "Create", "CreateText", "AppendText", "Replace", "Encrypt", "Decrypt" ],
+      "declaringTypes": [ "System.IO.FileInfo" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "fileinfo_write"
+    },
+    {
+      "provider": "io",
+      "operation": "read",
+      "methods": [ "OpenRead", "OpenText" ],
+      "declaringTypes": [ "System.IO.FileInfo" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "fileinfo_read"
+    },
+    {
+      "provider": "io",
+      "operation": "delete",
+      "methods": [ "Delete" ],
+      "declaringTypes": [ "System.IO.FileInfo" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "fileinfo_delete"
+    },
+    {
       "provider": "lock",
       "operation": "acquire",
       "methods": [ "Enter", "TryEnter", "Wait", "WaitAsync", "WaitOne", "EnterReadLock", "EnterWriteLock", "EnterUpgradeableReadLock", "AcquireReaderLock", "AcquireWriterLock" ],
-      "declaringTypes": [ "System.Threading.Monitor", "System.Threading.SemaphoreSlim", "System.Threading.Semaphore", "System.Threading.WaitHandle", "System.Threading.ReaderWriterLockSlim", "System.Threading.ReaderWriterLock" ],
+      "declaringTypes": [ "System.Threading.Monitor", "System.Threading.Semaphore", "System.Threading.WaitHandle", "System.Threading.ReaderWriterLockSlim", "System.Threading.ReaderWriterLock" ],
       "resource": "declaring_type",
       "confidence": "medium",
       "basis": "compilation+profile",
@@ -1179,11 +1249,31 @@
       "provider": "lock",
       "operation": "release",
       "methods": [ "Exit", "Release", "ReleaseMutex", "ExitReadLock", "ExitWriteLock", "ExitUpgradeableReadLock", "ReleaseReaderLock", "ReleaseWriterLock" ],
-      "declaringTypes": [ "System.Threading.Monitor", "System.Threading.SemaphoreSlim", "System.Threading.Semaphore", "System.Threading.Mutex", "System.Threading.ReaderWriterLockSlim", "System.Threading.ReaderWriterLock" ],
+      "declaringTypes": [ "System.Threading.Monitor", "System.Threading.Semaphore", "System.Threading.Mutex", "System.Threading.ReaderWriterLockSlim", "System.Threading.ReaderWriterLock" ],
       "resource": "declaring_type",
       "confidence": "medium",
       "basis": "compilation+profile",
       "reason": "lock_release"
+    },
+    {
+      "provider": "async_lock",
+      "operation": "acquire",
+      "methods": [ "Wait", "WaitAsync" ],
+      "declaringTypes": [ "System.Threading.SemaphoreSlim" ],
+      "resource": "declaring_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "async_lock_acquire"
+    },
+    {
+      "provider": "async_lock",
+      "operation": "release",
+      "methods": [ "Release" ],
+      "declaringTypes": [ "System.Threading.SemaphoreSlim" ],
+      "resource": "declaring_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "async_lock_release"
     },
     {
       "provider": "process",
@@ -1439,7 +1529,7 @@
       {
         "scopeKind": "lock",
         "scopeTypePatterns": [],
-        "excludeProviders": ["lock", "inproc_cache", "app_state", "session_state", "inproc_timer"],
+        "excludeProviders": ["lock", "async_lock", "inproc_cache", "app_state", "session_state", "inproc_timer"],
         "observationType": "lock_held_across_effect",
         "context": "lock"
       }
@@ -1461,6 +1551,7 @@
     "object_store": "📦",
     "io": "📁",
     "throw": "⚠️",
-    "lock": "🔒"
+    "lock": "🔒",
+    "async_lock": "🔐"
   }
 }
