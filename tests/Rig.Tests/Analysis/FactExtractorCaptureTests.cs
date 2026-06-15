@@ -130,6 +130,52 @@ public sealed class FactExtractorCaptureTests
         System.Text.Json.JsonSerializer.Deserialize<string?[]>(call.ArgumentNames!)![0].ShouldBe("Keys.Conn");
     }
 
+    // 18b lambda identity: a lambda passed as an argument to a call/ctor gets a synthetic symbol that
+    // OWNS its body's calls (so a deferred dispatcher can later promote it to an async entry point),
+    // plus a methodGroup edge consumer->lambda carrying the DelegateConsumer (the member it's handed
+    // to). Calls OUTSIDE the lambda stay attributed to the enclosing method.
+    [Test]
+    public void Lambda_argument_becomes_a_synthetic_symbol_owning_its_body_calls()
+    {
+        var source = """
+            namespace App
+            {
+                public static class Scheduler { public static void Schedule(System.Action work) { } }
+                public static class Worker { public static void DoWork() { } public static void Inline() { } }
+
+                public sealed class Caller
+                {
+                    public void Go()
+                    {
+                        Scheduler.Schedule(() => Worker.DoWork());
+                        Worker.Inline();
+                    }
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        // A synthetic lambda symbol, contained by Caller.Go.
+        var lambda = result.Symbols.SingleOrDefault(s => s.Kind == "lambda" && s.ContainingSymbolId != null && s.ContainingSymbolId.Contains("Caller.Go"));
+        lambda.ShouldNotBeNull();
+
+        // A methodGroup edge consumer(Scheduler.Schedule) -> lambda, enclosed by Caller.Go.
+        result.References.ShouldContain(r =>
+            r.RefKind == "methodGroup"
+            && r.TargetSymbolId == lambda!.SymbolId
+            && r.DelegateConsumer != null && r.DelegateConsumer.Contains("Scheduler.Schedule")
+            && r.EnclosingSymbolId != null && r.EnclosingSymbolId.Contains("Caller.Go"));
+
+        // The call INSIDE the lambda body is attributed to the lambda, NOT Caller.Go.
+        var doWork = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Worker.DoWork"));
+        doWork.EnclosingSymbolId.ShouldBe(lambda!.SymbolId);
+
+        // The call OUTSIDE the lambda still attributes to Caller.Go.
+        var inline = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Worker.Inline"));
+        inline.EnclosingSymbolId!.ShouldContain("Caller.Go");
+    }
+
     [Test]
     public void Captures_bodied_property_accessor_calls_and_skips_auto_properties()
     {

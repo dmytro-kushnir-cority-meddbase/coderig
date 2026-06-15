@@ -80,6 +80,10 @@ internal static class FactExtractor
                 AddDispatchFact(dispatch, dispatchSeen, overridden, overrideMethod, DispatchKinds.Override);
         }
 
+        // --- Lambda identity (18b): synthesize a symbol + handoff edge for each argument-passed lambda
+        //     BEFORE the reference pass, so EnclosingSymbolId can re-root the lambda body's facts. ---
+        var lambdaIds = CollectLambdaSymbols(root, model, tree, symbols, references);
+
         // --- References -> ReferenceFact (one pass over every simple name) ---
         foreach (var name in root.DescendantNodes().OfType<SimpleNameSyntax>())
         {
@@ -111,7 +115,7 @@ internal static class FactExtractor
                 references,
                 target,
                 refKind,
-                EnclosingSymbolId(name, model),
+                EnclosingSymbolId(name, model, lambdaIds),
                 tree,
                 name,
                 receiverType,
@@ -129,7 +133,7 @@ internal static class FactExtractor
             // accessor so reach walks its effects (a setter that validates/persists, a lazy getter that
             // fetches). See AddAccessorInvocations for the body-only selectivity.
             if (target is IPropertySymbol propertyAccess && refKind is RefKinds.Read or RefKinds.Write)
-                AddAccessorInvocations(references, propertyAccess, name, model, tree);
+                AddAccessorInvocations(references, propertyAccess, name, model, tree, lambdaIds);
         }
 
         // --- Object creations -> ctor refs ---
@@ -140,7 +144,7 @@ internal static class FactExtractor
         foreach (var creation in root.DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>())
         {
             if (model.GetSymbolInfo(creation).Symbol is IMethodSymbol { MethodKind: MethodKind.Constructor } ctor)
-                AddReference(references, ctor, RefKinds.Ctor, EnclosingSymbolId(creation, model), tree, creation);
+                AddReference(references, ctor, RefKinds.Ctor, EnclosingSymbolId(creation, model, lambdaIds), tree, creation);
         }
 
         // --- Throw sites -> "throw" refs (the thrown exception TYPE) ---
@@ -158,7 +162,7 @@ internal static class FactExtractor
                 references,
                 type,
                 RefKinds.Throw,
-                EnclosingSymbolId(thrown, model),
+                EnclosingSymbolId(thrown, model, lambdaIds),
                 tree,
                 thrown,
                 structural: StructuralContextOf(thrown, model),
@@ -176,7 +180,7 @@ internal static class FactExtractor
         // body's closing brace — and let the existing data-driven lock rules classify them. The
         // DETECTION stays in rules (builtin-rules.json); this only records a structural fact the
         // language guarantees, exactly as the ctor/throw passes record their constructs.
-        AddLockStatementRefs(references, root, model, tree);
+        AddLockStatementRefs(references, root, model, tree, lambdaIds);
 
         return new FactExtractionResult(symbols, references, relations, dispatch);
     }
@@ -186,7 +190,7 @@ internal static class FactExtractor
     // refs carry genuine DocIds (the same the lock rule's declaringTypes gate matches). The release is
     // pinned to the body's closing-brace line so the acquire/release straddle the locked body — the
     // lexical span the ordering work (transaction/lock-held-across-IO) will read.
-    private static void AddLockStatementRefs(List<ReferenceFact> references, SyntaxNode root, SemanticModel model, SyntaxTree tree)
+    private static void AddLockStatementRefs(List<ReferenceFact> references, SyntaxNode root, SemanticModel model, SyntaxTree tree, IReadOnlyDictionary<SyntaxNode, string> lambdaIds)
     {
         var locks = root.DescendantNodes().OfType<LockStatementSyntax>().ToArray();
         if (locks.Length == 0)
@@ -200,7 +204,7 @@ internal static class FactExtractor
 
         foreach (var lockStmt in locks)
         {
-            var enclosing = EnclosingSymbolId(lockStmt, model);
+            var enclosing = EnclosingSymbolId(lockStmt, model, lambdaIds);
             var structural = StructuralContextOf(lockStmt, model);
 
             // acquire: at the `lock` keyword / locked expression. allowRuntime keeps the BCL ref.
@@ -751,7 +755,8 @@ internal static class FactExtractor
         IPropertySymbol property,
         SimpleNameSyntax name,
         SemanticModel model,
-        SyntaxTree tree
+        SyntaxTree tree,
+        IReadOnlyDictionary<SyntaxNode, string> lambdaIds
     )
     {
         var (reads, writes) = AccessShape(name);
@@ -760,7 +765,7 @@ internal static class FactExtractor
         if (getter is null && setter is null)
             return;
 
-        var enclosing = EnclosingSymbolId(name, model);
+        var enclosing = EnclosingSymbolId(name, model, lambdaIds);
         var receiver = ReceiverTypeOf(name, model);
         var structural = StructuralContextOf(name, model);
         if (getter is not null)
@@ -823,17 +828,124 @@ internal static class FactExtractor
 
     private static SyntaxNode? AccessorNode(IMethodSymbol accessor) => accessor.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
 
-    private static string? EnclosingSymbolId(SyntaxNode node, SemanticModel model)
+    // The owning symbol of a usage site. Normally the nearest enclosing member (method/property/field),
+    // BUT a node inside an ARGUMENT-passed lambda (18b) is owned by that lambda's synthetic symbol —
+    // so the lambda body's calls/effects attach to the lambda (promotable to an async entry point by a
+    // deferred dispatcher) instead of bleeding into the enclosing method. Walks ancestors-or-self,
+    // innermost-first: the first arg-lambda in `lambdaIds` wins; lambdas NOT in the map (field/local
+    // assignments — 18c) are transparent and fall through to the member, preserving prior behaviour.
+    private static string? EnclosingSymbolId(SyntaxNode node, SemanticModel model, IReadOnlyDictionary<SyntaxNode, string> lambdaIds)
     {
-        var member = node.FirstAncestorOrSelf<MemberDeclarationSyntax>();
-        if (member is null)
-            return null;
-        if (member is BaseFieldDeclarationSyntax field)
+        for (var cur = node; cur is not null; cur = cur.Parent)
         {
-            var first = field.Declaration.Variables.FirstOrDefault();
-            return first is null ? null : model.GetDeclaredSymbol(first)?.GetDocumentationCommentId();
+            if (cur is AnonymousFunctionExpressionSyntax && lambdaIds.TryGetValue(cur, out var lambdaId))
+                return lambdaId;
+            if (cur is MemberDeclarationSyntax member)
+            {
+                if (member is BaseFieldDeclarationSyntax field)
+                {
+                    var first = field.Declaration.Variables.FirstOrDefault();
+                    return first is null ? null : model.GetDeclaredSymbol(first)?.GetDocumentationCommentId();
+                }
+                return model.GetDeclaredSymbol(member)?.GetDocumentationCommentId();
+            }
         }
-        return model.GetDeclaredSymbol(member)?.GetDocumentationCommentId();
+        return null;
+    }
+
+    // 18b: assign a synthetic identity to every lambda passed as a call/ctor ARGUMENT, emit it as a
+    // "lambda" SymbolFact + a methodGroup edge (enclosing -> lambda) carrying the DelegateConsumer (the
+    // dispatcher it's handed to), and return the node->id map that re-roots the lambda body's facts.
+    // A lambda that is NOT an argument (a `Func<> f = () => ..` field/local, a `+=` handler) gets no
+    // identity here — LambdaConsumerOf returns null — and stays owned by its member (deferred to 18c).
+    // Outer lambdas precede their nested children in document order, so a nested lambda's own edge
+    // resolves its enclosing to the OUTER lambda (already in the map).
+    private static Dictionary<SyntaxNode, string> CollectLambdaSymbols(
+        SyntaxNode root,
+        SemanticModel model,
+        SyntaxTree tree,
+        List<SymbolFact> symbols,
+        List<ReferenceFact> references
+    )
+    {
+        var ids = new Dictionary<SyntaxNode, string>();
+        var ordinalByMember = new Dictionary<string, int>(StringComparer.Ordinal);
+        var assembly = model.Compilation.AssemblyName ?? "";
+
+        foreach (var lambda in root.DescendantNodes().OfType<AnonymousFunctionExpressionSyntax>())
+        {
+            var consumer = LambdaConsumerOf(lambda, model);
+            if (consumer is null)
+                continue; // not an argument-passed lambda — no deferred identity
+
+            var member = lambda.FirstAncestorOrSelf<MemberDeclarationSyntax>();
+            var memberSymbol = member is null ? null : model.GetDeclaredSymbol(member);
+            var memberId = memberSymbol?.GetDocumentationCommentId();
+            if (memberId is null)
+                continue;
+
+            var ordinal = ordinalByMember.TryGetValue(memberId, out var n) ? n : 0;
+            ordinalByMember[memberId] = ordinal + 1;
+            var id = $"{memberId}~λ{ordinal}"; // λ marker: clearly synthetic, never collides with a real DocID
+            ids[lambda] = id;
+
+            var line = tree.GetLineSpan(lambda.Span).StartLinePosition.Line + 1;
+            symbols.Add(
+                new SymbolFact(
+                    SymbolId: id,
+                    Kind: "lambda",
+                    Name: $"λ{ordinal}",
+                    Namespace: memberSymbol?.ContainingNamespace?.ToDisplayString() ?? "",
+                    ContainingSymbolId: memberId,
+                    Modifiers: "",
+                    TypeKind: "",
+                    Signature: "lambda",
+                    FilePath: tree.FilePath,
+                    Line: line,
+                    DefiningAssembly: assembly,
+                    IsOverride: false
+                )
+            );
+            references.Add(
+                new ReferenceFact(
+                    TargetSymbolId: id,
+                    RefKind: RefKinds.MethodGroup,
+                    EnclosingSymbolId: EnclosingSymbolId(lambda.Parent ?? lambda, model, ids),
+                    TargetAssembly: assembly,
+                    TargetInSource: true,
+                    FilePath: tree.FilePath,
+                    Line: line,
+                    DelegateConsumer: consumer
+                )
+            );
+        }
+        return ids;
+    }
+
+    // The dispatcher a lambda is handed to: the enclosing invocation/constructor the lambda is an
+    // ARGUMENT of (mirrors DelegateConsumerOf's transparent-wrapper walk). Null when the lambda is not
+    // a call argument (assigned to a field/local, a return, a `+=`), which keeps those out of the
+    // promotion population.
+    private static string? LambdaConsumerOf(AnonymousFunctionExpressionSyntax lambda, SemanticModel model)
+    {
+        foreach (var ancestor in lambda.Ancestors())
+        {
+            switch (ancestor)
+            {
+                case InvocationExpressionSyntax invocation:
+                    return ConsumerDocId(model.GetSymbolInfo(invocation).Symbol);
+                case BaseObjectCreationExpressionSyntax creation:
+                    return ConsumerDocId(model.GetSymbolInfo(creation).Symbol);
+                case ArgumentSyntax:
+                case ArgumentListSyntax:
+                case ParenthesizedExpressionSyntax:
+                case CastExpressionSyntax:
+                    continue;
+                default:
+                    return null;
+            }
+        }
+        return null;
     }
 
     private static string KindOf(ISymbol symbol) =>
