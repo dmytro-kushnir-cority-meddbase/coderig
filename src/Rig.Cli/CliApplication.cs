@@ -2752,6 +2752,10 @@ public static class CliApplication
             switch (c)
             {
                 case '`':
+                    // `N after a NAME ("Foo`2") is ARITY -> <T, U>. A STANDALONE `N (token buffer empty,
+                    // i.e. an argument position like the `0,`1 in "QueryPipeline{`0,`1}") is a positional
+                    // type-PARAMETER reference -> that one param (T/U/V), NOT an arity count.
+                    var isArity = token.Length > 0;
                     FlushToken();
                     i++;
                     if (i < name.Length && name[i] == '`')
@@ -2759,8 +2763,13 @@ public static class CliApplication
                     var ds = i;
                     while (i < name.Length && char.IsDigit(name[i]))
                         i++;
-                    if (int.TryParse(name.Substring(ds, i - ds), out var n) && n > 0)
-                        sb.Append('<').Append(string.Join(", ", Enumerable.Range(0, n).Select(TypeParamName))).Append('>');
+                    if (int.TryParse(name.Substring(ds, i - ds), out var n))
+                    {
+                        if (!isArity)
+                            sb.Append(TypeParamName(n)); // `0 -> T, `1 -> U
+                        else if (n > 0)
+                            sb.Append('<').Append(string.Join(", ", Enumerable.Range(0, n).Select(TypeParamName))).Append('>');
+                    }
                     break;
                 case '{':
                     FlushToken();
