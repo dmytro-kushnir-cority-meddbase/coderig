@@ -1633,6 +1633,8 @@
     "throw": "⚠️",
     "lock": "🔒",
     "async_lock": "🔐",
-    "fhir": "🏥"
+    "fhir": "🏥",
+    "permission": "🔑",
+    "config": "⚙️"
   }
 }
