@@ -1306,6 +1306,16 @@
       "reason": "fhir_operation"
     },
     {
+      "provider": "soap",
+      "operation": "invoke",
+      "methods": [ "Invoke", "InvokeAsync", "BeginInvoke" ],
+      "declaringTypes": [ "System.Web.Services.Protocols.SoapHttpClientProtocol" ],
+      "resource": "string_argument",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "legacy_asmx_soap_invoke: any generated ASMX proxy's wrapper body calls the inherited SoapHttpClientProtocol.Invoke(\"operation\", args); the first string literal IS the SOAP operation name. One base-type rule covers every WSDL proxy (Healthcode + Labs/Mirth/LabsServer), where per-method project rules only cover the ones explicitly enumerated."
+    },
+    {
       "provider": "lock",
       "operation": "acquire",
       "methods": [ "Enter", "TryEnter", "Wait", "WaitAsync", "WaitOne", "EnterReadLock", "EnterWriteLock", "EnterUpgradeableReadLock", "AcquireReaderLock", "AcquireWriterLock" ],
