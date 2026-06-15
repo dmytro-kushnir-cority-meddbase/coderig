@@ -226,12 +226,20 @@ MISSES something real). Severity is the agents' ground-truthed assessment.
 - **VS-C3** SemaphoreSlim removed from the Monitor `lock` rules and retagged `async_lock:acquire/release` (🔐) — detector kept, just no longer conflated with Monitor; added to `lock_held_across` excludeProviders. Verified on `MonitorQueueBackgroundService`.
 - **VS-G6** Redis consume (`GetAsyncQueue`/`Dequeue`/`Subscribe*`) → `queue:read` (meddbase rig.rules.json). Verified `queue:read` at `MonitorQueueBackgroundService.cs:76`.
 - **VS-G8** BCL filesystem: `FileStream` added to stream read/write; `FileInfo` write/read/delete rules; `TextReader`/`TextWriter` added (also covers **VS-G12** base-class dispatch). Verified `io:delete`/`io:write` on `SharpAttachment.Save`.
+- **VS-G5** FHIR: new `fhir` provider (🏥) on `Hl7.Fhir.Rest.FhirClient`/`BaseFhirClient` — ops read/search/create/update/delete/transaction/operation (method surface confirmed by ILSpy-decompiling Hl7.Fhir.Base 5.2.0; declaring types confirmed via `rig refs`). builtin-rules.json. Verified live: GPConnect `fhir:operation`/`fhir:read`, PDS `fhir:search`/`fhir:read` — both NHS spine integrations now lit.
+- **VS-G9** in-proc cache: `inproc_cache:read` (GetOrCreate*/GetAll/TryGet) + `write` (Update/Merge) anchored on the first-party `MedDBase.Application.Core.MemoryCacheWithInvalidation` wrappers (the BCL `CacheExtensions` they delegate to are unresolved). meddbase rig.rules.json. Verified read on `GetAllDefinitionIds`, write on `PreCache`.
 
 **Not done (need engine, NOT rules-only):**
 - **VS-C2 dropped** — ExecuteScalar genuinely ambiguous (`INSERT … SELECT SCOPE_IDENTITY()` is a scalar write); can't classify without SQL parsing. Stays `execute`.
 - **VS-C4** XmlDocument-resource → needs a literal/constant resource strategy (only `declaring_type`/`receiver_type`/`*_argument` exist).
 - **VS-G4** generic SOAP → effect rules match `declaringTypes` exact/prefix only; needs base-type matching for `SoapHttpClientProtocol.Invoke` (or enumerate each proxy type).
 - **VS-G7 reclassified** — the missed `object_store:read` on generic `GetInstance``1` is NOT the arity suffix (the deriver already strips `` `N `` at match time, FactEffectDeriver.cs:90); root cause still open, needs its own dig.
+
+**Postponed 2026-06-15 (need a dig or a decision, per the "postpone if decision needed" directive):**
+- **VS-G4** (generic SOAP): the inherited `Invoke` should exact-match `System.Web.Services.Protocols.SoapHttpClientProtocol` in the DocID, but `rig refs` couldn't confirm the recorded declaring type — needs a dig (which type rig attributes the inherited `Invoke` to) before a rule can be trusted not to no-match.
+- **VS-C1** (Rx Subscribe phantom): fixable via a `handoffDispatchers` entry on the Subscribe call (cuts the deferred callback from synchronous reach), but the exact `Subscribe` target wasn't pinned (`rig refs` surfaced a first-party `WithGlobal.DefaultSubscriber.Subscribe` wrapper, not the BCL `IObservable.Subscribe`) and the cut needs verifying that the phantom effects actually disappear — an investigation cycle, not a clean drop.
+- **VS-G2 / VS-G3** (permission:assert + config:read families): new detector families whose value is in extracting the `Rights.*` flag / config key from the call args — needs a design decision (effect naming + arg-extraction approach, likely engine work).
+- **VS-G1 / F3** (background ctor-arg-delegate EP promotion), **VS-C3-Rx-class deferred-execution model** (VS-G10/G11/G13), **VS-G7 dig**, **VS-C4** (literal-resource strategy): engine changes; ordered after the rule wins.
 
 ### Suggested order (by value ÷ effort)
 1. **Rules-only quick wins (no re-mine):** VS-C2 (dapper scalar), VS-C5 (Flurl PUT), VS-G6 (queue:read), VS-G8 (BCL file I/O), VS-G4 (generic SOAP), VS-C4 (XmlDocument resource). A few lines of `rig.rules.json`/builtin-rules each; re-derive at query time.

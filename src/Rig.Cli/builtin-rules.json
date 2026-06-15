@@ -1236,6 +1236,76 @@
       "reason": "fileinfo_delete"
     },
     {
+      "provider": "fhir",
+      "operation": "read",
+      "methods": [ "Read", "ReadAsync", "Refresh", "RefreshAsync", "Get", "GetAsync", "History", "HistoryAsync", "TypeHistory", "TypeHistoryAsync", "WholeSystemHistory", "WholeSystemHistoryAsync", "Conformance", "ConformanceAsync", "CapabilityStatement", "CapabilityStatementAsync" ],
+      "declaringTypes": [ "Hl7.Fhir.Rest.FhirClient", "Hl7.Fhir.Rest.BaseFhirClient" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "fhir_read"
+    },
+    {
+      "provider": "fhir",
+      "operation": "search",
+      "methods": [ "Search", "SearchAsync", "SearchUsingPost", "SearchUsingPostAsync", "WholeSystemSearch", "WholeSystemSearchAsync", "Continue", "ContinueAsync" ],
+      "declaringTypes": [ "Hl7.Fhir.Rest.FhirClient", "Hl7.Fhir.Rest.BaseFhirClient" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "fhir_search"
+    },
+    {
+      "provider": "fhir",
+      "operation": "create",
+      "methods": [ "Create", "CreateAsync" ],
+      "declaringTypes": [ "Hl7.Fhir.Rest.FhirClient", "Hl7.Fhir.Rest.BaseFhirClient" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "fhir_create"
+    },
+    {
+      "provider": "fhir",
+      "operation": "update",
+      "methods": [ "Update", "UpdateAsync", "Patch", "PatchAsync" ],
+      "declaringTypes": [ "Hl7.Fhir.Rest.FhirClient", "Hl7.Fhir.Rest.BaseFhirClient" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "fhir_update"
+    },
+    {
+      "provider": "fhir",
+      "operation": "delete",
+      "methods": [ "Delete", "DeleteAsync" ],
+      "declaringTypes": [ "Hl7.Fhir.Rest.FhirClient", "Hl7.Fhir.Rest.BaseFhirClient" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "fhir_delete"
+    },
+    {
+      "provider": "fhir",
+      "operation": "transaction",
+      "methods": [ "Transaction", "TransactionAsync" ],
+      "declaringTypes": [ "Hl7.Fhir.Rest.FhirClient", "Hl7.Fhir.Rest.BaseFhirClient" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "fhir_transaction"
+    },
+    {
+      "provider": "fhir",
+      "operation": "operation",
+      "methods": [ "Operation", "OperationAsync", "TypeOperation", "TypeOperationAsync", "InstanceOperation", "InstanceOperationAsync", "WholeSystemOperation", "WholeSystemOperationAsync" ],
+      "declaringTypes": [ "Hl7.Fhir.Rest.FhirClient", "Hl7.Fhir.Rest.BaseFhirClient" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "fhir_operation"
+    },
+    {
       "provider": "lock",
       "operation": "acquire",
       "methods": [ "Enter", "TryEnter", "Wait", "WaitAsync", "WaitOne", "EnterReadLock", "EnterWriteLock", "EnterUpgradeableReadLock", "AcquireReaderLock", "AcquireWriterLock" ],
@@ -1552,6 +1622,7 @@
     "io": "📁",
     "throw": "⚠️",
     "lock": "🔒",
-    "async_lock": "🔐"
+    "async_lock": "🔐",
+    "fhir": "🏥"
   }
 }
