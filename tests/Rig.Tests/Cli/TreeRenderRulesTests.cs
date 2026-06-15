@@ -179,6 +179,35 @@ public sealed class TreeRenderRulesTests
     }
 
     [Test]
+    public void A_lambda_passes_the_enclosing_methods_instantiation_through_to_its_body_calls()
+    {
+        // A `…~λN` lambda shares its enclosing method's type scope: a forwarding call in its body (e.g.
+        // `skip: i => Create(...)`) must resolve against the lambda's PARENT instantiation, not reset to null.
+        var lambdaId = "M:App.QueryPipeline`2.Create``2()~λ0";
+        var root = Node(
+            "M:App.Caller.Go()",
+            Bind(
+                "M:App.QueryPipeline`2.Create``2()",
+                """["C:App.Account","C:App.Invoice"]""",
+                """["C:App.Entity","C:App.Account"]""",
+                // The lambda node carries no binding of its own.
+                new TraceNode(
+                    lambdaId,
+                    "invocation",
+                    null,
+                    null,
+                    [Bind("M:App.QueryPipeline`2.Create``2()", """["T:0","T:1"]""", """["M:0","M:1"]""")]
+                )
+            )
+        );
+
+        var output = Render(root, FactRenderRules.Empty, Effects());
+
+        // The body call resolves T:/M: through the lambda against QueryPipeline.Create's instantiation.
+        output.ShouldContain("QueryPipeline<Account, Invoice>.Create<Entity, Account>");
+    }
+
+    [Test]
     public void An_unresolvable_token_keeps_only_that_positions_placeholder()
     {
         // "?" (a composite like Seq<T>) and an out-of-range forward both leave their slot as a placeholder,

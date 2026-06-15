@@ -1740,12 +1740,20 @@ public static class CliApplication
         // This node's concrete instantiation (declaring-type args + own-method args), resolved from its
         // monomorphization bindings against the PARENT's resolved instantiation — path-contextual
         // monomorphization. Carried down to children as THEIR parent binding so a forwarding chain resolves.
-        var (declaringConcrete, methodConcrete) = ResolveNodeInstantiation(
-            node.DeclaringTypeArgBinding,
-            node.MethodTypeArgBinding,
-            parentDeclaringConcrete,
-            parentMethodConcrete
-        );
+        // A synthetic lambda (`…~λN`) shares its enclosing method's type-param scope: its body forwards the
+        // SAME T:/M: params the enclosing method does, and its own label (ShortName drops the `~λN` for a
+        // parameterful method, rendering it AS the enclosing method) is that method's instantiation. So a
+        // lambda inherits the PARENT's resolved instantiation for both its label and its children rather
+        // than its own (absent) binding — otherwise the chain breaks at `skip: i => Create(...)`.
+        var isLambda = node.SymbolId.Contains("~λ", StringComparison.Ordinal);
+        var (declaringConcrete, methodConcrete) = isLambda
+            ? (parentDeclaringConcrete, parentMethodConcrete)
+            : ResolveNodeInstantiation(
+                node.DeclaringTypeArgBinding,
+                node.MethodTypeArgBinding,
+                parentDeclaringConcrete,
+                parentMethodConcrete
+            );
         var name =
             PrettyGenericName(ShortName(node.SymbolId), declaringConcrete, methodConcrete)
             + (signatures ? ShortSignature(node.SymbolId) : "");
