@@ -284,7 +284,8 @@ public static class Reads
                 ReceiverType: r.ReceiverType,
                 HandoffDispatcher: null,
                 TypeArguments: r.TypeArguments,
-                DelegateConsumer: r.DelegateConsumer
+                DelegateConsumer: r.DelegateConsumer,
+                ReceiverTypeConcrete: r.ReceiverTypeConcrete
             ))
             .ToListAsync(cancellationToken);
 

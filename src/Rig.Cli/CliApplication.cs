@@ -280,7 +280,9 @@ public static class CliApplication
             await using var probe = new RigDbContext(finalDbPath, pooling: false, readOnly: true);
             if (!await Writes.HasAssemblyRegistryAsync(probe))
             {
-                error.WriteLine("Store predates multi-solution support (no assembly registry). Re-mine the base solution: rig index <base-solution>");
+                error.WriteLine(
+                    "Store predates multi-solution support (no assembly registry). Re-mine the base solution: rig index <base-solution>"
+                );
                 return 2;
             }
         }
@@ -1309,10 +1311,7 @@ public static class CliApplication
             var treeMethods = new HashSet<string>(StringComparer.Ordinal);
             foreach (var root in roots)
                 CollectTreeMethods(root, treeMethods);
-            var effectSites = effects
-                .Where(e => e.EnclosingSymbolId is not null)
-                .Select(e => (e.EnclosingSymbolId!, e.Line))
-                .ToHashSet();
+            var effectSites = effects.Where(e => e.EnclosingSymbolId is not null).Select(e => (e.EnclosingSymbolId!, e.Line)).ToHashSet();
             var libCalls = await Reads.LoadLibraryCallSitesAsync(context, treeMethods);
             foreach (
                 var c in libCalls
@@ -1737,12 +1736,17 @@ public static class CliApplication
                 cutTag = $" «cut: {matchedCut.Label}»";
         }
         // --full hoists effects out to leaf nodes (below), so the inline {…} tag is suppressed in that mode.
-        var fx = !full && effectsByMethod.TryGetValue(node.SymbolId, out var list) && list.Count > 0 ? "  {" + string.Join(", ", list) + "}" : "";
+        var fx =
+            !full && effectsByMethod.TryGetValue(node.SymbolId, out var list) && list.Count > 0
+                ? "  {" + string.Join(", ", list) + "}"
+                : "";
         var loc =
             files && locById is not null && locById.TryGetValue(node.SymbolId, out var l) && l.File is not null
                 ? $"  📄 {ShortenPath(l.File)}:{l.Line}"
                 : "";
-        var name = PrettyGenericName(ShortName(node.SymbolId)) + (signatures ? ShortSignature(node.SymbolId) : "");
+        var name =
+            PrettyGenericName(ShortName(node.SymbolId), ConcreteReceiverArgs(node.ConcreteReceiver))
+            + (signatures ? ShortSignature(node.SymbolId) : "");
         // EP marker: when this node is itself a rule-detected entry point, wrap its name with "▶ kind"
         // and a trailing service chip — the same custom rendering used by derive/callers.
         var (epPrefix, epSuffix) = epContext?.ChipFor(node.SymbolId) ?? ("", "");
@@ -1760,7 +1764,12 @@ public static class CliApplication
         // children, so the effect-producing calls (e.g. ExecuteAsync) are visible rather than folded into a
         // tag. The last leaf gets └─ only when nothing trails it — an opaque node renders no children, a
         // collapsed seam renders exactly one summary line, otherwise the visible call children follow.
-        if (full && effectLeavesByMethod is not null && effectLeavesByMethod.TryGetValue(node.SymbolId, out var fxLeaves) && fxLeaves.Count > 0)
+        if (
+            full
+            && effectLeavesByMethod is not null
+            && effectLeavesByMethod.TryGetValue(node.SymbolId, out var fxLeaves)
+            && fxLeaves.Count > 0
+        )
         {
             var trailing = opaque is not null ? 0 : (seam is not null && children.Count > 0 ? 1 : children.Count);
             for (var i = 0; i < fxLeaves.Count; i++)
@@ -1908,9 +1917,7 @@ public static class CliApplication
     {
         if (args.Length < 2 || args[1].StartsWith("--", StringComparison.Ordinal))
         {
-            error.WriteLine(
-                "Usage: rig callers <toPattern> [--orphans|--entrypoints] [--async] [--rules <path>...] [--depth <n>]"
-            );
+            error.WriteLine("Usage: rig callers <toPattern> [--orphans|--entrypoints] [--async] [--rules <path>...] [--depth <n>]");
             return 2;
         }
         var toPattern = args[1];
@@ -2721,13 +2728,24 @@ public static class CliApplication
     //     reads as `NewType<ChamberId, Int32, …>.New` instead of a wall of fully-qualified braces.
     // Type-arg simple-naming applies only INSIDE the braces (depth>0); the outer name (already shortened
     // by ShortName) and the trailing `.Member` keep their dots.
-    private static string PrettyGenericName(string name)
+    private static string PrettyGenericName(string name) => PrettyGenericName(name, []);
+
+    // `concreteArgs` (when non-empty) are the ordered, namespace-stripped generic type arguments of the
+    // CONCRETE receiver the node ran under (from TraceNode.ConcreteReceiver, e.g. ["Account", "Invoice"]).
+    // They substitute the DECLARING TYPE's open `<T, U>` placeholders so the label reads as the real
+    // instantiation — `QueryPipeline<Account, Invoice>.Enumerate` instead of `QueryPipeline<T, U>.Enumerate`.
+    // Substitution applies ONLY to the FIRST arity expansion (the declaring type's `N), and only when its
+    // arity matches the receiver's arg count; a generic METHOD's own arity (a later ``M) keeps placeholders
+    // (its concrete args aren't the receiver's). The constructed-brace form ({Ns.A,Ns.B}) is already concrete
+    // and never reaches the arity branch, so it is unaffected.
+    private static string PrettyGenericName(string name, IReadOnlyList<string> concreteArgs)
     {
         if (name.IndexOf('`') < 0 && name.IndexOf('{') < 0)
             return name;
         var sb = new StringBuilder();
         var token = new StringBuilder();
         var depth = 0;
+        var declaringAritySubstituted = false;
 
         void FlushToken()
         {
@@ -2768,7 +2786,19 @@ public static class CliApplication
                         if (!isArity)
                             sb.Append(TypeParamName(n)); // `0 -> T, `1 -> U
                         else if (n > 0)
-                            sb.Append('<').Append(string.Join(", ", Enumerable.Range(0, n).Select(TypeParamName))).Append('>');
+                        {
+                            // First arity = the declaring type's: substitute the concrete receiver args when
+                            // they match its arity. Later arities (a generic method's own) keep placeholders.
+                            var useConcrete = !declaringAritySubstituted && concreteArgs.Count == n;
+                            declaringAritySubstituted = true;
+                            sb.Append('<')
+                                .Append(
+                                    useConcrete
+                                        ? string.Join(", ", concreteArgs)
+                                        : string.Join(", ", Enumerable.Range(0, n).Select(TypeParamName))
+                                )
+                                .Append('>');
+                        }
                     }
                     break;
                 case '{':
@@ -2797,6 +2827,85 @@ public static class CliApplication
             }
         }
         FlushToken();
+        return sb.ToString();
+    }
+
+    // The ordered, namespace-stripped generic type ARGUMENTS of a concrete receiver display name, for
+    // substituting a node's declaring-type `<T, U>` placeholders (PrettyGenericName). Returns empty unless
+    // the receiver is exactly `Name<...>` — a SINGLE top-level generic group that runs to the end of the
+    // string. A nested/qualified receiver (`Outer<X>.Inner<Y>`) or one with a trailing suffix is rejected
+    // (returns empty → placeholders stand), because ShortName shows only the innermost type and mapping the
+    // wrong group's args would mislead. "Ns.QueryPipeline<Ns.Account, Other.Invoice>" -> ["Account", "Invoice"].
+    private static IReadOnlyList<string> ConcreteReceiverArgs(string? receiver)
+    {
+        if (string.IsNullOrEmpty(receiver))
+            return [];
+        var r = receiver!;
+        var open = r.IndexOf('<');
+        if (open < 0 || r[^1] != '>')
+            return [];
+
+        // The '<' at `open` must enclose all the way to the final '>': scan depth from it and require it to
+        // return to 0 exactly at the last char (else there's a trailing ".Inner<…>" / suffix — bail).
+        var depth = 0;
+        for (var i = open; i < r.Length; i++)
+        {
+            if (r[i] == '<')
+                depth++;
+            else if (r[i] == '>' && --depth == 0)
+            {
+                if (i != r.Length - 1)
+                    return [];
+                break;
+            }
+        }
+
+        var inner = r.Substring(open + 1, r.Length - 1 - (open + 1));
+        var args = new List<string>();
+        depth = 0;
+        var start = 0;
+        for (var i = 0; i <= inner.Length; i++)
+        {
+            if (i < inner.Length)
+            {
+                var c = inner[i];
+                if (c is '<' or '(' or '[')
+                    depth++;
+                else if (c is '>' or ')' or ']')
+                    depth--;
+                if (!(c == ',' && depth == 0))
+                    continue;
+            }
+            args.Add(StripTypeNamespaces(inner.Substring(start, i - start).Trim()));
+            start = i + 1;
+        }
+        return args;
+    }
+
+    // Strips the namespace from every dotted type token in a C#-display type name, preserving generic
+    // structure: "Ns.Foo<Ns.A, Other.B>" -> "Foo<A, B>", "System.Int32" -> "Int32".
+    private static string StripTypeNamespaces(string type)
+    {
+        var sb = new StringBuilder(type.Length);
+        var i = 0;
+        while (i < type.Length)
+        {
+            var c = type[i];
+            if (char.IsLetterOrDigit(c) || c is '_' or '.')
+            {
+                var start = i;
+                while (i < type.Length && (char.IsLetterOrDigit(type[i]) || type[i] is '_' or '.'))
+                    i++;
+                var token = type.Substring(start, i - start);
+                var dot = token.LastIndexOf('.');
+                sb.Append(dot >= 0 ? token.Substring(dot + 1) : token);
+            }
+            else
+            {
+                sb.Append(c);
+                i++;
+            }
+        }
         return sb.ToString();
     }
 

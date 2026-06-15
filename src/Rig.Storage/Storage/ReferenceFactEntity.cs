@@ -24,4 +24,5 @@ public sealed class ReferenceFactEntity
     public string? EnclosingScopes { get; set; }
     public string? ArgumentTemplates { get; set; }
     public string? ArgumentNames { get; set; }
+    public string? ReceiverTypeConcrete { get; set; }
 }

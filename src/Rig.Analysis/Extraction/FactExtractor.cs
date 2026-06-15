@@ -104,6 +104,7 @@ internal static class FactExtractor
 
             var invocation = refKind == RefKinds.Invocation ? InvocationOf(name) : null;
             var receiverType = refKind == RefKinds.Invocation ? ReceiverTypeOf(name, model) : null;
+            var receiverTypeConcrete = refKind == RefKinds.Invocation ? ReceiverTypeConcreteOf(name, model) : null;
             var (firstArgTemplate, firstArgType, firstArgName) = FirstArgumentOf(
                 FirstArgumentExpressionOf(name, refKind, invocation),
                 model
@@ -125,7 +126,8 @@ internal static class FactExtractor
                 firstArgumentName: firstArgName,
                 delegateConsumer: delegateConsumer,
                 argumentTemplates: argumentTemplates,
-                argumentNames: argumentNames
+                argumentNames: argumentNames,
+                receiverTypeConcrete: receiverTypeConcrete
             );
 
             // 18c: a method-group ASSIGNED to a delegate field/property/event (not passed as an
@@ -133,8 +135,13 @@ internal static class FactExtractor
             // (slot -> bound target) so the seam resolver can resolve `slot()` to its target.
             if (refKind == RefKinds.MethodGroup && DelegateBindSlotOf(name, model) is { } slot)
             {
-                var resolvedTarget = target is IMethodSymbol bound ? (bound.ReducedFrom ?? bound).OriginalDefinition : target.OriginalDefinition;
-                if (resolvedTarget.GetDocumentationCommentId() is { } boundId && dispatchSeen.Add((slot, boundId, DispatchKinds.DelegateBind)))
+                var resolvedTarget = target is IMethodSymbol bound
+                    ? (bound.ReducedFrom ?? bound).OriginalDefinition
+                    : target.OriginalDefinition;
+                if (
+                    resolvedTarget.GetDocumentationCommentId() is { } boundId
+                    && dispatchSeen.Add((slot, boundId, DispatchKinds.DelegateBind))
+                )
                     dispatch.Add(new DispatchFact(slot, boundId, DispatchKinds.DelegateBind));
             }
 
@@ -222,7 +229,13 @@ internal static class FactExtractor
     // refs carry genuine DocIds (the same the lock rule's declaringTypes gate matches). The release is
     // pinned to the body's closing-brace line so the acquire/release straddle the locked body — the
     // lexical span the ordering work (transaction/lock-held-across-IO) will read.
-    private static void AddLockStatementRefs(List<ReferenceFact> references, SyntaxNode root, SemanticModel model, SyntaxTree tree, IReadOnlyDictionary<SyntaxNode, string> lambdaIds)
+    private static void AddLockStatementRefs(
+        List<ReferenceFact> references,
+        SyntaxNode root,
+        SemanticModel model,
+        SyntaxTree tree,
+        IReadOnlyDictionary<SyntaxNode, string> lambdaIds
+    )
     {
         var locks = root.DescendantNodes().OfType<LockStatementSyntax>().ToArray();
         if (locks.Length == 0)
@@ -397,7 +410,8 @@ internal static class FactExtractor
         string? delegateConsumer = null,
         int? lineOverride = null,
         string? argumentTemplates = null,
-        string? argumentNames = null
+        string? argumentNames = null,
+        string? receiverTypeConcrete = null
     )
     {
         // Generic type arguments at the CALL SITE — read from the constructed `target` BEFORE
@@ -450,7 +464,12 @@ internal static class FactExtractor
                 DelegateConsumer: delegateConsumer,
                 EnclosingScopes: structural.EnclosingScopes,
                 ArgumentTemplates: argumentTemplates,
-                ArgumentNames: argumentNames
+                ArgumentNames: argumentNames,
+                // Store the concrete receiver ONLY for first-party callees: the dotted args bind the
+                // callee's DECLARING type params, and only first-party nodes are rendered, so a BCL
+                // receiver (List<int>.Add) would just be dead storage. ReceiverTypeConcreteOf already
+                // returns null for non-generic / open receivers; this gate drops the BCL-callee remainder.
+                ReceiverTypeConcrete: inSource ? receiverTypeConcrete : null
             )
         );
     }
@@ -462,7 +481,11 @@ internal static class FactExtractor
     // top-level-comma split would mis-segment; the deriver reads back the index-th element over a
     // stack buffer (FactEffectDeriver.NthJsonString). Feeds nth-argument resource resolution
     // (FactEffectRule.ArgumentIndex). Returns (null, null) for non-invocation refs and zero-arg calls.
-    private static (string? Templates, string? Names) ArgumentListOf(string refKind, InvocationExpressionSyntax? invocation, SemanticModel model)
+    private static (string? Templates, string? Names) ArgumentListOf(
+        string refKind,
+        InvocationExpressionSyntax? invocation,
+        SemanticModel model
+    )
     {
         if (refKind != RefKinds.Invocation || invocation is null)
             return (null, null);
@@ -513,6 +536,46 @@ internal static class FactExtractor
             return model.GetTypeInfo(conditional.Expression).Type?.OriginalDefinition.ToDisplayString();
 
         return null;
+    }
+
+    // The CONCRETE receiver type WITH its generic arguments (NO OriginalDefinition) — e.g.
+    // "Ns.QueryPipeline<Ns.Account, Ns.Invoice>" where ReceiverTypeOf returns the open "Ns.QueryPipeline<T, U>".
+    // Returns null when it does NOT differ from the open form (non-generic receiver, or an open-typed
+    // receiver inside a generic body whose args are still type PARAMETERS) — so only genuinely-instantiated
+    // generic receivers are captured. RENDERING ONLY: feeds TraceNode.ConcreteReceiver so the tree label can
+    // show the real instantiation; dispatch still narrows on the open ReceiverType (identity, not args).
+    private static string? ReceiverTypeConcreteOf(SimpleNameSyntax name, SemanticModel model)
+    {
+        ITypeSymbol? type = null;
+        if (name.Parent is MemberAccessExpressionSyntax member && member.Name == name)
+            type = model.GetTypeInfo(member.Expression).Type;
+        else if (name.Parent is MemberBindingExpressionSyntax binding && binding.Parent is ConditionalAccessExpressionSyntax conditional)
+            type = model.GetTypeInfo(conditional.Expression).Type;
+
+        // Capture only a CONSTRUCTED generic type whose args are all real types. A non-generic receiver has
+        // nothing to substitute; an OPEN one inside a generic body still has type-PARAMETER args (e.g.
+        // `QueryPipeline<X, Y>` in `Helper<X, Y>`) which render concretely-looking but are placeholders —
+        // and crucially differ from OriginalDefinition's own param names (T, U), so a naive text compare
+        // would wrongly keep them. HasTypeParameter is the precise gate.
+        if (type is not INamedTypeSymbol named || named.TypeArguments.Length == 0 || HasTypeParameter(named))
+            return null;
+        return named.ToDisplayString();
+    }
+
+    // True when `type` is a type PARAMETER, or a constructed generic / array that contains one at any depth
+    // (so `List<T>`, `Dictionary<string, T>`, `T[]` are all "still open"). Used to reject open-typed generic
+    // receivers when capturing the concrete receiver type for rendering.
+    private static bool HasTypeParameter(ITypeSymbol type)
+    {
+        if (type.TypeKind == TypeKind.TypeParameter)
+            return true;
+        if (type is IArrayTypeSymbol array)
+            return HasTypeParameter(array.ElementType);
+        if (type is INamedTypeSymbol named)
+            foreach (var arg in named.TypeArguments)
+                if (HasTypeParameter(arg))
+                    return true;
+        return false;
     }
 
     // The first-argument expression whose literal/type becomes a fact: an invocation's first

@@ -44,7 +44,12 @@ public static partial class FactPathFinder
         // narrowing when the target is later expanded. Reference-equal to the incoming binding when the
         // edge adds no concrete type args (the common case — most edges forward type parameters or are
         // non-generic), so threading it costs no allocation on those.
-        IReadOnlyCollection<string>? OutBinding
+        IReadOnlyCollection<string>? OutBinding,
+        // The CONCRETE receiver type WITH generic args of THIS edge (CallEdge.ReceiverTypeConcrete) — e.g.
+        // "Ns.QueryPipeline<Ns.Account, Ns.Invoice>" — forwarded onto the reached node for RENDERING only
+        // (TraceNode.ConcreteReceiver → declaring-type placeholder substitution). Null for non-generic
+        // receivers and for dispatch hops (no call-site receiver). Does NOT affect dispatch/narrowing.
+        string? OutReceiverConcrete
     )> Successors(
         string current,
         GraphIndex index,
@@ -89,7 +94,8 @@ public static partial class FactPathFinder
                         edge.ReceiverType,
                         edge.HandoffDispatcher ?? "handoff",
                         null,
-                        outBinding
+                        outBinding,
+                        edge.ReceiverTypeConcrete
                     );
                     continue;
                 }
@@ -105,7 +111,8 @@ public static partial class FactPathFinder
                     ContextControllerCarry(incomingReceiver, edge, index) ?? PropagateReceiver(incomingReceiver, edge, index),
                     null,
                     null,
-                    outBinding
+                    outBinding,
+                    edge.ReceiverTypeConcrete
                 );
             }
 
@@ -145,7 +152,8 @@ public static partial class FactPathFinder
                 SeedReceiver(incomingReceiver, d.Node, index),
                 null,
                 d.Basis,
-                incomingBinding
+                incomingBinding,
+                null
             );
     }
 

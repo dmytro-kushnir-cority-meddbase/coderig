@@ -138,7 +138,11 @@ public static class Writes
 
         foreach (var r in references)
         {
-            if (r.EnclosingSymbolId is null || !symbolAssembly.TryGetValue(r.EnclosingSymbolId, out var assembly) || string.IsNullOrEmpty(assembly))
+            if (
+                r.EnclosingSymbolId is null
+                || !symbolAssembly.TryGetValue(r.EnclosingSymbolId, out var assembly)
+                || string.IsNullOrEmpty(assembly)
+            )
                 continue;
             var a = For(assembly);
             a.Fold($"R:{r.TargetSymbolId}|{r.EnclosingSymbolId}|{r.Line}");
@@ -166,7 +170,9 @@ public static class Writes
                     // Same name, divergent content. Expected for a re-mine of the same solution; a
                     // genuine cross-solution collision (a fork) would carry a different source solution.
                     if (!string.Equals(row.SourceSolutionPath, solutionPath, StringComparison.OrdinalIgnoreCase))
-                        progress?.Invoke($"WARN: assembly '{assembly}' has divergent content across solutions ('{row.SourceSolutionPath}' vs '{solutionPath}') — possible fork; keeping latest");
+                        progress?.Invoke(
+                            $"WARN: assembly '{assembly}' has divergent content across solutions ('{row.SourceSolutionPath}' vs '{solutionPath}') — possible fork; keeping latest"
+                        );
                     row.ContentHash = hash;
                     row.SymbolCount = a.Symbols;
                     row.ReferenceCount = a.References;
@@ -322,6 +328,7 @@ public static class Writes
                     EnclosingScopes = r.EnclosingScopes,
                     ArgumentTemplates = r.ArgumentTemplates,
                     ArgumentNames = r.ArgumentNames,
+                    ReceiverTypeConcrete = r.ReceiverTypeConcrete,
                 }
         );
 
@@ -525,6 +532,7 @@ public static class Writes
                 EnclosingScopes    TEXT,
                 ArgumentTemplates  TEXT,
                 ArgumentNames      TEXT,
+                ReceiverTypeConcrete TEXT,
                 PRIMARY KEY (RunId, ReferenceFactIndex)
             );
             """,

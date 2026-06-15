@@ -67,6 +67,76 @@ public sealed class FactExtractorCaptureTests
     }
 
     [Test]
+    public void Captures_concrete_receiver_type_when_it_differs_from_the_open_definition()
+    {
+        var source = """
+            namespace App
+            {
+                public sealed class Account { }
+                public sealed class Invoice { }
+
+                public sealed class QueryPipeline<T, U>
+                {
+                    public void Enumerate() { }
+                }
+
+                public sealed class Caller
+                {
+                    public void Go(QueryPipeline<Account, Invoice> pipeline, string plain)
+                    {
+                        pipeline.Enumerate();   // generic receiver -> concrete captured
+                        plain.Trim();           // non-generic receiver -> null
+                    }
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        var enumerate = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("QueryPipeline") && r.TargetSymbolId.Contains("Enumerate"));
+        // Open form stays the original definition (for dispatch narrowing).
+        enumerate.ReceiverType.ShouldBe("App.QueryPipeline<T, U>");
+        // Concrete form carries the real instantiation (for rendering).
+        enumerate.ReceiverTypeConcrete.ShouldBe("App.QueryPipeline<App.Account, App.Invoice>");
+
+        // A non-generic receiver (string) stores no concrete form — but its callee is BCL (not in source)
+        // so it is also dropped by the inSource gate; assert the gate by checking no first-party row carries it.
+        result
+            .References.Where(r => r.ReceiverTypeConcrete is not null)
+            .ShouldAllBe(r => r.TargetInSource);
+    }
+
+    [Test]
+    public void Open_typed_generic_receiver_inside_a_generic_body_captures_no_concrete_form()
+    {
+        // Inside Helper<X, Y> the receiver `pipeline` is QueryPipeline<X, Y> — still type PARAMETERS, so the
+        // concrete form equals the open form and nothing is captured (placeholders are correct there).
+        var source = """
+            namespace App
+            {
+                public sealed class QueryPipeline<T, U>
+                {
+                    public void Enumerate() { }
+                }
+
+                public sealed class Helper<X, Y>
+                {
+                    public void Run(QueryPipeline<X, Y> pipeline)
+                    {
+                        pipeline.Enumerate();
+                    }
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        var enumerate = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Enumerate"));
+        enumerate.ReceiverType.ShouldBe("App.QueryPipeline<T, U>");
+        enumerate.ReceiverTypeConcrete.ShouldBeNull();
+    }
+
+    [Test]
     public void Captures_all_argument_names_and_templates_as_json_lists()
     {
         var source = """
@@ -124,7 +194,8 @@ public sealed class FactExtractorCaptureTests
 
         var call = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Db.GetConnectionString"));
         // The call site only NAMES the constant; the templates list resolves it to its value...
-        System.Text.Json.JsonSerializer.Deserialize<string?[]>(call.ArgumentTemplates!)![0]
+        System
+            .Text.Json.JsonSerializer.Deserialize<string?[]>(call.ArgumentTemplates!)![0]
             .ShouldBe("MedDBase.DataAccessTier.ConnectionString");
         // ...while the names list keeps the const reference path.
         System.Text.Json.JsonSerializer.Deserialize<string?[]>(call.ArgumentNames!)![0].ShouldBe("Keys.Conn");
@@ -157,15 +228,20 @@ public sealed class FactExtractorCaptureTests
         var result = Extract(source);
 
         // A synthetic lambda symbol, contained by Caller.Go.
-        var lambda = result.Symbols.SingleOrDefault(s => s.Kind == "lambda" && s.ContainingSymbolId != null && s.ContainingSymbolId.Contains("Caller.Go"));
+        var lambda = result.Symbols.SingleOrDefault(s =>
+            s.Kind == "lambda" && s.ContainingSymbolId != null && s.ContainingSymbolId.Contains("Caller.Go")
+        );
         lambda.ShouldNotBeNull();
 
         // A methodGroup edge consumer(Scheduler.Schedule) -> lambda, enclosed by Caller.Go.
         result.References.ShouldContain(r =>
             r.RefKind == "methodGroup"
             && r.TargetSymbolId == lambda!.SymbolId
-            && r.DelegateConsumer != null && r.DelegateConsumer.Contains("Scheduler.Schedule")
-            && r.EnclosingSymbolId != null && r.EnclosingSymbolId.Contains("Caller.Go"));
+            && r.DelegateConsumer != null
+            && r.DelegateConsumer.Contains("Scheduler.Schedule")
+            && r.EnclosingSymbolId != null
+            && r.EnclosingSymbolId.Contains("Caller.Go")
+        );
 
         // The call INSIDE the lambda body is attributed to the lambda, NOT Caller.Go.
         var doWork = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Worker.DoWork"));
@@ -204,9 +280,11 @@ public sealed class FactExtractorCaptureTests
         var result = Extract(source);
 
         result.Dispatch.ShouldContain(d =>
-            d.Kind == "delegate_bind" && d.SourceMember.Contains("Host._handler") && d.TargetMember.Contains("Worker.DoWork"));
+            d.Kind == "delegate_bind" && d.SourceMember.Contains("Host._handler") && d.TargetMember.Contains("Worker.DoWork")
+        );
         result.Dispatch.ShouldContain(d =>
-            d.Kind == "delegate_bind" && d.SourceMember.Contains("Host.Prop") && d.TargetMember.Contains("Worker.DoWork"));
+            d.Kind == "delegate_bind" && d.SourceMember.Contains("Host.Prop") && d.TargetMember.Contains("Worker.DoWork")
+        );
     }
 
     // 18c part 2: invoking a delegate slot (`_handler()`) emits an invocation edge to the SLOT so the
@@ -231,7 +309,9 @@ public sealed class FactExtractorCaptureTests
         result.References.ShouldContain(r =>
             r.RefKind == "invocation"
             && r.TargetSymbolId.Contains("Host._handler")
-            && r.EnclosingSymbolId != null && r.EnclosingSymbolId.Contains("Host.Run"));
+            && r.EnclosingSymbolId != null
+            && r.EnclosingSymbolId.Contains("Host.Run")
+        );
     }
 
     [Test]
@@ -364,7 +444,9 @@ public sealed class FactExtractorCaptureTests
             result.References.Any(r =>
                 r.RefKind == "invocation"
                 && r.TargetSymbolId.Contains(targetContains)
-                && r.EnclosingSymbolId is { } e && e.Contains(enclosingContains));
+                && r.EnclosingSymbolId is { } e
+                && e.Contains(enclosingContains)
+            );
 
         // Control: the query SOURCE expression (first `from`) and invocations inside an explicit lambda
         // are captured today.
@@ -405,7 +487,8 @@ public sealed class FactExtractorCaptureTests
             r.RefKind == "invocation"
             && r.TargetSymbolId.Contains("Io.Move")
             && r.EnclosingSymbolId != null
-            && r.EnclosingSymbolId.Contains("Caller.Go"));
+            && r.EnclosingSymbolId.Contains("Caller.Go")
+        );
     }
 
     [Test]

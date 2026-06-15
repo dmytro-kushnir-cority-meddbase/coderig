@@ -96,7 +96,15 @@ public sealed record ReferenceFact(
     // non-invocation refs and zero-arg calls. Index 0 mirrors FirstArgumentTemplate/Name (kept as the
     // unindexed fast path so the existing derivation is byte-for-byte unchanged).
     string? ArgumentTemplates = null,
-    string? ArgumentNames = null
+    string? ArgumentNames = null,
+    // CONCRETE static type of the invocation receiver at this site, WITH its generic type arguments
+    // (e.g. "Ns.QueryPipeline<Ns.PersonDataFieldDefinition, Ns.DefinitionAndRangeDto>"), captured only
+    // when it DIFFERS from the open-definition `ReceiverType` (so non-generic / open-typed receivers
+    // store null — most edges). ReceiverType stays the open form (`QueryPipeline<T, U>`) for dispatch
+    // narrowing (identity, not args); this concrete form is purely for RENDERING — it lets the tree
+    // label show the real instantiation a node ran under instead of placeholder `<T, U>`. Null for
+    // bare/static calls, non-invocation refs, and receivers that are already open/non-generic.
+    string? ReceiverTypeConcrete = null
 );
 
 /// <summary>A base-type or implemented-interface edge between two types.</summary>
@@ -174,7 +182,14 @@ public sealed record CallEdge(
     // the edge as Kind=="handoff"; it then becomes irrelevant. Null for non-methodGroup edges, for
     // method-groups that are not a call argument, and on stores indexed before this fact existed (the
     // classifier falls back to same-line co-location there).
-    string? DelegateConsumer = null
+    string? DelegateConsumer = null,
+    // The CONCRETE receiver type WITH generic args (ReferenceFact.ReceiverTypeConcrete) — the real
+    // instantiation the call ran on (e.g. "Ns.QueryPipeline<Ns.Account, Ns.Invoice>"), null when the
+    // receiver is non-generic / open-typed / absent. Carried purely for RENDERING: the traversal
+    // forwards it onto the reached node (TraceNode.ConcreteReceiver) so the tree label can substitute
+    // the declaring type's `<T, U>` placeholders with these concrete args. Does NOT affect dispatch
+    // (that uses the open `ReceiverType`).
+    string? ReceiverTypeConcrete = null
 );
 
 // An "implType implements ifaceType" edge (from a type-relation fact).
@@ -313,7 +328,14 @@ public sealed record TraceNode(
     // Set by the render-time single-impl fold: when an interface/base method dispatched to EXACTLY one
     // target, that lone interface hop is collapsed into its impl, and this carries the folded-away
     // interface's short name for a "«via IFoo»" marker. Null when the node was not folded.
-    string? FoldedVia = null
+    string? FoldedVia = null,
+    // The CONCRETE receiver type WITH generic args of the edge that reached this node (from
+    // CallEdge.ReceiverTypeConcrete) — e.g. "Ns.QueryPipeline<Ns.Account, Ns.Invoice>". Lets the tree
+    // renderer substitute the declaring type's `<T, U>` placeholders with the real instantiation this
+    // node ran under. Null when the reaching edge had no concrete generic receiver (the common case),
+    // for roots, and for dispatch hops (no call-site receiver). A node renders ONCE (first BFS path),
+    // so this is THAT path's instantiation when a method is reached with several.
+    string? ConcreteReceiver = null
 );
 
 // A method handed off as a delegate (method-group) — a deferred/background entry point the
