@@ -2575,7 +2575,9 @@ public static class CliApplication
         // ShortName keeps a leading DocID kind prefix ("M:"/"T:"/…) for a namespace-less symbol; strip it.
         if (name.Length > 2 && name[1] == ':')
             name = name[2..];
-        return $"· {name}{loc}";
+        // Render generic arity the same way resolved tree nodes do (`Seq`1.Iter` -> `Seq<T>.Iter`) so the
+        // library leaves don't show raw backtick arity next to the `<T,U>` of resolved siblings.
+        return $"· {PrettyGenericName(name)}{loc}";
     }
 
     private static string ShortName(string? symbolId)
@@ -2586,9 +2588,31 @@ public static class CliApplication
         var paren = s.IndexOf('(');
         if (paren >= 0)
             s = s.Substring(0, paren);
-        var lastDot = s.LastIndexOf('.');
-        var prevDot = lastDot > 0 ? s.LastIndexOf('.', lastDot - 1) : -1;
+        // Take the last two namespace segments, scanning for TOP-LEVEL dots only: a constructed-generic
+        // DocID renders type args in braces (`Foo{System.Int32}`) whose dots would otherwise mis-split the
+        // name into garbage like "Int32}}.New". Skip dots nested inside {}/<>/()/[] by tracking depth.
+        var lastDot = TopLevelLastDot(s, s.Length);
+        var prevDot = lastDot > 0 ? TopLevelLastDot(s, lastDot) : -1;
         return prevDot >= 0 ? s.Substring(prevDot + 1) : s;
+    }
+
+    // The index of the last '.' at bracket-depth 0 strictly before `end` (scanning backward), or -1.
+    // Dots inside generic-arg braces/angles/parens/brackets are skipped so a namespaced type ARGUMENT
+    // (e.g. `System.Int32` in `Foo{System.Int32}`) never mis-splits the enclosing name.
+    private static int TopLevelLastDot(string s, int end)
+    {
+        var depth = 0;
+        for (var i = end - 1; i >= 0; i--)
+        {
+            var c = s[i];
+            if (c is '}' or '>' or ')' or ']')
+                depth++;
+            else if (c is '{' or '<' or '(' or '[')
+                depth--;
+            else if (c == '.' && depth == 0)
+                return i;
+        }
+        return -1;
     }
 
     // Compact parameter signature for `rig tree --signatures`, so same-named OVERLOADS (e.g. the four
