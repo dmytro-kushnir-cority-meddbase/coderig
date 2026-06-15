@@ -266,6 +266,13 @@ Decision point: 18b (lambda identity) is the substance and a meaty extractor+dom
 - **#15 config:read** (builtin `f9fc2e0`): `GetSection`/`GetValue`/`GetConnectionString` over IConfiguration/ConfigurationManager/ConfigurationBinder, `resource:string_argument argumentIndex:0` (key is the syntactic first arg even for the extension methods; index 0 also resolves const keys). Legacy `AppSettings["x"]` dropped — `NameValueCollection.get_Item` has 0 invocation facts. Live: `⚙️ config:read accept-any`/`secret`.
 - **Store schema evolution**: `ArgumentTemplates`/`ArgumentNames` added to the live store via `sqlite3 ALTER` (no migration code); re-mine repopulated. Stale main-app run deleted by RunId before `index --merge` to avoid append-doubling (12 aux runs preserved).
 
+### Perf backlog — save-phase bulk insert (2026-06-15)
+**Save phase is ~4 min for ~2.2M fact rows (~9k rows/sec) — EF Core `SaveChangesAsync` is the bottleneck.** The PRAGMA half is already optimal (`Writes.fastBulkWrite`: journal_mode=OFF, synchronous=OFF, temp_store=MEMORY, cache_size=-64MB, locking_mode=EXCLUSIVE — safe because index writes a temp DB + atomic-renames). Fix, priority order:
+1. **Replace EF with a raw reused prepared `SqliteCommand` in one transaction** for the fact-row save (`SaveFactsBatchedAsync`) — the pattern `GraphMaterializer` already uses in-repo (one `CreateCommand`, bound params, `ExecuteNonQuery` loop in a `BeginTransaction`). Removes EF change-tracking/materialization overhead. Target: 4 min → ~15–30 s. No new dependency (raw `Microsoft.Data.Sqlite`).
+2. **Defer secondary indexes to AFTER the bulk load** (e.g. `IX_dispatch_facts_SourceMember`); the PK `(RunId, ReferenceFactIndex)` is insert-ordered so its b-tree appends cheaply — leave it.
+3. **Synchronous `ExecuteNonQuery`** (not `…Async`) per row — 2.2M awaited calls add Task overhead for zero real I/O with journal OFF.
+4. *(Incremental)* multi-row `INSERT … VALUES (…),(…)` ~200 rows/stmt; larger `page_size` (8192) set before table creation.
+
 ### Decisions taken 2026-06-15 (user)
 - **#1 LINQ deferred effects → KEEP heuristic, no work.** Eager materialization (`ToList`/`foreach`) sits next to the query ~99.9% of the time, so attributing the effect at the query call is correct in practice. Stays in backlog only as a documented edge.
 - **Rx Subscribe (VS-C1) → fold into the delegate-tracking engine feature, NOT a handoff cut.** Treat an Rx subscription like an async entry point: promote the `Subscribe(handler)` delegate to an EP node and **render it in the tree** (subscription body + its effects hang off the promoted node) rather than inlining it as synchronous (phantom) or silently cutting it. Easier for the reader, and it kills the false positive correctly.
