@@ -243,6 +243,19 @@ MISSES something real). Severity is the agents' ground-truthed assessment.
 - **VS-G2 / VS-G3** (permission:assert + config:read families): new detector families whose value is in extracting the `Rights.*` flag / config key from the call args — needs a design decision (effect naming + arg-extraction approach, likely engine work).
 - **VS-G1 / F3** (background ctor-arg-delegate EP promotion), **VS-C3-Rx-class deferred-execution model** (VS-G10/G11/G13), **VS-G7 dig**, **VS-C4** (literal-resource strategy): engine changes; ordered after the rule wins.
 
+### #18 delegate/Rx deferred-EP — architecture map + decomposition (2026-06-15, pre-build)
+The handoff infra is MORE complete than the backlog implied — confirmed by reading the code:
+- `DelegateConsumer` fact (method-group → consumer DocID, ancestor-walk) + `HandoffClassifier.Classify` rewrites dispatcher-consumed method-group edges to `Kind=Handoff` (consumer-pattern matching, rule data = `handoffDispatchers`).
+- `TraversalMode.AsyncInclude` + `HandoffVia` provenance → `rig tree --async` ALREADY renders deferred subtrees, marked `⤳`. Sync traversal cuts handoffs (no phantom for method-groups).
+- `handoffDispatchers` already covers schedulers (Repeating/BackgroundProcessSchedule.#ctor), `IAsyncEvent.Add`, Echo `spawn`/`Router.fromConfig`, `WithGlobal.Schedule`. `HandoffEntryPoint` derivation + `rig handoffs`/`derive` exist.
+
+**Gaps (the real #18 work), in order:**
+- **18a — Rx `Subscribe` handoff rule** (rule data, reuses infra): add Rx subscribe consumers to `handoffDispatchers`. ONLY fixes the **method-group** form (`obs.Subscribe(Handle)`); needs the real first-party Subscribe consumer DocID pinned (VS-C1 noted `WithGlobal.DefaultSubscriber.Subscribe`). Quick.
+- **18b — lambda identity (CORE engine gap)**: lambdas are host-context-only (no DocID), so a lambda handed to a dispatcher (`Subscribe(x => ..)`, `new Job(() => Work())`) is neither promoted NOR cut — its inner calls attribute to the enclosing method (the lambda-form Rx phantom + invisible lambda jobs). Fix = synthesize a stable identity for a lambda passed as a dispatcher arg + capture its body's calls as a promotable async-EP unit. Without this, rules can't help the dominant lambda case. Synthetic playground + TDD.
+- **18c — stored delegate-field seam** (`Func<T> _h = X; _h()`): the delegate-as-degenerate-interface binding-fact + seam-resolver (VS-G10/G11). Biggest; separate slice.
+
+Decision point: 18b (lambda identity) is the substance and a meaty extractor+domain change; 18a is a quick rule add but only covers method-group Subscribe. Recommend confirming depth (18a only / 18a+18b / +18c) before the engine build.
+
 ### Engine primitives + detectors SHIPPED 2026-06-15 (validated live on re-mined store 471174d2)
 - **nth-argument resolution** (`FactEffectRule.ArgumentIndex`): all positional args mined as JSON `string?[]` lists (`ArgumentTemplates`/`ArgumentNames`); the deriver reads the nth element over a stack buffer. `Rig.Domain` retargeted net10. coderig `c10815f`.
 - **const-string resolution**: a non-literal arg resolving to a compile-time constant string is captured in the templates list (`model.GetConstantValue`). coderig `de6b1de`.
