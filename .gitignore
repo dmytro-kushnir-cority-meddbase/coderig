@@ -20,3 +20,6 @@ playgrounds/OrchardCore/**
 !playgrounds/OrchardCore/rig.rules.json
 bench/last-run.txt
 BenchmarkDotNet.Artifacts/
+
+# git worktrees created by agents (never track)
+.claude/worktrees/
