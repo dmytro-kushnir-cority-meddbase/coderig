@@ -105,6 +105,32 @@ public sealed class FactExtractorCaptureTests
     }
 
     [Test]
+    public void Resolves_a_const_string_argument_to_its_value_in_the_templates_list()
+    {
+        var source = """
+            namespace App
+            {
+                public static class Keys { public const string Conn = "MedDBase.DataAccessTier.ConnectionString"; }
+                public static class Db { public static int GetConnectionString(string key) => 0; }
+
+                public sealed class Caller
+                {
+                    public void Go() => Db.GetConnectionString(Keys.Conn);
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        var call = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Db.GetConnectionString"));
+        // The call site only NAMES the constant; the templates list resolves it to its value...
+        System.Text.Json.JsonSerializer.Deserialize<string?[]>(call.ArgumentTemplates!)![0]
+            .ShouldBe("MedDBase.DataAccessTier.ConnectionString");
+        // ...while the names list keeps the const reference path.
+        System.Text.Json.JsonSerializer.Deserialize<string?[]>(call.ArgumentNames!)![0].ShouldBe("Keys.Conn");
+    }
+
+    [Test]
     public void Captures_bodied_property_accessor_calls_and_skips_auto_properties()
     {
         var source = """

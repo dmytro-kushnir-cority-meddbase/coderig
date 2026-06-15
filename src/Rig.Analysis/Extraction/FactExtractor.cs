@@ -104,7 +104,7 @@ internal static class FactExtractor
                 FirstArgumentExpressionOf(name, refKind, invocation),
                 model
             );
-            var (argumentTemplates, argumentNames) = ArgumentListOf(refKind, invocation);
+            var (argumentTemplates, argumentNames) = ArgumentListOf(refKind, invocation, model);
             var structural = StructuralContextOf(invocation, model);
             var delegateConsumer = refKind == RefKinds.MethodGroup ? DelegateConsumerOf(name, model) : null;
             AddReference(
@@ -426,7 +426,7 @@ internal static class FactExtractor
     // top-level-comma split would mis-segment; the deriver reads back the index-th element over a
     // stack buffer (FactEffectDeriver.NthJsonString). Feeds nth-argument resource resolution
     // (FactEffectRule.ArgumentIndex). Returns (null, null) for non-invocation refs and zero-arg calls.
-    private static (string? Templates, string? Names) ArgumentListOf(string refKind, InvocationExpressionSyntax? invocation)
+    private static (string? Templates, string? Names) ArgumentListOf(string refKind, InvocationExpressionSyntax? invocation, SemanticModel model)
     {
         if (refKind != RefKinds.Invocation || invocation is null)
             return (null, null);
@@ -440,11 +440,29 @@ internal static class FactExtractor
         for (var i = 0; i < arguments.Count; i++)
         {
             var expression = arguments[i].Expression;
-            templates[i] = expression.GetStringTemplate();
+            templates[i] = StringValueOf(expression, model);
             names[i] = expression is MemberAccessExpressionSyntax or IdentifierNameSyntax ? expression.ToString() : null;
         }
 
         return (JsonSerializer.Serialize(templates), JsonSerializer.Serialize(names));
+    }
+
+    // The argument's string VALUE for the string_argument resource: its inline string template
+    // (literal/interpolated) when it has one, else its compile-time CONSTANT string value when the
+    // argument is a `const string` reference. GetConstantValue folds const fields/locals and constant
+    // expressions — covering the LLBLGen `const string connectionKeyString = "…"` connection key and
+    // `Roles.* = "Patient.Create"` permission constants, which carry the real resource even though the
+    // call site only names the constant. (static-readonly tables like ProcessNames are NOT compile-time
+    // constants — handled separately when that surface is wired.) Confined to the nth-argument lists,
+    // so the unindexed FirstArgumentTemplate fast path — and every existing derivation — is unchanged;
+    // a new rule opts into const-resolved values via ArgumentIndex. Null when neither applies.
+    private static string? StringValueOf(ExpressionSyntax expression, SemanticModel model)
+    {
+        var template = expression.GetStringTemplate();
+        if (template is not null)
+            return template;
+
+        return model.GetConstantValue(expression) is { HasValue: true, Value: string constant } ? constant : null;
     }
 
     // Static type of an invocation's receiver: `a.Foo()` -> type of `a` (open-generic FQN).
