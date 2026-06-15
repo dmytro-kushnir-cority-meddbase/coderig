@@ -51,11 +51,15 @@ try {
         dotnet test $solution -c $Configuration --no-build /p:UseSharedCompilation=false
     }
 
+    # PORTABLE pack — do NOT add `-r <rid>`/`-p:PublishReadyToRun=true`. A RID-specific / ReadyToRun
+    # publish of the tool silently breaks Buildalyzer's design-time builds of .NET FRAMEWORK (net4x)
+    # projects: they return no result and are DROPPED from the index (net48 web/Pages vanish, ~half the
+    # symbols lost), while netstandard/modern projects still index. The loader code is fine — only the
+    # packaging triggers it. Verified on playgrounds/LegacyNet48Web: portable = 408 symbols, R2R = 35.
+    # See memory `feedback_coderig_r2r_publish_net48`.
     dotnet pack $toolProject `
         -c $Configuration `
         -o $packageOutput `
-        -r $HostRid `
-        -p:PublishReadyToRun=true `
         /p:PackageVersion=$ToolVersion `
         /p:Version=$ToolVersion
 
