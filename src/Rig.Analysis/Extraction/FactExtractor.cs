@@ -419,10 +419,12 @@ internal static class FactExtractor
 
         // Generic monomorphization bindings (RENDERING only) — see ReferenceFact. The DECLARING binding is
         // the callee's containing-type instantiation at this site (receiver/qualifier for a call, the
-        // constructed type for a ctor); the METHOD binding is the callee's own type args. Each position is
-        // encoded C:/T:/M:/? so the renderer can resolve forwarded params against the parent's binding.
+        // constructed type for a ctor, the owning type for a property/field read — e.g. `pipeline.Enumerate`
+        // where Enumerate is a `Func<…>` property on QueryPipeline<TRecord, TColumn>); the METHOD binding is
+        // the callee's own type args. Each position is encoded C:/T:/M:/? so the renderer can resolve
+        // forwarded params against the parent's binding.
         var constructed = target as IMethodSymbol;
-        var declaringContainer = (constructed?.ReducedFrom ?? constructed)?.ContainingType;
+        var declaringContainer = constructed is not null ? (constructed.ReducedFrom ?? constructed).ContainingType : target.ContainingType;
         var declaringTypeArgBinding = GenericArgBinding(declaringContainer?.TypeArguments);
         var methodTypeArgBinding = GenericArgBinding(constructed?.TypeArguments);
 

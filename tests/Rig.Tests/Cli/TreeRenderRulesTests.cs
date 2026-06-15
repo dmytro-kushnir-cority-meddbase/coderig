@@ -208,6 +208,62 @@ public sealed class TreeRenderRulesTests
     }
 
     [Test]
+    public void An_impl_dispatch_node_inherits_the_dispatch_sources_instantiation()
+    {
+        // IQueryResult<Account, Invoice>.Enumerate dispatches to the impl QueryResult<T,U>.Enumerate on the
+        // SAME runtime instantiation; the impl (and its forwarding body) inherit the source's concrete args.
+        var root = Node(
+            "M:App.Caller.Go()",
+            Bind(
+                "M:App.IQueryResult`2.Enumerate()",
+                """["C:App.Account","C:App.Invoice"]""",
+                null,
+                Dispatch("M:App.QueryResult`2.Enumerate()", 1, Bind("M:App.QueryPipeline`2.Enumerate()", """["T:0","T:1"]""", null))
+            )
+        );
+
+        var output = Render(root, FactRenderRules.Empty, Effects());
+
+        output.ShouldContain("QueryResult<Account, Invoice>.Enumerate");
+        output.ShouldContain("QueryPipeline<Account, Invoice>.Enumerate");
+        output.ShouldNotContain("QueryResult<T, U>");
+    }
+
+    [Test]
+    public void A_single_impl_fold_carries_the_interface_binding_onto_the_promoted_impl()
+    {
+        // IQueryResult<Account, Invoice>.Enumerate (concrete) folds its lone impl-dispatch child
+        // QueryResult<T,U>.Enumerate into its slot. The fold must transfer the interface's binding so the
+        // promoted impl — and its forwarding body — still monomorphize.
+        var iface = Bind(
+            "M:App.IQueryResult`2.Enumerate()",
+            """["C:App.Account","C:App.Invoice"]""",
+            null,
+            Dispatch("M:App.QueryResult`2.Enumerate()", 1, Bind("M:App.QueryPipeline`2.Enumerate()", """["T:0","T:1"]""", null))
+        );
+
+        var folded = CliApplication.FoldSingleImplHops(iface, new Dictionary<string, List<string>>(StringComparer.Ordinal));
+        var output = new StringWriter();
+        CliApplication.RenderTreeNode(
+            folded,
+            "",
+            isLast: true,
+            isRoot: true,
+            new Dictionary<string, List<string>>(StringComparer.Ordinal),
+            prune: false,
+            FactRenderRules.Empty,
+            new Dictionary<string, List<string>>(StringComparer.Ordinal),
+            output
+        );
+        var text = output.ToString();
+
+        text.ShouldContain("QueryResult<Account, Invoice>.Enumerate");
+        text.ShouldContain("«via"); // the folded-away interface marker is still shown
+        text.ShouldContain("QueryPipeline<Account, Invoice>.Enumerate");
+        text.ShouldNotContain("<T, U>");
+    }
+
+    [Test]
     public void An_unresolvable_token_keeps_only_that_positions_placeholder()
     {
         // "?" (a composite like Seq<T>) and an out-of-range forward both leave their slot as a placeholder,

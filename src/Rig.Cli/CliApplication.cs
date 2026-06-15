@@ -1590,7 +1590,7 @@ public static class CliApplication
     // naming the interface. Exact (a 1-target dispatch is determined, not an approximation); recurses
     // bottom-up so a chain of single-impl hops collapses. The node's own effect, a fan-out (>1), a
     // truncated/cut leaf, or extra children all block the fold (then children are folded in place).
-    private static TraceNode FoldSingleImplHops(TraceNode node, IReadOnlyDictionary<string, List<string>> effectsByMethod)
+    internal static TraceNode FoldSingleImplHops(TraceNode node, IReadOnlyDictionary<string, List<string>> effectsByMethod)
     {
         var kids = node.Children.Select(c => FoldSingleImplHops(c, effectsByMethod)).ToList();
         if (
@@ -1601,7 +1601,15 @@ public static class CliApplication
             && !effectsByMethod.ContainsKey(node.SymbolId)
             && !node.Truncated
         )
-            return kids[0] with { FoldedVia = FoldedViaTypeName(node.SymbolId) };
+            // Promote the impl into the folded-away interface's slot, carrying the interface node's generic
+            // binding (the impl was reached via dispatch and has none of its own; it runs on the SAME
+            // instantiation — identity base-list). Lets the impl's label + forwarding body monomorphize.
+            return kids[0] with
+            {
+                FoldedVia = FoldedViaTypeName(node.SymbolId),
+                DeclaringTypeArgBinding = kids[0].DeclaringTypeArgBinding ?? node.DeclaringTypeArgBinding,
+                MethodTypeArgBinding = kids[0].MethodTypeArgBinding ?? node.MethodTypeArgBinding,
+            };
         return node with { Children = kids };
     }
 
@@ -1740,13 +1748,22 @@ public static class CliApplication
         // This node's concrete instantiation (declaring-type args + own-method args), resolved from its
         // monomorphization bindings against the PARENT's resolved instantiation — path-contextual
         // monomorphization. Carried down to children as THEIR parent binding so a forwarding chain resolves.
-        // A synthetic lambda (`…~λN`) shares its enclosing method's type-param scope: its body forwards the
-        // SAME T:/M: params the enclosing method does, and its own label (ShortName drops the `~λN` for a
-        // parameterful method, rendering it AS the enclosing method) is that method's instantiation. So a
-        // lambda inherits the PARENT's resolved instantiation for both its label and its children rather
-        // than its own (absent) binding — otherwise the chain breaks at `skip: i => Create(...)`.
-        var isLambda = node.SymbolId.Contains("~λ", StringComparison.Ordinal);
-        var (declaringConcrete, methodConcrete) = isLambda
+        // Two node kinds carry no binding of their own but render in the PARENT's type-param scope, so they
+        // INHERIT the parent's resolved instantiation (for both label and children) instead of resetting it:
+        //   • a synthetic lambda (`…~λN`) — its body forwards the enclosing method's T:/M: params, and
+        //     ShortName drops the `~λN` for a parameterful method so it renders AS that method; otherwise the
+        //     chain breaks at `skip: i => Create(...)`.
+        //   • an impl/override-dispatch hop — `IFoo<A,B>.M` dispatches to `Impl<A,B>.M` on the SAME runtime
+        //     instantiation (identity base-list `Impl<T,U> : IFoo<T,U>`, the common case). Arity-mismatched
+        //     impls fall back to placeholders automatically (PrettyGenericName only substitutes on a match);
+        //     a reordered base-list mapping (`Impl<U,T> : IFoo<T,U>`) would mislabel — rare, accepted limit.
+        // A node with its OWN binding always resolves that (a folded interface hop transfers its binding to
+        // the promoted impl — see FoldSingleImplHops). Only a binding-less lambda/dispatch node inherits.
+        var hasOwnBinding = node.DeclaringTypeArgBinding is not null || node.MethodTypeArgBinding is not null;
+        var inheritsParentScope =
+            !hasOwnBinding
+            && (node.SymbolId.Contains("~λ", StringComparison.Ordinal) || node.EdgeKind is "impl-dispatch" or "override-dispatch");
+        var (declaringConcrete, methodConcrete) = inheritsParentScope
             ? (parentDeclaringConcrete, parentMethodConcrete)
             : ResolveNodeInstantiation(
                 node.DeclaringTypeArgBinding,

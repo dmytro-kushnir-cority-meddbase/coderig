@@ -117,6 +117,33 @@ public sealed class FactExtractorCaptureTests
     }
 
     [Test]
+    public void Declaring_binding_is_captured_for_a_property_read_on_a_generic_type()
+    {
+        // `pipe.Run` reads a property on Pipe<Account, Invoice> (mirrors QueryPipeline's `Func<…> Enumerate`
+        // accessed as `pipeline.Enumerate()`). The target is the PROPERTY (not a method), so the declaring
+        // binding must come from its owning type's instantiation, not `target as IMethodSymbol`.
+        var source = """
+            namespace App
+            {
+                public sealed class Account { }
+                public sealed class Invoice { }
+                public sealed class Pipe<T, U> { public System.Action Run { get; } = null; }
+
+                public sealed class Caller
+                {
+                    public void Go(Pipe<Account, Invoice> pipe) => pipe.Run();
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        result
+            .References.Where(r => r.TargetSymbolId.Contains("Pipe") && r.TargetSymbolId.Contains("Run"))
+            .ShouldContain(r => r.DeclaringTypeArgBinding == """["C:App.Account","C:App.Invoice"]""");
+    }
+
+    [Test]
     public void Method_type_arg_binding_records_static_factory_and_generic_method_args()
     {
         // Mirrors the MedDBase QueryResult/QueryPipeline static-factory shape: a static generic method whose
