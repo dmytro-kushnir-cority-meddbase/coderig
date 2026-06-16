@@ -268,6 +268,14 @@ Decision point: 18b (lambda identity) is the substance and a meaty extractor+dom
 - **#15 config:read** (builtin `f9fc2e0`): `GetSection`/`GetValue`/`GetConnectionString` over IConfiguration/ConfigurationManager/ConfigurationBinder, `resource:string_argument argumentIndex:0` (key is the syntactic first arg even for the extension methods; index 0 also resolves const keys). Legacy `AppSettings["x"]` dropped — `NameValueCollection.get_Item` has 0 invocation facts. Live: `⚙️ config:read accept-any`/`secret`.
 - **Store schema evolution**: `ArgumentTemplates`/`ArgumentNames` added to the live store via `sqlite3 ALTER` (no migration code); re-mine repopulated. Stale main-app run deleted by RunId before `index --merge` to avoid append-doubling (12 aux runs preserved).
 
+### SHIPPED 2026-06-16 (effect rules + render)
+- **#22 generic method-arg monomorphization** + **#23 dispatch-binding propagation** (coderig PR #4, merged `14b3c31`): full monomorphization of static-factory/generic-method chains via `DeclaringTypeArgBinding` + `MethodTypeArgBinding`, propagated across impl/override dispatch hops and single-impl folds. See the SUPERSEDED note under the 2026-06-15 render section. 226 tests green.
+- **#24 derive sample-truncation marker** (coderig PR #4): `rig derive`'s human-readable output prints only `Take(limit/4+1)` per kind, so a present-but-not-shown EP read as a false "derivation miss". Now prints `… +N more <kind> (sample shown; rig derive --format tsv lists all)`. Closed `docs/bugs/derive-misses-ep-with-c-sharp-predecessor.md` (the EP was correctly derived all along — confirmed via `--format tsv`, 5,486 actions).
+- **#16 Echo actor process-name + Flurl route effects** (coderig PR #5, builtin-rules — data-only, no deriver change, query-time): `actor:{spawn,tell,ask,register}` resolve the `ProcessDns` routing target via `resource:argument_name` (static-readonly process-name fields are NOT compile-time consts, so `argument_name`'s member-path capture is what carries them — `string_argument` would miss them). Implicit-target variants excluded. `http:route` on Flurl `AppendPathSegment(s)` carries the path-segment literal. Verified live (~700 actor effects to `ProcessDns` targets; 4 Flurl routes — AuditLogService submit/query/getById, OIDC redirect) + a ground-truth fixture in `LegacyNet48Web` (synthetic `Echo.Process`/`Flurl` stubs + real source, never the mined DB) asserting the three actor targets, the `tellSelf` exclusion, and the Flurl route literal. Fulfils VS-C4 (above).
+- **#17 SOAP Healthcode dedupe** (meddbase `82063ac`): removed the two redundant per-method `soap:submit`/`soap:query` rules (keyed on `receiver_type` over `HealthcodeWebServices`); the generic builtin `soap:invoke` (`SoapHttpClientProtocol.Invoke`, `resource:string_argument`) already captures the precise operation name (submitBill/billStatus), conveying submit-vs-query intent. Verified: `rig reaches "Master.SubmitToHealthcode" --only soap` now single-emits `soap invoke submitBill` (was a double-emit).
+
+**Still open:** **#10 Tier-1 global flags** (`--time`/`--no-cache`/`--format`/`--limit` uniform across every query command) — the broadest CLI-surface change; deferred to a later session. NB the `--time`/`PhaseTimer` plumbing already exists; #10 is about making the flag set consistent everywhere.
+
 ### Render — propagate concrete generic types into tree labels (SHIPPED 2026-06-15)
 Tree nodes rendered generics with placeholder params (`QueryPipeline<T, U>.Enumerate`) because the label used only the DocID open form (`PrettyGenericName(ShortName(node.SymbolId))`). Now substitutes the real instantiation → `QueryPipeline<PersonDataFieldDefinition, DefinitionAndRangeDto>.Enumerate`.
 
@@ -282,6 +290,18 @@ Tree nodes rendered generics with placeholder params (`QueryPipeline<T, U>.Enume
 **Caveat that stands:** a node renders ONCE (first BFS path), so it shows THAT path's instantiation; a method reached with several instantiations shows one. A `(+N)` hint was considered, not built.
 
 **Not done (tier 2):** concrete generic METHOD args (`Repository.Get<Account>()`) from the in-store `TypeArguments`/`OutBinding` — orderable via the comma-split, but left for later; the headline win was the declaring-type case.
+
+> **SUPERSEDED 2026-06-16 (#22/#23) — full monomorphization.** Tier 2 was completed and the whole
+> render scheme generalized. `ReceiverTypeConcrete`/`ReceiverTypeArgOrdinals` were **replaced** by per-edge
+> binding tokens — `DeclaringTypeArgBinding` + `MethodTypeArgBinding` (JSON `string[]`: `C:<fqn>` concrete ·
+> `T:<ord>` enclosing-type param · `M:<ord>` enclosing-method param · `?` composite). The parent node's
+> resolved (declaring, method) concretes thread down the recursion and resolve T:/M: tokens, so BOTH the
+> declaring-type and the generic-method arity groups substitute. This monomorphizes **static-factory +
+> generic-method chains** (the MedDBase `QueryResult`/`QueryPipeline.Create` shape, no value receiver), not
+> just instance receivers. Pass-through nodes (lambdas `~λN`, impl/override dispatch hops) inherit the
+> parent's instantiation unless they carry their own binding; the single-impl fold transfers the folded-away
+> interface's binding to the promoted impl (#23). The `caveat that stands` above is unchanged (a node renders
+> once, on its first BFS path). On the live MedDBase store the Create chain went ~20 `<T,U>` placeholders → 0.
 
 ### Perf backlog — save-phase bulk insert (2026-06-15)
 **Save phase is ~4 min for ~2.2M fact rows (~9k rows/sec) — EF Core `SaveChangesAsync` is the bottleneck.** The PRAGMA half is already optimal (`Writes.fastBulkWrite`: journal_mode=OFF, synchronous=OFF, temp_store=MEMORY, cache_size=-64MB, locking_mode=EXCLUSIVE — safe because index writes a temp DB + atomic-renames). Fix, priority order:
@@ -301,7 +321,7 @@ Tree nodes rendered generics with placeholder params (`QueryPipeline<T, U>.Enume
 - **#1 LINQ deferred effects → KEEP heuristic, no work.** Eager materialization (`ToList`/`foreach`) sits next to the query ~99.9% of the time, so attributing the effect at the query call is correct in practice. Stays in backlog only as a documented edge.
 - **Rx Subscribe (VS-C1) → fold into the delegate-tracking engine feature, NOT a handoff cut.** Treat an Rx subscription like an async entry point: promote the `Subscribe(handler)` delegate to an EP node and **render it in the tree** (subscription body + its effects hang off the promoted node) rather than inlining it as synchronous (phantom) or silently cutting it. Easier for the reader, and it kills the false positive correctly.
 - **#5 / VS-G1 / F3 background-delegate EP promotion → APPROVED, and unified with Rx above.** Same shape: a delegate handed to something that defers execution (scheduler/ctor arg, or Rx operator) becomes a promoted async entry point. One engine feature, two triggers. Build in isolation, **hard-TDD'd, synthetic playground first.**
-- **VS-C4 literal_argument resource strategy → APPROVED, triage first.** Candidate targets flagged by user: outbound HTTP endpoint URLs, Echo actor/process names, DB named-connection strings. Triage in flight to pick the highest-value first target.
+- **VS-C4 literal_argument resource strategy → DONE 2026-06-16 (#16).** Shipped two of the three flagged targets: **Echo actor/process names** (`actor:{spawn,tell,ask,register}` on `Echo.Process`, `resource:argument_name` @ arg 0 — resolves the `ProcessDns`/`EchoConfig.ProcessNames` routing target, e.g. `ProcessDns.AccountService`; implicit-target `tellSelf`/`tellChildren`/`askParent` excluded since their arg 0 is the message) and **outbound HTTP endpoints** (`http:route` on Flurl `AppendPathSegment(s)`, `resource:string_argument` @ arg 0 — the path-segment literal). DB named-connection strings not done (lower value). Verified live + ground-truth fixture; see "SHIPPED 2026-06-16" below.
 - **VS-G3 config:read → APPROVED, capture the key** (depends on the literal_argument strategy above).
 - **VS-G2 permission:assert → too vague, gathering real code examples first** before defining the detector surface.
 - **VS-G4 (SOAP) → quick dig in flight. VS-G7 (object_store generic read) → dig + fix in flight.**
