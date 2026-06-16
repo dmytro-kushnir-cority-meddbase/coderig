@@ -158,7 +158,9 @@ public sealed class AnalysisRuleSetTests
         public void Dispose()
         {
             if (Directory.Exists(DirectoryPath))
+            {
                 Directory.Delete(DirectoryPath, recursive: true);
+            }
         }
     }
 }

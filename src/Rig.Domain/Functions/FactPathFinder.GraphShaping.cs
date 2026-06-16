@@ -1,4 +1,5 @@
 using Rig.Domain.Data;
+using static System.Globalization.CultureInfo;
 
 namespace Rig.Domain.Functions;
 
@@ -24,7 +25,10 @@ public static partial class FactPathFinder
     public static FactGraphData MarkEventSubscriptionHandoffs(FactGraphData graph, ISet<EventSubscriptionSite> eventSites)
     {
         if (eventSites.Count == 0)
+        {
             return graph;
+        }
+
         var changed = false;
         var rewritten = new List<CallEdge>(graph.CallEdges.Count);
         foreach (var e in graph.CallEdges)
@@ -58,30 +62,47 @@ public static partial class FactPathFinder
     {
         var shaped = RewriteGenericFactories(graph, factoryRules);
         if (cutRules.Count == 0 && contextRules.Count == 0)
+        {
             return shaped;
-        return shaped with { CutRules = cutRules.Count > 0 ? cutRules : null, ContextRules = contextRules.Count > 0 ? contextRules : null };
+        }
+
+        return shaped with
+        {
+            CutRules = cutRules.Count > 0 ? cutRules : null,
+            ContextRules = contextRules.Count > 0 ? contextRules : null,
+        };
     }
 
     public static FactGraphData RewriteGenericFactories(FactGraphData graph, IReadOnlyList<FactGenericFactoryRule> rules)
     {
         if (rules.Count == 0)
+        {
             return graph;
+        }
 
         // (stripped construct type DocID, method name) -> overloads, for resolving X.Target.
         var methodsByTypeAndName = new Dictionary<(string Type, string Name), List<MethodRef>>();
         foreach (var m in graph.Methods)
         {
             if (m.ContainingTypeId is null)
+            {
                 continue;
+            }
+
             var key = (TypeClosure.StripGeneric(m.ContainingTypeId), m.Name);
             if (!methodsByTypeAndName.TryGetValue(key, out var list))
+            {
                 methodsByTypeAndName[key] = list = new List<MethodRef>();
+            }
+
             list.Add(m);
         }
 
         var ruleByMethod = new Dictionary<string, FactGenericFactoryRule>(StringComparer.Ordinal);
         foreach (var r in rules)
+        {
             ruleByMethod[r.Method] = r;
+        }
 
         var rewritten = new List<CallEdge>(graph.CallEdges.Count);
         var changed = false;
@@ -89,7 +110,9 @@ public static partial class FactPathFinder
         {
             var resolved = ResolveFactoryEdge(edge, ruleByMethod, methodsByTypeAndName);
             if (resolved is null)
+            {
                 rewritten.Add(edge);
+            }
             else
             {
                 rewritten.AddRange(resolved);
@@ -113,34 +136,57 @@ public static partial class FactPathFinder
         // non-generic, so this short-circuits before ParseMethod, whose per-edge substring allocations
         // dominated ShapeGraph's churn. Pure reorder — the empty-TypeArguments case returned null anyway.
         if (string.IsNullOrEmpty(edge.TypeArguments))
+        {
             return null;
+        }
+
         var parsed = ParseMethod(edge.Callee);
         if (parsed is null)
+        {
             return null;
+        }
+
         // ParseMethod returns TypeId WITH the "T:" prefix and a name that still carries the method
         // generic-arity marker (e.g. "New``3"); rule.Method is a plain "<declType>.<name>", so strip
         // the "``N" before matching.
         var name = parsed.Value.Name;
         var tick = name.IndexOf("``", StringComparison.Ordinal);
         if (tick >= 0)
+        {
             name = name.Substring(0, tick);
+        }
+
         var methodKey = parsed.Value.TypeId.Substring(2) + "." + name;
         if (!ruleByMethod.TryGetValue(methodKey, out var rule))
+        {
             return null;
+        }
+
         var construct = NthTopLevelArg(edge.TypeArguments!, rule.ConstructArgIndex);
         // Only a concrete, namespaced type can name a real construct; a bare type-parameter token
         // ("TConstruct") or primitive has no '.' and isn't resolvable -> leave the edge for the fallback.
         if (construct is null || construct.IndexOf('.') < 0)
+        {
             return null;
+        }
+
         var constructType = "T:" + TypeClosure.StripGeneric(construct);
         if (!methodsByTypeAndName.TryGetValue((constructType, rule.TargetMethod), out var candidates))
+        {
             return null;
+        }
+
         var arity = ParamArity(edge.Callee);
         var matched = candidates.Where(c => ParamArity(c.SymbolId) == arity).ToList();
         if (matched.Count == 0)
+        {
             matched = candidates; // no arity match — take all overloads; still bypasses the plumbing
+        }
+
         if (matched.Count == 0)
+        {
             return null;
+        }
 
         // Disambiguate same-arity overloads by the PK type. The factory's first parameter is a method
         // type-param reference (Entity.New``3(``1) -> index 1 = TPk), so the pk type is type-arg[1];
@@ -156,7 +202,9 @@ public static partial class FactPathFinder
                 var pkNorm = NormalizeTypeName(pkType);
                 var byPk = matched.Where(c => NormalizeTypeName(FirstTopLevelParam(c.SymbolId)) == pkNorm).ToList();
                 if (byPk.Count > 0)
+                {
                     matched = byPk;
+                }
             }
         }
         return matched.Select(m => edge with { Callee = m.SymbolId, TypeArguments = null }).ToList();
@@ -190,11 +238,17 @@ public static partial class FactPathFinder
     private static string NormalizeTypeName(string? type)
     {
         if (string.IsNullOrWhiteSpace(type))
+        {
             return "";
+        }
+
         var t = type!.Trim();
         var marker = t.IndexOfAny(['{', '<', '[']);
         if (marker >= 0)
+        {
             t = t.Substring(0, marker);
+        }
+
         var dot = t.LastIndexOf('.');
         var simple = dot >= 0 ? t.Substring(dot + 1) : t;
         return CSharpKeywordTypes.TryGetValue(simple, out var bcl) ? bcl : simple;
@@ -205,20 +259,32 @@ public static partial class FactPathFinder
     {
         var open = docId.IndexOf('(');
         if (open < 0)
+        {
             return null;
+        }
+
         var close = docId.LastIndexOf(')');
         if (close <= open + 1)
+        {
             return null;
+        }
+
         var depth = 0;
         for (var i = open + 1; i < close; i++)
         {
             var c = docId[i];
             if (c is '{' or '[' or '(' or '<')
+            {
                 depth++;
+            }
             else if (c is '}' or ']' or ')' or '>')
+            {
                 depth--;
+            }
             else if (c == ',' && depth == 0)
+            {
                 return docId.Substring(open + 1, i - (open + 1)).Trim();
+            }
         }
         return docId.Substring(open + 1, close - (open + 1)).Trim();
     }
@@ -228,8 +294,11 @@ public static partial class FactPathFinder
     private static int TypeParamRefIndex(string? param)
     {
         if (param is null || !param.StartsWith("``", StringComparison.Ordinal))
+        {
             return -1;
-        return int.TryParse(param.Substring(2), out var n) ? n : -1;
+        }
+
+        return int.TryParse(param.Substring(2), InvariantCulture, out var n) ? n : -1;
     }
 
     // The Nth (0-based) top-level element of a comma-joined type-arg list — commas inside <>/()/[]
@@ -237,7 +306,10 @@ public static partial class FactPathFinder
     private static string? NthTopLevelArg(string typeArguments, int index)
     {
         if (index < 0)
+        {
             return null;
+        }
+
         var depth = 0;
         var position = 0;
         var start = 0;
@@ -245,13 +317,20 @@ public static partial class FactPathFinder
         {
             var c = typeArguments[i];
             if (c is '<' or '(' or '[')
+            {
                 depth++;
+            }
             else if (c is '>' or ')' or ']')
+            {
                 depth--;
+            }
             else if (c == ',' && depth == 0)
             {
                 if (position == index)
+                {
                     return typeArguments.Substring(start, i - start).Trim();
+                }
+
                 position++;
                 start = i + 1;
             }

@@ -32,6 +32,8 @@ internal static class CallersCommand
         var raw = CommonOptions.Raw();
         var rules = CommonOptions.Rules();
         var depth = CommonOptions.Depth();
+        var format = CommonOptions.Format();
+        var limit = CommonOptions.Limit();
         var cmd = new Command("callers", "Reverse reachability: which methods reach the target.")
         {
             to,
@@ -41,12 +43,16 @@ internal static class CallersCommand
             raw,
             rules,
             depth,
+            format,
+            limit,
         };
         // --orphans (the candidate heuristic) and --entrypoints (the precise rule set) are distinct lenses.
         cmd.Validators.Add(result =>
         {
             if (result.GetValue(orphans) && result.GetValue(entrypoints))
+            {
                 result.AddError("Options --orphans and --entrypoints can't be combined for 'rig callers'.");
+            }
         });
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -61,6 +67,8 @@ internal static class CallersCommand
                         pr.GetValue(raw),
                         CommonOptions.RulesOf(pr.GetValue(rules)),
                         pr.GetValue(depth),
+                        pr.GetValue(format),
+                        pr.GetValue(limit),
                         output,
                         workingDirectory
                     )
@@ -77,10 +85,14 @@ internal static class CallersCommand
         bool raw,
         IReadOnlyList<string> extraRules,
         int? depth,
+        string? format,
+        int? limit,
         TextWriter output,
         string workingDirectory
     )
     {
+        var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
+        var max = limit ?? int.MaxValue; // --limit absent => unbounded
         var maxDepth = CommonOptions.DepthOrUnbounded(depth);
         var mode = CommonOptions.Mode(async);
         // callers walks the SAME shaped graph as path/reaches/tree — monomorphized generic factories + cut +
@@ -104,6 +116,7 @@ internal static class CallersCommand
         );
 
         if (entrypointsOnly)
+        {
             return await RunEntryPointsAsync(
                 context,
                 graph,
@@ -113,37 +126,90 @@ internal static class CallersCommand
                 shaping.Handoff,
                 extraRules,
                 workingDirectory,
+                tsv,
                 output
             );
+        }
 
-        // Deployment/EP context for the from-symbol annotations (opt-in via deployments.json). Null/no-op
-        // when unconfigured. Built once here for the roots + reachable listings.
-        var deployments = await LoadDeploymentsAsync(context, workingDirectory);
-        var epContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, shaping.Handoff, deployments);
+        // Deployment/EP context for the from-symbol annotations (opt-in via deployments.json). Only the
+        // --orphans text listing uses it for the chip; tsv and the reachable listing don't, so it's built
+        // lazily to avoid the EP-site derivation when it isn't read.
+        EpRenderContext? epContext = tsv
+            ? null
+            : await BuildEpContextAsync(
+                context,
+                graph,
+                workingDirectory,
+                extraRules,
+                shaping.Handoff,
+                await LoadDeploymentsAsync(context, workingDirectory)
+            );
 
         if (rootsOnly)
         {
             var roots = FactPathFinder.EntryRootsReaching(graph, toPattern, maxDepth, mode: mode);
             if (roots.Count == 0)
             {
-                output.WriteLine($"No entry-point candidates reach '{toPattern}' (or no symbol matches).");
+                if (!tsv)
+                {
+                    output.WriteLine($"No entry-point candidates reach '{toPattern}' (or no symbol matches).");
+                }
+
                 return 1;
             }
+            // --format tsv: one full-DocID root per line (no chip/header).
+            if (tsv)
+            {
+                foreach (var r in roots.Take(max))
+                {
+                    output.WriteLine(r);
+                }
+
+                return 0;
+            }
             output.WriteLine($"Entry-point candidates reaching '{toPattern}': {roots.Count}");
-            foreach (var r in roots)
+            foreach (var r in roots.Take(max))
+            {
                 output.WriteLine($"{Indent.L1}{r}{HeaderSuffix(epContext, r)}");
+            }
+            if (roots.Count > max)
+            {
+                output.WriteLine($"{Indent.L1}… +{roots.Count - max} more (raise --limit)");
+            }
+
             return 0;
         }
 
         var reachable = FactPathFinder.ReachedBy(graph, toPattern, maxDepth, mode: mode);
         if (reachable.Count == 0)
         {
-            output.WriteLine($"No symbol matches '{toPattern}'.");
+            if (!tsv)
+            {
+                output.WriteLine($"No symbol matches '{toPattern}'.");
+            }
+
             return 1;
         }
+        // --format tsv: depth + full DocID per reaching method (default unbounded; --limit caps it).
+        if (tsv)
+        {
+            foreach (var kv in reachable.OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).Take(max))
+            {
+                output.WriteLine($"{kv.Value}\t{kv.Key}");
+            }
+
+            return 0;
+        }
         output.WriteLine($"Methods that reach '{toPattern}': {reachable.Count}");
-        foreach (var kv in reachable.OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).Take(300))
+        foreach (var kv in reachable.OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).Take(max))
+        {
             output.WriteLine($"{Indent.L1}d{kv.Value}  {ShortName(kv.Key)}");
+        }
+        if (reachable.Count > max)
+        {
+            output.WriteLine($"{Indent.L1}… +{reachable.Count - max} more (raise --limit, or --format tsv for all)");
+        }
+
         return 0;
     }
 
@@ -161,6 +227,7 @@ internal static class CallersCommand
         IReadOnlyList<FactHandoffRule> handoffRules,
         IReadOnlyList<string> extraRules,
         string workingDirectory,
+        bool tsv,
         TextWriter output
     )
     {
@@ -169,7 +236,11 @@ internal static class CallersCommand
         var reachable = FactPathFinder.ReachedBy(graph, toPattern, maxDepth, mode: mode).Keys.ToHashSet(StringComparer.Ordinal);
         if (reachable.Count == 0)
         {
-            output.WriteLine($"No symbol matches '{toPattern}'.");
+            if (!tsv)
+            {
+                output.WriteLine($"No symbol matches '{toPattern}'.");
+            }
+
             return 1;
         }
 
@@ -194,21 +265,44 @@ internal static class CallersCommand
 
         if (touching.Count == 0)
         {
-            output.WriteLine($"No rule-detected entry points reach '{toPattern}'.");
+            if (!tsv)
+            {
+                output.WriteLine($"No rule-detected entry points reach '{toPattern}'.");
+            }
+
             return 1;
+        }
+        // --format tsv: one row per touching EP (full path), with the loaded + capability-active services.
+        // Columns: kind, route, file, line, requires, loadedServices, activeServices (comma-joined).
+        if (tsv)
+        {
+            foreach (var e in touching)
+            {
+                var loaded = deployments.ServicesForFile(e.FilePath);
+                var active = deployments.ActiveServices(loaded, e.Requires);
+                output.WriteLine(
+                    $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}"
+                );
+            }
+            return 0;
         }
         output.WriteLine(
             $"Rule-detected entry points reaching '{toPattern}': {touching.Count}"
                 + (mode == FactPathFinder.TraversalMode.AsyncInclude ? "  (--async: incl. scheduled paths)" : "")
         );
-        foreach (var kindGroup in touching.GroupBy(e => e.Kind).OrderByDescending(g => g.Count()))
+        foreach (var kindGroup in touching.GroupBy(e => e.Kind, StringComparer.Ordinal).OrderByDescending(g => g.Count()))
         {
             output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup)
+            {
                 WriteEntryPointLine(output, deployments, e.Route, e.FilePath, e.Line, e.Requires);
+            }
         }
         if (!deployments.IsEmpty)
+        {
             WriteServiceSummary(touching.Select(t => (t.Kind, (string?)t.FilePath, t.Requires)), deployments, output);
+        }
+
         return 0;
     }
 }

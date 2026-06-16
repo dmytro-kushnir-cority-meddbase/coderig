@@ -125,14 +125,21 @@ internal sealed record AnalysisRuleSet
     {
         var normalizedPath = Path.GetFullPath(rulesPath);
         if (!File.Exists(normalizedPath))
+        {
             return this;
+        }
+
         if (LoadedRulesPaths.Contains(normalizedPath, StringComparer.OrdinalIgnoreCase))
+        {
             return this;
+        }
 
         using var stream = File.OpenRead(normalizedPath);
         var document = JsonSerializer.Deserialize<AnalysisRulesDocument>(stream, JsonOptions);
         if (document is null)
+        {
             return this;
+        }
 
         return MergeDocument(document) with
         {
@@ -185,10 +192,16 @@ internal sealed record AnalysisRuleSet
     )
     {
         if (incoming is null || incoming.Count == 0)
+        {
             return existing;
+        }
+
         var merged = new Dictionary<string, string>(existing, StringComparer.OrdinalIgnoreCase);
         foreach (var kv in incoming)
+        {
             merged[kv.Key] = kv.Value;
+        }
+
         return merged;
     }
 

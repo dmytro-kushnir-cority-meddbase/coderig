@@ -37,12 +37,20 @@ public sealed class ContextDispatchNarrowingTests
         void Walk(TraceNode n)
         {
             if (n.SymbolId == "M:N.IState.RegisterEvents")
+            {
                 found = n;
+            }
+
             foreach (var c in n.Children)
+            {
                 Walk(c);
+            }
         }
         foreach (var r in roots)
+        {
             Walk(r);
+        }
+
         found.ShouldNotBeNull();
         return found!;
     }

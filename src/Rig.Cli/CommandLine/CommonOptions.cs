@@ -53,6 +53,11 @@ internal static class CommonOptions
     internal static Option<int> Limit(int defaultValue) =>
         new("--limit") { Description = $"Max rows to show (default {defaultValue}).", DefaultValueFactory = _ => defaultValue };
 
+    // Tier-1 `--limit` with NO fixed default — absent means UNBOUNDED (the action substitutes int.MaxValue).
+    // Distinct from Limit(n), which symbols/refs use for their sensible fixed cap; the flood-prone traversal
+    // listings (reaches/callers) default to showing everything and truncate only when a limit is given.
+    internal static Option<int?> Limit() => new("--limit") { Description = "Max rows in flood-prone listings (default: unbounded)." };
+
     internal static Option<bool> NoCache() => new("--no-cache") { Description = "Bypass the query cache." };
 
     internal static Option<bool> Time() => new("--time") { Description = "Print per-phase timings to stderr." };

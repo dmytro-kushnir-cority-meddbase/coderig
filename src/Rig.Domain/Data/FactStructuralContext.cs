@@ -30,7 +30,9 @@ public static class FactStructuralContext
     public static IReadOnlyList<EnclosingInvocation> DecodeInvocations(string? encoded)
     {
         if (string.IsNullOrEmpty(encoded))
+        {
             return [];
+        }
 
         var result = new List<EnclosingInvocation>();
         // Guarded non-null above; netstandard2.0's string.IsNullOrEmpty lacks [NotNullWhen(false)],
@@ -39,7 +41,9 @@ public static class FactStructuralContext
         {
             var fields = entry.Split(FieldSeparator);
             if (fields.Length == 3)
+            {
                 result.Add(new EnclosingInvocation(fields[0], fields[1], fields[2]));
+            }
         }
 
         return result;
@@ -63,14 +67,18 @@ public static class FactStructuralContext
     public static IReadOnlyList<EnclosingScope> DecodeScopes(string? encoded)
     {
         if (string.IsNullOrEmpty(encoded))
+        {
             return [];
+        }
 
         var result = new List<EnclosingScope>();
         foreach (var entry in encoded!.Split(ListSeparator))
         {
             var fields = entry.Split(FieldSeparator);
             if (fields.Length == 2)
+            {
                 result.Add(new EnclosingScope(fields[0], fields[1]));
+            }
         }
 
         return result;

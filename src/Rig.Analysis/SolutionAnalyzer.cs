@@ -80,7 +80,9 @@ public static class SolutionAnalyzer
         ));
         var allDiRegistrations = diRegistrations.Concat(xmlRegistrations).Concat(staticRegistrations).ToArray();
         if (xmlRegistrations.Count > 0)
+        {
             progress?.Invoke($"XML DI miner: {xmlRegistrations.Count} mappings from {rules.XmlDiFiles.Count} path(s)");
+        }
 
         progress?.Invoke(
             $"Analysis complete: {symbolFacts.Length} symbols, "

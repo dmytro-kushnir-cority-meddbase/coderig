@@ -33,7 +33,10 @@ internal static class TraversalGraphLoader
         // so the bounded graph is classified by construction. EF fallback: classify the loaded graph
         // with the rules so the in-memory traversal sees the same handoff edges.
         if (await SqlReachability.HasGraphAsync(context))
+        {
             return await SqlReachability.LoadBoundedGraphAsync(context, pattern, direction);
+        }
+
         return await Reads.LoadFactGraphAsync(context, handoffRules);
     }
 

@@ -57,8 +57,8 @@ internal static class QueryCacheKeys
     // these flags must get distinct sidecars (the forest itself is filter-independent and is not affected).
     internal static string EffectFilterSignature(IReadOnlyCollection<string> only, IReadOnlyCollection<string> exclude)
     {
-        var o = string.Join(",", only.Select(x => x.ToLowerInvariant()).OrderBy(x => x, StringComparer.Ordinal));
-        var e = string.Join(",", exclude.Select(x => x.ToLowerInvariant()).OrderBy(x => x, StringComparer.Ordinal));
+        var o = string.Join(',', only.Select(x => x.ToLowerInvariant()).OrderBy(x => x, StringComparer.Ordinal));
+        var e = string.Join(',', exclude.Select(x => x.ToLowerInvariant()).OrderBy(x => x, StringComparer.Ordinal));
         return $"only={o};exclude={e}";
     }
 

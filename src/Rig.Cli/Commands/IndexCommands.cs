@@ -40,16 +40,16 @@ internal static class IndexCommands
                 error,
                 () =>
                     RunIndexAsync(
-                        pr.GetValue(target)!,
-                        CommonOptions.RulesOf(pr.GetValue(rules)),
-                        pr.GetValue(identity),
-                        pr.GetValue(from) is { } f ? Path.GetFullPath(f) : null,
-                        pr.GetValue(parallelism),
-                        pr.GetValue(merge),
-                        pr.GetValue(includeTests),
-                        output,
-                        error,
-                        workingDirectory
+                        target: pr.GetValue(target)!,
+                        extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                        identity: pr.GetValue(identity),
+                        fromProject: pr.GetValue(from) is { } f ? Path.GetFullPath(f) : null,
+                        parallelism: pr.GetValue(parallelism),
+                        merge: pr.GetValue(merge),
+                        includeTests: pr.GetValue(includeTests),
+                        output: output,
+                        error: error,
+                        workingDirectory: workingDirectory
                     )
             )
         );
@@ -78,7 +78,9 @@ internal static class IndexCommands
         {
             scopeProjectPaths = await BuildEntryClosureAsync(target, fromProject, workingDirectory, output, error);
             if (scopeProjectPaths is null)
+            {
                 return 2;
+            }
         }
 
         var totalWatch = System.Diagnostics.Stopwatch.StartNew();
@@ -88,13 +90,25 @@ internal static class IndexCommands
         {
             output.WriteLine($"Indexing: {Path.GetFullPath(target)}");
             if (extraRules.Count > 0)
+            {
                 output.WriteLine($"Rules: {string.Join(", ", extraRules)}");
+            }
+
             if (identity is not null)
+            {
                 output.WriteLine($"Identity: {identity}");
+            }
+
             if (fromProject is not null)
+            {
                 output.WriteLine($"From (closure): {fromProject}  ->  {scopeProjectPaths!.Count} project(s)");
+            }
+
             if (parallelism is not null)
+            {
                 output.WriteLine($"Parallelism: {parallelism}");
+            }
+
             result = await SolutionAnalyzer.AnalyzeAsync(
                 target,
                 progress: message => output.WriteLine($"Progress: {message}"),
@@ -140,7 +154,9 @@ internal static class IndexCommands
         var finalDbPath = Path.Combine(storeDirectory, "rig.db");
         var dbPath = atomicPublish ? finalDbPath + ".tmp" : finalDbPath;
         if (atomicPublish)
+        {
             DeleteDbFiles(dbPath); // clear any leftover temp from a previous aborted run
+        }
 
         if (merge)
         {
@@ -270,11 +286,15 @@ internal static class IndexCommands
             {
                 var proj = queue.Dequeue();
                 if (visited.Add(proj))
+                {
                     batch.Add(proj);
+                }
             }
 
             if (batch.Count == 0)
+            {
                 break;
+            }
 
             output.WriteLine($"\n[mine] Batch: {batch.Count} project(s)");
 
@@ -325,7 +345,9 @@ internal static class IndexCommands
                 if (depGraph.TryGetValue(proj, out var deps))
                 {
                     foreach (var dep in deps.Where(d => !visited.Contains(d)))
+                    {
                         queue.Enqueue(dep);
+                    }
                 }
             }
         }
@@ -368,7 +390,9 @@ internal static class IndexCommands
     {
         var dbPath = Path.Combine(workingDirectory, ".rig", "rig.db");
         if (!File.Exists(dbPath))
+        {
             return CommandGuard.NoRunError(error);
+        }
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         await using var context = new RigDbContext(dbPath);
@@ -428,7 +452,9 @@ internal static class IndexCommands
         // test-free already; this honours --from's "without tests" contract defensively.
         var excludedTests = visited.Where(IsTestProjectPath).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray();
         foreach (var t in excludedTests)
+        {
             visited.Remove(t);
+        }
 
         var listPath = Path.Combine(workingDirectory, "relevant-projects.json");
         WriteJsonSidecar(
@@ -463,7 +489,9 @@ internal static class IndexCommands
         {
             var p = dbPath + suffix;
             if (File.Exists(p))
+            {
                 File.Delete(p);
+            }
         }
     }
 

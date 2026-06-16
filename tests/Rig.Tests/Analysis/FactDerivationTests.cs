@@ -23,7 +23,11 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var rules = FactEntryPointRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
         var entryPoints = FactEntryPointDeriver.Derive(FactProjection.EntryPointData(result), rules);
 
-        var actionRoutes = entryPoints.Where(e => e.Kind == "action").Select(e => e.Route).OrderBy(r => r).ToArray();
+        var actionRoutes = entryPoints
+            .Where(e => e.Kind == "action")
+            .Select(e => e.Route)
+            .OrderBy(r => r, StringComparer.Ordinal)
+            .ToArray();
         actionRoutes.ShouldBe(
             new[]
             {
@@ -135,6 +139,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var output = new StringWriter();
         var noEffects = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var root in FactPathFinder.BuildTree(graph, fromPattern))
+        {
             TreeRenderer.RenderTreeNode(
                 root,
                 "",
@@ -146,6 +151,8 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
                 noEffects,
                 output
             );
+        }
+
         return output.ToString();
     }
 
@@ -194,7 +201,9 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         overloadEdges.Count.ShouldBe(2);
         overloadEdges.ShouldAllBe(e => e.Basis == "roslyn");
         foreach (var edge in overloadEdges)
+        {
             edge.To.ShouldBe(edge.From.Replace("IDispatchWorkflows", "WorkflowRegistry"));
+        }
 
         var reach = FactPathFinder.Reaches(graph, "WorkflowCaller.RegisterController");
         reach.Keys.ShouldContain(k => k.Contains("WorkflowRegistry.Register(System.Int32", StringComparison.Ordinal));

@@ -22,8 +22,8 @@ public static class EntryPointSiteStore
         CancellationToken cancellationToken = default
     )
     {
-        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken).ConfigureAwait(false);
-        await using var tx = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        await using var tx = await connection.BeginTransactionAsync(cancellationToken);
 
         // One command, four statements — Microsoft.Data.Sqlite steps a ;-delimited batch in a single
         // ExecuteNonQuery (as ApplyReadPragmasAsync does), so the schema reset is one call, not four.
@@ -36,7 +36,7 @@ public static class EntryPointSiteStore
                 CREATE TABLE entry_point_sites(FilePath TEXT NOT NULL, Line INTEGER NOT NULL, Kind TEXT NOT NULL, Requires TEXT);
                 CREATE TABLE entry_point_sites_meta(RulesHash TEXT NOT NULL);
                 """;
-            await ddl.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await ddl.ExecuteNonQueryAsync(cancellationToken);
         }
 
         await using (var meta = connection.CreateCommand())
@@ -44,7 +44,7 @@ public static class EntryPointSiteStore
             meta.Transaction = (DbTransaction)tx;
             meta.CommandText = "INSERT INTO entry_point_sites_meta(RulesHash) VALUES ($h);";
             AddParam(meta, "$h", rulesHash);
-            await meta.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await meta.ExecuteNonQueryAsync(cancellationToken);
         }
 
         await using (var insert = connection.CreateCommand())
@@ -60,12 +60,12 @@ public static class EntryPointSiteStore
                 pf.Value = kv.Key.File;
                 pl.Value = kv.Key.Line;
                 pk.Value = kv.Value.Kind;
-                pr.Value = kv.Value.Requires is { } req ? string.Join(",", req) : DBNull.Value;
-                await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                pr.Value = kv.Value.Requires is { } req ? string.Join(',', req) : DBNull.Value;
+                await insert.ExecuteNonQueryAsync(cancellationToken);
             }
         }
 
-        await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
+        await tx.CommitAsync(cancellationToken);
     }
 
     // The materialized set if it exists AND was built under `rulesHash`; null otherwise (absent table, or
@@ -77,24 +77,28 @@ public static class EntryPointSiteStore
         CancellationToken cancellationToken = default
     )
     {
-        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken).ConfigureAwait(false);
-        if (!await StorageProbes.TableExistsAsync(connection, "entry_point_sites_meta", cancellationToken).ConfigureAwait(false))
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        if (!await StorageProbes.TableExistsAsync(connection, "entry_point_sites_meta", cancellationToken))
+        {
             return null;
+        }
 
         string? storedHash;
         await using (var meta = connection.CreateCommand())
         {
             meta.CommandText = "SELECT RulesHash FROM entry_point_sites_meta LIMIT 1;";
-            storedHash = await meta.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+            storedHash = await meta.ExecuteScalarAsync(cancellationToken) as string;
         }
         if (!string.Equals(storedHash, rulesHash, StringComparison.Ordinal))
+        {
             return null; // built under different rules (e.g. --rules) → caller derives under its own rules
+        }
 
         var map = new Dictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>();
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT FilePath, Line, Kind, Requires FROM entry_point_sites;";
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
         {
             var file = reader.IsDBNull(0) ? "" : reader.GetString(0);
             var line = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);

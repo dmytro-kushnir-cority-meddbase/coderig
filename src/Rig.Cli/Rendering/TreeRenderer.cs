@@ -28,16 +28,22 @@ internal static class TreeRenderer
             && !effectsByMethod.ContainsKey(node.SymbolId)
             && !node.Truncated
         )
-            // Promote the impl into the folded-away interface's slot, carrying the interface node's generic
-            // binding (the impl was reached via dispatch and has none of its own; it runs on the SAME
-            // instantiation — identity base-list). Lets the impl's label + forwarding body monomorphize.
+        // Promote the impl into the folded-away interface's slot, carrying the interface node's generic
+        // binding (the impl was reached via dispatch and has none of its own; it runs on the SAME
+        // instantiation — identity base-list). Lets the impl's label + forwarding body monomorphize.
+        {
             return kids[0] with
             {
                 FoldedVia = FoldedViaTypeName(node.SymbolId),
                 DeclaringTypeArgBinding = kids[0].DeclaringTypeArgBinding ?? node.DeclaringTypeArgBinding,
                 MethodTypeArgBinding = kids[0].MethodTypeArgBinding ?? node.MethodTypeArgBinding,
             };
-        return node with { Children = kids };
+        }
+
+        return node with
+        {
+            Children = kids,
+        };
     }
 
     // The folded-away interface/base TYPE's short name (e.g. "M:Ns.IFoo.Bar``1(..)" -> "IFoo"), for the
@@ -59,16 +65,23 @@ internal static class TreeRenderer
     )
     {
         if (effectsByMethod.ContainsKey(node.SymbolId) && seen.Add(node.SymbolId))
+        {
             ordered.Add(node.SymbolId);
+        }
+
         foreach (var c in node.Children)
+        {
             CollectEffectful(c, effectsByMethod, ordered, seen);
+        }
     }
 
     internal static void CollectTreeMethods(TraceNode node, HashSet<string> seen)
     {
         seen.Add(node.SymbolId);
         foreach (var c in node.Children)
+        {
             CollectTreeMethods(c, seen);
+        }
     }
 
     // True when this node directly has an effect or any descendant does. A "↺seen" (Truncated) node
@@ -77,10 +90,18 @@ internal static class TreeRenderer
     internal static bool SubtreeHasEffect(TraceNode node, IReadOnlyDictionary<string, List<string>> effectsByMethod)
     {
         if (effectsByMethod.ContainsKey(node.SymbolId))
+        {
             return true;
+        }
+
         foreach (var c in node.Children)
+        {
             if (SubtreeHasEffect(c, effectsByMethod))
+            {
                 return true;
+            }
+        }
+
         return false;
     }
 
@@ -155,13 +176,18 @@ internal static class TreeRenderer
         {
             FactTraversalCutRule? matchedCut = null;
             foreach (var rule in cutRules)
+            {
                 if (rule.IsMatch(node.SymbolId))
                 {
                     matchedCut = rule;
                     break;
                 }
+            }
+
             if (matchedCut is not null)
+            {
                 cutTag = $" «cut: {matchedCut.Label}»";
+            }
         }
         // --full hoists effects out to leaf nodes (below), so the inline {…} tag is suppressed in that mode.
         var fx =
@@ -234,7 +260,9 @@ internal static class TreeRenderer
         }
 
         if (opaque is not null)
+        {
             return;
+        }
 
         if (seam is not null && children.Count > 0)
         {
@@ -246,7 +274,7 @@ internal static class TreeRenderer
             const int cap = 30;
             var shown = effects.Take(cap).Select(e => "{" + e + "}");
             var overflow = effects.Count > cap ? $" …+{effects.Count - cap} more" : "";
-            var fxUnion = effects.Count == 0 ? "" : "  " + string.Join(" ", shown) + overflow;
+            var fxUnion = effects.Count == 0 ? "" : "  " + string.Join(' ', shown) + overflow;
             output.WriteLine(
                 $"{childPrefix}└─ ⋯ {children.Count} dispatch targets collapsed [seam: {seam.Label}]{fxUnion}  (+{hidden} lines hidden — `tree --raw` to expand)"
             );
@@ -254,6 +282,7 @@ internal static class TreeRenderer
         }
 
         for (var i = 0; i < children.Count; i++)
+        {
             RenderTreeNode(
                 children[i],
                 childPrefix,
@@ -274,6 +303,7 @@ internal static class TreeRenderer
                 declaringConcrete,
                 methodConcrete
             );
+        }
     }
 
     // Finds every collapse-seam hub in the tree(s) and precomputes its REALISTIC effect summary: the
@@ -294,18 +324,27 @@ internal static class TreeRenderer
     {
         var result = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         if (renderRules.CollapseSeams.Count == 0)
+        {
             return result;
+        }
 
         var hubs = new HashSet<string>(StringComparer.Ordinal);
         void FindHubs(TraceNode node)
         {
             if (renderRules.MatchCollapseSeam(node.SymbolId) is not null)
+            {
                 hubs.Add(node.SymbolId);
+            }
+
             foreach (var child in node.Children)
+            {
                 FindHubs(child);
+            }
         }
         foreach (var root in roots)
+        {
             FindHubs(root);
+        }
 
         foreach (var hub in hubs)
         {
@@ -313,13 +352,21 @@ internal static class TreeRenderer
             // Distinct resource types per (provider, operation) over the whole reach closure.
             var perOp = new Dictionary<(string Provider, string Operation), HashSet<string>>();
             foreach (var sym in reach.Keys)
+            {
                 if (structuredByMethod.TryGetValue(sym, out var list))
+                {
                     foreach (var effect in list)
                     {
                         if (!perOp.TryGetValue((effect.Provider, effect.Operation), out var resources))
+                        {
                             perOp[(effect.Provider, effect.Operation)] = resources = new HashSet<string>(StringComparer.Ordinal);
+                        }
+
                         resources.Add(effect.ResourceType);
                     }
+                }
+            }
+
             result[hub] = perOp
                 .OrderByDescending(kv => kv.Value.Count)
                 .ThenBy(kv => kv.Key.Provider, StringComparer.Ordinal)
@@ -347,16 +394,28 @@ internal static class TreeRenderer
         {
             count++;
             if (effectsByMethod.TryGetValue(node.SymbolId, out var list))
+            {
                 foreach (var effect in list)
+                {
                     if (seen.Add(effect))
+                    {
                         effects.Add(effect);
+                    }
+                }
+            }
+
             var kids = prune ? node.Children.Where(c => SubtreeHasEffect(c, effectsByMethod)) : node.Children;
             foreach (var child in kids)
+            {
                 Walk(child);
+            }
         }
 
         foreach (var node in nodes)
+        {
             Walk(node);
+        }
+
         return (effects, count);
     }
 
@@ -403,7 +462,10 @@ internal static class TreeRenderer
                 pairedResources.Contains(e.ResourceType ?? "")
                 && (e.Provider == "lock" && (e.Operation == "acquire" || e.Operation == "release"));
             if (isPaired)
+            {
                 continue;
+            }
+
             result.Add(
                 $"{FactEffectEmojiProvider.For(emoji, e.Provider, e.Operation)} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}"
             );
@@ -431,7 +493,10 @@ internal static class TreeRenderer
         var name = ShortName(target);
         // ShortName keeps a leading DocID kind prefix ("M:"/"T:"/…) for a namespace-less symbol; strip it.
         if (name.Length > 2 && name[1] == ':')
+        {
             name = name[2..];
+        }
+
         // Render generic arity the same way resolved tree nodes do (`Seq`1.Iter` -> `Seq<T>.Iter`) so the
         // library leaves don't show raw backtick arity next to the `<T,U>` of resolved siblings.
         return $"· {PrettyGenericName(name)}{loc}";

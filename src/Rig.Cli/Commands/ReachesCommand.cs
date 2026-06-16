@@ -28,6 +28,7 @@ internal static class ReachesCommand
         var format = CommonOptions.Format();
         var only = CommonOptions.Only();
         var exclude = CommonOptions.Exclude();
+        var limit = CommonOptions.Limit();
         var cmd = new Command("reaches", "Effects reachable from an entry point, by depth.")
         {
             from,
@@ -38,6 +39,7 @@ internal static class ReachesCommand
             format,
             only,
             exclude,
+            limit,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -45,16 +47,17 @@ internal static class ReachesCommand
                 error,
                 () =>
                     RunAsync(
-                        pr.GetValue(from)!,
-                        pr.GetValue(async),
-                        pr.GetValue(raw),
-                        CommonOptions.RulesOf(pr.GetValue(rules)),
-                        pr.GetValue(depth),
-                        pr.GetValue(format),
-                        CommonOptions.FilterSet(pr.GetValue(only)),
-                        CommonOptions.FilterSet(pr.GetValue(exclude)),
-                        output,
-                        workingDirectory
+                        fromPattern: pr.GetValue(from)!,
+                        async: pr.GetValue(async),
+                        raw: pr.GetValue(raw),
+                        extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                        depth: pr.GetValue(depth),
+                        format: pr.GetValue(format),
+                        only: CommonOptions.FilterSet(pr.GetValue(only)),
+                        exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
+                        limit: pr.GetValue(limit),
+                        output: output,
+                        workingDirectory: workingDirectory
                     )
             )
         );
@@ -70,11 +73,13 @@ internal static class ReachesCommand
         string? format,
         HashSet<string> only,
         HashSet<string> exclude,
+        int? limit,
         TextWriter output,
         string workingDirectory
     )
     {
         var maxDepth = CommonOptions.DepthOrUnbounded(depth);
+        var max = limit ?? int.MaxValue; // --limit absent => unbounded
         var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
         var mode = CommonOptions.Mode(async);
         // reaches monomorphizes generic factories even under --raw (a long-standing asymmetry vs
@@ -97,7 +102,10 @@ internal static class ReachesCommand
         );
         var graph = inputs.Graph;
         if (!raw)
+        {
             graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+        }
+
         var reachable = FactPathFinder.ReachesWithFanout(graph, fromPattern, maxDepth, mode: mode);
 
         var effects = DeriveEffects(
@@ -144,10 +152,13 @@ internal static class ReachesCommand
             // across an async handoff boundary (cross-thread; only under --async); dispatchBasis
             // (last col) = "heuristic" when a name/arity-guessed dispatch hop is on the path
             // ("roslyn" when all dispatch hops are exact mined facts; empty when no dispatch hop).
-            foreach (var h in hits)
+            foreach (var h in hits.Take(max))
+            {
                 output.WriteLine(
                     $"{h.Depth}\t{h.Effect.Provider}\t{h.Effect.Operation}\t{h.Effect.ResourceType}\t{h.Effect.EnclosingSymbolId}\t{ShortenPath(h.Effect.FilePath)}:{h.Effect.Line}\t{h.Fanout}\t{ShortLoop(h.Loop)}\t{h.Via}\t{(h.Via is null ? 0 : h.ViaDegree)}\t{h.HandoffVia}\t{h.Basis}"
                 );
+            }
+
             return 0;
         }
 
@@ -171,15 +182,24 @@ internal static class ReachesCommand
         output.WriteLine($"Reachable methods (<= depth {maxDepth}): {reachable.Count}");
         output.WriteLine($"Direct effects (real call paths): {direct.Count}  (fanned out under a loop: {direct.Count(h => h.Fanout > 0)})");
         foreach (var g in direct.GroupBy(h => (h.Effect.Provider, h.Effect.Operation)).OrderByDescending(g => g.Count()))
+        {
             output.WriteLine($"{Indent.L1}{g.Count(), 4}  {g.Key.Provider} {g.Key.Operation}");
+        }
+
         output.WriteLine("--- nearest direct effects (depth  provider op  resource  <- method  [loop]) ---");
-        foreach (var h in direct.Take(40))
+        foreach (var h in direct.Take(max))
         {
             var fan = h.Fanout > 0 ? $"  🔁x{h.Fanout} [loop: {ShortLoop(h.Loop)}]" : "";
             var heuristic = h.Basis == "heuristic" ? "  ~heuristic" : "";
             output.WriteLine(
                 $"{Indent.L1}d{h.Depth}  {h.Effect.Provider} {h.Effect.Operation}  {ShortName(h.Effect.ResourceType)}  <- {ShortName(h.Effect.EnclosingSymbolId)}{fan}{SpanTag(h.Effect)}{heuristic}"
             );
+        }
+        // Default is unbounded; only a `--limit` smaller than the result truncates — say so, so a grep over
+        // this listing isn't a silent false negative.
+        if (direct.Count > max)
+        {
+            output.WriteLine($"{Indent.L1}… +{direct.Count - max} more direct effect(s) (raise --limit, or --format tsv for all)");
         }
 
         if (scheduled.Count > 0)
@@ -190,9 +210,11 @@ internal static class ReachesCommand
             foreach (
                 var g in scheduled.GroupBy(h => (h.HandoffVia!, h.Effect.Provider, h.Effect.Operation)).OrderByDescending(g => g.Count())
             )
+            {
                 output.WriteLine(
                     $"{Indent.L1}⚡x{g.Count(), -4} {g.Key.Provider} {g.Key.Operation}  ⤳ via {ShortName(g.Key.Item1)} [cross_thread]"
                 );
+            }
         }
 
         if (fanned.Count > 0)

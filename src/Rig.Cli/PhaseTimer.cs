@@ -14,7 +14,10 @@ internal sealed class PhaseTimer
     public PhaseTimer(bool enabled, TextWriter writer)
     {
         if (!enabled)
+        {
             return;
+        }
+
         _writer = writer;
         _phase = Stopwatch.StartNew();
         _total = Stopwatch.StartNew();
@@ -23,15 +26,16 @@ internal sealed class PhaseTimer
     public void Lap(string phase)
     {
         if (_writer is null)
+        {
             return;
+        }
+
         _writer.WriteLine($"[time] {phase}: {_phase!.ElapsedMilliseconds} ms");
         _phase.Restart();
     }
 
     public void Total()
     {
-        if (_writer is null)
-            return;
-        _writer.WriteLine($"[time] total: {_total!.ElapsedMilliseconds} ms");
+        _writer?.WriteLine($"[time] total: {_total!.ElapsedMilliseconds} ms");
     }
 }

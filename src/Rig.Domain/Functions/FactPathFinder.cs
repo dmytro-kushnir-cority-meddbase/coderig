@@ -68,7 +68,10 @@ public static partial class FactPathFinder
         foreach (var start in index.Nodes.Where(n => Contains(n, fromPattern)))
         {
             if (parent.ContainsKey(start))
+            {
                 continue;
+            }
+
             parent[start] = null;
             receiverOf[start] = null;
             queue.Enqueue((start, 0));
@@ -79,15 +82,22 @@ public static partial class FactPathFinder
             var (current, depth) = queue.Dequeue();
 
             if (parent[current] is not null && Contains(current, toPattern))
+            {
                 return Reconstruct(parent, current);
+            }
 
             if (depth >= maxDepth)
+            {
                 continue;
+            }
 
             foreach (var s in Successors(current, index, receiverOf.TryGetValue(current, out var rc) ? rc : null, null, mode))
             {
                 if (!parent.ContainsKey(s.Node))
+                {
                     receiverOf[s.Node] = s.OutReceiver;
+                }
+
                 Enqueue(
                     parent,
                     queue,
@@ -159,7 +169,10 @@ public static partial class FactPathFinder
         var info = ReachesWithFanout(graph, fromPattern, maxDepth, maxNodes, narrowDispatch, mode);
         var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var kv in info)
+        {
             depthOf[kv.Key] = kv.Value.Depth;
+        }
+
         return depthOf;
     }
 
@@ -193,7 +206,10 @@ public static partial class FactPathFinder
         foreach (var start in index.Nodes.Where(n => Contains(n, fromPattern)))
         {
             if (info.ContainsKey(start))
+            {
                 continue;
+            }
+
             info[start] = new ReachInfo(0, 0, null, null);
             receiverOf[start] = null;
             bindingOf[start] = null;
@@ -205,7 +221,10 @@ public static partial class FactPathFinder
             var current = queue.Dequeue();
             var cur = info[current];
             if (cur.Depth >= maxDepth)
+            {
                 continue;
+            }
+
             foreach (
                 var s in Successors(
                     current,
@@ -223,7 +242,10 @@ public static partial class FactPathFinder
                 if (info.ContainsKey(s.Node))
                 {
                     if (grew)
+                    {
                         queue.Enqueue(s.Node);
+                    }
+
                     continue;
                 }
                 var looped = s.LoopKind is not null;
@@ -270,7 +292,10 @@ public static partial class FactPathFinder
         if (incoming is null || incoming.Count == 0)
         {
             if (!hadEntry)
+            {
                 bindingOf[node] = null; // record the node as reached with no binding (full CHA)
+            }
+
             return false;
         }
         if (!hadEntry || existing is null)
@@ -279,7 +304,10 @@ public static partial class FactPathFinder
             foreach (var t in incoming)
             {
                 if (set.Count >= MaxBinding)
+                {
                     break;
+                }
+
                 set.Add(t);
             }
             bindingOf[node] = set;
@@ -289,7 +317,10 @@ public static partial class FactPathFinder
         foreach (var t in incoming)
         {
             if (existing.Count >= MaxBinding)
+            {
                 break;
+            }
+
             existing.Add(t);
         }
         return existing.Count > before;
@@ -341,7 +372,9 @@ public static partial class FactPathFinder
         }
         // Push roots reversed so the first root's whole subtree is walked before the next root's.
         for (var i = mutableRoots.Count - 1; i >= 0; i--)
+        {
             stack.Push(mutableRoots[i]);
+        }
 
         while (stack.Count > 0 && budget > 0)
         {
@@ -362,7 +395,9 @@ public static partial class FactPathFinder
             // The cut is checked AFTER marking expanded so the node itself is rendered correctly
             // (its own effects are visible); only its successors are suppressed.
             if (index.ApplyTraversalCuts && index.IsTraversalCut(n.Symbol))
+            {
                 continue;
+            }
 
             foreach (var s in Successors(n.Symbol, index, n.Receiver, n.Binding, mode))
             {
@@ -374,6 +409,7 @@ public static partial class FactPathFinder
                 // LINQ form heap-allocated a closure + delegate on every successor edge of every node.
                 MutableNode? dup = null;
                 foreach (var k in n.Kids)
+                {
                     if (
                         k.Symbol == s.Node
                         && k.EdgeKind == s.Kind
@@ -387,6 +423,8 @@ public static partial class FactPathFinder
                         dup = k;
                         break;
                     }
+                }
+
                 if (dup is not null)
                 {
                     dup.CallSites++;
@@ -412,7 +450,9 @@ public static partial class FactPathFinder
             // Push this node's children reversed, so the first child (render order) is popped — and thus
             // expanded — next: a pre-order depth-first walk.
             for (var i = n.Kids.Count - 1; i >= 0; i--)
+            {
                 stack.Push(n.Kids[i]);
+            }
         }
 
         return mutableRoots.Select(ToTraceNode).ToArray();
@@ -477,6 +517,7 @@ public static partial class FactPathFinder
     private static TraceNode ToTraceNode(MutableNode n)
     {
         if (n.Truncated)
+        {
             return new TraceNode(
                 n.Symbol,
                 n.EdgeKind,
@@ -491,6 +532,7 @@ public static partial class FactPathFinder
                 DeclaringTypeArgBinding: n.DeclaringTypeArgBinding,
                 MethodTypeArgBinding: n.MethodTypeArgBinding
             );
+        }
 
         var children = n.Kids.Count == 0 ? EmptyNodes : (IReadOnlyList<TraceNode>)n.Kids.Select(ToTraceNode).ToArray();
         return new TraceNode(
@@ -508,7 +550,7 @@ public static partial class FactPathFinder
         );
     }
 
-    private static readonly IReadOnlyList<TraceNode> EmptyNodes = new TraceNode[0];
+    private static readonly IReadOnlyList<TraceNode> EmptyNodes = [];
 
     // Multi-source forward reachability: the union of everything reachable from ANY of the given root
     // symbol IDs, using the same edge model as Reaches/Find/tree (direct calls + method-group/ctor
@@ -528,21 +570,25 @@ public static partial class FactPathFinder
         var receiverOf = new Dictionary<string, string?>(StringComparer.Ordinal);
         var queue = new Queue<string>();
         foreach (var root in roots)
+        {
             if (index.Nodes.Contains(root) && seen.Add(root))
             {
                 receiverOf[root] = null;
                 queue.Enqueue(root);
             }
+        }
 
         while (queue.Count > 0 && seen.Count < maxNodes)
         {
             var current = queue.Dequeue();
             foreach (var s in Successors(current, index, receiverOf.TryGetValue(current, out var rc) ? rc : null, null, mode))
+            {
                 if (seen.Add(s.Node))
                 {
                     receiverOf[s.Node] = s.OutReceiver;
                     queue.Enqueue(s.Node);
                 }
+            }
         }
 
         return seen;
@@ -570,7 +616,10 @@ public static partial class FactPathFinder
         foreach (var start in index.Nodes.Where(n => Contains(n, toPattern)))
         {
             if (depthOf.ContainsKey(start))
+            {
                 continue;
+            }
+
             depthOf[start] = 0;
             queue.Enqueue(start);
         }
@@ -580,11 +629,17 @@ public static partial class FactPathFinder
             var current = queue.Dequeue();
             var depth = depthOf[current];
             if (depth >= maxDepth)
+            {
                 continue;
+            }
+
             foreach (var pred in Predecessors(current, index, rev))
             {
                 if (depthOf.ContainsKey(pred))
+                {
                     continue;
+                }
+
                 depthOf[pred] = depth + 1;
                 queue.Enqueue(pred);
             }
@@ -610,8 +665,13 @@ public static partial class FactPathFinder
         var reachable = ReachedBy(graph, toPattern, maxDepth, maxNodes, narrowDispatch: true, mode);
         var roots = new List<string>();
         foreach (var m in reachable.Keys)
+        {
             if (!Predecessors(m, index, rev).Any())
+            {
                 roots.Add(m);
+            }
+        }
+
         roots.Sort(StringComparer.Ordinal);
         return roots;
     }
@@ -630,7 +690,9 @@ public static partial class FactPathFinder
         var index = BuildIndex(graph, narrowDispatch: false);
         foreach (var node in index.Nodes)
         foreach (var target in DispatchTargets(node, index, receiverType: null))
+        {
             yield return (node, target.Node, target.Kind, target.Basis);
+        }
     }
 
     // The direct call edges as (caller -> callee, kind), deduped — the other half of the graph the
@@ -649,6 +711,7 @@ public static partial class FactPathFinder
     )> AllCallEdges(FactGraphData graph)
     {
         foreach (var edge in graph.CallEdges)
+        {
             yield return (
                 edge.Caller,
                 edge.Callee,
@@ -660,6 +723,7 @@ public static partial class FactPathFinder
                 edge.ReceiverType,
                 edge.HandoffDispatcher
             );
+        }
     }
 
     // Transitive strict descendants of a type, memoised. Keyed on the generic-stripped id so the
@@ -668,7 +732,10 @@ public static partial class FactPathFinder
     {
         var key = TypeClosure.StripGeneric(typeId);
         if (!index.DescendantsCache.TryGetValue(key, out var set))
+        {
             index.DescendantsCache[key] = set = TypeClosure.ComputeStrictDescendants(index.StrippedBaseEdges, new[] { typeId });
+        }
+
         return set;
     }
 
@@ -702,7 +769,10 @@ public static partial class FactPathFinder
     )
     {
         if (parent.ContainsKey(node))
+        {
             return;
+        }
+
         parent[node] = (from, kind, file, line, loopKind, loopDetail, fanout, handoffVia, basis);
         queue.Enqueue((node, depth + 1));
     }
@@ -744,7 +814,10 @@ public static partial class FactPathFinder
                 )
             );
             if (link is null)
+            {
                 break;
+            }
+
             node = link.Value.From;
         }
         steps.Reverse();
@@ -755,14 +828,23 @@ public static partial class FactPathFinder
     private static (string TypeId, string Name)? ParseMethod(string docId)
     {
         if (!docId.StartsWith("M:", StringComparison.Ordinal))
+        {
             return null;
+        }
+
         var body = docId.Substring(2);
         var paren = body.IndexOf('(');
         if (paren >= 0)
+        {
             body = body.Substring(0, paren);
+        }
+
         var lastDot = body.LastIndexOf('.');
         if (lastDot < 0)
+        {
             return null;
+        }
+
         return ("T:" + body.Substring(0, lastDot), body.Substring(lastDot + 1));
     }
 
@@ -774,21 +856,33 @@ public static partial class FactPathFinder
     {
         var open = docId.IndexOf('(');
         if (open < 0)
+        {
             return 0;
+        }
+
         var close = docId.LastIndexOf(')');
         if (close <= open + 1)
+        {
             return 0; // "()" — no parameters
+        }
+
         var count = 1;
         var depth = 0;
         for (var i = open + 1; i < close; i++)
         {
             var c = docId[i];
             if (c is '{' or '[' or '(')
+            {
                 depth++;
+            }
             else if (c is '}' or ']' or ')')
+            {
                 depth--;
+            }
             else if (c == ',' && depth == 0)
+            {
                 count++;
+            }
         }
         return count;
     }
@@ -799,13 +893,22 @@ public static partial class FactPathFinder
     {
         var s = typeId;
         if (s.Length >= 2 && s[1] == ':')
+        {
             s = s.Substring(2);
+        }
+
         var lastDot = s.LastIndexOf('.');
         if (lastDot >= 0)
+        {
             s = s.Substring(lastDot + 1);
+        }
+
         var tick = s.IndexOf('`');
         if (tick >= 0)
+        {
             s = s.Substring(0, tick);
+        }
+
         return s;
     }
 

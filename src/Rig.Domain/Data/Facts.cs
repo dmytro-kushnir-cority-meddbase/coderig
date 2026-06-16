@@ -406,15 +406,23 @@ public sealed record FactRenderRules(IReadOnlyList<FactRenderRule> CollapseSeams
     private static FactRenderRule? FirstMatch(IReadOnlyList<FactRenderRule> rules, string symbolId)
     {
         if (rules.Count == 0)
+        {
             return null;
+        }
+
         // Match against the DocID with the parameter list stripped, so a namespace/type pattern (e.g.
         // "Echo.") hits the DECLARING type only — never a parameter type in the signature (an app method
         // `M:App.Foo.Bar(Echo.ProcessId)` must NOT match "Echo.").
         var paren = symbolId.IndexOf('(');
         var head = paren >= 0 ? symbolId.Substring(0, paren) : symbolId;
         foreach (var rule in rules)
+        {
             if (head.IndexOf(rule.Pattern, StringComparison.OrdinalIgnoreCase) >= 0)
+            {
                 return rule;
+            }
+        }
+
         return null;
     }
 }

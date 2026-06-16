@@ -86,7 +86,10 @@ public static class FactEntryPointRuleProvider
     {
         var generic = type.IndexOf('<');
         if (generic >= 0)
+        {
             type = type.Substring(0, generic);
+        }
+
         var lastDot = type.LastIndexOf('.');
         return (lastDot >= 0 ? type.Substring(lastDot + 1) : type).Trim();
     }

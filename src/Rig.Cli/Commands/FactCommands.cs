@@ -52,7 +52,10 @@ internal static class FactCommands
                     await using var context = OpenReadContext(workingDirectory);
                     var registrations = await Reads.LoadDiRegistrationsAsync(context);
                     if (registrations is null)
+                    {
                         return CommandGuard.NoRunError(error);
+                    }
+
                     DiRenderer.Render(registrations, output);
                     return 0;
                 }
@@ -90,7 +93,9 @@ internal static class FactCommands
         cmd.Validators.Add(result =>
         {
             if (!result.GetValue(skipped))
+            {
                 result.AddError("Usage: rig files --skipped");
+            }
         });
         cmd.SetAction(_ =>
             CommandGuard.RunGuardedAsync(
@@ -101,7 +106,10 @@ internal static class FactCommands
                     await using var context = OpenReadContext(workingDirectory);
                     var sourceFiles = await Reads.LoadSkippedSourceFilesAsync(context);
                     if (sourceFiles is null)
+                    {
                         return CommandGuard.NoRunError(error);
+                    }
+
                     SourceFileRenderer.RenderSkipped(sourceFiles, output);
                     return 0;
                 }
@@ -128,7 +136,10 @@ internal static class FactCommands
                     var hits = await Reads.SearchSymbolsAsync(context, p, k, pr.GetValue(limit));
                     output.WriteLine($"Symbols matching '{p}'{(k is null ? "" : $" kind={k}")}");
                     foreach (var hit in hits)
+                    {
                         output.WriteLine($"{Indent.L1}{hit.Kind, -8} {hit.SymbolId}  {ShortenPath(hit.FilePath)}:{hit.Line}");
+                    }
+
                     output.WriteLine($"{Indent.L1}({hits.Count} shown)");
                     return 0;
                 }
@@ -156,13 +167,17 @@ internal static class FactCommands
                     await using var context = OpenReadContext(workingDirectory);
                     var hits = await Reads.FindReferencesAsync(context, p, fp, refKind, pr.GetValue(limit));
                     output.WriteLine($"References to '{p}'{(fp ? " (first-party)" : "")}{(refKind is null ? "" : $" kind={refKind}")}");
-                    foreach (var group in hits.GroupBy(h => h.TargetSymbolId).OrderBy(g => g.Key, StringComparer.Ordinal))
+                    foreach (
+                        var group in hits.GroupBy(h => h.TargetSymbolId, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal)
+                    )
                     {
                         output.WriteLine($"{Indent.L1}{group.Key}");
                         foreach (var hit in group)
+                        {
                             output.WriteLine(
                                 $"{Indent.L2}{hit.RefKind, -11} {hit.EnclosingSymbolId ?? "(top-level)"}  {ShortenPath(hit.FilePath)}:{hit.Line}"
                             );
+                        }
                     }
                     output.WriteLine($"{Indent.L1}({hits.Count} reference(s) shown)");
                     return 0;

@@ -45,7 +45,10 @@ internal static class EffectDerivation
     )
     {
         if (only.Count == 0 && exclude.Count == 0)
+        {
             return effects;
+        }
+
         return effects.Where(e => (only.Count == 0 || InSet(e, only)) && !InSet(e, exclude)).ToList();
 
         static bool InSet(DerivedEffect e, HashSet<string> set) => set.Contains(e.Provider) || set.Contains($"{e.Provider}:{e.Operation}");

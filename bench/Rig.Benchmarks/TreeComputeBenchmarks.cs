@@ -46,7 +46,9 @@ public class TreeComputeBenchmarks
         _pattern = Environment.GetEnvironmentVariable("RIG_BENCH_PATTERN") ?? "Master.SubmitToHealthcode";
         var dbPath = Path.Combine(dir, ".rig", "rig.db");
         if (!File.Exists(dbPath))
+        {
             throw new FileNotFoundException($"No rig.db at {dbPath}. Set RIG_BENCH_STORE to an indexed store.");
+        }
 
         await using var context = new RigDbContext(dbPath, readOnly: true);
 

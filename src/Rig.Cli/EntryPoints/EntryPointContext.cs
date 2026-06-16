@@ -75,7 +75,10 @@ internal static class EntryPointContext
         {
             var route = HandoffTargetRoute(h.Target);
             if (route is null || existingRoutes.Contains(route) || !seen.Add(route))
+            {
                 continue;
+            }
+
             var kind = h.Kind ?? "background";
             var method = kind.ToUpperInvariant();
             result.Add(new DerivedEntryPoint(kind, method, route, $"{kind} {method} {route}", h.FilePath, h.Line, h.Requires));
@@ -88,11 +91,17 @@ internal static class EntryPointContext
     internal static string? HandoffTargetRoute(string targetDocId)
     {
         if (!targetDocId.StartsWith("M:", StringComparison.Ordinal))
+        {
             return null;
+        }
+
         var body = targetDocId.Substring(2);
         var paren = body.IndexOf('(');
         if (paren >= 0)
+        {
             body = body.Substring(0, paren);
+        }
+
         var sb = new System.Text.StringBuilder(body.Length);
         for (var i = 0; i < body.Length; i++)
         {
@@ -100,7 +109,10 @@ internal static class EntryPointContext
             {
                 i++;
                 while (i < body.Length && char.IsDigit(body[i]))
+                {
                     i++;
+                }
+
                 i--;
                 continue;
             }
@@ -123,7 +135,9 @@ internal static class EntryPointContext
     )
     {
         if (deployments.IsEmpty)
+        {
             return null;
+        }
 
         // The site->kind map is the expensive, PATTERN-INDEPENDENT half — derive-or-cache it once per
         // (store + rules). The symbol->site map below is cheap and rebuilt fresh from THIS query's graph.
@@ -159,10 +173,14 @@ internal static class EntryPointContext
 
         // Tier 1: the materialized index table (built at `rig graph` under the default rules).
         if (await EntryPointSiteStore.LoadAsync(context, rulesHash) is { } materialized)
+        {
             return materialized;
+        }
 
         if (!useCache)
+        {
             return await DeriveEpSiteKindAsync(context, workingDirectory, extraRules, handoffRules);
+        }
 
         // Tier 2: query cache (handles --rules, which the table doesn't cover).
         var rigDir = Path.Combine(workingDirectory, ".rig");
@@ -170,11 +188,16 @@ internal static class EntryPointContext
         using var cache = QueryCache.Open(rigDir, storeKey);
         var key = cache is null ? null : EpCacheKey(storeKey, rulesHash);
         if (key is not null && cache!.Get(key) is { } blob && EpSiteCacheCodec.Decode(blob) is { } hit)
+        {
             return hit;
+        }
 
         var derived = await DeriveEpSiteKindAsync(context, workingDirectory, extraRules, handoffRules);
         if (key is not null)
+        {
             TryCache(() => cache!.Put(key, EpSiteCacheCodec.Encode(derived)));
+        }
+
         return derived;
     }
 
@@ -193,7 +216,10 @@ internal static class EntryPointContext
 
         var epSiteKind = new Dictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>();
         foreach (var e in derivedEps.Concat(promoted))
+        {
             epSiteKind[(e.FilePath, e.Line)] = (e.Kind, e.Requires);
+        }
+
         return epSiteKind;
     }
 
@@ -205,7 +231,10 @@ internal static class EntryPointContext
     internal static async Task MaterializeEntryPointSitesAsync(RigDbContext context, string workingDirectory)
     {
         if (!File.Exists(Path.Combine(workingDirectory, "deployments.json")))
+        {
             return;
+        }
+
         var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory).ToArray();
         var sites = await DeriveEpSiteKindAsync(context, workingDirectory, [], handoffRules);
         await EntryPointSiteStore.PersistAsync(context, sites, RulesFingerprint.Compute(workingDirectory, []));

@@ -31,7 +31,9 @@ public sealed class AssemblyRegistryTests
             var references = new[] { Invocation("M:Asm.B.Solo", "M:Asm.A.One") };
 
             await using (var write = new RigDbContext(dbPath, pooling: false))
+            {
                 await Writes.SaveAsync(write, Result(solution, symbols, references));
+            }
 
             string hashABefore;
             await using (var read = new RigDbContext(dbPath, pooling: false))
@@ -61,7 +63,9 @@ public sealed class AssemblyRegistryTests
 
             // Re-indexing the SAME content is idempotent: no duplicate assemblies/membership, same hash.
             await using (var write = new RigDbContext(dbPath, pooling: false))
+            {
                 await Writes.SaveAsync(write, Result(solution, symbols, references));
+            }
 
             await using (var read = new RigDbContext(dbPath, pooling: false))
             {
@@ -73,7 +77,9 @@ public sealed class AssemblyRegistryTests
             // A content change (extra symbol in Asm.A) flips that assembly's hash.
             var grown = symbols.Append(Symbol("M:Asm.A.Three", "Asm.A")).ToArray();
             await using (var write = new RigDbContext(dbPath, pooling: false))
+            {
                 await Writes.SaveAsync(write, Result(solution, grown, references));
+            }
 
             await using (var read = new RigDbContext(dbPath, pooling: false))
             {
@@ -100,12 +106,16 @@ public sealed class AssemblyRegistryTests
         {
             // Base solution (like the master mine).
             await using (var write = new RigDbContext(dbPath, pooling: false))
+            {
                 await Writes.SaveAsync(write, Result(master, [Symbol("M:Core.A", "Core"), Symbol("M:Shared.S", "Shared")], []));
+            }
 
             // A second solution merged in (append, no atomic-replace): brings a new assembly (Tail) and
             // re-references a shared one (Shared, already present from the master).
             await using (var write = new RigDbContext(dbPath, pooling: false))
+            {
                 await Writes.SaveAsync(write, Result(tail, [Symbol("M:Tail.T", "Tail"), Symbol("M:Shared.S", "Shared")], []));
+            }
 
             await using (var read = new RigDbContext(dbPath, pooling: false))
             {

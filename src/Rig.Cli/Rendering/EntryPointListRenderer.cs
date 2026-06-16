@@ -38,7 +38,9 @@ internal static class EntryPointListRenderer
     internal static void WriteSampleTruncationNote(TextWriter output, int total, int shown, string kind)
     {
         if (total > shown)
+        {
             output.WriteLine($"{Indent.L3}… +{total - shown} more {kind} (sample shown; `rig derive --format tsv` lists all)");
+        }
     }
 
     // Per-service rollup of entry points: total + per-kind breakdown, in deployments.json order.
@@ -70,14 +72,21 @@ internal static class EntryPointListRenderer
             foreach (var s in active)
             {
                 if (!byService.TryGetValue(s, out var kinds))
+                {
                     byService[s] = kinds = new Dictionary<string, int>(StringComparer.Ordinal);
+                }
+
                 kinds[kind] = kinds.GetValueOrDefault(kind) + 1;
                 totals[s] = totals.GetValueOrDefault(s) + 1;
             }
             // Services that link the EP's code but are gated out of activating it.
             foreach (var s in loaded)
-                if (!active.Contains(s))
+            {
+                if (!active.Contains(s, StringComparer.Ordinal))
+                {
                     inactive[s] = inactive.GetValueOrDefault(s) + 1;
+                }
+            }
         }
 
         output.WriteLine();
@@ -87,12 +96,15 @@ internal static class EntryPointListRenderer
             var total = totals.GetValueOrDefault(svc.Name);
             var inactiveCount = inactive.GetValueOrDefault(svc.Name);
             if (total == 0 && inactiveCount == 0)
+            {
                 continue;
+            }
+
             var breakdown =
                 total == 0
                     ? ""
                     : string.Join(
-                        " ",
+                        ' ',
                         byService[svc.Name]
                             .OrderByDescending(k => k.Value)
                             .ThenBy(k => k.Key, StringComparer.Ordinal)
@@ -103,7 +115,9 @@ internal static class EntryPointListRenderer
             output.WriteLine($"{Indent.L1}{label, -46} {total, 6}   {breakdown}{inactiveTail}");
         }
         if (unattributed > 0)
+        {
             output.WriteLine($"{Indent.L1}{"(unattributed — tests/tools/no service)", -46} {unattributed, 6}");
+        }
     }
 
     // A resource-span hazard tag for an effect (P2b ordering/nesting): a network/IO/external effect
@@ -113,7 +127,10 @@ internal static class EntryPointListRenderer
     {
         var span = (effect.Observations ?? []).FirstOrDefault(o => o.Type is "transaction_spans_effect" or "lock_held_across_effect");
         if (span is null)
+        {
             return "";
+        }
+
         return span.Type == "transaction_spans_effect" ? "  ⚠ inside-open-tx" : "  ⚠ lock-held-across";
     }
 }

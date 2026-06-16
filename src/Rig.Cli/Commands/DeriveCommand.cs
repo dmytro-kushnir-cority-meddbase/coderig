@@ -25,21 +25,28 @@ internal static class DeriveCommand
         var only = CommonOptions.Only();
         var exclude = CommonOptions.Exclude();
         var format = CommonOptions.Format();
-        var cmd = new Command("derive", "Re-derive effects + entry points from facts (no Roslyn).") { rules, limit, only, exclude, format };
+        var cmd = new Command(name: "derive", description: "Re-derive effects + entry points from facts (no Roslyn).")
+        {
+            rules,
+            limit,
+            only,
+            exclude,
+            format,
+        };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
                 error,
                 () =>
                     RunAsync(
-                        CommonOptions.RulesOf(pr.GetValue(rules)),
-                        pr.GetValue(limit),
-                        CommonOptions.FilterSet(pr.GetValue(only)),
-                        CommonOptions.FilterSet(pr.GetValue(exclude)),
-                        pr.GetValue(format),
-                        output,
-                        error,
-                        workingDirectory
+                        extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                        limit: pr.GetValue(limit),
+                        only: CommonOptions.FilterSet(pr.GetValue(only)),
+                        exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
+                        format: pr.GetValue(format),
+                        output: output,
+                        error: error,
+                        workingDirectory: workingDirectory
                     )
             )
         );
@@ -78,17 +85,28 @@ internal static class DeriveCommand
         // --- Effects (data-driven over facts) ---
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
-        var effects = DeriveEffects(workingDirectory, extraRules, invocations, epData.BaseEdges, epData.CtorRefs, throwRefs);
-        effects = ApplyEffectFilters(effects, only, exclude); // --only / --exclude (e.g. --exclude throw)
+        var effects = DeriveEffects(
+            workingDirectory: workingDirectory,
+            extraRules: extraRules,
+            invocations: invocations,
+            baseEdges: epData.BaseEdges,
+            ctorRefs: epData.CtorRefs,
+            throwRefs: throwRefs
+        );
+        effects = ApplyEffectFilters(effects: effects, only: only, exclude: exclude); // --only / --exclude (e.g. --exclude throw)
 
         // Machine-readable mode: emit full-fidelity rows (full DocIDs/paths) for tooling that joins
         // effects/entry points against the call graph. `rig derive --format tsv`.
         if (string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase))
         {
             foreach (var e in effects)
+            {
+                var observations = string.Join(',', (e.Observations ?? []).Select(o => o.Type));
                 output.WriteLine(
-                    $"effect\t{e.Provider}\t{e.Operation}\t{e.ResourceType}\t{e.EnclosingSymbolId}\t{e.FilePath}\t{e.Line}\t{string.Join(",", (e.Observations ?? []).Select(o => o.Type))}"
+                    $"effect\t{e.Provider}\t{e.Operation}\t{e.ResourceType}\t{e.EnclosingSymbolId}\t{e.FilePath}\t{e.Line}\t{observations}"
                 );
+            }
+
             var tsvEpRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
             var tsvClassRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(workingDirectory, extraRules);
             var tsvEps = FactEntryPointDeriver.Derive(epData, tsvEpRules, tsvClassRules);
@@ -101,7 +119,7 @@ internal static class DeriveCommand
                 var loaded = deployments.ServicesForFile(ep.FilePath);
                 var active = deployments.ActiveServices(loaded, ep.Requires);
                 output.WriteLine(
-                    $"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}\t{string.Join(",", loaded)}\t{string.Join(",", active)}"
+                    $"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}\t{string.Join(',', loaded)}\t{string.Join(',', active)}"
                 );
             }
             return 0;
@@ -112,23 +130,28 @@ internal static class DeriveCommand
         {
             output.WriteLine($"{Indent.L1}{group.Key.Provider} {group.Key.Operation}: {group.Count()}");
             foreach (var e in group.Take(limit / 8 + 1))
+            {
                 output.WriteLine(
                     $"{Indent.L3}{ShortName(e.ResourceType)}  <- {ShortName(e.EnclosingSymbolId)}  {ShortenPath(e.FilePath)}:{e.Line}"
                 );
+            }
         }
 
         // --- Observations attached to effects (looped_effect / parallel_fanout / …, P2b) ---
         var observationGroups = effects
             .SelectMany(e => e.Observations ?? [])
-            .GroupBy(o => o.Type)
+            .GroupBy(o => o.Type, StringComparer.Ordinal)
             .OrderByDescending(g => g.Count())
-            .ToArray();
-        if (observationGroups.Length > 0)
+            .ToList();
+
+        if (observationGroups.Count > 0)
         {
             output.WriteLine();
             output.WriteLine($"Observations on effects: {observationGroups.Sum(g => g.Count())}");
             foreach (var group in observationGroups)
+            {
                 output.WriteLine($"{Indent.L1}{group.Key}: {group.Count()}");
+            }
         }
 
         // --- Page + action entry points (fact-based BFS + attribute-ref detection) ---
@@ -140,11 +163,14 @@ internal static class DeriveCommand
         output.WriteLine();
         output.WriteLine($"Entry points re-derived from facts: {derivedEps.Count}");
         var perKindSample = limit / 4 + 1;
-        foreach (var kindGroup in derivedEps.GroupBy(e => e.Kind).OrderByDescending(g => g.Count()))
+        foreach (var kindGroup in derivedEps.GroupBy(e => e.Kind, StringComparer.Ordinal).OrderByDescending(g => g.Count()))
         {
             output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup.Take(perKindSample))
+            {
                 WriteEntryPointLine(output, deployments, e.Route, e.FilePath, e.Line, e.Requires);
+            }
+
             WriteSampleTruncationNote(output, kindGroup.Count(), perKindSample, kindGroup.Key);
         }
 
@@ -158,7 +184,7 @@ internal static class DeriveCommand
             $"Handoff entry points (classified): {classifiedHandoffs.Count}  "
                 + $"(promoted origins after dedup: {origins.Count}; unclassified methodGroup residual: {unclassifiedHandoffCount})"
         );
-        foreach (var kindGroup in classifiedHandoffs.GroupBy(h => h.Kind).OrderByDescending(g => g.Count()))
+        foreach (var kindGroup in classifiedHandoffs.GroupBy(h => h.Kind, StringComparer.Ordinal).OrderByDescending(g => g.Count()))
         {
             output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
             foreach (var h in kindGroup.Take(perKindSample))
@@ -174,7 +200,10 @@ internal static class DeriveCommand
         // The headline: entry points per deployed service (the summary table). An EP counts in every service
         // whose process loads it (shared libraries fan out to many hosts — see the chip counts).
         if (!deployments.IsEmpty)
+        {
             WriteServiceSummary(derivedEps.Concat(origins).Select(e => (e.Kind, (string?)e.FilePath, e.Requires)), deployments, output);
+        }
+
         return 0;
     }
 }

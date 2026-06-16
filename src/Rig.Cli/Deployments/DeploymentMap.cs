@@ -41,7 +41,9 @@ internal sealed class DeploymentMap
     public IReadOnlyList<string> ServicesForFile(string? filePath)
     {
         if (string.IsNullOrEmpty(filePath) || _projectDirs.Length == 0)
+        {
             return [];
+        }
 
         string full;
         try
@@ -54,8 +56,13 @@ internal sealed class DeploymentMap
         }
 
         foreach (var (dir, project) in _projectDirs)
+        {
             if (full.StartsWith(dir, StringComparison.OrdinalIgnoreCase))
+            {
                 return _projectToServices.TryGetValue(project, out var svcs) ? svcs : [];
+            }
+        }
+
         return [];
     }
 
@@ -66,7 +73,10 @@ internal sealed class DeploymentMap
     public IReadOnlyList<string> ActiveServices(IReadOnlyList<string> loadedServices, IReadOnlyList<string>? requires)
     {
         if (requires is null || requires.Count == 0 || loadedServices.Count == 0)
+        {
             return loadedServices;
+        }
+
         var required = new HashSet<string>(requires, StringComparer.OrdinalIgnoreCase);
         return loadedServices.Where(s => Service(s) is { } def && def.Provides.Any(required.Contains)).ToArray();
     }
@@ -75,7 +85,10 @@ internal sealed class DeploymentMap
     {
         var configPath = Path.Combine(workingDirectory, "deployments.json");
         if (!File.Exists(configPath))
+        {
             return Empty;
+        }
+
         if (solutionPath is null || !File.Exists(solutionPath))
         {
             log?.WriteLine("deployments.json found but the indexed solution path is unavailable — skipping deployment attribution.");
@@ -84,7 +97,9 @@ internal sealed class DeploymentMap
 
         var services = ParseServices(configPath, log);
         if (services.Count == 0)
+        {
             return Empty;
+        }
 
         var solutionDir = Path.GetDirectoryName(Path.GetFullPath(solutionPath)) ?? workingDirectory;
         var depGraph = await DependencyGraph.BuildAsync(solutionPath, log);
@@ -109,7 +124,9 @@ internal sealed class DeploymentMap
                     projectToServices[project] = list;
                 }
                 if (!list.Contains(service.Name))
+                {
                     list.Add(service.Name);
+                }
             }
         }
 
@@ -135,7 +152,9 @@ internal sealed class DeploymentMap
                 new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }
             );
             if (!doc.RootElement.TryGetProperty("services", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            {
                 return [];
+            }
 
             var result = new List<ServiceDef>();
             foreach (var e in arr.EnumerateArray())
@@ -143,7 +162,10 @@ internal sealed class DeploymentMap
                 var name = GetString(e, "name");
                 var host = GetString(e, "host");
                 if (name is null || host is null)
+                {
                     continue;
+                }
+
                 result.Add(new ServiceDef(name, host, GetString(e, "kind"), GetString(e, "note"), GetStringArray(e, "provides")));
             }
             return result;
@@ -161,7 +183,10 @@ internal sealed class DeploymentMap
     private static IReadOnlyList<string> GetStringArray(JsonElement obj, string name)
     {
         if (!obj.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Array)
+        {
             return [];
+        }
+
         return v.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToArray();
     }
 }

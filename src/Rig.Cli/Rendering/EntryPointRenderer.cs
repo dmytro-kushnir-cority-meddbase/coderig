@@ -17,13 +17,17 @@ internal static class EntryPointRenderer
     {
         var loaded = deployments.ServicesForFile(filePath);
         if (loaded.Count == 0)
+        {
             return "⟦no service⟧";
+        }
 
         var active = deployments.ActiveServices(loaded, requires);
         var inactive = loaded.Count - active.Count;
         if (active.Count == 0)
-            // Linked into hosts but gated out of all of them — the "runs here? no, anywhere" signal.
+        // Linked into hosts but gated out of all of them — the "runs here? no, anywhere" signal.
+        {
             return $"⟦0 active · {inactive} linked-inactive⟧";
+        }
 
         var shown = string.Join(", ", active.Take(cap).Select(s => FormatService(deployments, s)));
         var overflow = active.Count > cap ? $" +{active.Count - cap}" : "";
@@ -47,7 +51,10 @@ internal static class EntryPointRenderer
     )
     {
         if (kind is null)
+        {
             return ("", "");
+        }
+
         return ($"{Marker} {kind} ", $"  {DeployTag(deployments, filePath, requires)}");
     }
 }
@@ -65,18 +72,30 @@ internal sealed record EpRenderContext(
     public (string Prefix, string Suffix) ChipFor(string symbolId)
     {
         if (!SiteById.TryGetValue(symbolId, out var loc) || loc.File is null)
+        {
             return ("", "");
+        }
+
         if (!EpSiteKind.TryGetValue((loc.File, loc.Line), out var ep))
+        {
             return ("", "");
+        }
+
         return EntryPointRenderer.NodeChip(Deployments, ep.Kind, loc.File, ep.Requires);
     }
 
     public string HeaderTag(string symbolId)
     {
         if (!SiteById.TryGetValue(symbolId, out var loc) || loc.File is null)
+        {
             return "";
+        }
+
         if (EpSiteKind.TryGetValue((loc.File, loc.Line), out var ep))
+        {
             return $"{EntryPointRenderer.Marker} {ep.Kind}  {EntryPointRenderer.DeployTag(Deployments, loc.File, ep.Requires)}";
+        }
+
         return EntryPointRenderer.DeployTag(Deployments, loc.File);
     }
 }

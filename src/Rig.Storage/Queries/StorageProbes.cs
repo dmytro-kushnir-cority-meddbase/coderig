@@ -19,8 +19,8 @@ internal static class StorageProbes
         var connection = (DbConnection)context.Database.GetDbConnection();
         if (connection.State != System.Data.ConnectionState.Open)
         {
-            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            await ApplyReadPragmasAsync(connection, cancellationToken).ConfigureAwait(false);
+            await connection.OpenAsync(cancellationToken);
+            await ApplyReadPragmasAsync(connection, cancellationToken);
         }
         return connection;
     }
@@ -36,7 +36,7 @@ internal static class StorageProbes
         {
             await using var command = connection.CreateCommand();
             command.CommandText = "PRAGMA mmap_size=1073741824; PRAGMA cache_size=-262144; PRAGMA temp_store=MEMORY;";
-            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await command.ExecuteNonQueryAsync(cancellationToken);
         }
         catch (DbException)
         {
@@ -54,7 +54,7 @@ internal static class StorageProbes
         p.ParameterName = "$name";
         p.Value = table;
         command.Parameters.Add(p);
-        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null;
+        return await command.ExecuteScalarAsync(cancellationToken) is not null;
     }
 
     // True when `table` has a column named `column` (case-insensitive), via PRAGMA table_info — the only
@@ -68,10 +68,15 @@ internal static class StorageProbes
     {
         await using var command = connection.CreateCommand();
         command.CommandText = $"PRAGMA table_info({table});";
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
             if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+            {
                 return true;
+            }
+        }
+
         return false;
     }
 }

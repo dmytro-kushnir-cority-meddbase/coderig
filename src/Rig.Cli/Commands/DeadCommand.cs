@@ -51,15 +51,15 @@ internal static class DeadCommand
                 error,
                 () =>
                     RunAsync(
-                        CommonOptions.RulesOf(pr.GetValue(rules)),
-                        pr.GetValue(root) ?? [],
-                        pr.GetValue(lib),
-                        pr.GetValue(includeDispatch),
-                        pr.GetValue(all),
-                        pr.GetValue(limit),
-                        pr.GetValue(format),
-                        output,
-                        workingDirectory
+                        extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                        rootPatterns: pr.GetValue(root) ?? [],
+                        libMode: pr.GetValue(lib),
+                        includeDispatch: pr.GetValue(includeDispatch),
+                        showAll: pr.GetValue(all),
+                        limit: pr.GetValue(limit),
+                        format: pr.GetValue(format),
+                        output: output,
+                        workingDirectory: workingDirectory
                     )
             )
         );
@@ -101,28 +101,52 @@ internal static class DeadCommand
         var classRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(workingDirectory, extraRules);
         var roots = new HashSet<string>(StringComparer.Ordinal);
         foreach (var ep in FactEntryPointDeriver.Derive(epData, epRules, classRules))
+        {
             roots.Add(ep.Method);
+        }
+
         // RECALL RAIL: every delegate/method-group target stays a root REGARDLESS of classification — both
         // the surviving unclassified methodGroup edges AND the reclassified handoff edges. The sync-cut prunes
         // the registrar->callback edge from reach, so the callback must be a root or it would be falsely
         // flagged dead. (Constraint #1 in the handoff.)
         foreach (var edge in graph.CallEdges)
+        {
             if (edge.Kind is EdgeKinds.MethodGroup or EdgeKinds.Handoff)
+            {
                 roots.Add(edge.Callee);
+            }
+        }
+
         // Process entry points: any method named Main.
         foreach (var m in methods)
+        {
             if (m.Name == "Main")
+            {
                 roots.Add(m.SymbolId);
+            }
+        }
+
         // Test methods are framework-invoked roots: a ctor ref to a test attribute marks its enclosing method
         // ([Fact]/[Theory]/[Test]). Built in so `rig dead` works with no rules file.
         foreach (var cr in epData.CtorRefs)
+        {
             if (cr.Enclosing is not null && IsTestAttribute(cr.Target))
+            {
                 roots.Add(cr.Enclosing);
+            }
+        }
+
         // User-supplied roots (--root <pattern>): every method whose SymbolId contains the pattern.
         if (rootPatterns.Count > 0)
+        {
             foreach (var m in methods)
-                if (rootPatterns.Any(p => m.SymbolId.IndexOf(p, StringComparison.OrdinalIgnoreCase) >= 0))
+            {
+                if (rootPatterns.Any(p => m.SymbolId.Contains(p, StringComparison.OrdinalIgnoreCase)))
+                {
                     roots.Add(m.SymbolId);
+                }
+            }
+        }
 
         var candidates = DeadCodeFinder.Find(graph, roots, methods, libMode, includeDispatch);
         var shown = candidates.Where(c => showAll || c.Tier != DeadCodeFinder.Tier.Low).ToList();
@@ -130,7 +154,10 @@ internal static class DeadCommand
         if (tsv)
         {
             foreach (var c in shown)
+            {
                 output.WriteLine($"{c.Tier}\t{c.Reason}\t{c.DirectCallers}\t{c.SymbolId}\t{c.FilePath}:{c.Line}");
+            }
+
             return 0;
         }
 
@@ -143,7 +170,10 @@ internal static class DeadCommand
         output.WriteLine(libMode ? "Mode: library (public/protected = roots)" : "Mode: application (public methods are flaggable)");
         output.WriteLine("REPORT ONLY — confirm each against the C# compiler (IDE0051/CS0169) before removing.");
         if (!showAll && candidates.Any(c => c.Tier == DeadCodeFinder.Tier.Low))
+        {
             output.WriteLine("(Low-confidence public/protected candidates hidden; pass --all to include them.)");
+        }
+
         output.WriteLine();
         foreach (var tierGroup in shown.GroupBy(c => c.Tier).OrderBy(g => g.Key))
         {
@@ -154,13 +184,15 @@ internal static class DeadCommand
                 output.WriteLine($"{Indent.L1}{ShortName(c.SymbolId)}  {ShortenPath(c.FilePath)}:{c.Line}{note}");
             }
             if (tierGroup.Count() > limit)
+            {
                 output.WriteLine($"{Indent.L1}… and {tierGroup.Count() - limit} more (raise --limit)");
+            }
         }
         return 0;
     }
 
     private static bool IsTestAttribute(string targetSymbolId) =>
-        targetSymbolId.IndexOf("FactAttribute", StringComparison.Ordinal) >= 0
-        || targetSymbolId.IndexOf("TheoryAttribute", StringComparison.Ordinal) >= 0
-        || targetSymbolId.IndexOf("TestAttribute", StringComparison.Ordinal) >= 0;
+        targetSymbolId.Contains("FactAttribute", StringComparison.Ordinal)
+        || targetSymbolId.Contains("TheoryAttribute", StringComparison.Ordinal)
+        || targetSymbolId.Contains("TestAttribute", StringComparison.Ordinal);
 }

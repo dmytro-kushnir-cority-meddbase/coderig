@@ -1,4 +1,5 @@
 using System.Text;
+using static System.Globalization.CultureInfo;
 
 namespace Rig.Cli.Rendering;
 
@@ -11,11 +12,17 @@ internal static class SymbolNameFormatter
     internal static string ShortName(string? symbolId)
     {
         if (string.IsNullOrEmpty(symbolId))
+        {
             return "(top-level)";
-        var s = symbolId!;
+        }
+
+        var s = symbolId;
         var paren = s.IndexOf('(');
         if (paren >= 0)
+        {
             s = s.Substring(0, paren);
+        }
+
         // Take the last two namespace segments, scanning for TOP-LEVEL dots only: a constructed-generic
         // DocID renders type args in braces (`Foo{System.Int32}`) whose dots would otherwise mis-split the
         // name into garbage like "Int32}}.New". Skip dots nested inside {}/<>/()/[] by tracking depth.
@@ -34,11 +41,17 @@ internal static class SymbolNameFormatter
         {
             var c = s[i];
             if (c is '}' or '>' or ')' or ']')
+            {
                 depth++;
+            }
             else if (c is '{' or '<' or '(' or '[')
+            {
                 depth--;
+            }
             else if (c == '.' && depth == 0)
+            {
                 return i;
+            }
         }
         return -1;
     }
@@ -50,17 +63,28 @@ internal static class SymbolNameFormatter
     internal static string ShortSignature(string? symbolId)
     {
         if (string.IsNullOrEmpty(symbolId))
+        {
             return "";
+        }
+
         var s = symbolId!;
         var open = s.IndexOf('(');
         if (open < 0)
+        {
             return "";
+        }
+
         var close = s.LastIndexOf(')');
         if (close <= open)
+        {
             return "";
+        }
+
         var inner = s.Substring(open + 1, close - open - 1);
         if (inner.Length == 0)
+        {
             return "()";
+        }
 
         var parts = new List<string>();
         var depth = 0;
@@ -71,9 +95,14 @@ internal static class SymbolNameFormatter
             {
                 var c = inner[i];
                 if (c is '{' or '[' or '(' or '<')
+                {
                     depth++;
+                }
                 else if (c is '}' or ']' or ')' or '>')
+                {
                     depth--;
+                }
+
                 if (!(c == ',' && depth == 0))
                     continue;
             }
@@ -102,18 +131,27 @@ internal static class SymbolNameFormatter
                 // Render the positional placeholder T/U/V… (the real name isn't in the doc id).
                 i++;
                 if (i < param.Length && param[i] == '`')
+                {
                     i++;
+                }
+
                 var ds = i;
                 while (i < param.Length && char.IsDigit(param[i]))
+                {
                     i++;
-                sb.Append(int.TryParse(param.Substring(ds, i - ds), out var idx) ? TypeParamName(idx) : "T");
+                }
+
+                sb.Append(int.TryParse(param.Substring(ds, i - ds), InvariantCulture, out var idx) ? TypeParamName(idx) : "T");
                 continue;
             }
             if (char.IsLetterOrDigit(c) || c is '_' or '.')
             {
                 var start = i;
                 while (i < param.Length && (char.IsLetterOrDigit(param[i]) || param[i] is '_' or '.'))
+                {
                     i++;
+                }
+
                 var token = param.Substring(start, i - start);
                 var dot = token.LastIndexOf('.');
                 sb.Append(dot >= 0 ? token.Substring(dot + 1) : token);
@@ -127,7 +165,10 @@ internal static class SymbolNameFormatter
                     : c
                 );
                 if (c == ',')
+                {
                     sb.Append(' ');
+                }
+
                 i++;
             }
         }
@@ -161,7 +202,10 @@ internal static class SymbolNameFormatter
     internal static string PrettyGenericName(string name, IReadOnlyList<string?>? declaringArgs, IReadOnlyList<string?>? methodArgs)
     {
         if (name.IndexOf('`') < 0 && name.IndexOf('{') < 0)
+        {
             return name;
+        }
+
         var sb = new StringBuilder();
         var token = new StringBuilder();
         var depth = 0;
@@ -173,7 +217,10 @@ internal static class SymbolNameFormatter
         void FlushToken()
         {
             if (token.Length == 0)
+            {
                 return;
+            }
+
             var t = token.ToString();
             token.Clear();
             // Inside a generic-arg list, drop the namespace of a type token (Ns.Ns.Type -> Type).
@@ -181,7 +228,9 @@ internal static class SymbolNameFormatter
             {
                 var lastDot = t.LastIndexOf('.');
                 if (lastDot >= 0)
+                {
                     t = t.Substring(lastDot + 1);
+                }
             }
             sb.Append(t);
         }
@@ -200,14 +249,22 @@ internal static class SymbolNameFormatter
                     FlushToken();
                     i++;
                     if (i < name.Length && name[i] == '`')
+                    {
                         i++;
+                    }
+
                     var ds = i;
                     while (i < name.Length && char.IsDigit(name[i]))
+                    {
                         i++;
-                    if (int.TryParse(name.Substring(ds, i - ds), out var n))
+                    }
+
+                    if (int.TryParse(name.Substring(ds, i - ds), InvariantCulture, out var n))
                     {
                         if (!isArity)
+                        {
                             sb.Append(TypeParamName(n)); // `0 -> T, `1 -> U
+                        }
                         else if (n > 0)
                         {
                             // First arity group = the declaring type's, second = a generic method's own.
@@ -245,7 +302,10 @@ internal static class SymbolNameFormatter
                     sb.Append(", ");
                     i++;
                     if (i < name.Length && name[i] == ' ')
+                    {
                         i++; // collapse an existing ", " so spacing stays single
+                    }
+
                     break;
                 default:
                     token.Append(c);
@@ -281,7 +341,10 @@ internal static class SymbolNameFormatter
     )
     {
         if (string.IsNullOrEmpty(bindingJson))
+        {
             return null;
+        }
+
         string[]? tokens;
         try
         {
@@ -292,10 +355,14 @@ internal static class SymbolNameFormatter
             return null;
         }
         if (tokens is null || tokens.Length == 0)
+        {
             return null;
+        }
 
         static string? Forward(IReadOnlyList<string?>? parent, string ordinalText) =>
-            int.TryParse(ordinalText, out var ord) && parent is not null && ord >= 0 && ord < parent.Count ? parent[ord] : null;
+            int.TryParse(ordinalText, InvariantCulture, out var ord) && parent is not null && ord >= 0 && ord < parent.Count
+                ? parent[ord]
+                : null;
 
         var resolved = new string?[tokens.Length];
         for (var i = 0; i < tokens.Length; i++)
@@ -328,7 +395,10 @@ internal static class SymbolNameFormatter
             {
                 var start = i;
                 while (i < type.Length && (char.IsLetterOrDigit(type[i]) || type[i] is '_' or '.'))
+                {
                     i++;
+                }
+
                 var token = type.Substring(start, i - start);
                 var dot = token.LastIndexOf('.');
                 sb.Append(dot >= 0 ? token.Substring(dot + 1) : token);
@@ -347,8 +417,11 @@ internal static class SymbolNameFormatter
     internal static string ShortLoop(string? detail)
     {
         if (string.IsNullOrEmpty(detail))
+        {
             return "?";
-        var s = string.Join(" ", detail!.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
+        }
+
+        var s = string.Join(' ', detail!.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
         return s.Length <= 60 ? s : s.Substring(0, 57) + "...";
     }
 

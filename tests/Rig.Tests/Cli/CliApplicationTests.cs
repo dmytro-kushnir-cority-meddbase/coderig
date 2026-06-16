@@ -205,4 +205,74 @@ public sealed class CliApplicationTests
         reaches.ShouldContain("gateway_tell tell");
         reaches.ShouldContain("PaymentGatewayProcessDns.PaymentService");
     }
+
+    // --format tsv (Tier-1 #10): tree/path/callers emit tab-separated, full-DocID rows with no text chrome,
+    // so an agent/CI gate can consume them without scraping. Exercised over the same playground graph.
+    [Test]
+    public async Task Format_tsv_emits_tab_separated_rows_for_tree_path_callers()
+    {
+        using var playground = await TempPlayground.CreateEntryPointEffectsAsync();
+        var workingDirectory = Path.Combine(playground.RootDirectory, "workspace");
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        (await CliApplication.RunAsync(["index", playground.SolutionPath], output, error, workingDirectory)).ShouldBe(0);
+
+        // tree: one DFS row per node — `depth \t docId \t edgeKind \t …`; the matched root sits at depth 0.
+        output.GetStringBuilder().Clear();
+        (
+            await CliApplication.RunAsync(["tree", "PaymentGatewayCaller.Dispatch", "--format", "tsv"], output, error, workingDirectory)
+        ).ShouldBe(0);
+        var tree = output.ToString();
+        tree.ShouldContain("\t");
+        tree.ShouldContain("PaymentGatewayCaller.Dispatch");
+        tree.Split('\n', StringSplitOptions.RemoveEmptyEntries)[0].ShouldStartWith("0\t");
+
+        // path: one row per step; the text-only "Fact graph:" banner is suppressed under tsv.
+        output.GetStringBuilder().Clear();
+        (
+            await CliApplication.RunAsync(
+                ["path", "PaymentGatewayCaller.Dispatch", "PaymentGatewayProcess.Tell", "--format", "tsv"],
+                output,
+                error,
+                workingDirectory
+            )
+        ).ShouldBe(0);
+        var path = output.ToString();
+        path.ShouldContain("\t");
+        path.ShouldContain("PaymentGatewayProcess.Tell");
+        path.ShouldNotContain("Fact graph:");
+
+        // callers: `depth \t docId` per reaching method; the dispatcher reaches Tell. Text header suppressed.
+        output.GetStringBuilder().Clear();
+        (
+            await CliApplication.RunAsync(["callers", "PaymentGatewayProcess.Tell", "--format", "tsv"], output, error, workingDirectory)
+        ).ShouldBe(0);
+        var callers = output.ToString();
+        callers.ShouldContain("\t");
+        callers.ShouldContain("PaymentGatewayCaller.Dispatch");
+        callers.ShouldNotContain("Methods that reach");
+
+        // --limit caps the listing (default unbounded). Tell is reached by >1 method (itself + the
+        // dispatcher), so --limit 1 yields exactly one tsv row, and the text mode prints a "raise --limit"
+        // truncation note rather than silently dropping the rest.
+        var unlimited = callers.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
+        unlimited.ShouldBeGreaterThan(1);
+        output.GetStringBuilder().Clear();
+        (
+            await CliApplication.RunAsync(
+                ["callers", "PaymentGatewayProcess.Tell", "--format", "tsv", "--limit", "1"],
+                output,
+                error,
+                workingDirectory
+            )
+        ).ShouldBe(0);
+        output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Length.ShouldBe(1);
+
+        output.GetStringBuilder().Clear();
+        (
+            await CliApplication.RunAsync(["callers", "PaymentGatewayProcess.Tell", "--limit", "1"], output, error, workingDirectory)
+        ).ShouldBe(0);
+        output.ToString().ShouldContain("raise --limit");
+    }
 }

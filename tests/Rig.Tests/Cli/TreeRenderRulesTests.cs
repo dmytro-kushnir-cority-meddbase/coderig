@@ -17,7 +17,10 @@ public sealed class TreeRenderRulesTests
     {
         var map = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var (sym, effect) in pairs)
+        {
             (map.TryGetValue(sym, out var l) ? l : map[sym] = new List<string>()).Add(effect);
+        }
+
         return map;
     }
 
