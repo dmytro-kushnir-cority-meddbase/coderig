@@ -633,4 +633,68 @@ public sealed class FactExtractorCaptureTests
             d.Kind == "impl" && d.SourceMember.Contains("IConfig.set_Mode") && d.TargetMember.Contains("Config.set_Mode")
         );
     }
+
+    // Regression (2026-06-16 path/callers over-reach): a `nameof(Method)` is a compile-time STRING, not a
+    // delegate conversion or invocation — it must NOT emit a methodGroup/invocation reference edge that the
+    // call graph would walk as a real call. A genuine method-group delegate conversion in the SAME source
+    // MUST still produce its methodGroup edge, so the suppression is precise to nameof only.
+    [Test]
+    public void Nameof_of_a_method_does_not_emit_a_call_or_methodgroup_edge_but_a_real_method_group_does()
+    {
+        var source = """
+            namespace App
+            {
+                public sealed class Menu
+                {
+                    public void MarkSent() { }
+                    public void RealHandler() { }
+
+                    // nameof(MarkSent): compile-time string only — no call/methodGroup edge to MarkSent.
+                    public string MenuLabel = nameof(MarkSent);
+
+                    // genuine method-group conversion: RealHandler IS converted to a delegate -> methodGroup.
+                    public void Wire()
+                    {
+                        System.Action a = RealHandler;
+                    }
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        // No invocation OR methodGroup reference targets MarkSent (it appears only inside nameof). The
+        // call graph (Reads.LoadFactGraphAsync) only turns invocation/methodGroup/ctor refs into edges, so
+        // a nameof-classified ref is non-traversable. We also assert the recorded ref kind is `nameof`.
+        var markSentRefs = result.References.Where(r => r.TargetSymbolId.Contains("Menu.MarkSent")).ToList();
+        markSentRefs.ShouldNotBeEmpty(); // the name WAS referenced — we record it, just not as a call.
+        markSentRefs.ShouldAllBe(r => r.RefKind == "nameof");
+        markSentRefs.ShouldAllBe(r => r.RefKind != "invocation" && r.RefKind != "methodGroup");
+
+        // The real method-group conversion still produces a methodGroup edge into RealHandler.
+        result.References.ShouldContain(r => r.TargetSymbolId.Contains("Menu.RealHandler") && r.RefKind == "methodGroup");
+    }
+
+    // A dotted `nameof(Type.Method)` (and `nameof(field)`) likewise yields only a string — the inner
+    // Method/field name must not become a traversable reference either.
+    [Test]
+    public void Nameof_of_a_dotted_member_does_not_emit_a_call_edge()
+    {
+        var source = """
+            namespace App
+            {
+                public static class Repo { public static int Fetch() => 0; }
+
+                public sealed class User
+                {
+                    public string Name = nameof(Repo.Fetch);
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        var fetchRefs = result.References.Where(r => r.TargetSymbolId.Contains("Repo.Fetch")).ToList();
+        fetchRefs.ShouldAllBe(r => r.RefKind == "nameof");
+    }
 }

@@ -84,6 +84,16 @@ internal static class PathCommand
             cutRules: shaping.Cut,
             contextRules: shaping.Context
         );
+        // Reclassify event-subscription (`+=`) method-group edges to `handoff` — mirroring reaches/tree
+        // (ReachesCommand/TreeCommand do the same). The handler genuinely runs LATER via the event, not
+        // synchronously at the `+=` site, so it must be sync-cut by default and only crossed under --async.
+        // Without this, `path`/`callers` walked a `+=` handler as a synchronous call (the 2026-06-16
+        // over-reach). `--raw` bypasses all shaping, so it is gated the same way reaches/tree gate it.
+        if (!raw)
+        {
+            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+        }
+
         if (!tsv)
         {
             output.WriteLine(

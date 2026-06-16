@@ -1004,15 +1004,55 @@ internal static class FactExtractor
         };
 
     private static string? ClassifyReference(SimpleNameSyntax name, ISymbol target) =>
-        target switch
+        // A name inside `nameof(...)` is a compile-time string, NOT a use of the symbol — never a call,
+        // delegate bind, or data touch. Classify it as the benign, non-traversable NameOf kind BEFORE
+        // the use-based switch so a `nameof(Method)` (e.g. in a static menu map) does NOT emit a
+        // methodGroup call edge that path/callers would walk as a real call. Checked first so it wins
+        // over the IMethodSymbol -> MethodGroup arm. Real method-group conversions (`Foo.Bar` passed as
+        // a delegate) are NOT inside nameof, so they still fall through to MethodGroup below.
+        IsNameOfArgument(name)
+            ? RefKinds.NameOf
+            : target switch
+            {
+                IMethodSymbol { MethodKind: MethodKind.Constructor } => RefKinds.Ctor,
+                IMethodSymbol => IsInvoked(name) ? RefKinds.Invocation : RefKinds.MethodGroup,
+                INamedTypeSymbol or ITypeParameterSymbol => IsAttributeName(name) ? RefKinds.AttributeUse : RefKinds.TypeUse,
+                IPropertySymbol or IFieldSymbol => IsWriteTarget(name) ? RefKinds.Write : RefKinds.Read,
+                IEventSymbol => RefKinds.Read,
+                _ => null,
+            };
+
+    // True when this name is (an inner part of) the operand of a `nameof(...)` expression. `nameof` is a
+    // contextual keyword, not a real method, so its invocation binds to NO symbol — we detect it by an
+    // enclosing InvocationExpression whose callee is the bare identifier `nameof` that does not resolve to
+    // a method symbol. Walking ancestors (not just the immediate parent) covers `nameof(A.B.Method)`,
+    // where the Method name sits under MemberAccessExpressions inside the nameof argument.
+    private static bool IsNameOfArgument(SimpleNameSyntax name)
+    {
+        foreach (var ancestor in name.Ancestors())
         {
-            IMethodSymbol { MethodKind: MethodKind.Constructor } => RefKinds.Ctor,
-            IMethodSymbol => IsInvoked(name) ? RefKinds.Invocation : RefKinds.MethodGroup,
-            INamedTypeSymbol or ITypeParameterSymbol => IsAttributeName(name) ? RefKinds.AttributeUse : RefKinds.TypeUse,
-            IPropertySymbol or IFieldSymbol => IsWriteTarget(name) ? RefKinds.Write : RefKinds.Read,
-            IEventSymbol => RefKinds.Read,
-            _ => null,
-        };
+            switch (ancestor)
+            {
+                // The nameof operand is a (possibly dotted) name/member-access wrapped in the single
+                // Argument/ArgumentList of the call; keep climbing through those structural nodes.
+                case SimpleNameSyntax:
+                case MemberAccessExpressionSyntax:
+                case ArgumentSyntax:
+                case ArgumentListSyntax:
+                    continue;
+                // `nameof(<operand>)` — a `nameof`-shaped invocation whose callee is the contextual
+                // identifier `nameof` (which does not bind to any user method). The argument we climbed
+                // out of is exactly the operand, so this name is inside nameof.
+                case InvocationExpressionSyntax { Expression: IdentifierNameSyntax { Identifier.ValueText: "nameof" } } invocation:
+                    return invocation.ArgumentList.Arguments.Count == 1;
+                // Anything else terminates the operand chain — not a nameof argument.
+                default:
+                    return false;
+            }
+        }
+
+        return false;
+    }
 
     // True when this name is the method being invoked (a.Foo() or Foo()), as opposed to a
     // method group passed as a delegate (the background-worker handoff case).

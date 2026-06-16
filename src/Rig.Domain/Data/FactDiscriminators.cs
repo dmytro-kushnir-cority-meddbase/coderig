@@ -23,6 +23,14 @@ public static class RefKinds
     public const string Write = "write";
     public const string AttributeUse = "attributeUse";
     public const string Throw = "throw";
+
+    // A method/type name appearing as the argument of `nameof(...)`. `nameof` only extracts a
+    // compile-time STRING — the symbol is never converted to a delegate nor invoked through that
+    // reference — so this is recorded (the name WAS referenced) but DELIBERATELY EXCLUDED from the
+    // call/dispatch graph (it is not in the call-edge RefKind set in Reads.LoadFactGraphAsync). Keeps
+    // `path`/`callers`/`reaches` from treating e.g. a `nameof(Handler)` in a static menu map as a real
+    // call edge into Handler (the 2026-06-16 path/callers over-reach bug).
+    public const string NameOf = "nameof";
 }
 
 // call_edges.Kind — a call edge inherits its originating ref's kind (invocation/methodGroup/ctor); the

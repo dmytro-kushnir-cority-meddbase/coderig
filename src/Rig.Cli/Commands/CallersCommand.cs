@@ -114,6 +114,16 @@ internal static class CallersCommand
             shaping.Cut,
             shaping.Context
         );
+        // Reclassify event-subscription (`+=`) method-group edges to `handoff` — mirroring reaches/tree
+        // (and now path). The handler runs LATER via the event, not synchronously at the `+=` site, so it
+        // is sync-cut by default and only crossed under --async. Marks edges by (Caller, FilePath, Line),
+        // which is direction-agnostic, so it applies to this REVERSE subgraph the same way. Consequence
+        // (intended, matches reaches/tree): a `+=` handler is no longer a synchronous reverse caller, so
+        // event handlers surface under --roots/--entrypoints only via --async. `--raw` bypasses shaping.
+        if (!raw)
+        {
+            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+        }
 
         if (entrypointsOnly)
         {
