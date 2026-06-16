@@ -35,6 +35,28 @@ internal static class DependencyGraph
         return graph;
     }
 
+    // Transitive closure (BFS) of `entry` over a project dependency graph: the entry plus every project
+    // reachable by following ProjectReference edges. The single "everything reachable from a root" walk
+    // shared by `index --from` and deployment attribution (which previously each open-coded the same
+    // visited/queue loop). Paths are matched case-insensitively (the graph's key comparer).
+    public static HashSet<string> TransitiveClosure(string entry, IReadOnlyDictionary<string, List<string>> graph)
+    {
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var queue = new Queue<string>();
+        queue.Enqueue(entry);
+        while (queue.Count > 0)
+        {
+            var p = queue.Dequeue();
+            if (!visited.Add(p))
+                continue;
+            if (graph.TryGetValue(p, out var deps))
+                foreach (var d in deps)
+                    if (!visited.Contains(d))
+                        queue.Enqueue(d);
+        }
+        return visited;
+    }
+
     private static List<string> ParseProjectReferences(string projPath)
     {
         var dir = Path.GetDirectoryName(projPath) ?? "";

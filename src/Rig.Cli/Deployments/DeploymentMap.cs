@@ -101,7 +101,7 @@ internal sealed class DeploymentMap
                 continue;
             }
 
-            foreach (var project in Closure(hostFull, depGraph))
+            foreach (var project in DependencyGraph.TransitiveClosure(hostFull, depGraph))
             {
                 if (!projectToServices.TryGetValue(project, out var list))
                 {
@@ -123,24 +123,6 @@ internal sealed class DeploymentMap
         return new DeploymentMap(services, projectToServices, projectDirs);
     }
     
-    private static IEnumerable<string> Closure(string entry, Dictionary<string, List<string>> depGraph)
-    {
-        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var queue = new Queue<string>();
-        queue.Enqueue(entry);
-        while (queue.Count > 0)
-        {
-            var p = queue.Dequeue();
-            if (!visited.Add(p))
-                continue;
-            if (depGraph.TryGetValue(p, out var deps))
-                foreach (var d in deps)
-                    if (!visited.Contains(d))
-                        queue.Enqueue(d);
-        }
-        return visited;
-    }
-
     private static string EnsureTrailingSeparator(string dir) =>
         dir.EndsWith(Path.DirectorySeparatorChar) ? dir : dir + Path.DirectorySeparatorChar;
 

@@ -1,6 +1,7 @@
 using Rig.Analysis;
 using Rig.Analysis.Rules;
 using Rig.Cli;
+using Rig.Cli.Rendering;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Tests.Fixtures;
@@ -134,7 +135,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var output = new StringWriter();
         var noEffects = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var root in FactPathFinder.BuildTree(graph, fromPattern))
-            CliApplication.RenderTreeNode(
+            TreeRenderer.RenderTreeNode(
                 root,
                 "",
                 isLast: true,
