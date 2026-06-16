@@ -42,7 +42,11 @@ rig dead --root "App.Main"                       # unreachable first-party metho
 rig refs "IFoo" / rig symbols "Foo" --kind method
 ```
 
-Patterns are case-insensitive substring matches over DocIDs (`M:Ns.Type.Method(args)`).
+Patterns are case-insensitive substring matches over DocIDs (`M:Ns.Type.Method(args)`) — i.e. the
+**dotted** form (`Type.Method`). The `▶` entry-point lines and `callers --entrypoints` print the EP
+**route** (e.g. `AI/SmartLetter.SendMessage`, with a folder/slash); querying with that route form matches
+**nothing**. Strip the route to the dotted DocID (`SmartLetter.SendMessage`). If a query unexpectedly
+returns "No path"/empty or `tree` shows "0 call edges", suspect a route-form pattern first.
 
 ## Reading effect output (don't misread the counts)
 
@@ -58,6 +62,12 @@ Patterns are case-insensitive substring matches over DocIDs (`M:Ns.Type.Method(a
   rig falls back to name/arity matching and marks the hop `~heuristic` (tree: `«impl-dispatch
   ~heuristic»`, path: `[impl-dispatch (heuristic)]`, reaches: `~heuristic` suffix; TSV: trailing
   `dispatchBasis` column). ~99% correct — verify before relying on such a path.
+- **Dispatch fan-out is an OVER-APPROXIMATION, not a confirmed call.** A virtual/interface call resolves
+  to a concrete runtime method (**one hop**); CHA can't pick the runtime type, so it lists ALL impls.
+  `reaches` segregates targets reached ONLY via that fan-out into a separate **"dispatch fan-out (NOT a
+  real call)"** bucket; `tree` tags them `«impl-dispatch ×N fan-out»`. Read `×N` as "could be any of these
+  N," never "calls all N." A resolved target is NOT re-dispatched (dispatch is one hop) — so an impl
+  reached via the interface won't drag in its base method's *other* overrides.
 - **`tree` children are in source order** (call-site line ≈ eager-inline execution order), deterministic.
 - **Generic labels show the REAL instantiation, not `<T, U>`.** When a node is reached from a concrete
   entry, `tree` monomorphizes the declaring-type AND generic-method args down the call chain —
@@ -123,6 +133,28 @@ ships EMPTY, so a codebase with no curated render rules always sees the raw exac
 - Render rules NEVER affect `reaches`/`callers`/`path`/`dead` or the reach itself — only what `tree`
   draws. (MedDBase example: `IService.Startup` ×113 service-locator + `Construct\`2.New` ×49 entity
   registry collapse a depth-32 `InvoiceMain.MatchPayments` tree from 1970 → ~106 lines.)
+
+## Extending effect coverage — add a detector (data, query-side, NO re-index)
+
+Effects are DATA. To tag an outside-world call rig misses, add an entry to the `effects` array in
+`rig.rules.json` (cascaded via `--rules`), then re-run `rig derive`/`reaches`/`tree` — **no re-index**
+(effects are query-side; only `FactExtractor` changes need re-indexing). Schema (full in REFERENCE):
+`{ provider, operation, methods:[…], receiverTypes | declaringTypes:[…], resource }`.
+
+- **Match the API at its FIRST-PARTY call site — even for an external library.** The socket/IO call lives
+  in the dependency (e.g. `StackExchange.Redis.IDatabase.HashGet`, `System.Web.HttpResponse.Write`), but
+  the call SITE is first-party and the effect keys to the enclosing first-party method. So `receiverTypes`
+  can name an external type; rig still tags it where your code calls it. (Anchor at the real boundary, not
+  a deep wrapper — e.g. tag the Redis API, not just the Echo `ICluster` façade.)
+- **`resource: "argument_name"`** captures the first arg (the key/channel/setting name) as the resource —
+  high-signal (`config:read OpenAiKey`, `redis:read <key>`). Other strategies: `receiver_type`,
+  `declaring_type`, `argument_type`, `type_argument`.
+- **Verify live**: `rig derive --format tsv | awk -F'\t' '$1=="effect"{print $2}' | sort -u` (providers),
+  then `rig reaches <method>` — but **derive totals ≠ reachable**: an effect surfaces from a caller ONLY
+  if its enclosing id is a **call-graph node** (a method/accessor/lambda/ctor `M:`/synthetic id). An effect
+  keyed to a property (`P:`)/field (`F:`) id shows in `derive` totals but never in `reaches`/`tree`.
+- A detector matches by method NAME + receiver/declaring type, so a same-named method on an unrelated type
+  can mis-fire — gate with the tightest `receiverTypes`/`declaringTypes` that still covers the real sites.
 
 ## Core workflow — answer a reachability/effect question
 
