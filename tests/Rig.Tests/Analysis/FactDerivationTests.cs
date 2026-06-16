@@ -494,6 +494,44 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         }
     }
 
+    // #16: Echo actor effects attribute to the routing target (the ProcessDns member path at arg 0),
+    // and Flurl URL building scopes the http effect to the path-segment literal. The implicit-target
+    // tellSelf is excluded so its MESSAGE argument is never mislabeled as a process name.
+    [Test]
+    public async Task Echo_actor_and_flurl_route_effects_resolve_their_first_argument_target()
+    {
+        var playground = await playgrounds.LegacyNet48Async();
+        var result = playground.Result;
+
+        var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
+        var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var effects = FactEffectDeriver.Derive(
+            FactProjection.Invocations(result),
+            rules,
+            providerFilter: null,
+            baseEdges: FactProjection.EntryPointData(result).BaseEdges
+        );
+
+        var actor = effects
+            .Where(e => e.Provider == "actor" && e.EnclosingSymbolId!.Contains("OutboundGateway.SendEverything", StringComparison.Ordinal))
+            .ToArray();
+
+        actor.ShouldContain(e => e.Operation == "spawn" && e.ResourceType == "ProcessDns.WorkerName");
+        actor.ShouldContain(e => e.Operation == "tell" && e.ResourceType == "ProcessDns.AccountService");
+        actor.ShouldContain(e => e.Operation == "ask" && e.ResourceType == "ProcessDns.AccountService");
+
+        // Implicit-target tellSelf is NOT in the tell rule: no actor effect names the message expression.
+        actor.ShouldNotContain(e => e.ResourceType.Contains("self-msg", StringComparison.Ordinal));
+        actor.ShouldNotContain(e => e.Operation == "tell" && e.ResourceType != "ProcessDns.AccountService");
+
+        effects.ShouldContain(e =>
+            e.Provider == "http"
+            && e.Operation == "route"
+            && e.ResourceType == "submit"
+            && e.EnclosingSymbolId!.Contains("OutboundGateway.SendEverything", StringComparison.Ordinal)
+        );
+    }
+
     [Test]
     public async Task Derived_effect_resource_is_resolved_from_facts()
     {
