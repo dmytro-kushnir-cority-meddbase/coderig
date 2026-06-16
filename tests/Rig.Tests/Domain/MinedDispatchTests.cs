@@ -92,6 +92,50 @@ public sealed class MinedDispatchTests
         reach.Keys.ShouldNotContain("M:N.Mid.V");
     }
 
+    // An interface method whose impl resolves to an INHERITED base method must not fan into that base
+    // method's unrelated override siblings. ILogger.Startup is implemented by Impl : ServiceBase (the
+    // inherited ServiceBase.Startup satisfies it), so the mined impl edge points at ServiceBase.Startup —
+    // which is ALSO overridden by unrelated services (SvcA/SvcB that are NOT ILogger impls). Resolving
+    // ILogger.Startup must stop at ServiceBase.Startup, not cross into SvcA/SvcB. (Real-world: MedDBase's
+    // IPerformanceLogger.Startup fanned out to 32 service Startups via the inherited ServiceBase.Startup.)
+    [Test]
+    public void Impl_dispatch_to_an_inherited_base_method_does_not_fan_into_its_unrelated_overrides()
+    {
+        var impls = new[] { new ImplementsEdge("T:N.Impl", "T:N.ILogger") };
+        var bases = new[]
+        {
+            new BaseEdge("T:N.Impl", "T:N.ServiceBase"),
+            new BaseEdge("T:N.SvcA", "T:N.ServiceBase"),
+            new BaseEdge("T:N.SvcB", "T:N.ServiceBase"),
+        };
+        var methods = new[]
+        {
+            new MethodRef("M:N.ILogger.Startup", "Startup", "T:N.ILogger"),
+            new MethodRef("M:N.ServiceBase.Startup", "Startup", "T:N.ServiceBase"),
+            new MethodRef("M:N.SvcA.Startup", "Startup", "T:N.SvcA", IsOverride: true),
+            new MethodRef("M:N.SvcB.Startup", "Startup", "T:N.SvcB", IsOverride: true),
+        };
+        var mined = new[]
+        {
+            new DispatchFact("M:N.ILogger.Startup", "M:N.ServiceBase.Startup", "impl"),
+            new DispatchFact("M:N.ServiceBase.Startup", "M:N.SvcA.Startup", "override"),
+            new DispatchFact("M:N.ServiceBase.Startup", "M:N.SvcB.Startup", "override"),
+        };
+        var graph = new FactGraphData(System.Array.Empty<CallEdge>(), impls, methods, bases, mined);
+
+        var fromLogger = FactPathFinder.AllDispatchEdges(graph).Where(e => e.From == "M:N.ILogger.Startup").Select(e => e.To).ToList();
+        // Resolves to the inherited impl...
+        fromLogger.ShouldContain("M:N.ServiceBase.Startup");
+        // ...but NOT into the unrelated service overrides (the bug was a ×N fan-out here).
+        fromLogger.ShouldNotContain("M:N.SvcA.Startup");
+        fromLogger.ShouldNotContain("M:N.SvcB.Startup");
+
+        // Regression guard: a DIRECT call to the base virtual STILL fans to its overrides.
+        var fromBase = FactPathFinder.AllDispatchEdges(graph).Where(e => e.From == "M:N.ServiceBase.Startup").Select(e => e.To).ToList();
+        fromBase.ShouldContain("M:N.SvcA.Startup");
+        fromBase.ShouldContain("M:N.SvcB.Startup");
+    }
+
     [Test]
     public void Reverse_traversal_crosses_mined_dispatch_edges()
     {

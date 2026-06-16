@@ -97,7 +97,8 @@ public static partial class FactPathFinder
                     index: index,
                     incomingReceiver: receiverOf.TryGetValue(key: current, value: out var rc) ? rc : null,
                     incomingBinding: null,
-                    mode: mode
+                    mode: mode,
+                    fromDispatch: parent.TryGetValue(current, out var pe) && pe is { } p && IsDispatchEdgeKind(p.Kind)
                 )
             )
             {
@@ -210,6 +211,9 @@ public static partial class FactPathFinder
         // capped) so it reaches a fixpoint. Narrowing is recall-safe in DispatchTargets: an empty/unmatched
         // binding leaves the full CHA set, so a hub reached without a matching type arg is never emptied.
         var bindingOf = new Dictionary<string, HashSet<string>?>(StringComparer.Ordinal);
+        // Whether each node was first reached via a dispatch edge — gates one-hop dispatch (no re-dispatch
+        // of a resolved concrete target). BFS-first-reach wins, matching the DispatchVia tagging above.
+        var viaDispatchOf = new Dictionary<string, bool>(StringComparer.Ordinal);
         var queue = new Queue<string>();
         foreach (var start in index.Nodes.Where(n => Contains(value: n, pattern: fromPattern)))
         {
@@ -221,6 +225,7 @@ public static partial class FactPathFinder
             info[start] = new ReachInfo(Depth: 0, LoopNesting: 0, NearestLoopKind: null, NearestLoopDetail: null);
             receiverOf[start] = null;
             bindingOf[start] = null;
+            viaDispatchOf[start] = false;
             queue.Enqueue(start);
         }
 
@@ -239,7 +244,8 @@ public static partial class FactPathFinder
                     index: index,
                     incomingReceiver: receiverOf[current],
                     incomingBinding: bindingOf.TryGetValue(current, out var curBinding) ? curBinding : null,
-                    mode: mode
+                    mode: mode,
+                    fromDispatch: viaDispatchOf.TryGetValue(current, out var vd) && vd
                 )
             )
             {
@@ -287,6 +293,7 @@ public static partial class FactPathFinder
                     DispatchBasis: basis
                 );
                 receiverOf[s.Node] = s.OutReceiver;
+                viaDispatchOf[s.Node] = IsDispatchEdgeKind(s.Kind);
                 queue.Enqueue(s.Node);
             }
         }
@@ -430,7 +437,14 @@ public static partial class FactPathFinder
             }
 
             foreach (
-                var s in Successors(current: n.Symbol, index: index, incomingReceiver: n.Receiver, incomingBinding: n.Binding, mode: mode)
+                var s in Successors(
+                    current: n.Symbol,
+                    index: index,
+                    incomingReceiver: n.Receiver,
+                    incomingBinding: n.Binding,
+                    mode: mode,
+                    fromDispatch: IsDispatchEdgeKind(n.EdgeKind)
+                )
             )
             {
                 // Collapse identical sibling edges: a generic method or bodied accessor called N times

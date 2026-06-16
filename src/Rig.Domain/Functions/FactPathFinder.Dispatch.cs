@@ -55,7 +55,16 @@ public static partial class FactPathFinder
         GraphIndex index,
         string? incomingReceiver = null,
         IReadOnlyCollection<string>? incomingBinding = null,
-        TraversalMode mode = TraversalMode.SyncCut
+        TraversalMode mode = TraversalMode.SyncCut,
+        // True when `current` was itself reached via a dispatch edge (impl/override/delegate). DISPATCH
+        // IS A SINGLE HOP: resolving a virtual/interface call already yields the concrete runtime method,
+        // so that method must NOT be re-dispatched as if it were another virtual call site. Re-dispatching
+        // is how IPerformanceLogger.Startup (impl-resolved to the INHERITED ServiceBase.Startup) leaked
+        // into ServiceBase.Startup's 31 unrelated service overrides. The node's BODY (direct call edges)
+        // is still walked — only its own dispatch fan-out is suppressed. Set by the user-facing forward
+        // traversals (tree/reaches/path); the receiver-blind oracle (ReachableFromAll) leaves it false, so
+        // the SQL-equivalence superset is unchanged.
+        bool fromDispatch = false
     )
     {
         // Traversal cut: if the current node matches a cut rule, emit no successors — it is a leaf.
@@ -125,6 +134,13 @@ public static partial class FactPathFinder
             }
         }
 
+        // One-hop dispatch: a node reached via a dispatch edge is the resolved concrete method — walk its
+        // body (emitted above) but do NOT re-dispatch it (see `fromDispatch`).
+        if (fromDispatch)
+        {
+            yield break;
+        }
+
         // Dispatch (synthetic, no call-site line) edges AFTER the line-ordered real calls — the fan-out
         // of `current` itself when it is a virtual/base/interface method, narrowed by the receiver of the
         // call that REACHED current (edge-aware) AND by the carried type-arg binding (generic-dispatch
@@ -168,6 +184,11 @@ public static partial class FactPathFinder
             );
         }
     }
+
+    // The synthetic edge kinds emitted by the dispatch block (a virtual/interface/base/delegate fan-out),
+    // as opposed to a real call ("invocation"/"methodGroup"/"ctor"/…) or an async "handoff". A node reached
+    // by one of these is an already-resolved concrete target and must not be re-dispatched (one-hop).
+    private static bool IsDispatchEdgeKind(string? kind) => kind is "impl-dispatch" or "override-dispatch" or "delegate-dispatch";
 
     // The `this`-type to carry into a dispatched-to method `targetMethod`: the incoming concrete receiver
     // when it is the override's declaring type or a SUBTYPE of it (the precise runtime object, more derived
@@ -422,12 +443,24 @@ public static partial class FactPathFinder
         var hasMined = false;
         if (index.MinedDispatchBySource.Count > 0)
         {
+            // Walk the mined-dispatch closure, but NEVER CROSS edge kinds after the root hop. An impl edge
+            // resolves an interface method to the concrete method on ONE implementing type; the override
+            // edges out of THAT method belong to an unrelated base-virtual fan-out whose siblings do NOT
+            // implement the interface. Crossing impl->override is unsound: e.g. IPerformanceLogger.Startup
+            // impl-resolves to the INHERITED ServiceBase.Startup (a logger that derives ServiceBase and
+            // doesn't override Startup), and continuing into ServiceBase.Startup's 31 service overrides
+            // claimed the interface reaches every CacheManager/Service Startup — none of which are loggers.
+            // No recall is lost: per-type AllInterfaces mining already emits a DIRECT impl edge from the
+            // interface method to every implementing subtype (incl. ones that override the method), and
+            // override chains are walked transitively within their own kind. The root may take EITHER kind
+            // (an interface method has impl edges; a base virtual has override edges); after the first hop
+            // we stay within the kind we took. (`null` viaKind at the root = either kind allowed.)
             var visited = new HashSet<string>(StringComparer.Ordinal) { method };
-            var stack = new Stack<string>();
-            stack.Push(method);
+            var stack = new Stack<(string Node, string? ViaKind)>();
+            stack.Push((method, null));
             while (stack.Count > 0)
             {
-                var current = stack.Pop();
+                var (current, viaKind) = stack.Pop();
                 if (!index.MinedDispatchBySource.TryGetValue(current, out var outs))
                 {
                     continue;
@@ -435,13 +468,18 @@ public static partial class FactPathFinder
 
                 foreach (var (target, kind) in outs)
                 {
+                    if (viaKind is not null && !string.Equals(kind, viaKind, StringComparison.Ordinal))
+                    {
+                        continue; // don't cross from an impl hop into override siblings (or vice versa)
+                    }
+
                     if (!visited.Add(target))
                     {
                         continue;
                     }
 
                     hasMined = true;
-                    stack.Push(target); // walk the whole closure; NarrowByReceiver trims at the end
+                    stack.Push((target, kind)); // walk the closure WITHIN this kind; NarrowByReceiver trims at the end
                     if (seen.Add(target))
                     {
                         targets.Add((target, kind == DispatchKinds.Impl ? "impl-dispatch" : "override-dispatch", "roslyn"));
@@ -730,7 +768,7 @@ public static partial class FactPathFinder
         }
 
         var subtree = targets
-            .Where(t => ParseMethod(t.Node)?.TypeId is { } dt && InNarrowSubtree(typeId: dt, narrowRoot: narrowRoot, index: index))
+            .Where(t => ParseMethod(t.Node)?.TypeId is { } dt && InReceiverScope(typeId: dt, narrowRoot: narrowRoot, index: index))
             .ToList();
         if (subtree.Count > 0)
         {
@@ -763,6 +801,20 @@ public static partial class FactPathFinder
     private static bool IsStrictAncestor(string ancestorType, string descendantType, GraphIndex index) =>
         !string.Equals(TypeClosure.StripGeneric(ancestorType), TypeClosure.StripGeneric(descendantType), StringComparison.Ordinal)
         && AncestorOrEqual(ancestor: ancestorType, descendant: descendantType, index: index);
+
+    // A candidate target's declaring type is a possible runtime type for a receiver narrowed to
+    // `narrowRoot` when it IS narrowRoot / a base-edge subtype of it (the class-receiver case), OR —
+    // when narrowRoot is an INTERFACE — a type that implements it. The interface arm is what lets a
+    // sub-interface receiver (e.g. `IConfiguration`) trim a fan-out that was resolved against a BASE
+    // interface (`IConfiguration : IPersistentState`, call bound to `IPersistentState.GetItem`) down to
+    // the receiver interface's own implementers, instead of every `IPersistentState` implementer (which
+    // pulls in unrelated sibling-interface configs). `Descendants`/`InNarrowSubtree` only follow class
+    // base-edges, so without this an interface receiver can't narrow and falls back to full CHA. For a
+    // CLASS narrowRoot, `ImplsByInterface` has no entry so `ImplementsInterface` is false — behaviour
+    // unchanged. Recall-safe: NarrowByReceiver still falls back to the full set if NOTHING matches.
+    private static bool InReceiverScope(string typeId, string narrowRoot, GraphIndex index) =>
+        InNarrowSubtree(typeId: typeId, narrowRoot: narrowRoot, index: index)
+        || ImplementsInterface(strippedType: TypeClosure.StripGeneric(typeId), interfaceTypeId: narrowRoot, index: index);
 
     private static bool InNarrowSubtree(string typeId, string narrowRoot, GraphIndex index)
     {
