@@ -180,7 +180,15 @@ public static class FactEffectDeriver
                     );
 
                 results.Add(
-                    new DerivedEffect(rule.Provider, rule.Operation, resource!, inv.Enclosing, inv.FilePath, inv.Line, observations)
+                    new DerivedEffect(
+                        Provider: rule.Provider,
+                        Operation: rule.Operation,
+                        ResourceType: resource!,
+                        EnclosingSymbolId: inv.Enclosing,
+                        FilePath: inv.FilePath,
+                        Line: inv.Line,
+                        Observations: observations
+                    )
                 );
                 break; // first matching rule wins
             }
@@ -286,7 +294,14 @@ public static class FactEffectDeriver
                     }
 
                     results.Add(
-                        new DerivedEffect(rule.Provider, rule.Operation, constructedType, ctor.Enclosing, ctor.FilePath, ctor.Line)
+                        new DerivedEffect(
+                            Provider: rule.Provider,
+                            Operation: rule.Operation,
+                            ResourceType: constructedType,
+                            EnclosingSymbolId: ctor.Enclosing,
+                            FilePath: ctor.FilePath,
+                            Line: ctor.Line
+                        )
                     );
                     break;
                 }
@@ -320,7 +335,14 @@ public static class FactEffectDeriver
                     }
 
                     results.Add(
-                        new DerivedEffect(rule.Provider, rule.Operation, exceptionType, thrown.Enclosing, thrown.FilePath, thrown.Line)
+                        new DerivedEffect(
+                            Provider: rule.Provider,
+                            Operation: rule.Operation,
+                            ResourceType: exceptionType,
+                            EnclosingSymbolId: thrown.Enclosing,
+                            FilePath: thrown.FilePath,
+                            Line: thrown.Line
+                        )
                     );
                     break;
                 }

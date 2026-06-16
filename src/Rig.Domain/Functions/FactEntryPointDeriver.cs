@@ -156,7 +156,15 @@ public static class FactEntryPointDeriver
 
                     var displayName = BuildPageDisplayName(rule, route: route, signature: ctor.Signature);
                     results.Add(
-                        new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, ctor.FilePath, ctor.Line, rule.Requires)
+                        new DerivedEntryPoint(
+                            Kind: rule.Kind,
+                            Method: rule.DefaultMethod,
+                            Route: route,
+                            DisplayName: displayName,
+                            FilePath: ctor.FilePath,
+                            Line: ctor.Line,
+                            Requires: rule.Requires
+                        )
                     );
                 }
             }
@@ -169,7 +177,15 @@ public static class FactEntryPointDeriver
 
                 var displayName = $"{rule.Kind} {rule.DefaultMethod} {route}";
                 results.Add(
-                    new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, typeRow.FilePath, typeRow.Line, rule.Requires)
+                    new DerivedEntryPoint(
+                        Kind: rule.Kind,
+                        Method: rule.DefaultMethod,
+                        Route: route,
+                        DisplayName: displayName,
+                        FilePath: typeRow.FilePath,
+                        Line: typeRow.Line,
+                        Requires: rule.Requires
+                    )
                 );
             }
         }
@@ -242,7 +258,7 @@ public static class FactEntryPointDeriver
         // subtype of one of the rule's base types (e.g. ClientPage). Components/widgets that carry
         // the same attribute but inherit a different base (e.g. ClientControl) are NOT entry points —
         // this gate is what the Roslyn pass enforces and the fact deriver previously skipped.
-        var closure = TypeClosure.Compute(baseEdges, rule.BaseTypes);
+        var closure = TypeClosure.Compute(strippedBaseEdges: baseEdges, roots: rule.BaseTypes);
 
         foreach (var r in ctorRefs)
         {
@@ -251,18 +267,22 @@ public static class FactEntryPointDeriver
                 continue;
             }
 
-            if (!rule.HandlerMethodAttributePrefixes.Any(prefix => r.Target.StartsWith(prefix, StringComparison.Ordinal)))
+            if (
+                !rule.HandlerMethodAttributePrefixes.Any(predicate: prefix =>
+                    r.Target.StartsWith(value: prefix, comparisonType: StringComparison.Ordinal)
+                )
+            )
             {
                 continue;
             }
 
-            var declaringTypeId = DeclaringTypeId(r.Enclosing);
-            if (declaringTypeId is null || !TypeClosure.Contains(closure, declaringTypeId))
+            var declaringTypeId = DeclaringTypeId(enclosingSymbolId: r.Enclosing);
+            if (declaringTypeId is null || !TypeClosure.Contains(closure: closure, typeId: declaringTypeId))
             {
                 continue;
             }
 
-            if (!seen.Add((r.FilePath, r.Line)))
+            if (!seen.Add(item: (r.FilePath, r.Line)))
             {
                 continue;
             }
@@ -274,7 +294,17 @@ public static class FactEntryPointDeriver
             }
 
             var displayName = $"{rule.Kind} {rule.DefaultMethod} {route}";
-            results.Add(new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, r.FilePath, r.Line, rule.Requires));
+            results.Add(
+                item: new DerivedEntryPoint(
+                    Kind: rule.Kind,
+                    Method: rule.DefaultMethod,
+                    Route: route,
+                    DisplayName: displayName,
+                    FilePath: r.FilePath,
+                    Line: r.Line,
+                    Requires: rule.Requires
+                )
+            );
         }
     }
 
@@ -349,7 +379,17 @@ public static class FactEntryPointDeriver
             }
 
             var displayName = $"{rule.Kind} {rule.DefaultMethod} {route}";
-            results.Add(new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, m.FilePath, m.Line, rule.Requires));
+            results.Add(
+                new DerivedEntryPoint(
+                    Kind: rule.Kind,
+                    Method: rule.DefaultMethod,
+                    Route: route,
+                    DisplayName: displayName,
+                    FilePath: m.FilePath,
+                    Line: m.Line,
+                    Requires: rule.Requires
+                )
+            );
         }
     }
 

@@ -566,7 +566,8 @@ public static partial class FactPathFinder
             );
         }
 
-        var children = n.Kids.Count == 0 ? EmptyNodes : (IReadOnlyList<TraceNode>)n.Kids.Select(ToTraceNode).ToArray();
+        var children = n.Kids.Count == 0 ? EmptyNodes : n.Kids.Select(ToTraceNode).ToArray();
+
         return new TraceNode(
             SymbolId: n.Symbol,
             EdgeKind: n.EdgeKind,
@@ -842,15 +843,15 @@ public static partial class FactPathFinder
             var link = parent[node];
             steps.Add(
                 new PathStep(
-                    node,
-                    link?.Kind ?? "entry",
-                    link?.File,
-                    link?.Line ?? 0,
-                    link?.LoopKind,
-                    link?.LoopDetail,
-                    link?.Fanout ?? 0,
-                    link?.HandoffVia,
-                    link?.Basis
+                    SymbolId: node,
+                    Kind: link?.Kind ?? "entry",
+                    FilePath: link?.File,
+                    Line: link?.Line ?? 0,
+                    LoopKind: link?.LoopKind,
+                    LoopDetail: link?.LoopDetail,
+                    Fanout: link?.Fanout ?? 0,
+                    HandoffVia: link?.HandoffVia,
+                    DispatchBasis: link?.Basis
                 )
             );
             if (link is null)

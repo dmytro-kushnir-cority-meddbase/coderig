@@ -425,10 +425,7 @@ internal static class TreeRenderer
     //     if the sole resource is Threading.Monitor the resource name is omitted (always the same).
     // (2) identical rendered strings → deduplicated with a "×N" suffix.
     // (3) all effects are returned as individual strings; the caller joins them inside one {…} block.
-    internal static List<string> FormatEffectGroup(
-        IEnumerable<Rig.Domain.Data.DerivedEffect> effects,
-        IReadOnlyDictionary<string, string> emoji
-    )
+    internal static List<string> FormatEffectGroup(IEnumerable<DerivedEffect> effects, IReadOnlyDictionary<string, string> emoji)
     {
         var list = effects.ToList();
 
@@ -477,7 +474,7 @@ internal static class TreeRenderer
     // `tree --full`: one effect rendered as its OWN provenance leaf body — glyph + provider:op + resource +
     // the producing call site (file:line) — instead of the compact inline {…} tag the other modes hoist
     // onto the enclosing method. The caller orders a method's leaves by source line.
-    internal static string FormatEffectLeaf(Rig.Domain.Data.DerivedEffect e, IReadOnlyDictionary<string, string> emoji)
+    internal static string FormatEffectLeaf(DerivedEffect e, IReadOnlyDictionary<string, string> emoji)
     {
         var loc = string.IsNullOrEmpty(e.FilePath) ? "" : $"  {ShortenPath(e.FilePath)}:{e.Line}";
         var glyph = FactEffectEmojiProvider.For(emoji, provider: e.Provider, operation: e.Operation);

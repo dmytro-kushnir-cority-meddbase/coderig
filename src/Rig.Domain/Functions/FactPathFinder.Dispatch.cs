@@ -159,7 +159,7 @@ public static partial class FactPathFinder
                 null,
                 degree,
                 current,
-                SeedReceiver(incomingReceiver, d.Node, index),
+                SeedReceiver(incomingReceiver: incomingReceiver, targetMethod: d.Node, index: index),
                 null,
                 d.Basis,
                 incomingBinding,
@@ -524,7 +524,12 @@ public static partial class FactPathFinder
         }
 
         return NarrowByTypeArguments(
-            NarrowByContextFamily(NarrowByReceiver(targets, narrowRoot, index), receiverType, parsed.Value.TypeId, index),
+            NarrowByContextFamily(
+                targets: NarrowByReceiver(targets, narrowRoot, index),
+                receiverType: receiverType,
+                methodDeclaringTypeId: parsed.Value.TypeId,
+                index: index
+            ),
             carriedBinding,
             index
         );

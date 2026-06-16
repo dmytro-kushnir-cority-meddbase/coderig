@@ -79,9 +79,10 @@ public sealed class QueryCache : IDisposable
         try
         {
             using var command = _connection.CreateCommand();
-            command.CommandText =
-                "INSERT INTO artifact_cache (key, store_key, payload) VALUES ($k, $sk, $p) "
-                + "ON CONFLICT(key) DO UPDATE SET store_key = excluded.store_key, payload = excluded.payload;";
+            command.CommandText = """
+                INSERT INTO artifact_cache (key, store_key, payload) VALUES ($k, $sk, $p) 
+                ON CONFLICT(key) DO UPDATE SET store_key = excluded.store_key, payload = excluded.payload;
+                """;
             command.Parameters.AddWithValue("$k", key);
             command.Parameters.AddWithValue("$sk", _storeKey);
             command.Parameters.AddWithValue("$p", payload);

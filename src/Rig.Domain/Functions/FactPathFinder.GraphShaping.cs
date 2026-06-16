@@ -33,7 +33,10 @@ public static partial class FactPathFinder
         var rewritten = new List<CallEdge>(graph.CallEdges.Count);
         foreach (var e in graph.CallEdges)
         {
-            if (e.Kind == EdgeKinds.MethodGroup && eventSites.Contains(new EventSubscriptionSite(e.Caller, e.FilePath, e.Line)))
+            if (
+                e.Kind == EdgeKinds.MethodGroup
+                && eventSites.Contains(new EventSubscriptionSite(Caller: e.Caller, FilePath: e.FilePath, Line: e.Line))
+            )
             {
                 rewritten.Add(e with { Kind = "handoff", HandoffDispatcher = e.HandoffDispatcher ?? "event" });
                 changed = true;
