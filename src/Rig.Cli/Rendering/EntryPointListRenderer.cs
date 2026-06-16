@@ -24,11 +24,13 @@ internal static class EntryPointListRenderer
     {
         if (deployments.IsEmpty)
         {
-            output.WriteLine($"      {route}  {ShortenPath(filePath)}:{line}");
+            output.WriteLine($"{Indent.L3}{route}  {ShortenPath(filePath)}:{line}");
             return;
         }
-        output.WriteLine($"      {EntryPointRenderer.Marker} {route}  {EntryPointRenderer.DeployTag(deployments, filePath, requires)}");
-        output.WriteLine($"          {ShortenPath(filePath)}:{line}");
+        output.WriteLine(
+            $"{Indent.L3}{EntryPointRenderer.Marker} {route}  {EntryPointRenderer.DeployTag(deployments, filePath, requires)}"
+        );
+        output.WriteLine($"{Indent.L5}{ShortenPath(filePath)}:{line}");
     }
 
     // The per-kind listing is a SAMPLE (readability). Say so when truncated, so a grep over this output is
@@ -36,7 +38,7 @@ internal static class EntryPointListRenderer
     internal static void WriteSampleTruncationNote(TextWriter output, int total, int shown, string kind)
     {
         if (total > shown)
-            output.WriteLine($"      … +{total - shown} more {kind} (sample shown; `rig derive --format tsv` lists all)");
+            output.WriteLine($"{Indent.L3}… +{total - shown} more {kind} (sample shown; `rig derive --format tsv` lists all)");
     }
 
     // Per-service rollup of entry points: total + per-kind breakdown, in deployments.json order.
@@ -98,10 +100,10 @@ internal static class EntryPointListRenderer
                     );
             var inactiveTail = inactiveCount > 0 ? $"   · {inactiveCount} linked-inactive" : "";
             var label = svc.Kind is null ? svc.Name : $"{svc.Name} ({svc.Kind})";
-            output.WriteLine($"  {label, -46} {total, 6}   {breakdown}{inactiveTail}");
+            output.WriteLine($"{Indent.L1}{label, -46} {total, 6}   {breakdown}{inactiveTail}");
         }
         if (unattributed > 0)
-            output.WriteLine($"  {"(unattributed — tests/tools/no service)", -46} {unattributed, 6}");
+            output.WriteLine($"{Indent.L1}{"(unattributed — tests/tools/no service)", -46} {unattributed, 6}");
     }
 
     // A resource-span hazard tag for an effect (P2b ordering/nesting): a network/IO/external effect

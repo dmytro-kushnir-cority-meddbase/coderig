@@ -348,7 +348,7 @@ internal static class SymbolNameFormatter
     {
         if (string.IsNullOrEmpty(detail))
             return "?";
-        var s = string.Join(" ", detail!.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries));
+        var s = string.Join(" ", detail!.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
         return s.Length <= 60 ? s : s.Substring(0, 57) + "...";
     }
 

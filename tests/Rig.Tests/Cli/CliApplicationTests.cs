@@ -7,30 +7,32 @@ namespace Rig.Tests.Cli;
 
 public sealed class CliApplicationTests
 {
+    // No command -> System.CommandLine owns it: "Required command was not provided." goes to stderr, the
+    // root help (description + the subcommand list) to stdout, exit 1. We assert the help lists the
+    // subcommands, not the exact framework chrome.
     [Test]
-    public async Task No_arguments_prints_human_readable_command_summary()
+    public async Task No_arguments_prints_framework_help()
     {
         var output = new StringWriter();
         var error = new StringWriter();
 
         var exitCode = await CliApplication.RunAsync([], output, error);
 
-        exitCode.ShouldBe(0);
-        error.ToString().ShouldBeEmpty();
-        output.ToString().ShouldContain("Runtime Intelligence Graph");
-        output.ToString().ShouldContain("Usage:");
-        output.ToString().ShouldContain("rig index <solution|project>");
-        output.ToString().ShouldContain("rig runs");
-        output.ToString().ShouldContain("rig derive");
-        output.ToString().ShouldContain("rig reaches");
-        output.ToString().ShouldContain("rig tree");
-        output.ToString().ShouldContain("rig callers");
-        output.ToString().ShouldContain("rig dead");
-        output.ToString().ShouldContain("rig di");
-        output.ToString().ShouldContain("rig files --skipped");
-        output.ToString().ShouldContain("rig profile validate");
+        exitCode.ShouldBe(1);
+        error.ToString().ShouldContain("Required command was not provided.");
+        var help = output.ToString();
+        help.ShouldContain("Runtime Intelligence Graph");
+        help.ShouldContain("Commands:");
+        help.ShouldContain("tree");
+        help.ShouldContain("callers");
+        help.ShouldContain("reaches");
+        help.ShouldContain("derive");
+        help.ShouldContain("dead");
+        help.ShouldContain("profile");
     }
 
+    // An unrecognized command is a framework parse error (exit 1); it names the bad token and suggests the
+    // nearest match on stderr.
     [Test]
     public async Task Unknown_command_fails_with_actionable_error()
     {
@@ -39,15 +41,13 @@ public sealed class CliApplicationTests
 
         var exitCode = await CliApplication.RunAsync(["wat"], output, error);
 
-        exitCode.ShouldBe(2);
-        output.ToString().ShouldBeEmpty();
-        error.ToString().ShouldContain("Unknown command: wat");
+        exitCode.ShouldBe(1);
+        error.ToString().ShouldContain("Unrecognized command or argument 'wat'");
     }
 
-    // Guards the option-whitelist regression: --merge was missing from KnownFlagsByCommand["index"],
-    // so `rig index ... --merge` was rejected as an unknown option before it could run. Validation runs
-    // before solution load, so a KNOWN flag must NOT trip "Unknown option" (the command fails later for
-    // a different reason — a nonexistent solution).
+    // --merge / --include-tests are real Options on `index`, so they parse cleanly; the command then fails
+    // later for a different reason (a nonexistent solution: exit 2, "Failed to load") rather than being
+    // rejected up front. Guards against a known flag being dropped from the index surface.
     [Test]
     [Arguments("--merge")]
     [Arguments("--include-tests")]
@@ -58,16 +58,15 @@ public sealed class CliApplicationTests
 
         var exitCode = await CliApplication.RunAsync(["index", "C:/does-not-exist.slnx", flag], output, error);
 
-        // Known flag -> passes validation, then fails cleanly on the nonexistent solution (exit 2,
-        // "Failed to load") rather than being rejected up front as an unknown option.
         exitCode.ShouldBe(2);
-        error.ToString().ShouldNotContain("Unknown option");
+        error.ToString().ShouldNotContain("Unrecognized command or argument");
         error.ToString().ShouldContain("Failed to load");
     }
 
     // --durable and --no-tests were removed from the index surface (the former dropped entirely, the
-    // latter a redundant no-op alias of the now-default test exclusion). They must now be REJECTED up
-    // front as unknown options — not silently accepted — so a stale script using them fails loudly.
+    // latter a redundant no-op alias of the now-default test exclusion). With System.CommandLine they are
+    // no longer declared Options, so they are REJECTED up front as parse errors (exit 1) — not silently
+    // accepted — and a stale script using them fails loudly.
     [Test]
     [Arguments("--durable")]
     [Arguments("--no-tests")]
@@ -78,8 +77,8 @@ public sealed class CliApplicationTests
 
         var exitCode = await CliApplication.RunAsync(["index", "C:/does-not-exist.slnx", flag], output, error);
 
-        exitCode.ShouldBe(2);
-        error.ToString().ShouldContain("Unknown option");
+        exitCode.ShouldBe(1);
+        error.ToString().ShouldContain($"Unrecognized command or argument '{flag}'");
     }
 
     // Mutually-exclusive projection modes are rejected up front (validation runs before any store access,
@@ -92,7 +91,7 @@ public sealed class CliApplicationTests
 
         var exitCode = await CliApplication.RunAsync(["tree", "X", "--full", "--summary"], output, error);
 
-        exitCode.ShouldBe(2);
+        exitCode.ShouldBe(1);
         error.ToString().ShouldContain("can't be combined");
         error.ToString().ShouldContain("--full");
         error.ToString().ShouldContain("--summary");
@@ -106,7 +105,7 @@ public sealed class CliApplicationTests
 
         var exitCode = await CliApplication.RunAsync(["callers", "X", "--orphans", "--entrypoints"], output, error);
 
-        exitCode.ShouldBe(2);
+        exitCode.ShouldBe(1);
         error.ToString().ShouldContain("--orphans and --entrypoints can't be combined");
     }
 
@@ -142,8 +141,9 @@ public sealed class CliApplicationTests
 
         var exitCode = await CliApplication.RunAsync(["files"], output, error);
 
-        exitCode.ShouldBe(2);
-        output.ToString().ShouldBeEmpty();
+        // The required-flag validator fails up front (exit 1); its message goes to stderr, framework help to
+        // stdout.
+        exitCode.ShouldBe(1);
         error.ToString().ShouldContain("Usage: rig files --skipped");
     }
 

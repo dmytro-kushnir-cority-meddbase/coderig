@@ -23,7 +23,7 @@ internal sealed class DeploymentMap
 
     public IReadOnlyList<ServiceDef> Services { get; }
     public bool IsEmpty => Services.Count == 0;
-    
+
     internal DeploymentMap(
         IReadOnlyList<ServiceDef> services,
         Dictionary<string, List<string>> projectToServices,
@@ -70,7 +70,7 @@ internal sealed class DeploymentMap
         var required = new HashSet<string>(requires, StringComparer.OrdinalIgnoreCase);
         return loadedServices.Where(s => Service(s) is { } def && def.Provides.Any(required.Contains)).ToArray();
     }
-    
+
     public static async Task<DeploymentMap> LoadAsync(string workingDirectory, string? solutionPath, TextWriter? log = null)
     {
         var configPath = Path.Combine(workingDirectory, "deployments.json");
@@ -122,7 +122,7 @@ internal sealed class DeploymentMap
 
         return new DeploymentMap(services, projectToServices, projectDirs);
     }
-    
+
     private static string EnsureTrailingSeparator(string dir) =>
         dir.EndsWith(Path.DirectorySeparatorChar) ? dir : dir + Path.DirectorySeparatorChar;
 
