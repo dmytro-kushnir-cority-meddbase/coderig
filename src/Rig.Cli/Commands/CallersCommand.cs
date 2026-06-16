@@ -22,7 +22,7 @@ internal static class CallersCommand
 {
     internal static Command Build(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var to = CommonOptions.Pattern("to", "Target method pattern (who reaches this?).");
+        var to = CommonOptions.Pattern(name: "to", description: "Target method pattern (who reaches this?).");
         var orphans = new Option<bool>("--orphans", "--roots") { Description = "Only no-predecessor entry-point candidates (heuristic)." };
         var entrypoints = new Option<bool>("--entrypoints")
         {
@@ -34,7 +34,7 @@ internal static class CallersCommand
         var depth = CommonOptions.Depth();
         var format = CommonOptions.Format();
         var limit = CommonOptions.Limit();
-        var cmd = new Command("callers", "Reverse reachability: which methods reach the target.")
+        var cmd = new Command(name: "callers", description: "Reverse reachability: which methods reach the target.")
         {
             to,
             orphans,
@@ -60,17 +60,17 @@ internal static class CallersCommand
                 error,
                 () =>
                     RunAsync(
-                        pr.GetValue(to)!,
-                        pr.GetValue(orphans),
-                        pr.GetValue(entrypoints),
-                        pr.GetValue(async),
-                        pr.GetValue(raw),
-                        CommonOptions.RulesOf(pr.GetValue(rules)),
-                        pr.GetValue(depth),
-                        pr.GetValue(format),
-                        pr.GetValue(limit),
-                        output,
-                        workingDirectory
+                        toPattern: pr.GetValue(to)!,
+                        rootsOnly: pr.GetValue(orphans),
+                        entrypointsOnly: pr.GetValue(entrypoints),
+                        async: pr.GetValue(async),
+                        raw: pr.GetValue(raw),
+                        extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                        depth: pr.GetValue(depth),
+                        format: pr.GetValue(format),
+                        limit: pr.GetValue(limit),
+                        output: output,
+                        workingDirectory: workingDirectory
                     )
             )
         );
@@ -279,7 +279,7 @@ internal static class CallersCommand
             foreach (var e in touching)
             {
                 var loaded = deployments.ServicesForFile(e.FilePath);
-                var active = deployments.ActiveServices(loaded, e.Requires);
+                var active = deployments.ActiveServices(loadedServices: loaded, requires: e.Requires);
                 output.WriteLine(
                     $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}"
                 );
@@ -295,7 +295,7 @@ internal static class CallersCommand
             output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup)
             {
-                WriteEntryPointLine(output, deployments, e.Route, e.FilePath, e.Line, e.Requires);
+                WriteEntryPointLine(output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
             }
         }
         if (!deployments.IsEmpty)

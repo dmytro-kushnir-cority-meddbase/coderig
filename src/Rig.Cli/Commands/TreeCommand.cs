@@ -25,7 +25,7 @@ internal static class TreeCommand
 {
     internal static Command Build(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var from = CommonOptions.Pattern("from", "Entry-point method pattern.");
+        var from = CommonOptions.Pattern(name: "from", description: "Entry-point method pattern.");
         var full = new Option<bool>("--full") { Description = "Print every reachable method; effects/unresolved calls as leaf nodes." };
         var summary = new Option<bool>("--summary") { Description = "Print only the effect-count rollup." };
         var effects = new Option<bool>("--effects") { Description = "List only effectful methods (one line each, source order)." };
@@ -40,7 +40,7 @@ internal static class TreeCommand
         var noCache = CommonOptions.NoCache();
         var time = CommonOptions.Time();
         var format = CommonOptions.Format();
-        var cmd = new Command("tree", "Print the first-party call tree from an entry point, annotated with effects.")
+        var cmd = new Command(name: "tree", description: "Print the first-party call tree from an entry point, annotated with effects.")
         {
             from,
             full,
@@ -151,7 +151,7 @@ internal static class TreeCommand
         // to render. Auto-invalidates on reindex: the key embeds a store identity that index/graph change.
         var rigDir = Path.Combine(workingDirectory, ".rig");
         var storeKey = StoreKey(Path.Combine(rigDir, "rig.db"));
-        using var cache = noCache ? null : QueryCache.Open(rigDir, storeKey);
+        using var cache = noCache ? null : QueryCache.Open(rigDirectory: rigDir, storeKey: storeKey);
         var cacheKey = cache is null
             ? null
             : TreeCacheKey(
@@ -277,7 +277,11 @@ internal static class TreeCommand
             var tsvEffects = ApplyEffectFilters(effects, only, exclude)
                 .Where(e => e.EnclosingSymbolId is not null)
                 .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
-                .ToDictionary(g => g.Key, g => string.Join(',', g.Select(e => $"{e.Provider}:{e.Operation}")), StringComparer.Ordinal);
+                .ToDictionary(
+                    keySelector: g => g.Key,
+                    elementSelector: g => string.Join(',', g.Select(e => $"{e.Provider}:{e.Operation}")),
+                    comparer: StringComparer.Ordinal
+                );
             foreach (var root in roots)
             {
                 EmitTsvNode(root, 0, tsvEffects, locations, output);
@@ -406,7 +410,7 @@ internal static class TreeCommand
                 maxDepth: maxDepth,
                 mode: mode,
                 structuredByMethod: structuredByMethod,
-                emojiFor: (p, o) => FactEffectEmojiProvider.For(emoji, p, o)
+                emojiFor: (p, o) => FactEffectEmojiProvider.For(emoji, provider: p, operation: o)
             );
         }
 
@@ -464,7 +468,7 @@ internal static class TreeCommand
     )
     {
         var (file, line) = locations.TryGetValue(node.SymbolId, out var loc) ? loc : (null, 0);
-        var effects = effectsByMethod.GetValueOrDefault(node.SymbolId, "");
+        var effects = effectsByMethod.GetValueOrDefault(key: node.SymbolId, defaultValue: "");
         output.WriteLine($"{depth}\t{node.SymbolId}\t{node.EdgeKind}\t{node.HandoffVia}\t{node.Fanout}\t{effects}\t{file}\t{line}");
         foreach (var child in node.Children)
         {

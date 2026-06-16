@@ -170,7 +170,15 @@ public static class HandoffClassifier
                 continue;
             }
 
-            byKey[key] = new HandoffEntryPoint(e.Callee, e.Caller, e.FilePath, e.Line, dispatcher, kind, requires);
+            byKey[key] = new HandoffEntryPoint(
+                Target: e.Callee,
+                RegisteredIn: e.Caller,
+                FilePath: e.FilePath,
+                Line: e.Line,
+                Dispatcher: dispatcher,
+                Kind: kind,
+                Requires: requires
+            );
         }
 
         return byKey

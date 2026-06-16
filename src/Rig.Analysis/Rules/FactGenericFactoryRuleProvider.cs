@@ -18,5 +18,6 @@ public static class FactGenericFactoryRuleProvider
         return ruleSet.GenericFactories.Select(Project).ToArray();
     }
 
-    private static FactGenericFactoryRule Project(GenericFactoryRule rule) => new(rule.Method, rule.ConstructArgIndex, rule.TargetMethod);
+    private static FactGenericFactoryRule Project(GenericFactoryRule rule) =>
+        new(Method: rule.Method, ConstructArgIndex: rule.ConstructArgIndex, TargetMethod: rule.TargetMethod);
 }

@@ -51,9 +51,9 @@ internal static class TreeRenderer
     private static string FoldedViaTypeName(string methodSymbolId)
     {
         var paren = methodSymbolId.IndexOf('(');
-        var head = paren >= 0 ? methodSymbolId.Substring(0, paren) : methodSymbolId;
+        var head = paren >= 0 ? methodSymbolId.Substring(startIndex: 0, length: paren) : methodSymbolId;
         var lastDot = head.LastIndexOf('.');
-        return ShortName(lastDot >= 0 ? head.Substring(0, lastDot) : head);
+        return ShortName(lastDot >= 0 ? head.Substring(startIndex: 0, length: lastDot) : head);
     }
 
     // Collects effect-bearing methods in DFS (source) order, deduped — the backing of `tree --effects`.
@@ -219,13 +219,13 @@ internal static class TreeRenderer
         var (declaringConcrete, methodConcrete) = inheritsParentScope
             ? (parentDeclaringConcrete, parentMethodConcrete)
             : ResolveNodeInstantiation(
-                node.DeclaringTypeArgBinding,
-                node.MethodTypeArgBinding,
-                parentDeclaringConcrete,
-                parentMethodConcrete
+                declaringBinding: node.DeclaringTypeArgBinding,
+                methodBinding: node.MethodTypeArgBinding,
+                parentDeclaring: parentDeclaringConcrete,
+                parentMethod: parentMethodConcrete
             );
         var name =
-            PrettyGenericName(ShortName(node.SymbolId), declaringConcrete, methodConcrete)
+            PrettyGenericName(ShortName(node.SymbolId), declaringArgs: declaringConcrete, methodArgs: methodConcrete)
             + (signatures ? ShortSignature(node.SymbolId) : "");
         // EP marker: when this node is itself a rule-detected entry point, wrap its name with "▶ kind"
         // and a trailing service chip — the same custom rendering used by derive/callers.
@@ -286,22 +286,22 @@ internal static class TreeRenderer
             RenderTreeNode(
                 children[i],
                 childPrefix,
-                i == children.Count - 1,
+                isLast: i == children.Count - 1,
                 isRoot: false,
-                effectsByMethod,
-                prune,
-                renderRules,
-                seamEffects,
-                output,
-                files,
-                locById,
-                signatures,
-                cutRules,
-                epContext,
-                full,
-                effectLeavesByMethod,
-                declaringConcrete,
-                methodConcrete
+                effectsByMethod: effectsByMethod,
+                prune: prune,
+                renderRules: renderRules,
+                seamEffects: seamEffects,
+                output: output,
+                files: files,
+                locById: locById,
+                signatures: signatures,
+                cutRules: cutRules,
+                epContext: epContext,
+                full: full,
+                effectLeavesByMethod: effectLeavesByMethod,
+                parentDeclaringConcrete: declaringConcrete,
+                parentMethodConcrete: methodConcrete
             );
         }
     }
@@ -449,7 +449,7 @@ internal static class TreeRenderer
         // Emit one collapsed "lock" entry per paired resource.
         foreach (var resource in pairedResources.OrderBy(r => r, StringComparer.OrdinalIgnoreCase))
         {
-            var lockEmoji = FactEffectEmojiProvider.For(emoji, "lock", "held");
+            var lockEmoji = FactEffectEmojiProvider.For(emoji, provider: "lock", operation: "held");
             // Omit resource name when it is always Threading.Monitor — adds no information.
             var resourceLabel = resource.Contains("Threading.Monitor", StringComparison.OrdinalIgnoreCase) ? "" : $" {ShortName(resource)}";
             result.Add($"{lockEmoji} lock{resourceLabel}");
@@ -466,9 +466,8 @@ internal static class TreeRenderer
                 continue;
             }
 
-            result.Add(
-                $"{FactEffectEmojiProvider.For(emoji, e.Provider, e.Operation)} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}"
-            );
+            var glyph = FactEffectEmojiProvider.For(emoji, provider: e.Provider, operation: e.Operation);
+            result.Add($"{glyph} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}");
         }
 
         // Dedup: collapse identical strings to "label ×N".
@@ -481,7 +480,8 @@ internal static class TreeRenderer
     internal static string FormatEffectLeaf(Rig.Domain.Data.DerivedEffect e, IReadOnlyDictionary<string, string> emoji)
     {
         var loc = string.IsNullOrEmpty(e.FilePath) ? "" : $"  {ShortenPath(e.FilePath)}:{e.Line}";
-        return $"{FactEffectEmojiProvider.For(emoji, e.Provider, e.Operation)} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}{loc}";
+        var glyph = FactEffectEmojiProvider.For(emoji, provider: e.Provider, operation: e.Operation);
+        return $"{glyph} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}{loc}";
     }
 
     // `tree --full`: a library call that produced NO effect (resolved to a referenced-assembly target, but

@@ -79,7 +79,7 @@ internal static class FactExtractor
                     AddSymbol(symbols, accessor, tree, AccessorNode(accessor) ?? decl);
                     if (accessor.OverriddenMethod is { } overriddenAccessor)
                     {
-                        AddDispatchFact(dispatch, dispatchSeen, overriddenAccessor, accessor, DispatchKinds.Override);
+                        AddDispatchFact(dispatch, dispatchSeen, source: overriddenAccessor, target: accessor, kind: DispatchKinds.Override);
                     }
                 }
             }
@@ -89,7 +89,7 @@ internal static class FactExtractor
             // query time, so only the immediate hop is stored.
             if (symbol is IMethodSymbol { OverriddenMethod: { } overridden } overrideMethod)
             {
-                AddDispatchFact(dispatch, dispatchSeen, overridden, overrideMethod, DispatchKinds.Override);
+                AddDispatchFact(dispatch, dispatchSeen, source: overridden, target: overrideMethod, kind: DispatchKinds.Override);
             }
         }
 
@@ -131,14 +131,14 @@ internal static class FactExtractor
             AddReference(
                 references,
                 target,
-                refKind,
-                EnclosingSymbolId(name, model, lambdaIds),
-                tree,
-                name,
-                receiverType,
-                firstArgTemplate,
-                firstArgType,
-                structural,
+                refKind: refKind,
+                enclosingId: EnclosingSymbolId(name, model, lambdaIds),
+                tree: tree,
+                node: name,
+                receiverType: receiverType,
+                firstArgumentTemplate: firstArgTemplate,
+                firstArgumentType: firstArgType,
+                structural: structural,
                 firstArgumentName: firstArgName,
                 delegateConsumer: delegateConsumer,
                 argumentTemplates: argumentTemplates,
@@ -181,7 +181,14 @@ internal static class FactExtractor
         {
             if (model.GetSymbolInfo(creation).Symbol is IMethodSymbol { MethodKind: MethodKind.Constructor } ctor)
             {
-                AddReference(references, ctor, RefKinds.Ctor, EnclosingSymbolId(creation, model, lambdaIds), tree, creation);
+                AddReference(
+                    references,
+                    ctor,
+                    refKind: RefKinds.Ctor,
+                    enclosingId: EnclosingSymbolId(creation, model, lambdaIds),
+                    tree: tree,
+                    node: creation
+                );
             }
         }
 
@@ -227,10 +234,10 @@ internal static class FactExtractor
             AddReference(
                 references,
                 type,
-                RefKinds.Throw,
-                EnclosingSymbolId(thrown, model, lambdaIds),
-                tree,
-                thrown,
+                refKind: RefKinds.Throw,
+                enclosingId: EnclosingSymbolId(thrown, model, lambdaIds),
+                tree: tree,
+                node: thrown,
                 structural: StructuralContextOf(thrown, model),
                 allowRuntime: true
             );
@@ -287,10 +294,10 @@ internal static class FactExtractor
             AddReference(
                 references,
                 enter,
-                RefKinds.Invocation,
-                enclosing,
-                tree,
-                lockStmt.Expression,
+                refKind: RefKinds.Invocation,
+                enclosingId: enclosing,
+                tree: tree,
+                node: lockStmt.Expression,
                 structural: structural,
                 allowRuntime: true
             );
@@ -300,10 +307,10 @@ internal static class FactExtractor
             AddReference(
                 references,
                 exit,
-                RefKinds.Invocation,
-                enclosing,
-                tree,
-                lockStmt.Expression,
+                refKind: RefKinds.Invocation,
+                enclosingId: enclosing,
+                tree: tree,
+                node: lockStmt.Expression,
                 structural: structural,
                 allowRuntime: true,
                 lineOverride: releaseLine
@@ -337,7 +344,7 @@ internal static class FactExtractor
                 case IMethodSymbol { MethodKind: MethodKind.Ordinary } interfaceMethod:
                     if (type.FindImplementationForInterfaceMember(interfaceMethod) is IMethodSymbol impl)
                     {
-                        AddDispatchFact(dispatch, seen, interfaceMethod, impl, DispatchKinds.Impl);
+                        AddDispatchFact(dispatch, seen, source: interfaceMethod, target: impl, kind: DispatchKinds.Impl);
                     }
 
                     break;
@@ -349,8 +356,18 @@ internal static class FactExtractor
                 // bodied accessors).
                 case IPropertySymbol interfaceProperty
                     when type.FindImplementationForInterfaceMember(interfaceProperty) is IPropertySymbol implProperty:
-                    AddAccessorImplDispatch(dispatch, seen, interfaceProperty.GetMethod, implProperty.GetMethod);
-                    AddAccessorImplDispatch(dispatch, seen, interfaceProperty.SetMethod, implProperty.SetMethod);
+                    AddAccessorImplDispatch(
+                        dispatch,
+                        seen,
+                        interfaceAccessor: interfaceProperty.GetMethod,
+                        implAccessor: implProperty.GetMethod
+                    );
+                    AddAccessorImplDispatch(
+                        dispatch,
+                        seen,
+                        interfaceAccessor: interfaceProperty.SetMethod,
+                        implAccessor: implProperty.SetMethod
+                    );
                     break;
             }
         }
@@ -365,7 +382,7 @@ internal static class FactExtractor
     {
         if (interfaceAccessor is not null && implAccessor is not null && HasAccessorBody(implAccessor))
         {
-            AddDispatchFact(dispatch, seen, interfaceAccessor, implAccessor, DispatchKinds.Impl);
+            AddDispatchFact(dispatch, seen, source: interfaceAccessor, target: implAccessor, kind: DispatchKinds.Impl);
         }
     }
 
@@ -801,11 +818,11 @@ internal static class FactExtractor
         }
 
         return new StructuralContext(
-            loopKind,
-            loopDetail,
-            FactStructuralContext.EncodeInvocations(enclosing),
-            FactStructuralContext.EncodeList(catchTypes),
-            FactStructuralContext.EncodeScopes(scopes)
+            LoopKind: loopKind,
+            LoopDetail: loopDetail,
+            EnclosingInvocations: FactStructuralContext.EncodeInvocations(enclosing),
+            CatchTypes: FactStructuralContext.EncodeList(catchTypes),
+            EnclosingScopes: FactStructuralContext.EncodeScopes(scopes)
         );
     }
 
@@ -1048,12 +1065,30 @@ internal static class FactExtractor
         var structural = StructuralContextOf(name, model);
         if (getter is not null)
         {
-            AddReference(references, getter, RefKinds.Invocation, enclosing, tree, name, receiver, structural: structural);
+            AddReference(
+                references,
+                getter,
+                refKind: RefKinds.Invocation,
+                enclosingId: enclosing,
+                tree: tree,
+                node: name,
+                receiverType: receiver,
+                structural: structural
+            );
         }
 
         if (setter is not null)
         {
-            AddReference(references, setter, RefKinds.Invocation, enclosing, tree, name, receiver, structural: structural);
+            AddReference(
+                references,
+                setter,
+                refKind: RefKinds.Invocation,
+                enclosingId: enclosing,
+                tree: tree,
+                node: name,
+                receiverType: receiver,
+                structural: structural
+            );
         }
     }
 

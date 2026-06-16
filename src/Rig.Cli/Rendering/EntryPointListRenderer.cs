@@ -68,7 +68,7 @@ internal static class EntryPointListRenderer
                 unattributed++;
                 continue;
             }
-            var active = deployments.ActiveServices(loaded, requires);
+            var active = deployments.ActiveServices(loadedServices: loaded, requires: requires);
             foreach (var s in active)
             {
                 if (!byService.TryGetValue(s, out var kinds))

@@ -46,15 +46,15 @@ public static class FactEntryPointRuleProvider
         var paramTypeSimpleNames = (rule.HandlerParameterTypes ?? []).Select(SimpleTypeName).Where(n => n.Length > 0).ToArray();
 
         return new FactClassInheritanceRule(
-            rule.Id,
-            rule.Kind,
-            rule.DefaultMethod ?? rule.Kind.ToUpperInvariant(),
-            rule.BaseTypes,
-            rule.HandlerMethods ?? [],
-            rule.RequireOverride,
-            attributePrefixes,
-            paramTypeSimpleNames,
-            rule.Requires
+            Id: rule.Id,
+            Kind: rule.Kind,
+            DefaultMethod: rule.DefaultMethod ?? rule.Kind.ToUpperInvariant(),
+            BaseTypes: rule.BaseTypes,
+            HandlerMethods: rule.HandlerMethods ?? [],
+            RequireOverride: rule.RequireOverride,
+            HandlerMethodAttributePrefixes: attributePrefixes,
+            HandlerParameterTypeSimpleNames: paramTypeSimpleNames,
+            Requires: rule.Requires
         );
     }
 
@@ -71,13 +71,13 @@ public static class FactEntryPointRuleProvider
         var attributePrefixes = (rule.HandlerMethodAttributes ?? []).Where(a => a.Contains('.')).Select(a => $"M:{a}.").ToArray();
 
         return new FactEntryPointRule(
-            rule.Id,
-            rule.Kind,
-            rule.DefaultMethod ?? rule.Kind.ToUpperInvariant(),
-            rule.BaseTypes,
-            rule.NamespacePrefix,
-            attributePrefixes,
-            rule.Requires
+            Id: rule.Id,
+            Kind: rule.Kind,
+            DefaultMethod: rule.DefaultMethod ?? rule.Kind.ToUpperInvariant(),
+            BaseTypes: rule.BaseTypes,
+            NamespacePrefix: rule.NamespacePrefix,
+            HandlerMethodAttributePrefixes: attributePrefixes,
+            Requires: rule.Requires
         );
     }
 
@@ -87,7 +87,7 @@ public static class FactEntryPointRuleProvider
         var generic = type.IndexOf('<');
         if (generic >= 0)
         {
-            type = type.Substring(0, generic);
+            type = type.Substring(startIndex: 0, length: generic);
         }
 
         var lastDot = type.LastIndexOf('.');

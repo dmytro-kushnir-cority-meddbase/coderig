@@ -20,7 +20,11 @@ internal static class EntryPointContext
     // map every command loads the same way. Empty (no-op) when unconfigured. `log` surfaces config
     // problems (only `derive` passes one today).
     internal static async Task<DeploymentMap> LoadDeploymentsAsync(RigDbContext context, string workingDirectory, TextWriter? log = null) =>
-        await DeploymentMap.LoadAsync(workingDirectory, await PrimaryDeploymentSolutionPathAsync(context), log);
+        await DeploymentMap.LoadAsync(
+            workingDirectory: workingDirectory,
+            solutionPath: await PrimaryDeploymentSolutionPathAsync(context),
+            log: log
+        );
 
     // The solution to resolve deployments.json against: the run with the MOST symbols — the primary/root
     // solution (e.g. MedDBase.slnx at the monorepo root), NOT ListRunsAsync().FirstOrDefault() (which is
@@ -99,7 +103,7 @@ internal static class EntryPointContext
         var paren = body.IndexOf('(');
         if (paren >= 0)
         {
-            body = body.Substring(0, paren);
+            body = body.Substring(startIndex: 0, length: paren);
         }
 
         var sb = new System.Text.StringBuilder(body.Length);
@@ -185,7 +189,7 @@ internal static class EntryPointContext
         // Tier 2: query cache (handles --rules, which the table doesn't cover).
         var rigDir = Path.Combine(workingDirectory, ".rig");
         var storeKey = StoreKey(Path.Combine(rigDir, "rig.db"));
-        using var cache = QueryCache.Open(rigDir, storeKey);
+        using var cache = QueryCache.Open(rigDirectory: rigDir, storeKey: storeKey);
         var key = cache is null ? null : EpCacheKey(storeKey, rulesHash);
         if (key is not null && cache!.Get(key) is { } blob && EpSiteCacheCodec.Decode(blob) is { } hit)
         {

@@ -17,7 +17,7 @@ internal static class SolutionSourceLoader
     // =false) and emit no binaries, and the in-process Roslyn compile/read loops are CPU-bound, so a
     // big solution saturates every core rather than leaving most idle at a fixed cap. Override with
     // --parallelism <n> (e.g. lower it if memory-bound on a very large workspace).
-    private static readonly int DefaultParallelism = Math.Max(1, Environment.ProcessorCount);
+    private static readonly int DefaultParallelism = Math.Max(val1: 1, val2: Environment.ProcessorCount);
 
     public static async Task<SolutionSourceSet> LoadAsync(
         string solutionPath,
@@ -37,7 +37,7 @@ internal static class SolutionSourceLoader
         bool excludeTests = false
     )
     {
-        var maxParallelism = Math.Max(1, parallelism ?? DefaultParallelism);
+        var maxParallelism = Math.Max(val1: 1, val2: parallelism ?? DefaultParallelism);
 
         // Buildalyzer invokes MSBuild.exe out-of-process, completely avoiding the
         // System.Collections.Immutable assembly conflict in Roslyn's BuildHost-net472 that
@@ -74,7 +74,7 @@ internal static class SolutionSourceLoader
                 try
                 {
                     var current = Interlocked.Increment(ref compiledProjects);
-                    if (ShouldReportProgress(current, csharpProjects.Length))
+                    if (ShouldReportProgress(current: current, total: csharpProjects.Length))
                     {
                         ReportProgress(progress, $"Compiling project {current}/{csharpProjects.Length}: {project.Name}");
                     }
@@ -130,7 +130,7 @@ internal static class SolutionSourceLoader
                 try
                 {
                     var current = Interlocked.Increment(ref readProjects);
-                    if (ShouldReportProgress(current, csharpProjects.Length))
+                    if (ShouldReportProgress(current: current, total: csharpProjects.Length))
                     {
                         ReportProgress(progress, $"Reading source project {current}/{csharpProjects.Length}: {project.Name}");
                     }
@@ -178,12 +178,12 @@ internal static class SolutionSourceLoader
             var analyzer = manager.GetProject(solutionPath);
 #pragma warning restore CS0618
             progress?.Invoke($"MSBuild: running design-time build for {Path.GetFileNameWithoutExtension(solutionPath)}");
-            analyzer!.SetGlobalProperty("DesignTimeBuild", "true");
-            analyzer.SetGlobalProperty("BuildingInsideVisualStudio", "true");
+            analyzer!.SetGlobalProperty(key: "DesignTimeBuild", value: "true");
+            analyzer.SetGlobalProperty(key: "BuildingInsideVisualStudio", value: "true");
             // Prevent the MSBuild compiler server from being shared across parallel processes —
             // concurrent Buildalyzer calls can corrupt each other's bin/ output if they share
             // compilation state.
-            analyzer.SetGlobalProperty("UseSharedCompilation", "false");
+            analyzer.SetGlobalProperty(key: "UseSharedCompilation", value: "false");
             var built =
                 analyzer.Build().FirstOrDefault()
                 ?? throw new InvalidOperationException($"Buildalyzer produced no build results for '{solutionPath}'.");
@@ -226,7 +226,7 @@ internal static class SolutionSourceLoader
             var total = toBuild.Count;
             Parallel.ForEach(
                 toBuild,
-                new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, parallelism) },
+                new ParallelOptions { MaxDegreeOfParallelism = Math.Max(val1: 1, val2: parallelism) },
                 projectAnalyzer =>
                 {
                     var projectName = projectAnalyzer.ProjectFile.Name;
@@ -236,9 +236,9 @@ internal static class SolutionSourceLoader
                         ReportProgress(progress, $"MSBuild: design-time build {current}/{total}: {projectName}");
                     }
 
-                    projectAnalyzer.SetGlobalProperty("DesignTimeBuild", "true");
-                    projectAnalyzer.SetGlobalProperty("UseSharedCompilation", "false");
-                    projectAnalyzer.SetGlobalProperty("BuildingInsideVisualStudio", "true");
+                    projectAnalyzer.SetGlobalProperty(key: "DesignTimeBuild", value: "true");
+                    projectAnalyzer.SetGlobalProperty(key: "UseSharedCompilation", value: "false");
+                    projectAnalyzer.SetGlobalProperty(key: "BuildingInsideVisualStudio", value: "true");
                     try
                     {
                         var built = projectAnalyzer.Build().FirstOrDefault();
@@ -309,7 +309,7 @@ internal static class SolutionSourceLoader
             // handles modern C# syntax (primary constructors, collection expressions, etc.).
             // Falls back to LanguageVersion.Default if unset or unparseable.
             LanguageVersion langVersion = LanguageVersion.Default;
-            if (result.Properties.TryGetValue("LangVersion", out var lv) && lv is not null)
+            if (result.Properties.TryGetValue(key: "LangVersion", value: out var lv) && lv is not null)
             {
                 Microsoft.CodeAnalysis.CSharp.LanguageVersionFacts.TryParse(lv, out langVersion);
             }
@@ -319,18 +319,18 @@ internal static class SolutionSourceLoader
             // Compilation options: OutputKind must be Library for class library / web projects
             // so the compiler doesn't require a Main method (CS5001).  AllowUnsafe and Nullable
             // are also propagated from the MSBuild properties so method resolution succeeds.
-            var outputType = result.Properties.TryGetValue("OutputType", out var ot) ? ot : "Library";
+            var outputType = result.Properties.TryGetValue(key: "OutputType", value: out var ot) ? ot : "Library";
             var outputKind =
                 outputType.Equals("Exe", StringComparison.OrdinalIgnoreCase)
                 || outputType.Equals("WinExe", StringComparison.OrdinalIgnoreCase)
                     ? OutputKind.ConsoleApplication
                     : OutputKind.DynamicallyLinkedLibrary;
             var allowUnsafe =
-                result.Properties.TryGetValue("AllowUnsafeBlocks", out var unsafeStr)
+                result.Properties.TryGetValue(key: "AllowUnsafeBlocks", value: out var unsafeStr)
                 && bool.TryParse(unsafeStr, out var unsafeBool)
                 && unsafeBool;
             var nullableContext =
-                result.Properties.TryGetValue("Nullable", out var nullableStr)
+                result.Properties.TryGetValue(key: "Nullable", value: out var nullableStr)
                 && nullableStr?.Equals("enable", StringComparison.OrdinalIgnoreCase) == true
                     ? NullableContextOptions.Enable
                     : NullableContextOptions.Disable;
@@ -381,7 +381,9 @@ internal static class SolutionSourceLoader
                 analyzerResults
                     .Where(r => r.ProjectFilePath is not null && inWorkspaceProjectPaths.Contains(Path.GetFullPath(r.ProjectFilePath!)))
                     .Select(r =>
-                        r.Properties.TryGetValue("AssemblyName", out var n) ? n : Path.GetFileNameWithoutExtension(r.ProjectFilePath!)
+                        r.Properties.TryGetValue(key: "AssemblyName", value: out var n)
+                            ? n
+                            : Path.GetFileNameWithoutExtension(r.ProjectFilePath!)
                     ),
                 StringComparer.OrdinalIgnoreCase
             );
@@ -436,7 +438,7 @@ internal static class SolutionSourceLoader
                 .ToArray();
 
             var projectName = result.ProjectFilePath is not null ? Path.GetFileNameWithoutExtension(result.ProjectFilePath) : "Unknown";
-            var assemblyName = result.Properties.TryGetValue("AssemblyName", out var a) ? a : projectName;
+            var assemblyName = result.Properties.TryGetValue(key: "AssemblyName", value: out var a) ? a : projectName;
 
             var projectInfo = Microsoft.CodeAnalysis.ProjectInfo.Create(
                 projectId,
@@ -630,7 +632,12 @@ internal static class SolutionSourceLoader
                 continue;
             }
 
-            var classification = SourceFileClassifier.Classify(solutionPath, project, document.FilePath, rules);
+            var classification = SourceFileClassifier.Classify(
+                solutionPath: solutionPath,
+                project: project,
+                filePath: document.FilePath,
+                rules: rules
+            );
             sourceFiles.Add(
                 new SourceFileInfo(
                     ProjectName: project.Name,
@@ -724,7 +731,7 @@ internal static class SolutionSourceLoader
 
             foreach (var generatorProjectPath in AnalyzerProjectReferencePaths(project.FilePath))
             {
-                if (!emittedDllByGeneratorPath.TryGetValue(generatorProjectPath, out var dllPath))
+                if (!emittedDllByGeneratorPath.TryGetValue(key: generatorProjectPath, value: out var dllPath))
                 {
                     dllPath = projectByPath.TryGetValue(generatorProjectPath, out var generatorId)
                         ? await EmitCompilationToTempAsync(solution.GetProject(generatorId)!, cancellationToken)
@@ -805,7 +812,12 @@ internal static class SolutionSourceLoader
 
             var parseOptions = project.ParseOptions as CSharpParseOptions;
             GeneratorDriver driver = CSharpGeneratorDriver.Create(generators, parseOptions: parseOptions);
-            driver = driver.RunGeneratorsAndUpdateCompilation(compilation, out var generatedCompilation, out _, cancellationToken);
+            driver = driver.RunGeneratorsAndUpdateCompilation(
+                compilation: compilation,
+                outputCompilation: out var generatedCompilation,
+                diagnostics: out _,
+                cancellationToken: cancellationToken
+            );
 
             var originalTrees = new HashSet<SyntaxTree>(compilation.SyntaxTrees);
             var results = new List<SourceModel>();
@@ -867,7 +879,7 @@ internal static class SolutionSourceLoader
 
         private static void EnsureRedirectHook()
         {
-            if (Interlocked.Exchange(ref _hooked, 1) != 0)
+            if (Interlocked.Exchange(location1: ref _hooked, value: 1) != 0)
             {
                 return;
             }

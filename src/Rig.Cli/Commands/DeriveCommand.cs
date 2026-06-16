@@ -117,7 +117,7 @@ internal static class DeriveCommand
             foreach (var ep in tsvEps.Concat(PromoteHandoffOrigins(classifiedHandoffs, tsvEps)))
             {
                 var loaded = deployments.ServicesForFile(ep.FilePath);
-                var active = deployments.ActiveServices(loaded, ep.Requires);
+                var active = deployments.ActiveServices(loadedServices: loaded, requires: ep.Requires);
                 output.WriteLine(
                     $"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}\t{string.Join(',', loaded)}\t{string.Join(',', active)}"
                 );
@@ -168,10 +168,10 @@ internal static class DeriveCommand
             output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup.Take(perKindSample))
             {
-                WriteEntryPointLine(output, deployments, e.Route, e.FilePath, e.Line, e.Requires);
+                WriteEntryPointLine(output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
             }
 
-            WriteSampleTruncationNote(output, kindGroup.Count(), perKindSample, kindGroup.Key);
+            WriteSampleTruncationNote(output, total: kindGroup.Count(), shown: perKindSample, kind: kindGroup.Key);
         }
 
         // --- Classified handoff entry points (Phase 1/3): dispatcher-consumed delegates, promoted to
@@ -194,7 +194,7 @@ internal static class DeriveCommand
                     $"{Indent.L3}{ShortName(h.Target)}  ⤳ via {h.Dispatcher}{tag}\n{Indent.L5}registered in {ShortName(h.RegisteredIn)}  {ShortenPath(h.FilePath)}:{h.Line}  [async_handoff]"
                 );
             }
-            WriteSampleTruncationNote(output, kindGroup.Count(), perKindSample, kindGroup.Key ?? "");
+            WriteSampleTruncationNote(output, total: kindGroup.Count(), shown: perKindSample, kind: kindGroup.Key ?? "");
         }
 
         // The headline: entry points per deployed service (the summary table). An EP counts in every service

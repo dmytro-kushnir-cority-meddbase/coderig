@@ -28,9 +28,10 @@ internal static class CommonOptions
     // --maxdepth / --depth (alias): unbounded when absent (the action substitutes int.MaxValue).
     internal static Option<int?> Depth() => new("--maxdepth", "--depth") { Description = "Max traversal depth (default: unbounded)." };
 
-    internal static Option<string[]> Only() => FilterList("--only", "Keep only these effects (provider or provider:operation).");
+    internal static Option<string[]> Only() =>
+        FilterList(name: "--only", description: "Keep only these effects (provider or provider:operation).");
 
-    internal static Option<string[]> Exclude() => FilterList("--exclude", "Drop these effects (e.g. --exclude throw).");
+    internal static Option<string[]> Exclude() => FilterList(name: "--exclude", description: "Drop these effects (e.g. --exclude throw).");
 
     // A repeatable list option whose value is split on commas OR whitespace (also ';' / tab) with empties
     // trimmed — so `--exclude throw`, `--exclude throw,llblgen:read`, `--exclude "throw cache"`, and

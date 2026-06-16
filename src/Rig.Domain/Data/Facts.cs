@@ -395,7 +395,7 @@ public sealed record FactHandoffRule(
 //     builder): a matching node is drawn as a leaf — its own effects still print, its subtree does not.
 public sealed record FactRenderRules(IReadOnlyList<FactRenderRule> CollapseSeams, IReadOnlyList<FactRenderRule> OpaqueTypes)
 {
-    public static readonly FactRenderRules Empty = new([], []);
+    public static readonly FactRenderRules Empty = new(CollapseSeams: [], OpaqueTypes: []);
 
     public bool IsEmpty => CollapseSeams.Count == 0 && OpaqueTypes.Count == 0;
 
@@ -414,7 +414,7 @@ public sealed record FactRenderRules(IReadOnlyList<FactRenderRule> CollapseSeams
         // "Echo.") hits the DECLARING type only — never a parameter type in the signature (an app method
         // `M:App.Foo.Bar(Echo.ProcessId)` must NOT match "Echo.").
         var paren = symbolId.IndexOf('(');
-        var head = paren >= 0 ? symbolId.Substring(0, paren) : symbolId;
+        var head = paren >= 0 ? symbolId.Substring(startIndex: 0, length: paren) : symbolId;
         foreach (var rule in rules)
         {
             if (head.IndexOf(rule.Pattern, StringComparison.OrdinalIgnoreCase) >= 0)
@@ -444,7 +444,7 @@ public sealed record FactTraversalCutRule(string Pattern, string Label)
     public bool IsMatch(string symbolId)
     {
         var paren = symbolId.IndexOf('(');
-        var head = paren >= 0 ? symbolId.Substring(0, paren) : symbolId;
+        var head = paren >= 0 ? symbolId.Substring(startIndex: 0, length: paren) : symbolId;
         return head.IndexOf(Pattern, StringComparison.OrdinalIgnoreCase) >= 0;
     }
 }

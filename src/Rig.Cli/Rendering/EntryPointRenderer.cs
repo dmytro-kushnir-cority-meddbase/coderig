@@ -21,7 +21,7 @@ internal static class EntryPointRenderer
             return "⟦no service⟧";
         }
 
-        var active = deployments.ActiveServices(loaded, requires);
+        var active = deployments.ActiveServices(loadedServices: loaded, requires: requires);
         var inactive = loaded.Count - active.Count;
         if (active.Count == 0)
         // Linked into hosts but gated out of all of them — the "runs here? no, anywhere" signal.
@@ -81,7 +81,7 @@ internal sealed record EpRenderContext(
             return ("", "");
         }
 
-        return EntryPointRenderer.NodeChip(Deployments, ep.Kind, loc.File, ep.Requires);
+        return EntryPointRenderer.NodeChip(Deployments, kind: ep.Kind, filePath: loc.File, requires: ep.Requires);
     }
 
     public string HeaderTag(string symbolId)

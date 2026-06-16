@@ -121,11 +121,11 @@ public static class TypeClosure
         var brace = typeId.IndexOf('{');
         if (brace > 0)
         {
-            typeId = typeId.Substring(0, brace);
+            typeId = typeId.Substring(startIndex: 0, length: brace);
         }
 
         var backtick = typeId.IndexOf('`');
-        return backtick > 0 ? typeId.Substring(0, backtick) : typeId;
+        return backtick > 0 ? typeId.Substring(startIndex: 0, length: backtick) : typeId;
     }
 
     // Yields the original DocID and, when generic, its bare prefix — so lookups match both the
@@ -136,13 +136,13 @@ public static class TypeClosure
         var brace = typeId.IndexOf('{');
         if (brace > 0)
         {
-            yield return typeId.Substring(0, brace);
+            yield return typeId.Substring(startIndex: 0, length: brace);
             yield break;
         }
         var backtick = typeId.IndexOf('`');
         if (backtick > 0)
         {
-            yield return typeId.Substring(0, backtick);
+            yield return typeId.Substring(startIndex: 0, length: backtick);
         }
     }
 }

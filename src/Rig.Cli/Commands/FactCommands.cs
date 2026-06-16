@@ -14,7 +14,7 @@ internal static class FactCommands
 {
     internal static Command BuildRuns(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var cmd = new Command("runs", "List indexed runs (solution, counts, timestamp).");
+        var cmd = new Command(name: "runs", description: "List indexed runs (solution, counts, timestamp).");
         cmd.SetAction(_ =>
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
@@ -42,7 +42,7 @@ internal static class FactCommands
 
     internal static Command BuildDi(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var cmd = new Command("di", "DI registrations: service -> implementation, lifetime, source.");
+        var cmd = new Command(name: "di", description: "DI registrations: service -> implementation, lifetime, source.");
         cmd.SetAction(_ =>
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
@@ -66,7 +66,7 @@ internal static class FactCommands
 
     internal static Command BuildProfile(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var validate = new Command("validate", "Validate the analysis profile for this solution.");
+        var validate = new Command(name: "validate", description: "Validate the analysis profile for this solution.");
         validate.SetAction(_ =>
         {
             try
@@ -81,13 +81,13 @@ internal static class FactCommands
                 return Task.FromResult(2);
             }
         });
-        return new Command("profile", "Analysis-profile commands.") { validate };
+        return new Command(name: "profile", description: "Analysis-profile commands.") { validate };
     }
 
     internal static Command BuildFiles(TextWriter output, TextWriter error, string workingDirectory)
     {
         var skipped = new Option<bool>("--skipped") { Description = "List source files skipped during indexing." };
-        var cmd = new Command("files", "Inspect indexed source files.") { skipped };
+        var cmd = new Command(name: "files", description: "Inspect indexed source files.") { skipped };
         // `files` exists only to serve --skipped today; keep the historical usage hint as a validator
         // (exits with a parse error rather than running an empty command).
         cmd.Validators.Add(result =>
@@ -120,10 +120,10 @@ internal static class FactCommands
 
     internal static Command BuildSymbols(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var pattern = CommonOptions.Pattern("pattern", "Symbol name pattern to search for.");
+        var pattern = CommonOptions.Pattern(name: "pattern", description: "Symbol name pattern to search for.");
         var kind = CommonOptions.Kind();
         var limit = CommonOptions.Limit(50);
-        var cmd = new Command("symbols", "Search indexed symbols by name.") { pattern, kind, limit };
+        var cmd = new Command(name: "symbols", description: "Search indexed symbols by name.") { pattern, kind, limit };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
@@ -133,7 +133,7 @@ internal static class FactCommands
                     var p = pr.GetValue(pattern)!;
                     var k = pr.GetValue(kind);
                     await using var context = OpenReadContext(workingDirectory);
-                    var hits = await Reads.SearchSymbolsAsync(context, p, k, pr.GetValue(limit));
+                    var hits = await Reads.SearchSymbolsAsync(context, pattern: p, kind: k, limit: pr.GetValue(limit));
                     output.WriteLine($"Symbols matching '{p}'{(k is null ? "" : $" kind={k}")}");
                     foreach (var hit in hits)
                     {
@@ -150,11 +150,11 @@ internal static class FactCommands
 
     internal static Command BuildRefs(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var pattern = CommonOptions.Pattern("pattern", "Target symbol pattern to find references to.");
+        var pattern = CommonOptions.Pattern(name: "pattern", description: "Target symbol pattern to find references to.");
         var firstParty = new Option<bool>("--first-party") { Description = "Only references from first-party code." };
         var kind = CommonOptions.Kind();
         var limit = CommonOptions.Limit(200);
-        var cmd = new Command("refs", "Find references to a symbol.") { pattern, firstParty, kind, limit };
+        var cmd = new Command(name: "refs", description: "Find references to a symbol.") { pattern, firstParty, kind, limit };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
@@ -165,7 +165,13 @@ internal static class FactCommands
                     var fp = pr.GetValue(firstParty);
                     var refKind = pr.GetValue(kind);
                     await using var context = OpenReadContext(workingDirectory);
-                    var hits = await Reads.FindReferencesAsync(context, p, fp, refKind, pr.GetValue(limit));
+                    var hits = await Reads.FindReferencesAsync(
+                        context,
+                        pattern: p,
+                        firstPartyOnly: fp,
+                        refKind: refKind,
+                        limit: pr.GetValue(limit)
+                    );
                     output.WriteLine($"References to '{p}'{(fp ? " (first-party)" : "")}{(refKind is null ? "" : $" kind={refKind}")}");
                     foreach (
                         var group in hits.GroupBy(h => h.TargetSymbolId, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal)

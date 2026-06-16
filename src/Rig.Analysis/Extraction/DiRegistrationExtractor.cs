@@ -54,16 +54,16 @@ internal static class DiRegistrationExtractor
                     : rule.RegistrationKind;
 
             yield return new DiRegistrationInfo(
-                serviceType,
-                implementationType,
-                rule.Lifetime,
-                registrationKind,
-                source.FilePath,
-                RoslynSymbolHelpers.GetLine(source.Tree, invocation),
-                "high",
-                "compilation+profile",
-                rule.Reason,
-                BuildEvidence(source, invocation, methodName)
+                ServiceType: serviceType,
+                ImplementationType: implementationType,
+                Lifetime: rule.Lifetime,
+                RegistrationKind: registrationKind,
+                FilePath: source.FilePath,
+                Line: RoslynSymbolHelpers.GetLine(source.Tree, invocation),
+                Confidence: "high",
+                Basis: "compilation+profile",
+                Reason: rule.Reason,
+                Evidence: BuildEvidence(source, invocation, methodName)
             );
         }
     }

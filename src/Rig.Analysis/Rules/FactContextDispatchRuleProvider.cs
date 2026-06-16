@@ -19,5 +19,6 @@ public static class FactContextDispatchRuleProvider
         return ruleSet.ContextDispatch.Select(Project).ToArray();
     }
 
-    private static FactContextDispatchRule Project(ContextDispatchRule rule) => new(rule.Interface, rule.BindingBase);
+    private static FactContextDispatchRule Project(ContextDispatchRule rule) =>
+        new(Interface: rule.Interface, BindingBase: rule.BindingBase);
 }

@@ -153,7 +153,7 @@ public static partial class FactPathFinder
         var tick = name.IndexOf("``", StringComparison.Ordinal);
         if (tick >= 0)
         {
-            name = name.Substring(0, tick);
+            name = name.Substring(startIndex: 0, length: tick);
         }
 
         var methodKey = parsed.Value.TypeId.Substring(2) + "." + name;
@@ -246,12 +246,12 @@ public static partial class FactPathFinder
         var marker = t.IndexOfAny(['{', '<', '[']);
         if (marker >= 0)
         {
-            t = t.Substring(0, marker);
+            t = t.Substring(startIndex: 0, length: marker);
         }
 
         var dot = t.LastIndexOf('.');
         var simple = dot >= 0 ? t.Substring(dot + 1) : t;
-        return CSharpKeywordTypes.TryGetValue(simple, out var bcl) ? bcl : simple;
+        return CSharpKeywordTypes.TryGetValue(key: simple, value: out var bcl) ? bcl : simple;
     }
 
     // The first top-level parameter substring of a method DocID's "(...)" list, or null if there is none.
@@ -283,10 +283,10 @@ public static partial class FactPathFinder
             }
             else if (c == ',' && depth == 0)
             {
-                return docId.Substring(open + 1, i - (open + 1)).Trim();
+                return docId.Substring(startIndex: open + 1, length: i - (open + 1)).Trim();
             }
         }
-        return docId.Substring(open + 1, close - (open + 1)).Trim();
+        return docId.Substring(startIndex: open + 1, length: close - (open + 1)).Trim();
     }
 
     // A method type-parameter reference token ("``N") -> its index N; -1 for anything else (a concrete
@@ -328,7 +328,7 @@ public static partial class FactPathFinder
             {
                 if (position == index)
                 {
-                    return typeArguments.Substring(start, i - start).Trim();
+                    return typeArguments.Substring(startIndex: start, length: i - start).Trim();
                 }
 
                 position++;

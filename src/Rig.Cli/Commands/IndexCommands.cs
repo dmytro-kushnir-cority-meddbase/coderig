@@ -16,7 +16,7 @@ internal static class IndexCommands
 {
     internal static Command BuildIndex(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var target = CommonOptions.Pattern("solution", "Solution (.slnx/.sln/.slnf) or project (.csproj) to index.");
+        var target = CommonOptions.Pattern(name: "solution", description: "Solution (.slnx/.sln/.slnf) or project (.csproj) to index.");
         var rules = CommonOptions.Rules();
         var identity = new Option<string?>("--identity") { Description = "Store identity for an append (multi-solution) index." };
         var from = new Option<string?>("--from") { Description = "Index only the entry project's transitive closure (one workspace)." };
@@ -24,7 +24,7 @@ internal static class IndexCommands
         var merge = new Option<bool>("--merge") { Description = "Accumulate into an existing store (multi-solution unified store)." };
         var includeTests = new Option<bool>("--include-tests") { Description = "Keep test projects (excluded by default)." };
 
-        var cmd = new Command("index", "Index a solution/project into a .rig store.")
+        var cmd = new Command(name: "index", description: "Index a solution/project into a .rig store.")
         {
             target,
             rules,
@@ -76,7 +76,13 @@ internal static class IndexCommands
         IReadOnlySet<string>? scopeProjectPaths = null;
         if (fromProject is not null)
         {
-            scopeProjectPaths = await BuildEntryClosureAsync(target, fromProject, workingDirectory, output, error);
+            scopeProjectPaths = await BuildEntryClosureAsync(
+                solutionPath: target,
+                fromProject: fromProject,
+                workingDirectory: workingDirectory,
+                output: output,
+                error: error
+            );
             if (scopeProjectPaths is null)
             {
                 return 2;
@@ -151,7 +157,7 @@ internal static class IndexCommands
 
         var storeDirectory = Path.Combine(workingDirectory, ".rig");
         Directory.CreateDirectory(storeDirectory);
-        var finalDbPath = Path.Combine(storeDirectory, "rig.db");
+        var finalDbPath = Path.Combine(storeDirectory, path2: "rig.db");
         var dbPath = atomicPublish ? finalDbPath + ".tmp" : finalDbPath;
         if (atomicPublish)
         {
@@ -196,7 +202,7 @@ internal static class IndexCommands
         if (atomicPublish)
         {
             DeleteDbFiles(finalDbPath); // drop the old published store + any sidecars
-            File.Move(dbPath, finalDbPath, overwrite: true);
+            File.Move(sourceFileName: dbPath, destFileName: finalDbPath, overwrite: true);
         }
         saveWatch.Stop();
         totalWatch.Stop();
@@ -215,13 +221,13 @@ internal static class IndexCommands
 
     internal static Command BuildMine(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var solution = CommonOptions.Pattern("solution", "Solution to mine.");
+        var solution = CommonOptions.Pattern(name: "solution", description: "Solution to mine.");
         var from = new Option<string?>("--from") { Description = "Entry project (.csproj) to BFS from.", Required = true };
         var rules = CommonOptions.Rules();
         var identity = new Option<string?>("--identity") { Description = "Store identity (defaults to a hash of the solution path)." };
         var parallelism = new Option<int?>("--parallelism") { Description = "Max concurrent project analyses." };
 
-        var cmd = new Command("mine", "BFS-index a project dependency closure, level by level, in parallel.")
+        var cmd = new Command(name: "mine", description: "BFS-index a project dependency closure, level by level, in parallel.")
         {
             solution,
             from,
@@ -235,14 +241,14 @@ internal static class IndexCommands
                 error,
                 () =>
                     RunMineAsync(
-                        Path.GetFullPath(pr.GetValue(solution)!),
-                        Path.GetFullPath(pr.GetValue(from)!),
-                        CommonOptions.RulesOf(pr.GetValue(rules)),
-                        pr.GetValue(identity),
-                        pr.GetValue(parallelism),
-                        output,
-                        error,
-                        workingDirectory
+                        solutionPath: Path.GetFullPath(pr.GetValue(solution)!),
+                        fromProject: Path.GetFullPath(pr.GetValue(from)!),
+                        extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                        identity: pr.GetValue(identity),
+                        parallelismOverride: pr.GetValue(parallelism),
+                        output: output,
+                        error: error,
+                        workingDirectory: workingDirectory
                     )
             )
         );
@@ -260,7 +266,7 @@ internal static class IndexCommands
         string workingDirectory
     )
     {
-        var parallelism = parallelismOverride ?? Math.Max(1, Environment.ProcessorCount / 2);
+        var parallelism = parallelismOverride ?? Math.Max(val1: 1, val2: Environment.ProcessorCount / 2);
         identity ??= ComputeIdentity(solutionPath);
         output.WriteLine($"Mine: {solutionPath}");
         output.WriteLine($"From: {fromProject}");
@@ -309,16 +315,16 @@ internal static class IndexCommands
                     output.WriteLine($"  [mine] Indexing: {projName}");
 
                     var exitCode = await RunIndexAsync(
-                        proj,
-                        extraRules,
-                        identity,
+                        target: proj,
+                        extraRules: extraRules,
+                        identity: identity,
                         fromProject: null,
                         parallelism: null,
                         merge: false,
                         includeTests: false,
-                        output,
-                        error,
-                        workingDirectory
+                        output: output,
+                        error: error,
+                        workingDirectory: workingDirectory
                     );
                     if (exitCode == 0)
                     {
@@ -376,8 +382,8 @@ internal static class IndexCommands
     internal static Command BuildGraph(TextWriter output, TextWriter error, string workingDirectory)
     {
         var cmd = new Command(
-            "graph",
-            "Rebuild the derived call-graph views (call_edges + dispatch_edges) from facts; idempotent, no rescan."
+            name: "graph",
+            description: "Rebuild the derived call-graph views (call_edges + dispatch_edges) from facts; idempotent, no rescan."
         );
         cmd.SetAction(_ => CommandGuard.RunGuardedAsync(workingDirectory, error, () => RunGraphAsync(output, error, workingDirectory)));
         return cmd;
@@ -507,7 +513,7 @@ internal static class IndexCommands
     // (reachable-projects.json).
     private static void WriteJsonSidecar(string path, object data) =>
         File.WriteAllText(
-            path,
-            System.Text.Json.JsonSerializer.Serialize(data, new System.Text.Json.JsonSerializerOptions { WriteIndented = true })
+            path: path,
+            contents: System.Text.Json.JsonSerializer.Serialize(data, new System.Text.Json.JsonSerializerOptions { WriteIndented = true })
         );
 }

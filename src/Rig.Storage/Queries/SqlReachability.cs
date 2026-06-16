@@ -399,7 +399,7 @@ public static class SqlReachability
             cancellationToken
         );
 
-        return new ReachInputs(graph, invocations, ctorByLoc.Values.ToArray(), throwByKey.Values.ToArray());
+        return new ReachInputs(graph, invocations, CtorRefs: ctorByLoc.Values.ToArray(), ThrowRefs: throwByKey.Values.ToArray());
     }
 
     // Loads the bounded FactGraphData from the already-built reach_set temp table. Forward joins
@@ -415,13 +415,23 @@ public static class SqlReachability
         // ReceiverType drives the in-memory edge-aware dispatch narrowing. Old stores (built before the
         // column existed and never re-`rig graph`-ed) lack it — probe so the SELECT degrades to a null
         // receiver (full CHA) instead of throwing.
-        var hasReceiver = await StorageProbes.ColumnExistsAsync(connection, "call_edges", "ReceiverType", cancellationToken);
+        var hasReceiver = await StorageProbes.ColumnExistsAsync(
+            connection,
+            table: "call_edges",
+            column: "ReceiverType",
+            cancellationToken: cancellationToken
+        );
         var receiverSelect = hasReceiver ? "c.ReceiverType" : "NULL";
         // HandoffDispatcher rides along so the bounded in-memory graph carries the async-handoff
         // classification — the in-memory FactPathFinder applies the sync-cut / --async filter over the
         // (superset) bounded graph, so this column is what lets it tell handoff edges apart. Null on a
         // store built before classification (degrades to no handoffs = the pre-async behavior).
-        var hasHandoff = await StorageProbes.ColumnExistsAsync(connection, "call_edges", "HandoffDispatcher", cancellationToken);
+        var hasHandoff = await StorageProbes.ColumnExistsAsync(
+            connection,
+            table: "call_edges",
+            column: "HandoffDispatcher",
+            cancellationToken: cancellationToken
+        );
         var handoffSelect = hasHandoff ? "c.HandoffDispatcher" : "NULL";
 
         // Call-site generic type arguments aren't stored on call_edges; they live on reference_facts
@@ -432,7 +442,12 @@ public static class SqlReachability
         // thousands of times. The bulk query is bounded to reach_set on the caller-side index and returns
         // only the (few) generic call sites. Probed so a store predating the column degrades to no
         // narrowing (full CHA). Non-generic / synthesized dispatch edges have no entry -> null.
-        var hasTypeArgs = await StorageProbes.ColumnExistsAsync(connection, "reference_facts", "TypeArguments", cancellationToken);
+        var hasTypeArgs = await StorageProbes.ColumnExistsAsync(
+            connection,
+            table: "reference_facts",
+            column: "TypeArguments",
+            cancellationToken: cancellationToken
+        );
         var typeArgsByEdge = new Dictionary<(string, string, int), string>();
         if (hasTypeArgs)
         {
@@ -494,12 +509,12 @@ public static class SqlReachability
                 if (!methodById.ContainsKey(id))
                 {
                     methodById[id] = new MethodRef(
-                        id,
-                        reader.GetString(1),
-                        reader.IsDBNull(2) ? null : reader.GetString(2),
-                        !reader.IsDBNull(3) && reader.GetInt32(3) != 0,
-                        reader.IsDBNull(4) ? null : reader.GetString(4),
-                        reader.IsDBNull(5) ? 0 : reader.GetInt32(5)
+                        SymbolId: id,
+                        Name: reader.GetString(1),
+                        ContainingTypeId: reader.IsDBNull(2) ? null : reader.GetString(2),
+                        IsOverride: !reader.IsDBNull(3) && reader.GetInt32(3) != 0,
+                        FilePath: reader.IsDBNull(4) ? null : reader.GetString(4),
+                        Line: reader.IsDBNull(5) ? 0 : reader.GetInt32(5)
                     );
                 }
             },
@@ -611,7 +626,8 @@ public static class SqlReachability
         }
     }
 
-    private static string EscapeLike(string value) => value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+    private static string EscapeLike(string value) =>
+        value.Replace(oldValue: "\\", newValue: "\\\\").Replace(oldValue: "%", newValue: "\\%").Replace(oldValue: "_", newValue: "\\_");
 
     private static async Task ReadAsync(
         DbConnection connection,

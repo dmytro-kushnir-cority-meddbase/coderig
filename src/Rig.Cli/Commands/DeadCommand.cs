@@ -35,7 +35,7 @@ internal static class DeadCommand
         var all = new Option<bool>("--all") { Description = "Include Low-confidence (public/protected) candidates." };
         var limit = CommonOptions.Limit(80);
         var format = CommonOptions.Format();
-        var cmd = new Command("dead", "Find unreachable first-party methods (report-only).")
+        var cmd = new Command(name: "dead", description: "Find unreachable first-party methods (report-only).")
         {
             rules,
             root,
@@ -148,7 +148,13 @@ internal static class DeadCommand
             }
         }
 
-        var candidates = DeadCodeFinder.Find(graph, roots, methods, libMode, includeDispatch);
+        var candidates = DeadCodeFinder.Find(
+            graph,
+            roots,
+            methods,
+            treatExternallyVisibleAsRoots: libMode,
+            includeDispatchMembers: includeDispatch
+        );
         var shown = candidates.Where(c => showAll || c.Tier != DeadCodeFinder.Tier.Low).ToList();
 
         if (tsv)

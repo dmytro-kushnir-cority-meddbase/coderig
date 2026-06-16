@@ -92,7 +92,7 @@ public static class FactEntryPointDeriver
             var inheritanceEdges = TypeClosure.BuildBaseEdgeLookup(data.BaseEdges.Concat(data.InterfaceEdges ?? []));
             var attributeRefsByMethod = data
                 .CtorRefs.Where(r => r.Enclosing is not null)
-                .ToLookup(r => r.Enclosing!, r => r.Target, StringComparer.Ordinal);
+                .ToLookup(keySelector: r => r.Enclosing!, elementSelector: r => r.Target, comparer: StringComparer.Ordinal);
             var handlers = data.Methods.Where(m => m.Name != ".ctor").ToArray();
 
             foreach (var rule in classInheritanceRules)
@@ -136,7 +136,7 @@ public static class FactEntryPointDeriver
 
             var fqn = typeId.Substring(2); // strip "T:"
 
-            var route = BuildTypeRoute(fqn, rule.NamespacePrefix);
+            var route = BuildTypeRoute(fqn: fqn, namespacePrefix: rule.NamespacePrefix);
             if (route is null)
             {
                 continue; // type is outside the namespace prefix
@@ -154,7 +154,7 @@ public static class FactEntryPointDeriver
                         continue;
                     }
 
-                    var displayName = BuildPageDisplayName(rule, route, ctor.Signature);
+                    var displayName = BuildPageDisplayName(rule, route: route, signature: ctor.Signature);
                     results.Add(
                         new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, ctor.FilePath, ctor.Line, rule.Requires)
                     );
@@ -184,7 +184,7 @@ public static class FactEntryPointDeriver
             return null;
         }
 
-        return StripArityMarkers(fqn.Substring(namespacePrefix.Length)).Replace('.', '/');
+        return StripArityMarkers(fqn.Substring(namespacePrefix.Length)).Replace(oldChar: '.', newChar: '/');
     }
 
     // Removes generic-arity markers (`1, `2, ...) from anywhere in a DocID-derived name so display
@@ -267,7 +267,7 @@ public static class FactEntryPointDeriver
                 continue;
             }
 
-            var route = BuildActionRoute(r.Enclosing, rule.NamespacePrefix);
+            var route = BuildActionRoute(enclosingSymbolId: r.Enclosing, namespacePrefix: rule.NamespacePrefix);
             if (route is null)
             {
                 continue;
@@ -342,7 +342,7 @@ public static class FactEntryPointDeriver
                 continue;
             }
 
-            var route = BuildInheritanceRoute(m.ContainingSymbolId, m.Name);
+            var route = BuildInheritanceRoute(containingTypeId: m.ContainingSymbolId, methodName: m.Name);
             if (route is null)
             {
                 continue;
@@ -368,7 +368,7 @@ public static class FactEntryPointDeriver
 
         var paramSimpleNames = new HashSet<string>(
             signature
-                .Substring(open + 1, close - open - 1)
+                .Substring(startIndex: open + 1, length: close - open - 1)
                 .Split(',')
                 .Select(t => t.Trim())
                 .Where(t => t.Length > 0)
@@ -390,7 +390,7 @@ public static class FactEntryPointDeriver
         var generic = token.IndexOf('<');
         if (generic >= 0)
         {
-            token = token.Substring(0, generic);
+            token = token.Substring(startIndex: 0, length: generic);
         }
 
         var lastDot = token.LastIndexOf('.');
@@ -427,7 +427,7 @@ public static class FactEntryPointDeriver
         var paren = body.IndexOf('(');
         if (paren >= 0)
         {
-            body = body.Substring(0, paren);
+            body = body.Substring(startIndex: 0, length: paren);
         }
 
         // Strip generic arity markers in place (WorkflowPaneBase`1.Save -> WorkflowPaneBase.Save) —
@@ -452,7 +452,7 @@ public static class FactEntryPointDeriver
         }
 
         // Everything before the last dot: replace remaining '.' with '/'
-        var classPath = body.Substring(0, lastDot).Replace('.', '/');
+        var classPath = body.Substring(startIndex: 0, length: lastDot).Replace(oldChar: '.', newChar: '/');
         var methodName = body.Substring(lastDot); // includes the '.'
         return classPath + methodName; // e.g. "Accounts/AdvancedPayerDialog.HandleEvent"
     }
@@ -471,7 +471,7 @@ public static class FactEntryPointDeriver
         var paren = body.IndexOf('(');
         if (paren >= 0)
         {
-            body = body.Substring(0, paren);
+            body = body.Substring(startIndex: 0, length: paren);
         }
 
         // Do NOT strip the generic arity globally: a generic *type* keeps its `n (e.g.
@@ -483,6 +483,6 @@ public static class FactEntryPointDeriver
             return null; // no declaring type segment
         }
 
-        return "T:" + body.Substring(0, lastDot);
+        return "T:" + body.Substring(startIndex: 0, length: lastDot);
     }
 }

@@ -32,7 +32,7 @@ public static class TreeCacheCodec
         using var output = new MemoryStream();
         using (var gzip = new GZipStream(output, CompressionLevel.Optimal))
         {
-            gzip.Write(json, 0, json.Length);
+            gzip.Write(json, offset: 0, count: json.Length);
         }
 
         return output.ToArray();
@@ -76,13 +76,15 @@ public static class EpSiteCacheCodec
     public static byte[] Encode(IReadOnlyDictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)> sites)
     {
         var payload = new EpSiteCachePayload(
-            sites.Select(kv => new EpSiteEntry(kv.Key.File, kv.Key.Line, kv.Value.Kind, kv.Value.Requires)).ToArray()
+            sites
+                .Select(kv => new EpSiteEntry(File: kv.Key.File, Line: kv.Key.Line, Kind: kv.Value.Kind, Requires: kv.Value.Requires))
+                .ToArray()
         );
         var json = JsonSerializer.SerializeToUtf8Bytes(payload, Context.EpSiteCachePayload);
         using var output = new MemoryStream();
         using (var gzip = new GZipStream(output, CompressionLevel.Optimal))
         {
-            gzip.Write(json, 0, json.Length);
+            gzip.Write(json, offset: 0, count: json.Length);
         }
 
         return output.ToArray();
@@ -144,13 +146,13 @@ public static class RenderSidecarCodec
     {
         var payload = new RenderSidecarPayload(
             seamEffects.ToDictionary(kv => kv.Key, kv => kv.Value.ToArray(), StringComparer.Ordinal),
-            locations.Select(kv => new LocationEntry(kv.Key, kv.Value.File, kv.Value.Line)).ToArray()
+            locations.Select(kv => new LocationEntry(Symbol: kv.Key, File: kv.Value.File, Line: kv.Value.Line)).ToArray()
         );
         var json = JsonSerializer.SerializeToUtf8Bytes(payload, Context.RenderSidecarPayload);
         using var output = new MemoryStream();
         using (var gzip = new GZipStream(output, CompressionLevel.Optimal))
         {
-            gzip.Write(json, 0, json.Length);
+            gzip.Write(json, offset: 0, count: json.Length);
         }
 
         return output.ToArray();

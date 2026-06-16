@@ -91,7 +91,7 @@ public static class GraphMaterializer
         progress?.Invoke("Analyzing statistics");
         await ExecuteAsync(connection, null, "ANALYZE;", cancellationToken);
 
-        return new GraphStats(callCount, dispatchCount, nodeCount, heuristicCount);
+        return new GraphStats(CallEdges: callCount, DispatchEdges: dispatchCount, Nodes: nodeCount, HeuristicDispatchEdges: heuristicCount);
     }
 
     private static async Task BuildSearchIndexAsync(DbConnection connection, Action<string>? progress, CancellationToken cancellationToken)
@@ -195,10 +195,22 @@ public static class GraphMaterializer
         // Add the ReceiverType column to a pre-existing call_edges (a store created before receiver-type
         // dispatch narrowing). `rig graph` rebuilds the rows anyway; this just makes the column present
         // so the INSERT/SELECT carry it. Reads degrade gracefully (NULL receiver => CHA) on old stores.
-        await AddColumnIfMissingAsync(connection, "call_edges", "ReceiverType", "TEXT", cancellationToken);
+        await AddColumnIfMissingAsync(
+            connection,
+            table: "call_edges",
+            column: "ReceiverType",
+            type: "TEXT",
+            cancellationToken: cancellationToken
+        );
         // Likewise add HandoffDispatcher to a pre-existing table so the INSERT/SELECT carry it (a store
         // created before async-handoff classification). Re-`rig graph` repopulates it from the rules.
-        await AddColumnIfMissingAsync(connection, "call_edges", "HandoffDispatcher", "TEXT", cancellationToken);
+        await AddColumnIfMissingAsync(
+            connection,
+            table: "call_edges",
+            column: "HandoffDispatcher",
+            type: "TEXT",
+            cancellationToken: cancellationToken
+        );
         await ExecuteAsync(connection, null, "CREATE INDEX IF NOT EXISTS IX_call_edges_FromSym ON call_edges(FromSym);", cancellationToken);
         await ExecuteAsync(connection, null, "CREATE INDEX IF NOT EXISTS IX_call_edges_ToSym ON call_edges(ToSym);", cancellationToken);
         // Index on Kind so the handoff-EP read (DeriveHandoffEntryPoints) selects the ~5k handoff +
@@ -220,7 +232,13 @@ public static class GraphMaterializer
         );
         // Add Basis to a pre-existing dispatch_edges (a store graphed before dispatch provenance).
         // Render-only — the CTE set walk never reads it; re-`rig graph` repopulates the rows.
-        await AddColumnIfMissingAsync(connection, "dispatch_edges", "Basis", "TEXT", cancellationToken);
+        await AddColumnIfMissingAsync(
+            connection,
+            table: "dispatch_edges",
+            column: "Basis",
+            type: "TEXT",
+            cancellationToken: cancellationToken
+        );
         await ExecuteAsync(
             connection,
             null,

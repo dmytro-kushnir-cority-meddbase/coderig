@@ -96,7 +96,7 @@ internal static class TraversalGraphLoader
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
-        return new SqlReachability.ReachInputs(graph, invocations, epData.CtorRefs, throwRefs);
+        return new SqlReachability.ReachInputs(graph, invocations, CtorRefs: epData.CtorRefs, ThrowRefs: throwRefs);
     }
 
     // Base edges in the (TypeId, BaseId) shape FactEffectDeriver.Derive expects, from a graph's edges.

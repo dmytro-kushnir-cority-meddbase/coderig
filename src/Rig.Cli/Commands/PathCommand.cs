@@ -17,14 +17,14 @@ internal static class PathCommand
 {
     internal static Command Build(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var from = CommonOptions.Pattern("from", "Source method pattern.");
-        var to = CommonOptions.Pattern("to", "Target method pattern.");
+        var from = CommonOptions.Pattern(name: "from", description: "Source method pattern.");
+        var to = CommonOptions.Pattern(name: "to", description: "Target method pattern.");
         var async = CommonOptions.Async();
         var raw = CommonOptions.Raw();
         var rules = CommonOptions.Rules();
         var depth = CommonOptions.Depth();
         var format = CommonOptions.Format();
-        var cmd = new Command("path", "Print the first call path from one method to another.")
+        var cmd = new Command(name: "path", description: "Print the first call path from one method to another.")
         {
             from,
             to,

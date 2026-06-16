@@ -114,7 +114,10 @@ public static partial class FactPathFinder
             var typeId = parsed?.TypeId;
             foreach (var s in sources)
             {
-                if ((!cutting || !index.IsTraversalCut(s)) && (typeId is null || ReverseDispatchReaches(s, typeId, index, rev)))
+                if (
+                    (!cutting || !index.IsTraversalCut(s))
+                    && (typeId is null || ReverseDispatchReaches(baseMethod: s, overrideTypeId: typeId, index: index, rev: rev))
+                )
                 {
                     yield return s;
                 }
@@ -155,12 +158,18 @@ public static partial class FactPathFinder
                 return true;
             }
 
-            if (Descendants(r, index).Contains(overrideTypeId) || DescendantsContainStripped(r, overrideStripped, index))
+            if (
+                Descendants(r, index).Contains(overrideTypeId)
+                || DescendantsContainStripped(declaringTypeId: r, strippedReceiver: overrideStripped, index: index)
+            )
             {
                 return true;
             }
 
-            if (Descendants(overrideTypeId, index).Contains(r) || DescendantsContainStripped(overrideTypeId, r, index))
+            if (
+                Descendants(overrideTypeId, index).Contains(r)
+                || DescendantsContainStripped(declaringTypeId: overrideTypeId, strippedReceiver: r, index: index)
+            )
             {
                 return true;
             }
@@ -360,10 +369,10 @@ public static partial class FactPathFinder
             }
 
             var controllerKey = NormType(contextArg);
-            Bind(controllerKey, NormType(edge.SubType));
+            Bind(controllerKey: controllerKey, stateTypeId: NormType(edge.SubType));
             foreach (var descendant in Descendants(edge.SubType, index))
             {
-                Bind(controllerKey, NormType(descendant));
+                Bind(controllerKey: controllerKey, stateTypeId: NormType(descendant));
             }
         }
     }
@@ -396,7 +405,7 @@ public static partial class FactPathFinder
             }
             else if (typeId[i] == '}' && --depth == 0)
             {
-                return typeId.Substring(open + 1, i - open - 1).Trim();
+                return typeId.Substring(startIndex: open + 1, length: i - open - 1).Trim();
             }
         }
         return null;
