@@ -87,7 +87,33 @@ public sealed record ReferenceFact(
     // observation (P2b ordering/nesting): a network/IO effect nested in a transaction-`using` or a
     // `lock` is held across that effect ("transaction spans a network call" / "lock held across IO").
     // Null when the invocation is not inside any using/lock. Decode with FactStructuralContext.
-    string? EnclosingScopes = null
+    string? EnclosingScopes = null,
+    // ALL positional arguments' string templates and member/identifier name paths, index-aligned with
+    // the call's argument list, each serialized as a JSON string?[] (comma-safe — unlike the
+    // TypeArguments comma-join, an argument string literal can itself contain commas). Feed the
+    // nth-argument resource resolution (FactEffectRule.ArgumentIndex) for resources past position 0
+    // (e.g. CertificateEntity.HasRight(cert, Rights.X.Y, txn) — the right is arg 1). Null for
+    // non-invocation refs and zero-arg calls. Index 0 mirrors FirstArgumentTemplate/Name (kept as the
+    // unindexed fast path so the existing derivation is byte-for-byte unchanged).
+    string? ArgumentTemplates = null,
+    string? ArgumentNames = null,
+    // --- Generic monomorphization bindings (RENDERING ONLY) — let the tree label show the real
+    //     instantiation (`QueryPipeline<Account, Invoice>.Create<Entity, Account>`) instead of the
+    //     arity-synthesized `<T, U>` placeholders, propagated down a call chain of static factories,
+    //     generic methods, and instance calls alike. Each is a JSON string[] of per-position tokens:
+    //       "C:Ns.Type<…>" — a CONCRETE type at the call site (namespace-stripped at render),
+    //       "T:n"          — the n-th type parameter of the ENCLOSING method's containing TYPE,
+    //       "M:n"          — the n-th type parameter of the ENCLOSING method itself,
+    //       "?"            — unresolvable (a composite like `Seq<T>`); that position keeps its placeholder.
+    //     The renderer resolves T:/M: tokens against the PARENT node's already-resolved declaring/method
+    //     concretes (a concrete entry seeds the chain with C: tokens; inner forwarding hops carry T:/M:).
+    //     Both null for non-generic callees and BCL callees (gated by inSource — only first-party renders). ---
+    // The callee's DECLARING TYPE instantiation at the call site (from target.ContainingType.TypeArguments):
+    // the receiver/qualifier type's args for an instance/static call, the constructed type for a ctor.
+    string? DeclaringTypeArgBinding = null,
+    // The callee's own METHOD type arguments at the call site (from the constructed method's TypeArguments;
+    // explicit or inferred). Null for non-generic methods.
+    string? MethodTypeArgBinding = null
 );
 
 /// <summary>A base-type or implemented-interface edge between two types.</summary>
@@ -165,7 +191,14 @@ public sealed record CallEdge(
     // the edge as Kind=="handoff"; it then becomes irrelevant. Null for non-methodGroup edges, for
     // method-groups that are not a call argument, and on stores indexed before this fact existed (the
     // classifier falls back to same-line co-location there).
-    string? DelegateConsumer = null
+    string? DelegateConsumer = null,
+    // Generic monomorphization bindings (RENDERING only) — the callee's declaring-type and own-method
+    // type-arg tokens at this call site (ReferenceFact.DeclaringTypeArgBinding / MethodTypeArgBinding,
+    // JSON string[] of C:/T:/M:/? tokens). Carried onto the reached node so the renderer can resolve the
+    // forwarded T:/M: positions against the parent node's instantiation and substitute the label's
+    // declaring + method arity placeholders. Do NOT affect dispatch (that uses the open `ReceiverType`).
+    string? DeclaringTypeArgBinding = null,
+    string? MethodTypeArgBinding = null
 );
 
 // An "implType implements ifaceType" edge (from a type-relation fact).
@@ -188,6 +221,37 @@ public sealed record MethodRef(
     int Line = 0
 );
 
+// A reference to a target symbol from within an enclosing method, at a source location. Covers ctor
+// refs (RefKind="ctor": constructor calls + attribute applications) and throw refs (RefKind="throw") —
+// both feed the effect/entry-point derivers keyed by this identical (Target, Enclosing, FilePath, Line)
+// shape, and were previously two structurally-identical 4-tuples. Enclosing is null when the ref has no
+// resolved enclosing method (most callers filter those out at the query).
+public sealed record SymbolRef(string Target, string? Enclosing, string FilePath, int Line);
+
+// A declared method symbol (symbol_facts kind="method") with the metadata the entry-point deriver needs:
+// page EPs use the .ctor rows; class-inheritance EPs use the named-handler rows (IsOverride gates
+// RequireOverride rules; Signature feeds parameter-type matching). Distinct from MethodRef (the call-graph
+// descriptor) — this carries Signature and is keyed for EP derivation, not dispatch resolution.
+public sealed record MethodSymbol(
+    string SymbolId,
+    string Name,
+    string? ContainingSymbolId,
+    string Signature,
+    string FilePath,
+    int Line,
+    bool IsOverride
+);
+
+// A declared type symbol (symbol_facts kind="type") for page EPs where the class has no explicit ctor.
+// IsAbstract gates out base/abstract pages, which are never navigable entry points.
+public sealed record TypeSymbol(string SymbolId, string Namespace, string FilePath, int Line, bool IsAbstract);
+
+// A call SITE (Caller, FilePath, Line) that contains an event read — a `someEvent += Handler`. Mined by
+// Reads.EventSubscriptionSitesAsync and intersected with method-group edges by
+// FactPathFinder.MarkEventSubscriptionHandoffs so the handler subtree is treated as a deferred handoff
+// rather than a synchronous call. Lives in Domain because the shaping consumer is a Domain function.
+public sealed record EventSubscriptionSite(string Caller, string FilePath, int Line);
+
 // The fact-derived call graph loaded for cross-project path finding (stage 2 over facts).
 public sealed record FactGraphData(
     IReadOnlyList<CallEdge> CallEdges,
@@ -201,7 +265,18 @@ public sealed record FactGraphData(
     // only as a flagged fallback for members with no mined edge (Basis="heuristic"). Null/empty =>
     // behaves like before this fact existed (pure CHA, all heuristic) — old stores and synthetic
     // test graphs degrade gracefully.
-    IReadOnlyList<DispatchFact>? MinedDispatch = null
+    IReadOnlyList<DispatchFact>? MinedDispatch = null,
+    // Graph SHAPING carried ON the graph so EVERY traversal — forward (reaches/tree/path) or reverse
+    // (callers) — honours the identical shaping, instead of each command deciding it independently (the
+    // old split where `callers` walked the raw graph and saw a different reach than `path`). Set by
+    // FactPathFinder.ShapeGraph at load. CutRules: nodes whose successors are not walked (reflection /
+    // service-locator seams) — applied symmetrically (forward: a leaf; reverse: never a predecessor).
+    // ContextRules: context-bound interface-dispatch narrowing (state-family). The generic-FACTORY
+    // rewrite needs no field — it is baked into CallEdges by ShapeGraph. Null => unshaped (the `--raw`
+    // path, and the sound CHA superset `dead` requires). Default null keeps synthetic test graphs
+    // source-compatible.
+    IReadOnlyList<FactTraversalCutRule>? CutRules = null,
+    IReadOnlyList<FactContextDispatchRule>? ContextRules = null
 );
 
 // One hop in a found path. LoopKind/LoopDetail describe the enclosing loop of the call that
@@ -262,7 +337,13 @@ public sealed record TraceNode(
     // Set by the render-time single-impl fold: when an interface/base method dispatched to EXACTLY one
     // target, that lone interface hop is collapsed into its impl, and this carries the folded-away
     // interface's short name for a "«via IFoo»" marker. Null when the node was not folded.
-    string? FoldedVia = null
+    string? FoldedVia = null,
+    // Generic monomorphization bindings (from CallEdge): the callee's declaring-type and own-method
+    // type-arg tokens (JSON string[] of C:/T:/M:/?) at the call site that reached this node. RENDERING
+    // ONLY: the renderer resolves T:/M: tokens against the PARENT node's resolved instantiation and
+    // substitutes both arity groups of this node's label. Null for dispatch hops / non-generic callees.
+    string? DeclaringTypeArgBinding = null,
+    string? MethodTypeArgBinding = null
 );
 
 // A method handed off as a delegate (method-group) — a deferred/background entry point the
@@ -276,7 +357,10 @@ public sealed record HandoffEntryPoint(
     string FilePath,
     int Line,
     string? Dispatcher = null,
-    string? Kind = null
+    string? Kind = null,
+    // Capability tokens (from the producing dispatcher rule) a deployment must `provides` for this
+    // handoff to ACTIVATE there — active-in vs merely loaded-in. Null/empty = ungated. See DeploymentMap.
+    IReadOnlyList<string>? Requires = null
 );
 
 // A handoff-dispatcher rule (the fact-matchable projection of a `handoffDispatchers` JSON entry):
@@ -287,7 +371,16 @@ public sealed record HandoffEntryPoint(
 // is the execution-origin kind the promoted callback gets (background|timer|actor|event); Repeating
 // flags a re-firing schedule (vs one-shot). Rule data, not code — see the "detectors are data"
 // agreement; the generic matcher lives in HandoffClassifier.
-public sealed record FactHandoffRule(string Id, string Kind, IReadOnlyList<string> ConsumerPatterns, bool Repeating = false);
+public sealed record FactHandoffRule(
+    string Id,
+    string Kind,
+    IReadOnlyList<string> ConsumerPatterns,
+    bool Repeating = false,
+    // Capability tokens a deployment must `provides` (ANY-intersection) for the handoffs this dispatcher
+    // produces to be active-in that deployment. Null/empty = ungated (active wherever loaded). The
+    // tokens are opaque strings to rig — a generic per-deployment gate, not a coderig concept.
+    IReadOnlyList<string>? Requires = null
+);
 
 // Codebase-specific RENDER knowledge for `rig tree` — presentation rules, NOT analysis facts. They
 // only change what the tree DRAWS; the underlying reach is untouched and stays exact. Loaded from the
@@ -396,7 +489,11 @@ public sealed record FactInvocation(
     string? FirstArgName = null,
     // Enclosing held-resource scope chain (using/lock), innermost-first. Feeds the resource_span
     // observation. Decode with FactStructuralContext.DecodeScopes. See ReferenceFact.EnclosingScopes.
-    string? EnclosingScopes = null
+    string? EnclosingScopes = null,
+    // ALL arguments' string templates / member-identifier names as JSON string?[] (see
+    // ReferenceFact.ArgumentTemplates/ArgumentNames). Feed nth-argument resource resolution.
+    string? ArgumentTemplates = null,
+    string? ArgumentNames = null
 );
 
 // An effect re-derived from the reference index by matching an invocation target against the
@@ -453,7 +550,7 @@ public sealed record FactObservationRules(
 );
 
 // An entry point re-derived from facts (type_relation_facts BFS + symbol_facts + reference_facts).
-// Covers the two pageModel cases: constructor-per-overload (page kind) and
+// Covers the two type-entry-point cases: constructor-per-overload (page kind) and
 // attribute-decorated methods (action kind).
 public sealed record DerivedEntryPoint(
     string Kind, // e.g. "page" or "action"
@@ -461,10 +558,13 @@ public sealed record DerivedEntryPoint(
     string Route, // e.g. "Accounts/MakePaymentComponents/Create2"
     string DisplayName, // e.g. "page PAGE Accounts/MakePaymentComponents/Create2(pkInvoice)"
     string FilePath,
-    int Line
+    int Line,
+    // Capability tokens inherited from the producing rule; a deployment activates this EP only if it
+    // `provides` one of them (active-in). Null/empty = ungated. See DeploymentMap.ActiveServices.
+    IReadOnlyList<string>? Requires = null
 );
 
-// Fact-matchable projection of a pageModel entry-point rule (from AnalysisRuleSet.PageModel).
+// Fact-matchable projection of a typeEntryPoints rule (from AnalysisRuleSet.TypeEntryPoints).
 // The generic BFS deriver (FactEntryPointDeriver) consumes these — no hardcoded type lists.
 public sealed record FactEntryPointRule(
     string Id,
@@ -474,7 +574,10 @@ public sealed record FactEntryPointRule(
     string NamespacePrefix, // strip prefix from namespace to build route (e.g. "MedDBase.Pages.")
     // When set: methods decorated with any of these attribute DocID prefixes are action entry points.
     // When null/empty: the rule emits constructor-overload page entry points instead.
-    IReadOnlyList<string> HandlerMethodAttributePrefixes
+    IReadOnlyList<string> HandlerMethodAttributePrefixes,
+    // Capability tokens a deployment must `provides` for EPs from this rule to be active-in it (active-in
+    // vs loaded-in). Null/empty = ungated. Opaque to rig; see DeploymentMap.
+    IReadOnlyList<string>? Requires = null
 );
 
 // Fact-matchable projection of a classInheritance entry-point rule (from
@@ -503,7 +606,10 @@ public sealed record FactClassInheritanceRule(
     // for the gRPC rule). Matched against the fact Signature's parameter-type tokens by simple name —
     // the discriminator that stops a baseTypes:["*"]/handlerMethods:["*"] rule from matching every
     // override. Without honoring it the gRPC rule would degrade to "every override method".
-    IReadOnlyList<string> HandlerParameterTypeSimpleNames
+    IReadOnlyList<string> HandlerParameterTypeSimpleNames,
+    // Capability tokens a deployment must `provides` for EPs from this rule to be active-in it (active-in
+    // vs loaded-in). Null/empty = ungated. Opaque to rig; see DeploymentMap.
+    IReadOnlyList<string>? Requires = null
 );
 
 // The fact-matchable projection of an effect rule — the same rule data the Roslyn pass uses
@@ -571,5 +677,11 @@ public sealed record FactEffectRule(
     // pins the constructed entity to position 0, so the effect resolves to that one type at the
     // concrete call site (entity_cache:read Account) rather than the CHA-fanned per-entity aggregate.
     // Only consulted when Resource == "type_argument".
-    int? TypeArgumentIndex = null
+    int? TypeArgumentIndex = null,
+    // Selects ONE positional argument (0-based) for the `string_argument` / `argument_name` resource
+    // instead of the first. Null = argument 0 (the existing first-argument fast path). Lets a rule pull
+    // a resource that lives past position 0 — e.g. CertificateEntity.HasRight(cert, Rights.X.Y, txn)
+    // exposes the permission right at arg 1 via `resource:argument_name, argumentIndex:1`. Resolved
+    // from the JSON ArgumentNames/ArgumentTemplates lists. Only consulted for those two strategies.
+    int? ArgumentIndex = null
 );

@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text;
 using Rig.Analysis;
 using Rig.Analysis.Rules;
+using Rig.Cli.Deployments;
 using Rig.Cli.Rendering;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
@@ -39,25 +40,61 @@ public static class CliApplication
     {
         if (HasUnknownFlag(args[0], args, error))
             return 2;
-        return args[0] switch
+        try
         {
-            "index" => await RunIndexAsync(args, output, error, workingDirectory),
-            "mine" => await RunMineAsync(args, output, error, workingDirectory),
-            "runs" => await RunRunsAsync(output, workingDirectory),
-            "di" => await RunDiAsync(output, error, workingDirectory),
-            "symbols" => await RunSymbolsAsync(args, output, error, workingDirectory),
-            "refs" => await RunRefsAsync(args, output, error, workingDirectory),
-            "path" => await RunPathAsync(args, output, error, workingDirectory),
-            "tree" => await RunTreeAsync(args, output, error, workingDirectory),
-            "callers" => await RunCallersAsync(args, output, error, workingDirectory),
-            "reaches" => await RunReachesAsync(args, output, error, workingDirectory),
-            "derive" => await RunDeriveAsync(args, output, error, workingDirectory),
-            "graph" => await RunGraphAsync(output, error, workingDirectory),
-            "dead" => await RunDeadAsync(args, output, error, workingDirectory),
-            "files" => await RunFilesAsync(args, output, error, workingDirectory),
-            "profile" => await RunProfileAsync(args, output, error, workingDirectory),
-            _ => UnknownCommand(args[0], error),
-        };
+            return args[0] switch
+            {
+                "index" => await RunIndexAsync(args, output, error, workingDirectory),
+                "mine" => await RunMineAsync(args, output, error, workingDirectory),
+                "runs" => await RunRunsAsync(output, workingDirectory),
+                "di" => await RunDiAsync(output, error, workingDirectory),
+                "symbols" => await RunSymbolsAsync(args, output, error, workingDirectory),
+                "refs" => await RunRefsAsync(args, output, error, workingDirectory),
+                "path" => await RunPathAsync(args, output, error, workingDirectory),
+                "tree" => await RunTreeAsync(args, output, error, workingDirectory),
+                "callers" => await RunCallersAsync(args, output, error, workingDirectory),
+                "reaches" => await RunReachesAsync(args, output, error, workingDirectory),
+                "derive" => await RunDeriveAsync(args, output, error, workingDirectory),
+                "graph" => await RunGraphAsync(output, error, workingDirectory),
+                "dead" => await RunDeadAsync(args, output, error, workingDirectory),
+                "files" => await RunFilesAsync(args, output, error, workingDirectory),
+                "profile" => await RunProfileAsync(args, output, error, workingDirectory),
+                _ => UnknownCommand(args[0], error),
+            };
+        }
+        catch (System.Data.Common.DbException exception)
+        {
+            // A SQLite error escaping a command almost always means the store is missing (wrong cwd) or
+            // was built by an older rig (schema drift — a column/table added since). Translate the raw
+            // EF/SQLite stack trace into a clean, actionable message, mirroring how `index` already handles
+            // a bad target path.
+            return StoreError(workingDirectory, exception, error);
+        }
+    }
+
+    // Clean exit-2 message for a store that can't be read: distinguish "no store here" (wrong directory)
+    // from "older-rig schema mismatch" (re-index needed) from any other read failure.
+    private static int StoreError(string workingDirectory, System.Data.Common.DbException exception, TextWriter error)
+    {
+        var dbPath = Path.Combine(workingDirectory, ".rig", "rig.db");
+        if (!File.Exists(dbPath))
+        {
+            error.WriteLine($"No indexed store at {dbPath}.");
+            error.WriteLine("Run `rig index <solution>` here first, or cd to the directory that owns the .rig store.");
+        }
+        else if (
+            exception.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase)
+            || exception.Message.Contains("no such table", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            error.WriteLine($"The store at {dbPath} was built by an older rig (schema mismatch: {exception.Message}).");
+            error.WriteLine("Re-index with the current rig: `rig index <solution>`.");
+        }
+        else
+        {
+            error.WriteLine($"Could not read the store at {dbPath}: {exception.Message}");
+        }
+        return 2;
     }
 
     private static bool IsHelp(string arg)
@@ -83,7 +120,7 @@ public static class CliApplication
         output.WriteLine();
         output.WriteLine("Usage:");
         output.WriteLine(
-            "  rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable]   (--from = index only the entry project's non-test closure, one workspace; --durable = journaled write, default is fast atomic-publish)"
+            "  rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--merge] [--include-tests]   (--from = index only the entry project's closure, one workspace; --merge = accumulate into an existing store for a multi-solution unified store; test projects are EXCLUDED by default — --include-tests keeps them)"
         );
         output.WriteLine("  rig mine <solution> --from <project.csproj> [--rules <path>...] [--identity <id>] [--parallelism <n>]");
         output.WriteLine("  rig runs");
@@ -91,16 +128,16 @@ public static class CliApplication
         output.WriteLine("  rig symbols <pattern> [--kind <k>] [--limit <n>]");
         output.WriteLine("  rig refs <pattern> [--first-party] [--kind <refkind>] [--limit <n>]");
         output.WriteLine(
-            "  rig path <fromPattern> <toPattern> [--async] [--maxdepth|--depth <n>]   (synchronous by default; --async also walks async handoff edges, tagged; --maxdepth defaults unbounded)"
+            "  rig path <fromPattern> <toPattern> [--async] [--raw] [--rules <path>...] [--depth <n>]   (synchronous by default; --async also walks async handoff edges, tagged; --raw bypasses graph shaping (factory/cut/context rules); --depth defaults unbounded)"
         );
         output.WriteLine(
-            "  rig reaches <fromPattern> [--async] [--rules <path>...] [--maxdepth|--depth <n>] [--only <p,..>] [--exclude <p,..>] [--format tsv]   (effects reachable from an entry point; synchronous by default (handoffs cut); --async adds scheduled/cross-thread reach via handoffs in a separate ⚡bucket; --exclude throw to drop exceptions)"
+            "  rig reaches <fromPattern> [--async] [--rules <path>...] [--depth <n>] [--only <p,..>] [--exclude <p,..>] [--format tsv]   (effects reachable from an entry point; synchronous by default (handoffs cut); --async adds scheduled/cross-thread reach via handoffs in a separate ⚡bucket; --exclude throw to drop exceptions)"
         );
         output.WriteLine(
-            "  rig tree <fromPattern> [--full|--summary|--effects] [--async] [--only <p,..>] [--exclude <p,..>] [--rules <path>...] [--maxdepth|--depth <n>]   (call tree from an entry point; default = synchronous paths that reach an effect; --async also crosses handoffs (marked ⤳); --effects = only effectful methods, no skeleton; --exclude throw to drop exceptions)"
+            "  rig tree <fromPattern> [--full|--summary|--effects] [--async] [--only <p,..>] [--exclude <p,..>] [--rules <path>...] [--depth <n>]   (call tree from an entry point; default = synchronous paths that reach an effect, effects inline as {tags}; --full = every reachable method with effects (⚡) AND unresolved library calls (·) as call-site leaf nodes; --async also crosses handoffs (marked ⤳); --effects = only effectful methods, no skeleton; --exclude throw to drop exceptions)"
         );
         output.WriteLine(
-            "  rig callers <toPattern> [--roots|--entrypoints] [--async] [--maxdepth|--depth <n>]   (reverse reachability: who reaches this method; defaults to SYNCHRONOUS only (handoffs cut), so background callbacks show as their own origins; --async also counts scheduled paths; --roots = no-predecessor candidates (heuristic); --entrypoints = RULE-DETECTED entry points that reach it (precise))"
+            "  rig callers <toPattern> [--orphans|--entrypoints] [--async] [--raw] [--rules <path>...] [--depth <n>]   (reverse reachability: who reaches this method; defaults to SYNCHRONOUS only (handoffs cut), so background callbacks show as their own origins; --async also counts scheduled paths; --orphans = no-predecessor candidates (heuristic); --entrypoints = RULE-DETECTED entry points that reach it (precise); shaped by the same factory/cut/context rules as path/reaches/tree, --raw bypasses)"
         );
         output.WriteLine(
             "  rig derive [--rules <path>...] [--limit <n>] [--only <p,..>] [--exclude <p,..>]   (stage-2 pass over facts: effects + handoffs; --exclude throw to drop exceptions)"
@@ -109,7 +146,7 @@ public static class CliApplication
             "  rig graph   (rebuild the derived call-graph views (call_edges + dispatch_edges) from facts; idempotent, no rescan — speeds up reaches/callers/tree/dead)"
         );
         output.WriteLine(
-            "  rig dead [--rules <path>...] [--lib] [--include-dispatch] [--all] [--root <pattern>...] [--format tsv]   (unreachable first-party methods; report-only, compiler-confirm before removing)"
+            "  rig dead [--rules <path>...] [--include-lib] [--include-dispatch] [--all] [--root <pattern>...] [--format tsv]   (unreachable first-party methods; report-only, compiler-confirm before removing)"
         );
         output.WriteLine("  rig files --skipped");
         output.WriteLine("  rig profile validate");
@@ -121,7 +158,7 @@ public static class CliApplication
         {
             error.WriteLine("Missing solution or project path.");
             error.WriteLine(
-                "Usage: rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--durable]"
+                "Usage: rig index <solution|project> [--rules <path>...] [--identity <id>] [--from <entry.csproj>] [--parallelism <n>] [--merge] [--include-tests]"
             );
             return 2;
         }
@@ -186,11 +223,17 @@ public static class CliApplication
                 extraRulesPaths: extraRules.Count > 0 ? extraRules : null,
                 projectIdentity: identity,
                 scopeProjectPaths: scopeProjectPaths,
-                parallelism: parallelism
+                parallelism: parallelism,
+                // Tests are EXCLUDED by default (they add graph width, not reach); `--include-tests` opts
+                // them back in.
+                excludeTests: !args.Contains("--include-tests")
             );
         }
-        catch (InvalidOperationException exception)
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
         {
+            // IOException/FileNotFoundException: the solution/project path doesn't exist or can't be read
+            // (a clean "Failed to load" beats an uncaught stack trace). InvalidOperationException: the
+            // workspace couldn't load/bind the target.
             error.WriteLine("Failed to load solution/project for analysis.");
             error.WriteLine(exception.Message);
             error.WriteLine("Ensure the target solution has been restored and builds successfully, then retry.");
@@ -204,14 +247,15 @@ public static class CliApplication
         // Publish model. A standalone `index` is a full REPLACE published via write-to-temp +
         // atomic rename, so a crash can't tear the live store (and the previous index survives a
         // failed re-index). Fast/durability-off pragmas are the DEFAULT here — a corrupt temp is
-        // never published, so there's nothing to protect with a journal. Two opt-outs to the safe,
-        // durable, journaled path:
-        //   --durable      — user asks for a consistent in-the-clear write (still atomic-published).
-        //   --identity set — `mine` APPENDS many per-project runs into the live DB from PARALLEL
-        //                    writers, so it writes in place and MUST keep the journal (no fast pragmas).
-        var durable = args.Contains("--durable");
-        var appendMode = identity is not null; // mine
-        var fastBulkWrite = !durable && !appendMode; // optimisations on by default; opt out above
+        // never published, so there's nothing to protect with a journal. The sole exception is the
+        // APPEND path (`--merge`, or `mine`'s `--identity`): it writes IN PLACE into the live DB from
+        // (potentially parallel) writers, so it MUST keep the journal — no fast pragmas, no atomic swap.
+        // --merge accumulates this solution into an existing store (multi-solution unified store): append
+        // in place, dedup assemblies by content-hash via the registry, NO atomic-replace. See
+        // docs/multi-solution-storage.md.
+        var merge = args.Contains("--merge");
+        var appendMode = identity is not null || merge; // mine, or --merge into an existing store
+        var fastBulkWrite = !appendMode; // fast pragmas on the standalone atomic-publish path
         var atomicPublish = !appendMode; // replace-via-rename for a standalone index
 
         var storeDirectory = Path.Combine(workingDirectory, ".rig");
@@ -220,6 +264,25 @@ public static class CliApplication
         var dbPath = atomicPublish ? finalDbPath + ".tmp" : finalDbPath;
         if (atomicPublish)
             DeleteDbFiles(dbPath); // clear any leftover temp from a previous aborted run
+
+        if (merge)
+        {
+            // Required DB state for a merge (declare + require, never migrate): an existing store WITH
+            // the assembly registry. A pre-multi-solution store is told to re-mine, not silently altered.
+            if (!File.Exists(finalDbPath))
+            {
+                error.WriteLine("--merge requires an existing store. Run `rig index <base-solution>` first, then merge others.");
+                return 2;
+            }
+            await using var probe = new RigDbContext(finalDbPath, pooling: false, readOnly: true);
+            if (!await Writes.HasAssemblyRegistryAsync(probe))
+            {
+                error.WriteLine(
+                    "Store predates multi-solution support (no assembly registry). Re-mine the base solution: rig index <base-solution>"
+                );
+                return 2;
+            }
+        }
 
         output.WriteLine(
             $"Progress: Saving run ({(fastBulkWrite ? "fast" : "durable")}{(atomicPublish ? ", atomic-publish" : ", in-place")})"
@@ -375,14 +438,25 @@ public static class CliApplication
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         await using var context = new RigDbContext(dbPath);
         // Classification rules flow in here so call_edges is written with Kind="handoff" baked in — the
-        // single place classification persists, read back by every SQL query path.
+        // single place classification persists, read back by every SQL query path. Generic-factory rules
+        // flow in too so the factory monomorphization is baked into call_edges (so the SQL bounding walk
+        // sees the rewritten edges the in-memory traversal does — no effect-path divergence).
         var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory).ToArray();
-        var stats = await GraphMaterializer.BuildAsync(context, handoffRules, message => output.WriteLine($"Progress: {message}"));
+        var factoryRules = FactGenericFactoryRuleProvider.LoadForWorkingDirectory(workingDirectory);
+        var stats = await GraphMaterializer.BuildAsync(
+            context,
+            handoffRules,
+            message => output.WriteLine($"Progress: {message}"),
+            factoryRules: factoryRules
+        );
         output.WriteLine(
             $"Graph: {stats.CallEdges} call edge(s), {stats.DispatchEdges} dispatch edge(s) "
                 + $"({stats.DispatchEdges - stats.HeuristicDispatchEdges} roslyn-mined, {stats.HeuristicDispatchEdges} heuristic), "
                 + $"{stats.Nodes} node(s) in {FormatElapsed(stopwatch.Elapsed)}"
         );
+        // Materialize the pattern-independent EP-site set into a table now, so every later query reads it
+        // directly instead of re-deriving from the whole-store fact tables. No-op without deployments.json.
+        await MaterializeEntryPointSitesAsync(context, workingDirectory);
         return 0;
     }
 
@@ -447,11 +521,11 @@ public static class CliApplication
     private static RigDbContext OpenReadContext(string workingDirectory) =>
         new(Path.Combine(workingDirectory, ".rig", "rig.db"), readOnly: true);
 
-    // The call graph for a traversal command (reaches/tree/callers). When the derived edge views exist
-    // (`rig graph` has been run) it returns the BOUNDED subgraph for `pattern` in the given direction —
-    // loaded on disk via recursive CTE, sized to the result, not the 1.6GB store. Otherwise it falls
-    // back to the full in-memory EF graph (the reference path). The SAME FactPathFinder then runs over
-    // whichever graph, so the output is identical — only the load cost differs.
+    // The call graph for a traversal command (reaches/tree/path/callers). When the derived edge views
+    // exist (`rig graph` has been run) it returns the BOUNDED subgraph for `pattern` in the given
+    // direction — loaded on disk via recursive CTE, sized to the result, not the 1.6GB store. Otherwise
+    // it falls back to the full in-memory EF graph (the reference path). The SAME FactPathFinder then
+    // runs over whichever graph, so the output is identical — only the load cost differs.
     private static async Task<FactGraphData> LoadTraversalGraphAsync(
         RigDbContext context,
         string pattern,
@@ -467,6 +541,25 @@ public static class CliApplication
         return await Reads.LoadFactGraphAsync(context, handoffRules);
     }
 
+    // The SHAPED traversal graph: LoadTraversalGraphAsync + the single FactPathFinder.ShapeGraph pass
+    // (monomorphize generic factories + carry cut/context rules on the graph). EVERY attribution command
+    // — forward (path) or reverse (callers) — loads through here so they all walk the identical shaped
+    // graph; this is what keeps `callers` consistent with `path`/`reaches`. `dead` deliberately does NOT
+    // use this (it needs the sound CHA superset). Pass empty rule sets (the `--raw` path) for no shaping.
+    private static async Task<FactGraphData> LoadShapedTraversalGraphAsync(
+        RigDbContext context,
+        string pattern,
+        SqlReachability.Direction direction,
+        IReadOnlyList<FactHandoffRule> handoffRules,
+        IReadOnlyList<FactGenericFactoryRule> factoryRules,
+        IReadOnlyList<FactTraversalCutRule> cutRules,
+        IReadOnlyList<FactContextDispatchRule> contextRules
+    )
+    {
+        var graph = await LoadTraversalGraphAsync(context, pattern, direction, handoffRules);
+        return FactPathFinder.ShapeGraph(graph, factoryRules, cutRules, contextRules);
+    }
+
     // Like LoadTraversalGraphAsync, but also returns the effect-derivation inputs (invocations / ctor
     // refs / throw refs) bounded to the SAME closure — so reaches/tree don't scan every invocation in
     // the codebase. SQL path: one reach_set drives the graph + bounded inputs. EF fallback: the full
@@ -476,18 +569,22 @@ public static class CliApplication
         string pattern,
         SqlReachability.Direction direction,
         IReadOnlyList<FactHandoffRule> handoffRules,
-        IReadOnlyList<FactGenericFactoryRule>? factoryRules = null
+        IReadOnlyList<FactGenericFactoryRule>? factoryRules = null,
+        IReadOnlyList<FactTraversalCutRule>? cutRules = null,
+        IReadOnlyList<FactContextDispatchRule>? contextRules = null
     )
     {
         var inputs = await SqlReachability.HasGraphAsync(context)
             ? await SqlReachability.LoadReachInputsAsync(context, pattern, direction)
             : await LoadReachInputsFromRowsAsync(context, handoffRules);
 
-        // Monomorphize generic-factory call edges (e.g. Entity.New<Account,…> -> Account.New), collapsing
-        // the generic plumbing so tree/reaches/callers go straight to the constructed type. Edges with no
-        // concrete construct keep their plumbing (the in-memory generic-dispatch narrowing covers those).
-        if (factoryRules is { Count: > 0 })
-            inputs = inputs with { Graph = FactPathFinder.RewriteGenericFactories(inputs.Graph, factoryRules) };
+        // The single shaping pass (monomorphize generic factories + carry cut/context rules on the graph)
+        // so reaches/tree walk the same shaped graph as path/callers. Edges with no concrete construct
+        // keep their plumbing (the in-memory generic-dispatch narrowing covers those).
+        inputs = inputs with
+        {
+            Graph = FactPathFinder.ShapeGraph(inputs.Graph, factoryRules ?? [], cutRules ?? [], contextRules ?? []),
+        };
         return inputs;
     }
 
@@ -730,21 +827,49 @@ public static class CliApplication
     {
         if (args.Length < 3)
         {
-            error.WriteLine("Usage: rig path <fromPattern> <toPattern> [--async] [--maxdepth|--depth <n>]");
+            error.WriteLine("Usage: rig path <fromPattern> <toPattern> [--async] [--raw] [--rules <path>...] [--depth <n>]");
             return 2;
         }
 
         var fromPattern = args[1];
         var toPattern = args[2];
         var mode = TraversalModeOf(args);
-        var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory);
+        var extraRules = new List<string>();
+        for (var i = 0; i < args.Length; i++)
+            if (args[i] == "--rules" && i + 1 < args.Length)
+            {
+                extraRules.Add(Path.GetFullPath(args[i + 1]));
+                i++;
+            }
+        var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        // `path` walks the SAME shaped graph as reaches/tree (monomorphized factories + cut/context
+        // rules) so the path it reports is consistent with what those report — a reflection seam that
+        // `tree` cuts is not silently traversed here either. `--raw` bypasses all shaping.
+        var raw = args.Contains("--raw");
+        var factoryRules = raw
+            ? Array.Empty<FactGenericFactoryRule>()
+            : FactGenericFactoryRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var cutRules = raw
+            ? Array.Empty<FactTraversalCutRule>()
+            : FactTraversalCutRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var contextRules = raw
+            ? Array.Empty<FactContextDispatchRule>()
+            : FactContextDispatchRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
 
         await using var context = OpenReadContext(workingDirectory);
         // Any path from a `from` node lies entirely within that node's forward closure, so the BOUNDED
         // forward subgraph (loaded on disk via the derived edge views, sized to the result) finds the
         // same first path as the full graph — without the 1.4M-row in-memory load. Falls back to the
         // full EF graph when `rig graph` hasn't been run. (Same pattern as reaches/tree/callers.)
-        var graph = await LoadTraversalGraphAsync(context, fromPattern, SqlReachability.Direction.Forward, handoffRules);
+        var graph = await LoadShapedTraversalGraphAsync(
+            context,
+            fromPattern,
+            SqlReachability.Direction.Forward,
+            handoffRules,
+            factoryRules,
+            cutRules,
+            contextRules
+        );
         output.WriteLine(
             $"Fact graph: {graph.CallEdges.Count} call edges, {graph.ImplementsEdges.Count} implements edges, {graph.Methods.Count} methods"
         );
@@ -756,6 +881,19 @@ public static class CliApplication
             return 1;
         }
 
+        // Deployment/EP chip on the from-node (path[0]): which service(s) host this entry point.
+        // Opt-in via deployments.json; no-op otherwise.
+        var pathDeployments = await DeploymentMap.LoadAsync(workingDirectory, await PrimaryDeploymentSolutionPathAsync(context));
+        var pathEpContext = await BuildEpContextAsync(
+            context,
+            graph,
+            workingDirectory,
+            extraRules,
+            handoffRules,
+            pathDeployments,
+            !args.Contains("--no-cache")
+        );
+
         output.WriteLine($"Path '{fromPattern}' -> '{toPattern}' ({path.Count} nodes):");
         for (var i = 0; i < path.Count; i++)
         {
@@ -765,7 +903,10 @@ public static class CliApplication
             if (step.DispatchBasis == "heuristic")
                 kindBase += " (heuristic)";
             var kind = step.Fanout > 1 ? $"{kindBase} ×{step.Fanout} fan-out" : kindBase;
-            var via = i == 0 ? "" : $"  [{kind}{loop}{(step.FilePath is null ? "" : $" @ {ShortenPath(step.FilePath)}:{step.Line}")}]";
+            var via =
+                i == 0
+                    ? HeaderSuffix(pathEpContext, step.SymbolId)
+                    : $"  [{kind}{loop}{(step.FilePath is null ? "" : $" @ {ShortenPath(step.FilePath)}:{step.Line}")}]";
             output.WriteLine($"  {new string(' ', i * 2)}{step.SymbolId}{via}");
         }
         return 0;
@@ -779,7 +920,7 @@ public static class CliApplication
     {
         if (args.Length < 2)
         {
-            error.WriteLine("Usage: rig reaches <fromPattern> [--async] [--rules <path>...] [--maxdepth|--depth <n>] [--format tsv]");
+            error.WriteLine("Usage: rig reaches <fromPattern> [--async] [--rules <path>...] [--depth <n>] [--format tsv]");
             return 2;
         }
         var fromPattern = args[1];
@@ -805,18 +946,19 @@ public static class CliApplication
 
         await using var context = OpenReadContext(workingDirectory);
 
-        var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, handoffRules, factoryRules);
+        var inputs = await LoadEffectReachInputsAsync(
+            context,
+            fromPattern,
+            SqlReachability.Direction.Forward,
+            handoffRules,
+            factoryRules,
+            cutRules,
+            contextRules
+        );
         var graph = inputs.Graph;
         if (!raw)
             graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
-        var reachable = FactPathFinder.ReachesWithFanout(
-            graph,
-            fromPattern,
-            maxDepth,
-            mode: mode,
-            cutRules: cutRules,
-            contextRules: contextRules
-        );
+        var reachable = FactPathFinder.ReachesWithFanout(graph, fromPattern, maxDepth, mode: mode);
 
         var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
@@ -880,8 +1022,22 @@ public static class CliApplication
         var direct = hits.Where(h => h.HandoffVia is null && h.Via is null).ToList();
         var fanned = hits.Where(h => h.HandoffVia is null && h.Via is not null).ToList();
 
+        // Deployment/EP chip on the From line: which service(s) host this entry point (opt-in via
+        // deployments.json; no-op otherwise). The from-root is the depth-0 reachable symbol.
+        var reachDeployments = await DeploymentMap.LoadAsync(workingDirectory, await PrimaryDeploymentSolutionPathAsync(context));
+        var reachEpContext = await BuildEpContextAsync(
+            context,
+            graph,
+            workingDirectory,
+            extraRules,
+            handoffRules,
+            reachDeployments,
+            !args.Contains("--no-cache")
+        );
+        var reachFromRoot = reachable.Where(kv => kv.Value.Depth == 0).Select(kv => kv.Key).FirstOrDefault();
         output.WriteLine(
             $"From: {fromPattern}{(mode == FactPathFinder.TraversalMode.AsyncInclude ? "  (--async: handoffs included)" : "")}"
+                + (reachFromRoot is null ? "" : HeaderSuffix(reachEpContext, reachFromRoot))
         );
         output.WriteLine($"Reachable methods (<= depth {maxDepth}): {reachable.Count}");
         output.WriteLine($"Direct effects (real call paths): {direct.Count}  (fanned out under a loop: {direct.Count(h => h.Fanout > 0)})");
@@ -929,15 +1085,16 @@ public static class CliApplication
     // The full first-party call TREE from an entry point over the fact graph (entrypoint-independent,
     // same edges as reaches/path — incl. interface->impl + base->override dispatch + loop context).
     // Modes mirror the legacy `callgraph`: default prunes to call paths that REACH an effect; --full
-    // prints every reachable method; --summary prints just the effect-count rollup. Effects are
-    // annotated inline ({provider:op resource}); looped edges get 🔁; cycle/shared-callee re-entry
+    // prints every reachable method AND promotes effects to call-site leaf nodes (provider:op + resource +
+    // file:line) instead of the inline tag; --summary prints just the effect-count rollup. In the compact
+    // modes effects are annotated inline ({provider:op resource}); looped edges get 🔁; cycle/shared-callee re-entry
     // is shown as "↺seen" (that method's subtree is printed under its first occurrence).
     private static async Task<int> RunTreeAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
     {
         if (args.Length < 2 || args[1].StartsWith("--", StringComparison.Ordinal))
         {
             error.WriteLine(
-                "Usage: rig tree <fromPattern> [--full|--summary|--effects] [--async] [--raw] [--files] [--signatures] [--rules <path>...] [--maxdepth|--depth <n>]"
+                "Usage: rig tree <fromPattern> [--full|--summary|--effects] [--async] [--raw] [--files] [--signatures] [--rules <path>...] [--depth <n>] [--no-cache] [--time]"
             );
             return 2;
         }
@@ -946,6 +1103,8 @@ public static class CliApplication
         var full = args.Contains("--full");
         var summary = args.Contains("--summary");
         var effectsOnly = args.Contains("--effects");
+        if (HasConflictingModes(args, "tree", error, "--full", "--summary", "--effects"))
+            return 2;
         var mode = TraversalModeOf(args);
         var extraRules = new List<string>();
         for (var i = 0; i < args.Length; i++)
@@ -976,47 +1135,183 @@ public static class CliApplication
             : FactContextDispatchRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
 
         await using var context = OpenReadContext(workingDirectory);
+        var timer = new PhaseTimer(args.Contains("--time"), error);
 
-        var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, handoffRules, factoryRules);
-        var graph = inputs.Graph;
-        // Event subscriptions (`someEvent += Handler`) are deferred handlers, not synchronous calls —
-        // mark them as handoffs so the sync tree doesn't expand the handler as if RegisterEvents ran it.
-        if (!raw)
-            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
-        var roots = FactPathFinder.BuildTree(graph, fromPattern, maxDepth, mode: mode, cutRules: cutRules, contextRules: contextRules);
+        // Query cache (best-effort, opt-out via --no-cache). A `rig tree` query recomputes the call-tree
+        // forest (BuildTree) AND its effects (FactEffectDeriver.Derive — the ~3.8s dominant cost); both
+        // are a pure function of the store + effective rules + traversal params. Cache the pair in a
+        // separate writable `.rig/cache.db` (rig.db itself is opened read-only), so a repeat query skips
+        // both and only re-loads the cheaper graph to render. Auto-invalidates on reindex: the key embeds
+        // a store identity (rig.db size+mtime) that `rig index`/`rig graph` change. See QueryCache.
+        var rigDir = Path.Combine(workingDirectory, ".rig");
+        var storeKey = StoreKey(Path.Combine(rigDir, "rig.db"));
+        using var cache = args.Contains("--no-cache") ? null : QueryCache.Open(rigDir, storeKey);
+        var cacheKey = cache is null
+            ? null
+            : TreeCacheKey(storeKey, RulesFingerprint.Compute(workingDirectory, extraRules), fromPattern, maxDepth, mode, raw);
+        var cached = cacheKey is not null && cache!.Get(cacheKey) is { } blob ? TreeCacheCodec.Decode(blob) : null;
+        // Render sidecar: everything render needs from the graph (seam effects + locations), keyed by the
+        // forest key PLUS the effect filters. Seam effects are derived from the FILTERED effects, and
+        // filters are deliberately absent from the forest key (effects are cached unfiltered and re-filtered
+        // per query), so the sidecar must key on them — else a differently-filtered warm query would render
+        // stale seam summaries. Locations are filter-free but ride along (negligible). No filters → a stable
+        // shared key. A sidecar hit lets the warm path skip the graph load entirely.
+        var sidecarKey = cacheKey is null ? null : cacheKey + ":sidecar:" + EffectFilterSignature(args);
+        var sidecar =
+            cached is not null && sidecarKey is not null && cache!.Get(sidecarKey) is { } scBlob ? RenderSidecarCodec.Decode(scBlob) : null;
+        timer.Lap($"cache lookup (forest={cached is not null}, sidecar={sidecar is not null})");
+
+        FactGraphData? graph = null; // stays null on a full hit (forest + sidecar) — the graph is never loaded
+        IReadOnlyList<TraceNode> roots;
+        IReadOnlyList<DerivedEffect> effects;
+        if (cached is not null && sidecar is not null)
+        {
+            // FULL HIT: forest + effects + render sidecar all cached → render without touching the graph.
+            roots = cached.Forest;
+            effects = cached.Effects;
+            timer.Lap("forest + sidecar hit (no graph load)");
+        }
+        else if (cached is not null)
+        {
+            // Forest hit but no sidecar (a pre-sidecar entry, or first run under this filter): load the
+            // shaped graph to render — the sidecar is written below so the NEXT query is a full hit.
+            roots = cached.Forest;
+            effects = cached.Effects;
+            graph = await LoadShapedTraversalGraphAsync(
+                context,
+                fromPattern,
+                SqlReachability.Direction.Forward,
+                handoffRules,
+                factoryRules,
+                cutRules,
+                contextRules
+            );
+            if (!raw)
+                graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+            timer.Lap("graph load + event marking (cache hit)");
+        }
+        else
+        {
+            var inputs = await LoadEffectReachInputsAsync(
+                context,
+                fromPattern,
+                SqlReachability.Direction.Forward,
+                handoffRules,
+                factoryRules,
+                cutRules,
+                contextRules
+            );
+            graph = inputs.Graph;
+            timer.Lap("graph + invocations load");
+            // Event subscriptions (`someEvent += Handler`) are deferred handlers, not synchronous calls —
+            // mark them as handoffs so the sync tree doesn't expand the handler as if RegisterEvents ran it.
+            if (!raw)
+                graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+
+            roots = FactPathFinder.BuildTree(graph, fromPattern, maxDepth, mode: mode);
+            timer.Lap("event marking + BuildTree");
+            if (roots.Count == 0)
+            {
+                effects = [];
+            }
+            else
+            {
+                // Effects per enclosing method — same derivation as `reaches` (incl. throws).
+                var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+                var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+                effects = FactEffectDeriver.Derive(
+                    inputs.Invocations,
+                    effectRules,
+                    providerFilter: null,
+                    baseEdges: BaseEdgeTuples(graph),
+                    ctorRefs: inputs.CtorRefs,
+                    observationRules: observationRules,
+                    throwRefs: inputs.ThrowRefs
+                );
+                // Cache UNFILTERED effects; --only/--exclude are applied below so they don't fragment the
+                // key. Best-effort: encoding a pathologically deep forest (or any IO hiccup) must never
+                // fail the query — on error we simply don't cache and the next run recomputes.
+                if (cacheKey is not null)
+                {
+                    try
+                    {
+                        cache!.Put(cacheKey, TreeCacheCodec.Encode(new TreeCachePayload(roots, effects)));
+                    }
+                    catch (Exception ex)
+                        when (ex is System.Text.Json.JsonException or NotSupportedException or InvalidOperationException or IOException)
+                    {
+                        // skip caching this result
+                    }
+                }
+                timer.Lap("derive effects + cache store");
+            }
+        }
+
         if (roots.Count == 0)
         {
             output.WriteLine($"No symbol matches '{fromPattern}'.");
             return 1;
         }
 
-        // Effects per enclosing method — same derivation as `reaches` (incl. throws).
-        var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var effects = FactEffectDeriver.Derive(
-            inputs.Invocations,
-            effectRules,
-            providerFilter: null,
-            baseEdges: BaseEdgeTuples(graph),
-            ctorRefs: inputs.CtorRefs,
-            observationRules: observationRules,
-            throwRefs: inputs.ThrowRefs
-        );
+        // Deployment attribution (opt-in via deployments.json) + EP-site lookup, so tree nodes that are
+        // themselves entry points get the ▶ kind + service chip. Null when unconfigured (default tree).
+        // Locations (method DocID -> file:line): from the sidecar on a full hit, else from the graph.
+        // One map serves both the EP-chip site lookup and `--files` links.
+        IReadOnlyDictionary<string, (string? File, int Line)> locations =
+            sidecar?.Locations
+            ?? graph!
+                .Methods.GroupBy(m => m.SymbolId, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => ((string?)g.First().FilePath, g.First().Line), StringComparer.Ordinal);
+
+        var deployments = await DeploymentMap.LoadAsync(workingDirectory, await PrimaryDeploymentSolutionPathAsync(context));
+        // EP context is built from `locations` (not the graph), so it works on the no-graph full-hit path.
+        // The expensive, pattern-independent site->kind map is its own cache (LoadOrDeriveEpSiteKind).
+        var epContext = deployments.IsEmpty
+            ? null
+            : new EpRenderContext(
+                deployments,
+                locations,
+                await LoadOrDeriveEpSiteKindAsync(context, workingDirectory, extraRules, handoffRules, !args.Contains("--no-cache"))
+            );
+        timer.Lap("deployment map + entry-point derivation");
+
         effects = ApplyEffectFilters(effects, args); // --only / --exclude (e.g. --exclude throw)
 
-        var emoji = EffectEmoji.Load(workingDirectory);
+        var emoji = FactEffectEmojiProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         var effectsByMethod = effects
             .Where(e => e.EnclosingSymbolId is not null)
             .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
-            .ToDictionary(
-                g => g.Key,
-                g =>
-                    g.Select(e =>
-                            $"{EffectEmoji.For(emoji, e.Provider, e.Operation)} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}"
-                        )
-                        .ToList(),
-                StringComparer.Ordinal
-            );
+            .ToDictionary(g => g.Key, g => FormatEffectGroup(g, emoji), StringComparer.Ordinal);
+
+        // `--full` renders effects AND unresolved library calls as leaf nodes (call site + line), source-
+        // ordered per method, rather than the compact inline tag. Only built in --full; other modes never
+        // read it, so the extra library-call query never touches the default/compact path.
+        IReadOnlyDictionary<string, List<string>>? effectLeavesByMethod = null;
+        if (full)
+        {
+            var leafRows = new List<(string Method, int Line, string Body)>();
+            foreach (var e in effects.Where(e => e.EnclosingSymbolId is not null))
+                leafRows.Add((e.EnclosingSymbolId!, e.Line, FormatEffectLeaf(e, emoji)));
+
+            // Unresolved library calls: invocations to a referenced-assembly target that produced no effect
+            // (no rule matched). Bounded to the rendered tree's methods; subtract the effect call-sites so a
+            // call already shown as an effect leaf isn't doubled.
+            var treeMethods = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var root in roots)
+                CollectTreeMethods(root, treeMethods);
+            var effectSites = effects.Where(e => e.EnclosingSymbolId is not null).Select(e => (e.EnclosingSymbolId!, e.Line)).ToHashSet();
+            var libCalls = await Reads.LoadLibraryCallSitesAsync(context, treeMethods);
+            foreach (
+                var c in libCalls
+                    .Where(c => c.Enclosing is not null && !effectSites.Contains((c.Enclosing!, c.Line)))
+                    .DistinctBy(c => (c.Enclosing, c.Target, c.Line))
+            )
+                leafRows.Add((c.Enclosing!, c.Line, FormatUnresolvedLeaf(c.Target, c.FilePath, c.Line)));
+
+            effectLeavesByMethod = leafRows
+                .GroupBy(r => r.Method, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.OrderBy(r => r.Line).Select(r => r.Body).ToList(), StringComparer.Ordinal);
+        }
 
         if (summary)
         {
@@ -1029,6 +1324,7 @@ public static class CliApplication
             output.WriteLine($"Effects on reachable methods: {hits.Count}");
             foreach (var g in hits.GroupBy(h => (h.Provider, h.Operation)).OrderByDescending(g => g.Count()))
                 output.WriteLine($"  {g.Count(), 4}  {g.Key.Provider} {g.Key.Operation}");
+            timer.Total();
             return 0;
         }
 
@@ -1044,32 +1340,51 @@ public static class CliApplication
             output.WriteLine($"From: {fromPattern}  ({ordered.Count} effectful method(s), source order)");
             foreach (var sym in ordered)
                 output.WriteLine($"  {ShortName(sym)}\n      {string.Join("  ", effectsByMethod[sym])}");
+            timer.Total();
             return 0;
         }
 
-        var structuredByMethod = effects
-            .Where(e => e.EnclosingSymbolId is not null)
-            .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
-        var seamEffects = ComputeSeamEffects(
-            roots,
-            renderRules,
-            graph,
-            maxDepth,
-            mode,
-            structuredByMethod,
-            (p, o) => EffectEmoji.For(emoji, p, o)
-        );
+        // Seam effects: from the sidecar on a full hit, else computed from the (filtered) effects + graph.
+        IReadOnlyDictionary<string, List<string>> seamEffects;
+        if (sidecar is not null)
+            seamEffects = sidecar.Value.SeamEffects;
+        else
+        {
+            var structuredByMethod = effects
+                .Where(e => e.EnclosingSymbolId is not null)
+                .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+            seamEffects = ComputeSeamEffects(
+                roots,
+                renderRules,
+                graph!,
+                maxDepth,
+                mode,
+                structuredByMethod,
+                (p, o) => FactEffectEmojiProvider.For(emoji, p, o)
+            );
+        }
 
         // `--files`: per-node definition location (relpath:line) from the loaded methods, for source links.
         // `--signatures` (alias --sig): per-node compact param signature, to tell same-named overloads apart.
         var files = args.Contains("--files");
         var signatures = args.Contains("--signatures") || args.Contains("--sig");
-        var locById = files
-            ? graph
-                .Methods.GroupBy(m => m.SymbolId)
-                .ToDictionary(g => g.Key, g => (g.First().FilePath, g.First().Line), StringComparer.Ordinal)
-            : null;
+        var locById = files ? locations : null;
+
+        // Populate the render sidecar (best-effort) so the next warm query renders with NO graph load.
+        // Only when a graph was actually loaded (cold or sidecar-miss) and caching is on.
+        if (graph is not null && sidecarKey is not null)
+        {
+            try
+            {
+                cache!.Put(sidecarKey, RenderSidecarCodec.Encode(seamEffects, locations));
+            }
+            catch (Exception ex)
+                when (ex is System.Text.Json.JsonException or NotSupportedException or InvalidOperationException or IOException)
+            {
+                // skip caching the sidecar
+            }
+        }
 
         foreach (var root in roots)
         {
@@ -1090,10 +1405,183 @@ public static class CliApplication
                 files,
                 locById,
                 signatures,
-                cutRules
+                cutRules,
+                epContext,
+                full,
+                effectLeavesByMethod
             );
         }
+        timer.Lap("seam effects + render");
+        timer.Total();
         return 0;
+    }
+
+    // Builds the EP-render context for a tree: the SymbolId->site map (from the loaded graph) and the
+    // site->kind map (from the SAME derived entry-point set `derive` emits, incl. promoted handoff
+    // origins). Returns null when deployments are unconfigured, so the default tree pays no cost.
+    private static async Task<EpRenderContext?> BuildEpContextAsync(
+        RigDbContext context,
+        FactGraphData graph,
+        string workingDirectory,
+        IReadOnlyList<string> extraRules,
+        IReadOnlyList<FactHandoffRule> handoffRules,
+        DeploymentMap deployments,
+        bool useCache = true
+    )
+    {
+        if (deployments.IsEmpty)
+            return null;
+
+        // The site->kind map is the expensive, PATTERN-INDEPENDENT half — derive-or-cache it once per
+        // (store + rules). The symbol->site map below is cheap and rebuilt fresh from THIS query's graph.
+        var epSiteKind = await LoadOrDeriveEpSiteKindAsync(context, workingDirectory, extraRules, handoffRules, useCache);
+
+        var siteById = graph
+            .Methods.GroupBy(m => m.SymbolId, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => ((string?)g.First().FilePath, g.First().Line), StringComparer.Ordinal);
+
+        return new EpRenderContext(deployments, siteById, epSiteKind);
+    }
+
+    // Load the whole-store entry-point site map: (file,line) -> (kind, capability requirements), covering
+    // both rule-detected EPs and promoted handoff origins. A pure function of the store + effective rules
+    // (NO traversal pattern). Three tiers, fastest first:
+    //   1. The entry_point_sites table `rig graph` materialized — INDEX data, read via raw ADO (no EF, no
+    //      whole-store load, no derive). Used whenever the effective rules match what graph was built with,
+    //      regardless of --no-cache (it's index data, like call_edges), so it serves the common path.
+    //   2. The .rig/cache.db query cache — for --rules queries (rule-hash mismatch on the table) when
+    //      caching is on; derives once then memoizes.
+    //   3. A live derive — --no-cache with a rule mismatch, or no materialized table yet.
+    private static async Task<
+        IReadOnlyDictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>
+    > LoadOrDeriveEpSiteKindAsync(
+        RigDbContext context,
+        string workingDirectory,
+        IReadOnlyList<string> extraRules,
+        IReadOnlyList<FactHandoffRule> handoffRules,
+        bool useCache
+    )
+    {
+        var rulesHash = RulesFingerprint.Compute(workingDirectory, extraRules);
+
+        // Tier 1: the materialized index table (built at `rig graph` under the default rules).
+        if (await EntryPointSiteStore.LoadAsync(context, rulesHash) is { } materialized)
+            return materialized;
+
+        if (!useCache)
+            return await DeriveEpSiteKindAsync(context, workingDirectory, extraRules, handoffRules);
+
+        // Tier 2: query cache (handles --rules, which the table doesn't cover).
+        var rigDir = Path.Combine(workingDirectory, ".rig");
+        var storeKey = StoreKey(Path.Combine(rigDir, "rig.db"));
+        using var cache = QueryCache.Open(rigDir, storeKey);
+        var key = cache is null ? null : EpCacheKey(storeKey, rulesHash);
+        if (key is not null && cache!.Get(key) is { } blob && EpSiteCacheCodec.Decode(blob) is { } hit)
+            return hit;
+
+        var derived = await DeriveEpSiteKindAsync(context, workingDirectory, extraRules, handoffRules);
+        if (key is not null)
+        {
+            try
+            {
+                cache!.Put(key, EpSiteCacheCodec.Encode(derived));
+            }
+            catch (Exception ex)
+                when (ex is System.Text.Json.JsonException or NotSupportedException or InvalidOperationException or IOException)
+            {
+                // skip caching this result
+            }
+        }
+        return derived;
+    }
+
+    // The actual whole-store EP derivation (uncached): rule EPs + class-inheritance EPs + promoted handoff
+    // origins, flattened to a (file,line)->(kind,requires) map. Pulled out of BuildEpContextAsync so both
+    // the lazy query path and the eager `rig graph` warm-up share one definition.
+    private static async Task<Dictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>> DeriveEpSiteKindAsync(
+        RigDbContext context,
+        string workingDirectory,
+        IReadOnlyList<string> extraRules,
+        IReadOnlyList<FactHandoffRule> handoffRules
+    )
+    {
+        var epData = await Reads.LoadFactEntryPointDataAsync(context);
+        var epRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var classRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(workingDirectory, extraRules);
+        var derivedEps = FactEntryPointDeriver.Derive(epData, epRules, classRules);
+        var classifiedHandoffs = (await Reads.DeriveHandoffEntryPointsAsync(context, int.MaxValue, handoffRules))
+            .Where(h => h.Dispatcher is not null)
+            .ToList();
+
+        var epSiteKind = new Dictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>();
+        foreach (var e in derivedEps.Concat(PromoteHandoffOrigins(classifiedHandoffs, derivedEps)))
+            epSiteKind[(e.FilePath, e.Line)] = (e.Kind, e.Requires);
+        return epSiteKind;
+    }
+
+    // Materialize the pattern-independent EP-site set as a first-class table right after `rig graph`
+    // rebuilds the store, so every later query reads it via raw ADO (no EF, no whole-store load, no derive)
+    // instead of paying the ~2.1s derivation. Gated on deployments.json — projects without deployment
+    // attribution never use the EP set, so they pay nothing. Built with the DEFAULT rules and stamped with
+    // their hash; a --rules query sees the mismatch and derives live under its own rules.
+    private static async Task MaterializeEntryPointSitesAsync(RigDbContext context, string workingDirectory)
+    {
+        if (!File.Exists(Path.Combine(workingDirectory, "deployments.json")))
+            return;
+        var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory).ToArray();
+        var sites = await DeriveEpSiteKindAsync(context, workingDirectory, [], handoffRules);
+        await EntryPointSiteStore.PersistAsync(context, sites, RulesFingerprint.Compute(workingDirectory, []));
+    }
+
+    // Cache key for the pattern-INDEPENDENT EP-site map: store identity + rule fingerprint only (no
+    // pattern, no traversal params), so a single derivation serves every query against the store.
+    private static string EpCacheKey(string storeKey, string rulesHash)
+    {
+        var material = $"ep|v1|{storeKey}|{rulesHash}";
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+    }
+
+    // Identity of the current store for cache keying + invalidation: rig.db size + last-write time.
+    // `rig index` publishes a fresh db (atomic rename → new mtime/size) and `rig graph` rewrites the
+    // derived edge tables in place (mtime changes), so any reindex shifts this — old cache entries no
+    // longer match and are purged. Missing db → a constant sentinel (cache simply never hits).
+    private static string StoreKey(string dbPath)
+    {
+        try
+        {
+            var info = new FileInfo(dbPath);
+            return info.Exists ? $"{info.Length}:{info.LastWriteTimeUtc.Ticks}" : "absent";
+        }
+        catch (IOException)
+        {
+            return "absent";
+        }
+    }
+
+    // The cache key for a `rig tree` forest+effects artifact: everything the artifact is a function of —
+    // the store identity, the effective rule fingerprint, and the traversal parameters. `v1` is the
+    // payload-schema version (bump to ignore older blobs). Render-only flags (--files/--summary/--effects
+    // and --only/--exclude) are deliberately absent: they don't change the forest or the unfiltered
+    // effects, only how they're presented, so they must not fragment the cache.
+    private static string TreeCacheKey(
+        string storeKey,
+        string rulesHash,
+        string fromPattern,
+        int maxDepth,
+        FactPathFinder.TraversalMode mode,
+        bool raw
+    )
+    {
+        var material = $"tree|v1|{storeKey}|{rulesHash}|{fromPattern}|{maxDepth}|{mode}|{raw}";
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+    }
+
+    // "  ▶ kind  ⟦svc⟧" suffix for a from/root symbol (reaches/path/callers roots), or "" when there is
+    // no deployment context or the symbol has no known declaration site.
+    private static string HeaderSuffix(EpRenderContext? epContext, string symbolId)
+    {
+        var tag = epContext?.HeaderTag(symbolId);
+        return string.IsNullOrEmpty(tag) ? "" : $"  {tag}";
     }
 
     // Collapses single-target dispatch hops: when a node has exactly one child reached by impl-/override-
@@ -1102,7 +1590,7 @@ public static class CliApplication
     // naming the interface. Exact (a 1-target dispatch is determined, not an approximation); recurses
     // bottom-up so a chain of single-impl hops collapses. The node's own effect, a fan-out (>1), a
     // truncated/cut leaf, or extra children all block the fold (then children are folded in place).
-    private static TraceNode FoldSingleImplHops(TraceNode node, IReadOnlyDictionary<string, List<string>> effectsByMethod)
+    internal static TraceNode FoldSingleImplHops(TraceNode node, IReadOnlyDictionary<string, List<string>> effectsByMethod)
     {
         var kids = node.Children.Select(c => FoldSingleImplHops(c, effectsByMethod)).ToList();
         if (
@@ -1113,7 +1601,15 @@ public static class CliApplication
             && !effectsByMethod.ContainsKey(node.SymbolId)
             && !node.Truncated
         )
-            return kids[0] with { FoldedVia = FoldedViaTypeName(node.SymbolId) };
+            // Promote the impl into the folded-away interface's slot, carrying the interface node's generic
+            // binding (the impl was reached via dispatch and has none of its own; it runs on the SAME
+            // instantiation — identity base-list). Lets the impl's label + forwarding body monomorphize.
+            return kids[0] with
+            {
+                FoldedVia = FoldedViaTypeName(node.SymbolId),
+                DeclaringTypeArgBinding = kids[0].DeclaringTypeArgBinding ?? node.DeclaringTypeArgBinding,
+                MethodTypeArgBinding = kids[0].MethodTypeArgBinding ?? node.MethodTypeArgBinding,
+            };
         return node with { Children = kids };
     }
 
@@ -1184,18 +1680,37 @@ public static class CliApplication
         bool signatures = false,
         // Traversal-cut rules for the «cut» marker: a node matching a cut rule gets a visible marker
         // indicating that its subtree was cut during traversal (not just render). Null = no markers.
-        IReadOnlyList<FactTraversalCutRule>? cutRules = null
+        IReadOnlyList<FactTraversalCutRule>? cutRules = null,
+        // Deployment/EP context: when supplied, a node that is itself a rule-detected entry point is
+        // marked with the ▶ kind + service chip. Null = no EP marking (default tree).
+        EpRenderContext? epContext = null,
+        // `--full`: render effects as provenance leaf nodes (call site + line) BELOW each method instead of
+        // the inline {…} tag. effectLeavesByMethod carries the precomputed leaf bodies. false/null = the
+        // compact inline-tag rendering used by default/--effects/--summary.
+        bool full = false,
+        IReadOnlyDictionary<string, List<string>>? effectLeavesByMethod = null,
+        // Path-contextual monomorphization: the PARENT node's resolved concrete instantiation — its
+        // declaring-type args and its own-method args. A child resolves its forwarded T:/M: binding tokens
+        // against these, so a chain of static factories / generic methods renders concretely. Null at roots.
+        IReadOnlyList<string?>? parentDeclaringConcrete = null,
+        IReadOnlyList<string?>? parentMethodConcrete = null
     )
     {
+        // Compute visible children first — the fan-out label must reflect how many branches are
+        // actually rendered (pruning may drop effectless children, making ×2 fan-out misleading
+        // when only 1 child survives).
+        var children = prune ? node.Children.Where(c => SubtreeHasEffect(c, effectsByMethod)).ToList() : node.Children.ToList();
+        var childPrefix = isRoot ? "" : prefix + (isLast ? "   " : "│  ");
+
         var dispatchTag = node.DispatchBasis == "heuristic" ? $"{node.EdgeKind} ~heuristic" : node.EdgeKind;
         // A folded single-impl hop shows «via IFoo» (the collapsed interface) in place of the dispatch tag.
         var dispatch =
             node.FoldedVia is not null ? $" «via {node.FoldedVia}»"
             : node.EdgeKind is "impl-dispatch" or "override-dispatch"
-                ? (node.Fanout > 1 ? $" «{dispatchTag} ×{node.Fanout} fan-out»" : $" «{dispatchTag}»")
+                ? (children.Count > 1 ? $" «{dispatchTag} ×{children.Count} fan-out»" : $" «{dispatchTag}»")
             : "";
         // An async handoff hop (only present under --async): mark the cross-thread boundary.
-        var handoff = node.EdgeKind == "handoff" ? $" ⤳handoff via {ShortName(node.HandoffVia)} [cross_thread]" : "";
+        var handoff = node.EdgeKind == EdgeKinds.Handoff ? $" ⤳handoff via {ShortName(node.HandoffVia)} [cross_thread]" : "";
         var loop = node.LoopKind is null ? "" : $" 🔁[{ShortLoop(node.LoopDetail)}]";
         // Identical sibling edges collapsed under one parent (e.g. a generic method called once per
         // type-arg): show the call-site count rather than N repeated "↺seen" lines.
@@ -1221,26 +1736,79 @@ public static class CliApplication
             if (matchedCut is not null)
                 cutTag = $" «cut: {matchedCut.Label}»";
         }
-        var fx = effectsByMethod.TryGetValue(node.SymbolId, out var list) ? "  " + string.Join(" ", list.Select(e => "{" + e + "}")) : "";
+        // --full hoists effects out to leaf nodes (below), so the inline {…} tag is suppressed in that mode.
+        var fx =
+            !full && effectsByMethod.TryGetValue(node.SymbolId, out var list) && list.Count > 0
+                ? "  {" + string.Join(", ", list) + "}"
+                : "";
         var loc =
             files && locById is not null && locById.TryGetValue(node.SymbolId, out var l) && l.File is not null
                 ? $"  📄 {ShortenPath(l.File)}:{l.Line}"
                 : "";
-        var name = PrettyGenericName(ShortName(node.SymbolId)) + (signatures ? ShortSignature(node.SymbolId) : "");
-        var label = $"{name}{dispatch}{handoff}{loop}{calls}{seen}{opaqueTag}{cutTag}{fx}{loc}";
+        // This node's concrete instantiation (declaring-type args + own-method args), resolved from its
+        // monomorphization bindings against the PARENT's resolved instantiation — path-contextual
+        // monomorphization. Carried down to children as THEIR parent binding so a forwarding chain resolves.
+        // Two node kinds carry no binding of their own but render in the PARENT's type-param scope, so they
+        // INHERIT the parent's resolved instantiation (for both label and children) instead of resetting it:
+        //   • a synthetic lambda (`…~λN`) — its body forwards the enclosing method's T:/M: params, and
+        //     ShortName drops the `~λN` for a parameterful method so it renders AS that method; otherwise the
+        //     chain breaks at `skip: i => Create(...)`.
+        //   • an impl/override-dispatch hop — `IFoo<A,B>.M` dispatches to `Impl<A,B>.M` on the SAME runtime
+        //     instantiation (identity base-list `Impl<T,U> : IFoo<T,U>`, the common case). Arity-mismatched
+        //     impls fall back to placeholders automatically (PrettyGenericName only substitutes on a match);
+        //     a reordered base-list mapping (`Impl<U,T> : IFoo<T,U>`) would mislabel — rare, accepted limit.
+        // A node with its OWN binding always resolves that (a folded interface hop transfers its binding to
+        // the promoted impl — see FoldSingleImplHops). Only a binding-less lambda/dispatch node inherits.
+        var hasOwnBinding = node.DeclaringTypeArgBinding is not null || node.MethodTypeArgBinding is not null;
+        var inheritsParentScope =
+            !hasOwnBinding
+            && (node.SymbolId.Contains("~λ", StringComparison.Ordinal) || node.EdgeKind is "impl-dispatch" or "override-dispatch");
+        var (declaringConcrete, methodConcrete) = inheritsParentScope
+            ? (parentDeclaringConcrete, parentMethodConcrete)
+            : ResolveNodeInstantiation(
+                node.DeclaringTypeArgBinding,
+                node.MethodTypeArgBinding,
+                parentDeclaringConcrete,
+                parentMethodConcrete
+            );
+        var name =
+            PrettyGenericName(ShortName(node.SymbolId), declaringConcrete, methodConcrete)
+            + (signatures ? ShortSignature(node.SymbolId) : "");
+        // EP marker: when this node is itself a rule-detected entry point, wrap its name with "▶ kind"
+        // and a trailing service chip — the same custom rendering used by derive/callers.
+        var (epPrefix, epSuffix) = epContext?.ChipFor(node.SymbolId) ?? ("", "");
+        var label = $"{epPrefix}{name}{dispatch}{handoff}{loop}{calls}{seen}{opaqueTag}{cutTag}{fx}{loc}{epSuffix}";
         output.WriteLine(isRoot ? label : $"{prefix}{(isLast ? "└─ " : "├─ ")}{label}");
-
-        if (opaque is not null)
-            return;
-
-        var children = prune ? node.Children.Where(c => SubtreeHasEffect(c, effectsByMethod)).ToList() : node.Children.ToList();
-        var childPrefix = isRoot ? "" : prefix + (isLast ? "   " : "│  ");
 
         // Collapse-seam render rule: this node is a fan-out hub (e.g. a reflection service-locator or
         // an ORM entity-constructor factory). Fold its candidate children into ONE summary leaf —
         // the union of effects reachable through them + how many lines were hidden — instead of N
-        // near-identical polymorphic subtrees that drown out the real call story.
+        // near-identical polymorphic subtrees that drown out the real call story. Computed here (ahead of
+        // the effect-leaf pass) so leaf connectors know whether a trailing seam summary line follows.
         var seam = renderRules.MatchCollapseSeam(node.SymbolId);
+
+        // --full: emit this method's effects as provenance leaf nodes (call site + line) ahead of the call
+        // children, so the effect-producing calls (e.g. ExecuteAsync) are visible rather than folded into a
+        // tag. The last leaf gets └─ only when nothing trails it — an opaque node renders no children, a
+        // collapsed seam renders exactly one summary line, otherwise the visible call children follow.
+        if (
+            full
+            && effectLeavesByMethod is not null
+            && effectLeavesByMethod.TryGetValue(node.SymbolId, out var fxLeaves)
+            && fxLeaves.Count > 0
+        )
+        {
+            var trailing = opaque is not null ? 0 : (seam is not null && children.Count > 0 ? 1 : children.Count);
+            for (var i = 0; i < fxLeaves.Count; i++)
+            {
+                var lastLeaf = trailing == 0 && i == fxLeaves.Count - 1;
+                output.WriteLine($"{childPrefix}{(lastLeaf ? "└─ " : "├─ ")}{fxLeaves[i]}");
+            }
+        }
+
+        if (opaque is not null)
+            return;
+
         if (seam is not null && children.Count > 0)
         {
             // Lines-hidden is the rendered subtree size; the effect union is the REALISTIC reach-closure
@@ -1272,7 +1840,12 @@ public static class CliApplication
                 files,
                 locById,
                 signatures,
-                cutRules
+                cutRules,
+                epContext,
+                full,
+                effectLeavesByMethod,
+                declaringConcrete,
+                methodConcrete
             );
     }
 
@@ -1373,17 +1946,20 @@ public static class CliApplication
     {
         if (args.Length < 2 || args[1].StartsWith("--", StringComparison.Ordinal))
         {
-            error.WriteLine(
-                "Usage: rig callers <toPattern> [--roots|--entrypoints] [--async] [--rules <path>...] [--maxdepth|--depth <n>]"
-            );
+            error.WriteLine("Usage: rig callers <toPattern> [--orphans|--entrypoints] [--async] [--rules <path>...] [--depth <n>]");
             return 2;
         }
         var toPattern = args[1];
         var maxDepth = MaxDepthOf(args);
-        var rootsOnly = args.Contains("--roots");
+        var rootsOnly = args.Contains("--orphans") || args.Contains("--roots"); // --roots: deprecated alias
         var entrypointsOnly = args.Contains("--entrypoints");
+        if (rootsOnly && entrypointsOnly)
+        {
+            error.WriteLine("Options --orphans and --entrypoints can't be combined for 'rig callers'.");
+            return 2;
+        }
         var mode = TraversalModeOf(args);
-        var includeHandoff = mode == FactPathFinder.TraversalMode.AsyncInclude;
+        var raw = args.Contains("--raw");
         var extraRules = new List<string>();
         for (var i = 0; i < args.Length; i++)
             if (args[i] == "--rules" && i + 1 < args.Length)
@@ -1392,34 +1968,66 @@ public static class CliApplication
                 i++;
             }
         var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        // callers walks the SAME shaped graph as path/reaches/tree — monomorphized generic factories +
+        // cut + context rules, carried on the graph and honoured SYMMETRICALLY by the reverse traversal
+        // (a cut node yields no successors forward, so it is never a predecessor in reverse). Before this,
+        // callers walked the raw call_edges and fanned reflection/service-locator seams (e.g.
+        // ProvideService<T>, ~1k callers) out to thousands of unrelated entry points — disagreeing with
+        // what `path`/`reaches` reported for the same target. `--raw` bypasses shaping (the unfiltered
+        // reverse closure, for inspecting the exact plumbing).
+        var factoryRules = raw
+            ? Array.Empty<FactGenericFactoryRule>()
+            : FactGenericFactoryRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var cutRules = raw
+            ? Array.Empty<FactTraversalCutRule>()
+            : FactTraversalCutRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var contextRules = raw
+            ? Array.Empty<FactContextDispatchRule>()
+            : FactContextDispatchRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
 
         await using var context = OpenReadContext(workingDirectory);
+
+        // One shaped reverse subgraph (bounded when `rig graph` has run, else the full EF graph) drives
+        // all three callers modes — the set, the no-predecessor roots, and the rule-detected entrypoints.
+        var graph = await LoadShapedTraversalGraphAsync(
+            context,
+            toPattern,
+            SqlReachability.Direction.Reverse,
+            handoffRules,
+            factoryRules,
+            cutRules,
+            contextRules
+        );
 
         if (entrypointsOnly)
             return await RunCallersEntryPointsAsync(
                 context,
+                graph,
                 toPattern,
                 maxDepth,
                 mode,
-                includeHandoff,
                 handoffRules,
                 extraRules,
                 workingDirectory,
                 output
             );
 
-        // SQL-native traversal when the derived edge views exist: the reverse closure (+ shortest depth,
-        // + no-predecessor roots) is computed entirely in SQLite over call_edges ∪ dispatch_edges, so we
-        // skip loading the bounded subgraph into memory and running FactPathFinder.ReachedBy. Same edges,
-        // same maxDepth, same seed universe (the `nodes` table) → identical keyset. Falls back to the EF
-        // graph + in-memory ReachedBy when `rig graph` hasn't been run.
-        var useSql = await SqlReachability.HasGraphAsync(context);
+        // Deployment/EP context for the from-symbol annotations (opt-in via deployments.json). Null/no-op
+        // when unconfigured. Built once here for the roots + reachable listings.
+        var deployments = await DeploymentMap.LoadAsync(workingDirectory, await PrimaryDeploymentSolutionPathAsync(context));
+        var epContext = await BuildEpContextAsync(
+            context,
+            graph,
+            workingDirectory,
+            extraRules,
+            handoffRules,
+            deployments,
+            !args.Contains("--no-cache")
+        );
 
         if (rootsOnly)
         {
-            var roots = useSql
-                ? await SqlReachability.EntryRootsReachingAsync(context, toPattern, maxDepth, includeHandoff)
-                : FactPathFinder.EntryRootsReaching(await Reads.LoadFactGraphAsync(context, handoffRules), toPattern, maxDepth, mode: mode);
+            var roots = FactPathFinder.EntryRootsReaching(graph, toPattern, maxDepth, mode: mode);
             if (roots.Count == 0)
             {
                 output.WriteLine($"No entry-point candidates reach '{toPattern}' (or no symbol matches).");
@@ -1427,13 +2035,11 @@ public static class CliApplication
             }
             output.WriteLine($"Entry-point candidates reaching '{toPattern}': {roots.Count}");
             foreach (var r in roots)
-                output.WriteLine($"  {r}");
+                output.WriteLine($"  {r}{HeaderSuffix(epContext, r)}");
             return 0;
         }
 
-        var reachable = useSql
-            ? await SqlReachability.ReachedWithDepthAsync(context, toPattern, SqlReachability.Direction.Reverse, maxDepth, includeHandoff)
-            : FactPathFinder.ReachedBy(await Reads.LoadFactGraphAsync(context, handoffRules), toPattern, maxDepth, mode: mode);
+        var reachable = FactPathFinder.ReachedBy(graph, toPattern, maxDepth, mode: mode);
         if (reachable.Count == 0)
         {
             output.WriteLine($"No symbol matches '{toPattern}'.");
@@ -1456,29 +2062,27 @@ public static class CliApplication
     // reach the target across a handoff (scheduled). Honors --maxdepth.
     private static async Task<int> RunCallersEntryPointsAsync(
         RigDbContext context,
+        FactGraphData graph,
         string toPattern,
         int maxDepth,
         FactPathFinder.TraversalMode mode,
-        bool includeHandoff,
         IReadOnlyList<FactHandoffRule> handoffRules,
         IReadOnlyList<string> extraRules,
         string workingDirectory,
         TextWriter output
     )
     {
-        // Reverse closure of the target (every method that reaches it), as a DocID set.
-        var reachable = await SqlReachability.HasGraphAsync(context)
-            ? (
-                await SqlReachability.ReachedWithDepthAsync(context, toPattern, SqlReachability.Direction.Reverse, maxDepth, includeHandoff)
-            ).Keys.ToHashSet(StringComparer.Ordinal)
-            : FactPathFinder
-                .ReachedBy(await Reads.LoadFactGraphAsync(context, handoffRules), toPattern, maxDepth, mode: mode)
-                .Keys.ToHashSet(StringComparer.Ordinal);
+        // Reverse closure of the target (every method that reaches it) over the SAME shaped graph the
+        // caller loaded — so the rule-detected entry points are intersected with the cut-shaped reach,
+        // not the raw fan-out.
+        var reachable = FactPathFinder.ReachedBy(graph, toPattern, maxDepth, mode: mode).Keys.ToHashSet(StringComparer.Ordinal);
         if (reachable.Count == 0)
         {
             output.WriteLine($"No symbol matches '{toPattern}'.");
             return 1;
         }
+
+        var deployments = await DeploymentMap.LoadAsync(workingDirectory, await PrimaryDeploymentSolutionPathAsync(context));
 
         // (FilePath, Line) of every reverse-reachable method — the join key against derived EP sites.
         var methods = await Reads.LoadDeadCodeMethodsAsync(context);
@@ -1497,7 +2101,7 @@ public static class CliApplication
         var touching = allEps
             .Where(e => reachableSites.Contains((e.FilePath, e.Line)))
             .GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line))
-            .Select(g => g.Key)
+            .Select(g => (g.Key.Kind, g.Key.Route, g.Key.FilePath, g.Key.Line, g.First().Requires))
             .OrderBy(e => e.Kind, StringComparer.Ordinal)
             .ThenBy(e => e.Route, StringComparer.Ordinal)
             .ToList();
@@ -1515,8 +2119,10 @@ public static class CliApplication
         {
             output.WriteLine($"  {kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup)
-                output.WriteLine($"      {e.Route}  {ShortenPath(e.FilePath)}:{e.Line}");
+                WriteEntryPointLine(output, deployments, e.Route, e.FilePath, e.Line, e.Requires);
         }
+        if (!deployments.IsEmpty)
+            WriteServiceSummary(touching.Select(t => (t.Kind, (string?)t.FilePath, t.Requires)), deployments, output);
         return 0;
     }
 
@@ -1539,6 +2145,11 @@ public static class CliApplication
         }
         var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         await using var context = OpenReadContext(workingDirectory);
+
+        // Deployment attribution (opt-in: only when deployments.json sits next to .rig). Maps each EP's
+        // source file to the deployed service(s) whose process loads it, via the indexed solution's
+        // ProjectReference graph. Empty (no-op) when the config is absent.
+        var deployments = await DeploymentMap.LoadAsync(workingDirectory, await PrimaryDeploymentSolutionPathAsync(context), error);
 
         // Classified handoffs (background/timer/actor/event) shared by the listing, the origin-EP
         // promotion, and the TSV output — derived once from the classified call graph.
@@ -1577,11 +2188,18 @@ public static class CliApplication
             var tsvEpRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
             var tsvClassRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(workingDirectory, extraRules);
             var tsvEps = FactEntryPointDeriver.Derive(epData, tsvEpRules, tsvClassRules);
-            foreach (var ep in tsvEps)
-                output.WriteLine($"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}");
-            // Promoted handoff origins (Phase 3) as first-class entry points, deduped against L1 EPs.
-            foreach (var ep in PromoteHandoffOrigins(classifiedHandoffs, tsvEps))
-                output.WriteLine($"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}");
+            // Trailing columns (comma-joined, empty when no deployments.json): `service` = the hosts
+            // that LOAD the EP (link its code); `activeService` = the subset it is ACTIVE-IN after the
+            // capability gate (== service when the EP is ungated). `service` is kept unchanged for
+            // back-compat; tooling that wants runs-here filters on the new `activeService` column.
+            foreach (var ep in tsvEps.Concat(PromoteHandoffOrigins(classifiedHandoffs, tsvEps)))
+            {
+                var loaded = deployments.ServicesForFile(ep.FilePath);
+                var active = deployments.ActiveServices(loaded, ep.Requires);
+                output.WriteLine(
+                    $"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}\t{string.Join(",", loaded)}\t{string.Join(",", active)}"
+                );
+            }
             return 0;
         }
 
@@ -1617,11 +2235,18 @@ public static class CliApplication
 
         output.WriteLine();
         output.WriteLine($"Entry points re-derived from facts: {derivedEps.Count}");
+        var perKindSample = limit / 4 + 1;
         foreach (var kindGroup in derivedEps.GroupBy(e => e.Kind).OrderByDescending(g => g.Count()))
         {
             output.WriteLine($"  {kindGroup.Key}: {kindGroup.Count()}");
-            foreach (var e in kindGroup.Take(limit / 4 + 1))
-                output.WriteLine($"      {e.Route}  {ShortenPath(e.FilePath)}:{e.Line}");
+            foreach (var e in kindGroup.Take(perKindSample))
+                WriteEntryPointLine(output, deployments, e.Route, e.FilePath, e.Line, e.Requires);
+            // The per-kind listing is a SAMPLE (readability). Say so when truncated, so a grep over this
+            // output is never silently a false negative — the full set is in `--format tsv` (or raise --limit).
+            if (kindGroup.Count() > perKindSample)
+                output.WriteLine(
+                    $"      … +{kindGroup.Count() - perKindSample} more {kindGroup.Key} (sample shown; `rig derive --format tsv` lists all)"
+                );
         }
 
         // --- Classified handoff entry points (Phase 1/3): dispatcher-consumed delegates, promoted to
@@ -1637,12 +2262,110 @@ public static class CliApplication
         foreach (var kindGroup in classifiedHandoffs.GroupBy(h => h.Kind).OrderByDescending(g => g.Count()))
         {
             output.WriteLine($"  {kindGroup.Key}: {kindGroup.Count()}");
-            foreach (var h in kindGroup.Take(limit / 4 + 1))
+            foreach (var h in kindGroup.Take(perKindSample))
+            {
+                var tag = deployments.IsEmpty ? "" : $"  {EntryPointRenderer.DeployTag(deployments, h.FilePath, h.Requires)}";
                 output.WriteLine(
-                    $"      {ShortName(h.Target)}  ⤳ via {h.Dispatcher}\n          registered in {ShortName(h.RegisteredIn)}  {ShortenPath(h.FilePath)}:{h.Line}  [async_handoff]"
+                    $"      {ShortName(h.Target)}  ⤳ via {h.Dispatcher}{tag}\n          registered in {ShortName(h.RegisteredIn)}  {ShortenPath(h.FilePath)}:{h.Line}  [async_handoff]"
+                );
+            }
+            if (kindGroup.Count() > perKindSample)
+                output.WriteLine(
+                    $"      … +{kindGroup.Count() - perKindSample} more {kindGroup.Key} (sample shown; `rig derive --format tsv` lists all)"
                 );
         }
+
+        // The headline: entry points per deployed service (the summary table). An EP counts in every
+        // service whose process loads it (shared libraries fan out to many hosts — see the chip counts).
+        if (!deployments.IsEmpty)
+            WriteServiceSummary(derivedEps.Concat(origins).Select(e => (e.Kind, (string?)e.FilePath, e.Requires)), deployments, output);
         return 0;
+    }
+
+    // The two-line "custom" EP listing line (Format A) when deployment data exists; the plain
+    // route + location otherwise. The kind is supplied by the caller's group header, so it's not
+    // repeated on the line — only the ▶ marker, route, deployment chip, then the indented location.
+    private static void WriteEntryPointLine(
+        TextWriter output,
+        DeploymentMap deployments,
+        string route,
+        string filePath,
+        int line,
+        IReadOnlyList<string>? requires = null
+    )
+    {
+        if (deployments.IsEmpty)
+        {
+            output.WriteLine($"      {route}  {ShortenPath(filePath)}:{line}");
+            return;
+        }
+        output.WriteLine($"      {EntryPointRenderer.Marker} {route}  {EntryPointRenderer.DeployTag(deployments, filePath, requires)}");
+        output.WriteLine($"          {ShortenPath(filePath)}:{line}");
+    }
+
+    // Per-service rollup of entry points: total + per-kind breakdown, in deployments.json order.
+    // An EP counts in every service it is ACTIVE-IN (loaded AND capability-gated in) — so a gated
+    // actor counts only in the host(s) that `provides` its required token, not in every host that
+    // merely links it. A service that LOADS an EP but is gated out of it is still listed, with a
+    // `· N linked-inactive` tail (and a 0 active count when it activates none) — so the "loaded here,
+    // doesn't run here" signal is visible in the rollup, not just on each EP line. EPs whose owning
+    // project is in no service closure (tests/tools) fall into "(unattributed)".
+    private static void WriteServiceSummary(
+        IEnumerable<(string Kind, string? FilePath, IReadOnlyList<string>? Requires)> eps,
+        DeploymentMap deployments,
+        TextWriter output
+    )
+    {
+        var byService = new Dictionary<string, Dictionary<string, int>>(StringComparer.Ordinal);
+        var totals = new Dictionary<string, int>(StringComparer.Ordinal);
+        var inactive = new Dictionary<string, int>(StringComparer.Ordinal); // loaded but gated out
+        var unattributed = 0;
+        foreach (var (kind, filePath, requires) in eps)
+        {
+            var loaded = deployments.ServicesForFile(filePath);
+            if (loaded.Count == 0)
+            {
+                unattributed++;
+                continue;
+            }
+            var active = deployments.ActiveServices(loaded, requires);
+            foreach (var s in active)
+            {
+                if (!byService.TryGetValue(s, out var kinds))
+                    byService[s] = kinds = new Dictionary<string, int>(StringComparer.Ordinal);
+                kinds[kind] = kinds.GetValueOrDefault(kind) + 1;
+                totals[s] = totals.GetValueOrDefault(s) + 1;
+            }
+            // Services that link the EP's code but are gated out of activating it.
+            foreach (var s in loaded)
+                if (!active.Contains(s))
+                    inactive[s] = inactive.GetValueOrDefault(s) + 1;
+        }
+
+        output.WriteLine();
+        output.WriteLine("Entry points per deployed service (active-in; `· N linked-inactive` = loaded but gated out of that host):");
+        foreach (var svc in deployments.Services)
+        {
+            var total = totals.GetValueOrDefault(svc.Name);
+            var inactiveCount = inactive.GetValueOrDefault(svc.Name);
+            if (total == 0 && inactiveCount == 0)
+                continue;
+            var breakdown =
+                total == 0
+                    ? ""
+                    : string.Join(
+                        " ",
+                        byService[svc.Name]
+                            .OrderByDescending(k => k.Value)
+                            .ThenBy(k => k.Key, StringComparer.Ordinal)
+                            .Select(k => $"{k.Key}={k.Value}")
+                    );
+            var inactiveTail = inactiveCount > 0 ? $"   · {inactiveCount} linked-inactive" : "";
+            var label = svc.Kind is null ? svc.Name : $"{svc.Name} ({svc.Kind})";
+            output.WriteLine($"  {label, -46} {total, 6}   {breakdown}{inactiveTail}");
+        }
+        if (unattributed > 0)
+            output.WriteLine($"  {"(unattributed — tests/tools/no service)", -46} {unattributed, 6}");
     }
 
     // Phase-3 origin promotion: a CLASSIFIED handoff target becomes a first-class DerivedEntryPoint —
@@ -1665,7 +2388,7 @@ public static class CliApplication
                 continue;
             var kind = h.Kind ?? "background";
             var method = kind.ToUpperInvariant();
-            result.Add(new DerivedEntryPoint(kind, method, route, $"{kind} {method} {route}", h.FilePath, h.Line));
+            result.Add(new DerivedEntryPoint(kind, method, route, $"{kind} {method} {route}", h.FilePath, h.Line, h.Requires));
         }
         return result;
     }
@@ -1712,7 +2435,7 @@ public static class CliApplication
     private static async Task<int> RunDeadAsync(string[] args, TextWriter output, TextWriter error, string workingDirectory)
     {
         var limit = int.TryParse(GetOption(args, "--limit"), out var l) ? l : 80;
-        var libMode = args.Contains("--lib");
+        var libMode = args.Contains("--include-lib") || args.Contains("--lib"); // --lib: deprecated alias
         var includeDispatch = args.Contains("--include-dispatch");
         var showAll = args.Contains("--all");
         var tsv = string.Equals(GetOption(args, "--format"), "tsv", StringComparison.OrdinalIgnoreCase);
@@ -1760,7 +2483,7 @@ public static class CliApplication
         // sync-cut prunes the registrar->callback edge from reach, so the callback must be a root or it
         // would be falsely flagged dead. (Constraint #1 in the handoff.)
         foreach (var edge in graph.CallEdges)
-            if (edge.Kind is "methodGroup" or "handoff")
+            if (edge.Kind is EdgeKinds.MethodGroup or EdgeKinds.Handoff)
                 roots.Add(edge.Callee);
         // Process entry points: any method named Main.
         foreach (var m in methods)
@@ -1769,8 +2492,8 @@ public static class CliApplication
         // Test methods are framework-invoked roots: a ctor ref to a test attribute marks its enclosing
         // method ([Fact]/[Theory]/[Test]). Built in so `rig dead` works with no rules file.
         foreach (var cr in epData.CtorRefs)
-            if (cr.EnclosingSymbolId is not null && IsTestAttribute(cr.TargetSymbolId))
-                roots.Add(cr.EnclosingSymbolId);
+            if (cr.Enclosing is not null && IsTestAttribute(cr.Target))
+                roots.Add(cr.Enclosing);
         // User-supplied roots (--root <pattern>): every method whose SymbolId contains the pattern.
         if (rootPatterns.Count > 0)
             foreach (var m in methods)
@@ -1817,6 +2540,83 @@ public static class CliApplication
         || targetSymbolId.IndexOf("TheoryAttribute", StringComparison.Ordinal) >= 0
         || targetSymbolId.IndexOf("TestAttribute", StringComparison.Ordinal) >= 0;
 
+    // Formats the raw effect group for one method into display strings, applying three transforms:
+    // (1) lock:acquire+release pairs on the same resource → single "🔒 lock [resource]" entry
+    //     (the pair is always emitted together and adds no information individually);
+    //     if the sole resource is Threading.Monitor the resource name is omitted (always the same).
+    // (2) identical rendered strings → deduplicated with a "×N" suffix.
+    // (3) all effects are returned as individual strings; the caller joins them inside one {…} block.
+    private static List<string> FormatEffectGroup(
+        IEnumerable<Rig.Domain.Data.DerivedEffect> effects,
+        IReadOnlyDictionary<string, string> emoji
+    )
+    {
+        var list = effects.ToList();
+
+        // Collapse lock acquire+release pairs per resource.
+        var acquiresByResource = list.Where(e => e.Provider == "lock" && e.Operation == "acquire")
+            .GroupBy(e => e.ResourceType, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key ?? "", g => g.Count(), StringComparer.OrdinalIgnoreCase);
+        var releasesByResource = list.Where(e => e.Provider == "lock" && e.Operation == "release")
+            .GroupBy(e => e.ResourceType, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key ?? "", g => g.Count(), StringComparer.OrdinalIgnoreCase);
+
+        var pairedResources = acquiresByResource
+            .Keys.Intersect(releasesByResource.Keys, StringComparer.OrdinalIgnoreCase)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var result = new List<string>();
+
+        // Emit one collapsed "lock" entry per paired resource.
+        foreach (var resource in pairedResources.OrderBy(r => r, StringComparer.OrdinalIgnoreCase))
+        {
+            var lockEmoji = FactEffectEmojiProvider.For(emoji, "lock", "held");
+            // Omit resource name when it is always Threading.Monitor — adds no information.
+            var resourceLabel = resource.Contains("Threading.Monitor", StringComparison.OrdinalIgnoreCase) ? "" : $" {ShortName(resource)}";
+            result.Add($"{lockEmoji} lock{resourceLabel}");
+        }
+
+        // Emit non-lock effects and any unpaired lock effects normally.
+        foreach (var e in list)
+        {
+            var isPaired =
+                pairedResources.Contains(e.ResourceType ?? "")
+                && (e.Provider == "lock" && (e.Operation == "acquire" || e.Operation == "release"));
+            if (isPaired)
+                continue;
+            result.Add(
+                $"{FactEffectEmojiProvider.For(emoji, e.Provider, e.Operation)} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}"
+            );
+        }
+
+        // Dedup: collapse identical strings to "label ×N".
+        return result.GroupBy(s => s, StringComparer.Ordinal).Select(g => g.Count() > 1 ? $"{g.Key} ×{g.Count()}" : g.Key).ToList();
+    }
+
+    // `tree --full`: one effect rendered as its OWN provenance leaf body — glyph + provider:op + resource +
+    // the producing call site (file:line) — instead of the compact inline {…} tag the other modes hoist
+    // onto the enclosing method. The caller orders a method's leaves by source line.
+    private static string FormatEffectLeaf(Rig.Domain.Data.DerivedEffect e, IReadOnlyDictionary<string, string> emoji)
+    {
+        var loc = string.IsNullOrEmpty(e.FilePath) ? "" : $"  {ShortenPath(e.FilePath)}:{e.Line}";
+        return $"{FactEffectEmojiProvider.For(emoji, e.Provider, e.Operation)} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}{loc}";
+    }
+
+    // `tree --full`: a library call that produced NO effect (resolved to a referenced-assembly target, but
+    // no rule matched it). Rendered as a dim leaf (· marker) so the call is visible without implying an
+    // effect — distinct from the glyph-prefixed effect leaves above.
+    private static string FormatUnresolvedLeaf(string target, string? filePath, int line)
+    {
+        var loc = string.IsNullOrEmpty(filePath) ? "" : $"  {ShortenPath(filePath)}:{line}";
+        var name = ShortName(target);
+        // ShortName keeps a leading DocID kind prefix ("M:"/"T:"/…) for a namespace-less symbol; strip it.
+        if (name.Length > 2 && name[1] == ':')
+            name = name[2..];
+        // Render generic arity the same way resolved tree nodes do (`Seq`1.Iter` -> `Seq<T>.Iter`) so the
+        // library leaves don't show raw backtick arity next to the `<T,U>` of resolved siblings.
+        return $"· {PrettyGenericName(name)}{loc}";
+    }
+
     private static string ShortName(string? symbolId)
     {
         if (string.IsNullOrEmpty(symbolId))
@@ -1825,9 +2625,31 @@ public static class CliApplication
         var paren = s.IndexOf('(');
         if (paren >= 0)
             s = s.Substring(0, paren);
-        var lastDot = s.LastIndexOf('.');
-        var prevDot = lastDot > 0 ? s.LastIndexOf('.', lastDot - 1) : -1;
+        // Take the last two namespace segments, scanning for TOP-LEVEL dots only: a constructed-generic
+        // DocID renders type args in braces (`Foo{System.Int32}`) whose dots would otherwise mis-split the
+        // name into garbage like "Int32}}.New". Skip dots nested inside {}/<>/()/[] by tracking depth.
+        var lastDot = TopLevelLastDot(s, s.Length);
+        var prevDot = lastDot > 0 ? TopLevelLastDot(s, lastDot) : -1;
         return prevDot >= 0 ? s.Substring(prevDot + 1) : s;
+    }
+
+    // The index of the last '.' at bracket-depth 0 strictly before `end` (scanning backward), or -1.
+    // Dots inside generic-arg braces/angles/parens/brackets are skipped so a namespaced type ARGUMENT
+    // (e.g. `System.Int32` in `Foo{System.Int32}`) never mis-splits the enclosing name.
+    private static int TopLevelLastDot(string s, int end)
+    {
+        var depth = 0;
+        for (var i = end - 1; i >= 0; i--)
+        {
+            var c = s[i];
+            if (c is '}' or '>' or ')' or ']')
+                depth++;
+            else if (c is '{' or '<' or '(' or '[')
+                depth--;
+            else if (c == '.' && depth == 0)
+                return i;
+        }
+        return -1;
     }
 
     // Compact parameter signature for `rig tree --signatures`, so same-named OVERLOADS (e.g. the four
@@ -1929,28 +2751,200 @@ public static class CliApplication
     // like C#: "Cache`2.GetResults" -> "Cache<T, U>.GetResults",
     // "CheckAllExternalApplications``1" -> "CheckAllExternalApplications<T>". A bare name is returned
     // unchanged. (Parameter type-param REFERENCES are handled in SimplifyParamType.)
-    private static string PrettyGenericName(string name)
+    // DocID-form name -> readable display. Two generic shapes:
+    //   * OPEN generic backtick arity `N / ``N  ->  <T, U, …>  (placeholder type params),
+    //   * CONSTRUCTED generic braces  {Ns.A, Ns.B{Ns.C}}  ->  <A, B<C>>  (actual args, namespaces
+    //     stripped, nested handled) — so a LanguageExt `NewType{MedDBase.ChamberId,System.Int32,…}.New`
+    //     reads as `NewType<ChamberId, Int32, …>.New` instead of a wall of fully-qualified braces.
+    // Type-arg simple-naming applies only INSIDE the braces (depth>0); the outer name (already shortened
+    // by ShortName) and the trailing `.Member` keep their dots.
+    private static string PrettyGenericName(string name) => PrettyGenericName(name, null, null);
+
+    // `declaringArgs` / `methodArgs` (when non-null) are the ordered, namespace-stripped concrete type
+    // arguments the node ran under — resolved from the generic monomorphization bindings (see
+    // ResolveNodeInstantiation). They substitute the label's two arity expansions: the declaring type's
+    // `N (declaringArgs) and a generic method's own ``M (methodArgs) — e.g. `QueryPipeline<Account, Invoice>
+    // .Create<Entity, Account>` instead of `QueryPipeline<T, U>.Create<T, U>`. A null list or per-position
+    // null keeps that slot's placeholder. The constructed-brace form ({Ns.A,Ns.B}) is already concrete and
+    // never reaches the arity branch, so it is unaffected.
+    private static string PrettyGenericName(string name, IReadOnlyList<string?>? declaringArgs, IReadOnlyList<string?>? methodArgs)
     {
-        if (name.IndexOf('`') < 0)
+        if (name.IndexOf('`') < 0 && name.IndexOf('{') < 0)
             return name;
         var sb = new StringBuilder();
+        var token = new StringBuilder();
+        var depth = 0;
+        // Arity expansions appear in order: the FIRST is the declaring type's `N (substitute declaringArgs),
+        // the SECOND is a generic method's own ``M (substitute methodArgs). A per-position null arg keeps
+        // that slot's placeholder (T/U/V), so a partial binding still resolves the positions it knows.
+        var arityGroup = 0;
+
+        void FlushToken()
+        {
+            if (token.Length == 0)
+                return;
+            var t = token.ToString();
+            token.Clear();
+            // Inside a generic-arg list, drop the namespace of a type token (Ns.Ns.Type -> Type).
+            if (depth > 0)
+            {
+                var lastDot = t.LastIndexOf('.');
+                if (lastDot >= 0)
+                    t = t.Substring(lastDot + 1);
+            }
+            sb.Append(t);
+        }
+
         var i = 0;
         while (i < name.Length)
         {
-            if (name[i] == '`')
+            var c = name[i];
+            switch (c)
             {
-                i++;
-                if (i < name.Length && name[i] == '`')
+                case '`':
+                    // `N after a NAME ("Foo`2") is ARITY -> <T, U>. A STANDALONE `N (token buffer empty,
+                    // i.e. an argument position like the `0,`1 in "QueryPipeline{`0,`1}") is a positional
+                    // type-PARAMETER reference -> that one param (T/U/V), NOT an arity count.
+                    var isArity = token.Length > 0;
+                    FlushToken();
                     i++;
-                var ds = i;
-                while (i < name.Length && char.IsDigit(name[i]))
+                    if (i < name.Length && name[i] == '`')
+                        i++;
+                    var ds = i;
+                    while (i < name.Length && char.IsDigit(name[i]))
+                        i++;
+                    if (int.TryParse(name.Substring(ds, i - ds), out var n))
+                    {
+                        if (!isArity)
+                            sb.Append(TypeParamName(n)); // `0 -> T, `1 -> U
+                        else if (n > 0)
+                        {
+                            // First arity group = the declaring type's, second = a generic method's own.
+                            var args =
+                                arityGroup == 0 ? declaringArgs
+                                : arityGroup == 1 ? methodArgs
+                                : null;
+                            arityGroup++;
+                            var usable = args is not null && args.Count == n;
+                            sb.Append('<')
+                                .Append(
+                                    string.Join(
+                                        ", ",
+                                        Enumerable.Range(0, n).Select(k => usable && args![k] is { } v ? v : TypeParamName(k))
+                                    )
+                                )
+                                .Append('>');
+                        }
+                    }
+                    break;
+                case '{':
+                    FlushToken();
+                    sb.Append('<');
+                    depth++;
                     i++;
-                if (int.TryParse(name.Substring(ds, i - ds), out var n) && n > 0)
-                    sb.Append('<').Append(string.Join(", ", Enumerable.Range(0, n).Select(TypeParamName))).Append('>');
+                    break;
+                case '}':
+                    FlushToken();
+                    sb.Append('>');
+                    depth = Math.Max(0, depth - 1);
+                    i++;
+                    break;
+                case ',':
+                    FlushToken();
+                    sb.Append(", ");
+                    i++;
+                    if (i < name.Length && name[i] == ' ')
+                        i++; // collapse an existing ", " so spacing stays single
+                    break;
+                default:
+                    token.Append(c);
+                    i++;
+                    break;
+            }
+        }
+        FlushToken();
+        return sb.ToString();
+    }
+
+    // Path-contextual monomorphization: resolve this node's concrete instantiation — (declaring-type args,
+    // own-method args) — from its mined bindings against the PARENT node's resolved instantiation. Each
+    // binding is a JSON string[] of C:/T:/M:/? tokens (see ReferenceFact). A "C:" token is the concrete type
+    // (namespace-stripped); a "T:n"/"M:n" token forwards the parent's n-th declaring/method concrete; "?" or
+    // an out-of-range/missing forward yields null (that position keeps its placeholder). Returns (null, null)
+    // for non-generic callees. The arrays it returns become the children's parent instantiation.
+    private static (IReadOnlyList<string?>? Declaring, IReadOnlyList<string?>? Method) ResolveNodeInstantiation(
+        string? declaringBinding,
+        string? methodBinding,
+        IReadOnlyList<string?>? parentDeclaring,
+        IReadOnlyList<string?>? parentMethod
+    ) =>
+        (
+            ResolveBindingTokens(declaringBinding, parentDeclaring, parentMethod),
+            ResolveBindingTokens(methodBinding, parentDeclaring, parentMethod)
+        );
+
+    private static IReadOnlyList<string?>? ResolveBindingTokens(
+        string? bindingJson,
+        IReadOnlyList<string?>? parentDeclaring,
+        IReadOnlyList<string?>? parentMethod
+    )
+    {
+        if (string.IsNullOrEmpty(bindingJson))
+            return null;
+        string[]? tokens;
+        try
+        {
+            tokens = System.Text.Json.JsonSerializer.Deserialize<string[]>(bindingJson!);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+        if (tokens is null || tokens.Length == 0)
+            return null;
+
+        static string? Forward(IReadOnlyList<string?>? parent, string ordinalText) =>
+            int.TryParse(ordinalText, out var ord) && parent is not null && ord >= 0 && ord < parent.Count ? parent[ord] : null;
+
+        var resolved = new string?[tokens.Length];
+        for (var i = 0; i < tokens.Length; i++)
+        {
+            var tok = tokens[i];
+            resolved[i] =
+                tok.Length < 2
+                    ? null
+                    : tok[0] switch
+                    {
+                        'C' => StripTypeNamespaces(tok.Substring(2)),
+                        'T' => Forward(parentDeclaring, tok.Substring(2)),
+                        'M' => Forward(parentMethod, tok.Substring(2)),
+                        _ => null,
+                    };
+        }
+        return resolved;
+    }
+
+    // Strips the namespace from every dotted type token in a C#-display type name, preserving generic
+    // structure: "Ns.Foo<Ns.A, Other.B>" -> "Foo<A, B>", "System.Int32" -> "Int32".
+    private static string StripTypeNamespaces(string type)
+    {
+        var sb = new StringBuilder(type.Length);
+        var i = 0;
+        while (i < type.Length)
+        {
+            var c = type[i];
+            if (char.IsLetterOrDigit(c) || c is '_' or '.')
+            {
+                var start = i;
+                while (i < type.Length && (char.IsLetterOrDigit(type[i]) || type[i] is '_' or '.'))
+                    i++;
+                var token = type.Substring(start, i - start);
+                var dot = token.LastIndexOf('.');
+                sb.Append(dot >= 0 ? token.Substring(dot + 1) : token);
             }
             else
             {
-                sb.Append(name[i]);
+                sb.Append(c);
                 i++;
             }
         }
@@ -1972,9 +2966,7 @@ public static class CliApplication
     // across IO"). Empty when the effect carries no span observation.
     private static string SpanTag(DerivedEffect effect)
     {
-        var span = (effect.Observations ?? []).FirstOrDefault(o =>
-            o.Type is "transaction_spans_effect" or "lock_held_across_effect"
-        );
+        var span = (effect.Observations ?? []).FirstOrDefault(o => o.Type is "transaction_spans_effect" or "lock_held_across_effect");
         if (span is null)
             return "";
         return span.Type == "transaction_spans_effect" ? "  ⚠ inside-open-tx" : "  ⚠ lock-held-across";
@@ -1986,13 +2978,22 @@ public static class CliApplication
         return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
     }
 
+    // The solution to resolve deployments.json against: the run with the MOST symbols — the primary/root
+    // solution (e.g. MedDBase.slnx at the monorepo root), NOT ListRunsAsync().FirstOrDefault() (which is
+    // newest-first). In a multi-solution `--merge` store the newest run is whatever sub-solution was
+    // merged last, sitting in a subdirectory; deployments.json host paths are relative to the root
+    // solution's directory, so resolving against a sub-solution makes every host "not found". The
+    // max-symbol run is the real root in practice. Null when the store has no runs.
+    private static async Task<string?> PrimaryDeploymentSolutionPathAsync(RigDbContext context) =>
+        (await Reads.ListRunsAsync(context)).OrderByDescending(r => r.SymbolCount).FirstOrDefault()?.SolutionPath;
+
     // The flags each command accepts. Option VALUES never start with "--" for any rig command
     // (patterns, paths, ints, effect names), so any leading-"--" token that isn't listed here is a
     // genuine typo or wrong name — rejected up front rather than silently ignored. (This is what bit
     // `tree --depth 4`: --depth was unknown, dropped, and the tree rendered unbounded.)
     private static readonly Dictionary<string, string[]> KnownFlagsByCommand = new(StringComparer.Ordinal)
     {
-        ["index"] = ["--rules", "--identity", "--from", "--parallelism", "--durable"],
+        ["index"] = ["--rules", "--identity", "--from", "--parallelism", "--merge", "--include-tests"],
         ["mine"] = ["--from", "--rules", "--identity", "--parallelism"],
         ["runs"] = [],
         ["di"] = [],
@@ -2001,7 +3002,7 @@ public static class CliApplication
         ["files"] = ["--skipped"],
         ["symbols"] = ["--kind", "--limit"],
         ["refs"] = ["--first-party", "--kind", "--limit"],
-        ["path"] = ["--async", "--maxdepth", "--depth"],
+        ["path"] = ["--async", "--raw", "--rules", "--maxdepth", "--depth"],
         ["reaches"] = ["--async", "--rules", "--maxdepth", "--depth", "--format", "--raw", "--only", "--exclude"],
         ["tree"] =
         [
@@ -2018,10 +3019,12 @@ public static class CliApplication
             "--depth",
             "--only",
             "--exclude",
+            "--no-cache",
+            "--time",
         ],
-        ["callers"] = ["--roots", "--entrypoints", "--async", "--rules", "--maxdepth", "--depth"],
+        ["callers"] = ["--orphans", "--roots", "--entrypoints", "--async", "--raw", "--rules", "--maxdepth", "--depth"],
         ["derive"] = ["--limit", "--rules", "--only", "--exclude", "--format"],
-        ["dead"] = ["--limit", "--lib", "--include-dispatch", "--all", "--format", "--rules", "--root"],
+        ["dead"] = ["--limit", "--include-lib", "--lib", "--include-dispatch", "--all", "--format", "--rules", "--root"],
     };
 
     // Reject the first unrecognised --flag for the command (--help/--version always allowed). Commands
@@ -2045,6 +3048,18 @@ public static class CliApplication
         return false;
     }
 
+    // Reject more than one flag from a mutually-exclusive mode group (e.g. tree's --full/--summary/--effects).
+    // Returns true (and prints guidance) when two or more are present.
+    private static bool HasConflictingModes(string[] args, string command, TextWriter error, params string[] group)
+    {
+        var present = group.Where(args.Contains).ToList();
+        if (present.Count <= 1)
+            return false;
+        error.WriteLine($"Options {string.Join(" and ", present)} can't be combined for 'rig {command}'.");
+        error.WriteLine("  Run `rig --help` for usage.");
+        return true;
+    }
+
     // --maxdepth defaults to UNBOUNDED (int.MaxValue) — traversal runs to its natural frontier (the
     // closure, the maxNodes cap, and cycle/shared-callee dedup all still terminate it), not an arbitrary
     // hop cap. Pass --maxdepth <n> to bound it explicitly (e.g. for a shallow nearest-effects view).
@@ -2063,6 +3078,20 @@ public static class CliApplication
     // Effect selection for reaches/tree/derive: --only keeps just the listed effects, --exclude drops
     // them (exclude wins on overlap). Tokens match an effect's `provider` (e.g. "throw") or the precise
     // `provider:operation` (e.g. "llblgen:read"). Returns the input unchanged when neither flag is given.
+    // A stable signature of the effect filters (--only/--exclude) for the render-sidecar key: sorted +
+    // lowercased so token order/casing don't fragment it, empty in the common no-filter case. The seam
+    // summaries in the sidecar are a function of the FILTERED effects, so two queries that differ only by
+    // these flags must get distinct sidecars (the forest itself is filter-independent and is not affected).
+    private static string EffectFilterSignature(string[] args)
+    {
+        var only = string.Join(",", ParseList(args, "--only").Select(x => x.ToLowerInvariant()).OrderBy(x => x, StringComparer.Ordinal));
+        var exclude = string.Join(
+            ",",
+            ParseList(args, "--exclude").Select(x => x.ToLowerInvariant()).OrderBy(x => x, StringComparer.Ordinal)
+        );
+        return $"only={only};exclude={exclude}";
+    }
+
     private static IReadOnlyList<DerivedEffect> ApplyEffectFilters(IReadOnlyList<DerivedEffect> effects, string[] args)
     {
         var only = ParseList(args, "--only");
@@ -2084,7 +3113,7 @@ public static class CliApplication
             if (args[i] == name)
                 foreach (
                     var token in args[i + 1]
-                        .Split(new[] { ',', ' ', '\t', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Split([',', ' ', '\t', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 )
                     set.Add(token);
         return set;

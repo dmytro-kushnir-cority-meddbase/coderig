@@ -73,8 +73,23 @@ public static class TypeClosure
         return strict;
     }
 
-    // True when the type (or its generic-stripped form) is in the closure.
-    public static bool Contains(HashSet<string> closure, string typeId) => ExpandGeneric(typeId).Any(closure.Contains);
+    // True when the type (or its generic-stripped form) is in the closure. Hand-inlined ExpandGeneric:
+    // this is called once per handler method per class-inheritance rule (hundreds of thousands of times),
+    // and the iterator + LINQ .Any() form heap-allocated a state machine, an enumerator, and a delegate
+    // on every call. This allocates only a single substring, and only for a generic type not already
+    // present directly. Membership semantics are identical to ExpandGeneric(typeId).Any(closure.Contains).
+    public static bool Contains(HashSet<string> closure, string typeId)
+    {
+        if (closure.Contains(typeId))
+            return true;
+        var brace = typeId.IndexOf('{');
+        if (brace > 0)
+            return closure.Contains(typeId.Substring(0, brace));
+        var backtick = typeId.IndexOf('`');
+        if (backtick > 0)
+            return closure.Contains(typeId.Substring(0, backtick));
+        return false;
+    }
 
     // Reduces a type DocID to its bare (non-generic) form: strips an instantiated argument list
     // (T:Foo`1{T:Bar} -> T:Foo`1 -> T:Foo) and the open-generic arity (T:Foo`1 -> T:Foo).

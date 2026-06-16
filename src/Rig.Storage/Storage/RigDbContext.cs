@@ -34,6 +34,10 @@ public sealed class RigDbContext(string databasePath, bool pooling = true, bool 
 
     public DbSet<DispatchFactEntity> DispatchFacts => Set<DispatchFactEntity>();
 
+    public DbSet<AssemblyEntity> Assemblies => Set<AssemblyEntity>();
+
+    public DbSet<SolutionMembershipEntity> SolutionMemberships => Set<SolutionMembershipEntity>();
+
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
         var connectionString = $"Data Source={databasePath}";
@@ -103,6 +107,19 @@ public sealed class RigDbContext(string databasePath, bool pooling = true, bool 
             entity.ToTable("dispatch_facts");
             entity.HasKey(d => new { d.RunId, d.DispatchFactIndex });
             entity.HasIndex(d => d.SourceMember);
+        });
+
+        modelBuilder.Entity<AssemblyEntity>(entity =>
+        {
+            entity.ToTable("assemblies");
+            entity.HasKey(a => a.AssemblyName);
+        });
+
+        modelBuilder.Entity<SolutionMembershipEntity>(entity =>
+        {
+            entity.ToTable("solution_membership");
+            entity.HasKey(m => new { m.SolutionPath, m.AssemblyName });
+            entity.HasIndex(m => m.AssemblyName);
         });
     }
 }

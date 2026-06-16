@@ -17,7 +17,9 @@ public static class SolutionAnalyzer
         // closure from `rig index --from`); still ONE cross-project Roslyn workspace / run.
         IReadOnlySet<string>? scopeProjectPaths = null,
         // Max concurrent design-time builds / compilations (null = conservative default).
-        int? parallelism = null
+        int? parallelism = null,
+        // Drop test projects (by name convention) from the indexed set (the index default).
+        bool excludeTests = false
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
@@ -30,7 +32,8 @@ public static class SolutionAnalyzer
             cancellationToken,
             progress,
             scopeProjectPaths,
-            parallelism
+            parallelism,
+            excludeTests
         );
         progress?.Invoke("Merging project rules");
         rules = rules.MergeWithProjectDirectories(sourceSet.ProjectDirectories);

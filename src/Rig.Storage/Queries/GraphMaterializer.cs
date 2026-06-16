@@ -30,7 +30,8 @@ public static class GraphMaterializer
         RigDbContext context,
         Domain.Data.FactHandoffRule[]? handoffRules = null,
         Action<string>? progress = null,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<Domain.Data.FactGenericFactoryRule>? factoryRules = null
     )
     {
         progress?.Invoke("Loading facts");
@@ -39,6 +40,16 @@ public static class GraphMaterializer
         // in-memory oracle classifies identically by being given the same rules.
         var graph = await Reads.LoadFactGraphAsync(context, handoffRules, cancellationToken).ConfigureAwait(false);
 
+        // Bake generic-factory monomorphization into the persisted edges — the SAME RewriteGenericFactories
+        // the in-memory traversal applies via ShapeGraph. This is the EDGE-CREATING shaping (it rewrites
+        // `caller -> Factory<X>` to `caller -> X.Target`), so it MUST be in call_edges or the SQL bounding
+        // walk traverses the un-rewritten factory edge and never pulls X.Target's closure into the bounded
+        // subgraph — under-reporting reach vs the in-memory oracle (the effect-path divergence). Cut and
+        // context-dispatch shaping are deliberately NOT baked: they are traversal-time (a cut removes
+        // reach; context narrows dispatch), so leaving them out keeps call_edges a sound SUPERSET that the
+        // in-memory pass re-applies over the bounded graph. No-op when factoryRules is null/empty.
+        graph = FactPathFinder.RewriteGenericFactories(graph, factoryRules ?? []);
+
         var connection = (DbConnection)context.Database.GetDbConnection();
         if (connection.State != System.Data.ConnectionState.Open)
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -46,7 +57,7 @@ public static class GraphMaterializer
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
 
         progress?.Invoke("Rebuilding derived edge tables");
-        using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
         await ExecuteAsync(connection, transaction, "DELETE FROM call_edges;", cancellationToken).ConfigureAwait(false);
         await ExecuteAsync(connection, transaction, "DELETE FROM dispatch_edges;", cancellationToken).ConfigureAwait(false);
@@ -71,6 +82,12 @@ public static class GraphMaterializer
         // <3 chars fall back to LIKE. Owned by `rig graph` (the writer); read commands only MATCH them.
         progress?.Invoke("Building search index (FTS5 trigram)");
         await BuildSearchIndexAsync(connection, progress, cancellationToken).ConfigureAwait(false);
+
+        // Refresh whole-store statistics (sqlite_stat1) now that all derived tables + indexes exist, so the
+        // query-time planner picks the right index/join order for whole-store reads (entry-point data,
+        // dispatch facts) instead of guessing. One-time cost at graph build; query connections only read.
+        progress?.Invoke("Analyzing statistics");
+        await ExecuteAsync(connection, null, "ANALYZE;", cancellationToken).ConfigureAwait(false);
 
         return new GraphStats(callCount, dispatchCount, nodeCount, heuristicCount);
     }
@@ -125,9 +142,9 @@ public static class GraphMaterializer
             )
             .ConfigureAwait(false);
 
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = "SELECT (SELECT count(*) FROM symbol_fts), (SELECT count(*) FROM ref_target_fts);";
-        using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             progress?.Invoke($"search index: {reader.GetInt32(0)} symbols, {reader.GetInt32(1)} ref targets");
     }
@@ -149,7 +166,7 @@ public static class GraphMaterializer
                 cancellationToken
             )
             .ConfigureAwait(false);
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.CommandText = "SELECT count(*) FROM nodes;";
         return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
     }
@@ -188,6 +205,10 @@ public static class GraphMaterializer
         await ExecuteAsync(connection, null, "CREATE INDEX IF NOT EXISTS IX_call_edges_FromSym ON call_edges(FromSym);", cancellationToken)
             .ConfigureAwait(false);
         await ExecuteAsync(connection, null, "CREATE INDEX IF NOT EXISTS IX_call_edges_ToSym ON call_edges(ToSym);", cancellationToken)
+            .ConfigureAwait(false);
+        // Index on Kind so the handoff-EP read (DeriveHandoffEntryPoints) selects the ~5k handoff +
+        // methodGroup rows by index instead of scanning all ~533k call_edges.
+        await ExecuteAsync(connection, null, "CREATE INDEX IF NOT EXISTS IX_call_edges_Kind ON call_edges(Kind);", cancellationToken)
             .ConfigureAwait(false);
 
         await ExecuteAsync(
@@ -231,7 +252,7 @@ public static class GraphMaterializer
         CancellationToken cancellationToken
     )
     {
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
             "INSERT INTO call_edges (FromSym, ToSym, Kind, FilePath, Line, LoopKind, LoopDetail, ReceiverType, HandoffDispatcher) "
@@ -274,7 +295,7 @@ public static class GraphMaterializer
         CancellationToken cancellationToken
     )
     {
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = "INSERT INTO dispatch_edges (FromSym, ToSym, Kind, Basis) VALUES ($from, $to, $kind, $basis);";
         var pFrom = AddParam(command, "$from");
@@ -310,16 +331,7 @@ public static class GraphMaterializer
         CancellationToken cancellationToken
     )
     {
-        var present = false;
-        using (var probe = connection.CreateCommand())
-        {
-            probe.CommandText = $"PRAGMA table_info({table});";
-            using var reader = await probe.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
-                    present = true;
-        }
-        if (!present)
+        if (!await StorageProbes.ColumnExistsAsync(connection, table, column, cancellationToken).ConfigureAwait(false))
             await ExecuteAsync(connection, null, $"ALTER TABLE {table} ADD COLUMN {column} {type};", cancellationToken)
                 .ConfigureAwait(false);
     }
@@ -339,7 +351,7 @@ public static class GraphMaterializer
         CancellationToken cancellationToken
     )
     {
-        using var command = connection.CreateCommand();
+        await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = sql;
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);

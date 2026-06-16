@@ -44,6 +44,96 @@ public sealed class CliApplicationTests
         error.ToString().ShouldContain("Unknown command: wat");
     }
 
+    // Guards the option-whitelist regression: --merge was missing from KnownFlagsByCommand["index"],
+    // so `rig index ... --merge` was rejected as an unknown option before it could run. Validation runs
+    // before solution load, so a KNOWN flag must NOT trip "Unknown option" (the command fails later for
+    // a different reason — a nonexistent solution).
+    [Test]
+    [Arguments("--merge")]
+    [Arguments("--include-tests")]
+    public async Task Index_does_not_reject_known_flags(string flag)
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["index", "C:/does-not-exist.slnx", flag], output, error);
+
+        // Known flag -> passes validation, then fails cleanly on the nonexistent solution (exit 2,
+        // "Failed to load") rather than being rejected up front as an unknown option.
+        exitCode.ShouldBe(2);
+        error.ToString().ShouldNotContain("Unknown option");
+        error.ToString().ShouldContain("Failed to load");
+    }
+
+    // --durable and --no-tests were removed from the index surface (the former dropped entirely, the
+    // latter a redundant no-op alias of the now-default test exclusion). They must now be REJECTED up
+    // front as unknown options — not silently accepted — so a stale script using them fails loudly.
+    [Test]
+    [Arguments("--durable")]
+    [Arguments("--no-tests")]
+    public async Task Index_rejects_removed_flags(string flag)
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["index", "C:/does-not-exist.slnx", flag], output, error);
+
+        exitCode.ShouldBe(2);
+        error.ToString().ShouldContain("Unknown option");
+    }
+
+    // Mutually-exclusive projection modes are rejected up front (validation runs before any store access,
+    // so these fail cleanly without a store).
+    [Test]
+    public async Task Tree_rejects_conflicting_projection_modes()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--full", "--summary"], output, error);
+
+        exitCode.ShouldBe(2);
+        error.ToString().ShouldContain("can't be combined");
+        error.ToString().ShouldContain("--full");
+        error.ToString().ShouldContain("--summary");
+    }
+
+    [Test]
+    public async Task Callers_rejects_orphans_with_entrypoints()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["callers", "X", "--orphans", "--entrypoints"], output, error);
+
+        exitCode.ShouldBe(2);
+        error.ToString().ShouldContain("--orphans and --entrypoints can't be combined");
+    }
+
+    // A query command run where there is no .rig store (e.g. wrong directory) fails cleanly with exit 2
+    // and an actionable message, not an unhandled SqliteException stack trace.
+    [Test]
+    public async Task Query_command_without_a_store_fails_cleanly()
+    {
+        var emptyDir = Path.Combine(Path.GetTempPath(), "rig-no-store-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(emptyDir);
+        try
+        {
+            var output = new StringWriter();
+            var error = new StringWriter();
+
+            var exitCode = await CliApplication.RunAsync(["tree", "Whatever"], output, error, emptyDir);
+
+            exitCode.ShouldBe(2);
+            error.ToString().ShouldContain("No indexed store");
+            error.ToString().ShouldNotContain("SqliteException");
+        }
+        finally
+        {
+            Directory.Delete(emptyDir, recursive: true);
+        }
+    }
+
     [Test]
     public async Task Files_requires_skipped_flag()
     {

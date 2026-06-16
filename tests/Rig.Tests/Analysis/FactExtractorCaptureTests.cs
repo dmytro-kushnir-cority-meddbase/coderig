@@ -67,6 +67,314 @@ public sealed class FactExtractorCaptureTests
     }
 
     [Test]
+    public void Declaring_type_arg_binding_records_concrete_and_forwarded_receiver_args()
+    {
+        var source = """
+            namespace App
+            {
+                public sealed class Account { }
+                public sealed class Invoice { }
+
+                public sealed class QueryPipeline<T, U>
+                {
+                    public void Enumerate() { }
+                }
+
+                public sealed class Caller
+                {
+                    public void Concrete(QueryPipeline<Account, Invoice> pipeline) => pipeline.Enumerate();
+                }
+
+                // Forwarding receiver: args are the enclosing TYPE's params, swapped (Y=1, X=0).
+                public sealed class Swapper<X, Y>
+                {
+                    public void Reversed(QueryPipeline<Y, X> pipeline) => pipeline.Enumerate();
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        Rig.Domain.Data.ReferenceFact Enumerate(string enclosing) =>
+            result.References.Single(r =>
+                r.RefKind == "invocation"
+                && r.TargetSymbolId.Contains("QueryPipeline")
+                && r.TargetSymbolId.Contains("Enumerate")
+                && r.EnclosingSymbolId!.Contains(enclosing)
+            );
+
+        // Open form stays the original definition (for dispatch narrowing); the binding carries rendering.
+        var concrete = Enumerate("Concrete");
+        concrete.ReceiverType.ShouldBe("App.QueryPipeline<T, U>");
+        concrete.DeclaringTypeArgBinding.ShouldBe("""["C:App.Account","C:App.Invoice"]""");
+        concrete.MethodTypeArgBinding.ShouldBeNull(); // Enumerate is non-generic
+
+        // Forwarded params encode as enclosing-TYPE ordinals in source order: Y is T:1, X is T:0.
+        Enumerate("Reversed").DeclaringTypeArgBinding.ShouldBe("""["T:1","T:0"]""");
+
+        // Binding is gated to first-party callees only (only first-party nodes render).
+        result.References.Where(r => r.DeclaringTypeArgBinding is not null).ShouldAllBe(r => r.TargetInSource);
+    }
+
+    [Test]
+    public void Declaring_binding_is_captured_for_a_property_read_on_a_generic_type()
+    {
+        // `pipe.Run` reads a property on Pipe<Account, Invoice> (mirrors QueryPipeline's `Func<…> Enumerate`
+        // accessed as `pipeline.Enumerate()`). The target is the PROPERTY (not a method), so the declaring
+        // binding must come from its owning type's instantiation, not `target as IMethodSymbol`.
+        var source = """
+            namespace App
+            {
+                public sealed class Account { }
+                public sealed class Invoice { }
+                public sealed class Pipe<T, U> { public System.Action Run { get; } = null; }
+
+                public sealed class Caller
+                {
+                    public void Go(Pipe<Account, Invoice> pipe) => pipe.Run();
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        result
+            .References.Where(r => r.TargetSymbolId.Contains("Pipe") && r.TargetSymbolId.Contains("Run"))
+            .ShouldContain(r => r.DeclaringTypeArgBinding == """["C:App.Account","C:App.Invoice"]""");
+    }
+
+    [Test]
+    public void Method_type_arg_binding_records_static_factory_and_generic_method_args()
+    {
+        // Mirrors the MedDBase QueryResult/QueryPipeline static-factory shape: a static generic method whose
+        // body forwards a mix of the enclosing TYPE param (TColumn) and its own METHOD param (RRecord).
+        var source = """
+            namespace App
+            {
+                public sealed class Account { }
+                public sealed class Row { }
+
+                public sealed class QueryPipeline<TRecord, TColumn>
+                {
+                    public static QueryPipeline<RRecord, TColumn> Create<TEntity, RRecord>() => null;
+                }
+
+                public sealed class QueryResult<TRecord, TColumn>
+                {
+                    public static QueryResult<RRecord, TColumn> Create<TEntity, RRecord>() =>
+                        QueryPipeline<RRecord, TColumn>.Create<TEntity, RRecord>() == null ? null : null;
+                }
+
+                public sealed class Caller
+                {
+                    public void Go() => QueryResult<Account, Row>.Create<Account, Account>();
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        Rig.Domain.Data.ReferenceFact Create(string enclosing) =>
+            result.References.Single(r =>
+                r.RefKind == "invocation"
+                && r.TargetSymbolId.Contains("QueryPipeline")
+                && r.TargetSymbolId.Contains("Create")
+                && r.EnclosingSymbolId!.Contains(enclosing)
+            );
+
+        // The ENTRY call pins concretes: QueryResult<Account, Row>.Create<Account, Account>.
+        var entry = result.References.Single(r =>
+            r.TargetSymbolId.Contains("QueryResult") && r.TargetSymbolId.Contains("Create") && r.EnclosingSymbolId!.Contains("Caller.Go")
+        );
+        entry.DeclaringTypeArgBinding.ShouldBe("""["C:App.Account","C:App.Row"]""");
+        entry.MethodTypeArgBinding.ShouldBe("""["C:App.Account","C:App.Account"]""");
+
+        // The INNER static call forwards: declaring QueryPipeline<RRecord(M:1), TColumn(T:1)>, method <TEntity
+        // (M:0), RRecord(M:1)> — exactly the tokens the renderer resolves against the parent's instantiation.
+        var inner = Create("QueryResult");
+        inner.DeclaringTypeArgBinding.ShouldBe("""["M:1","T:1"]""");
+        inner.MethodTypeArgBinding.ShouldBe("""["M:0","M:1"]""");
+    }
+
+    [Test]
+    public void Captures_all_argument_names_and_templates_as_json_lists()
+    {
+        var source = """
+            namespace App
+            {
+                public static class Rights { public static class Account { public static int CanViewAccounts => 1; } }
+                public static class Cert { public static bool HasRight(int a, int right, int t) => true; }
+                public static class Api { public static void Get(string path, int x) { } }
+
+                public sealed class Caller
+                {
+                    public void Go(int account, int txn)
+                    {
+                        Cert.HasRight(account, Rights.Account.CanViewAccounts, txn);
+                        Api.Get("client", 1);
+                    }
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        // The permission-shape call: the right is a member path at argument 1 (NOT the first argument).
+        var hasRight = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Cert.HasRight"));
+        var names = System.Text.Json.JsonSerializer.Deserialize<string?[]>(hasRight.ArgumentNames!)!;
+        names.Length.ShouldBe(3);
+        names[0].ShouldBe("account");
+        names[1].ShouldBe("Rights.Account.CanViewAccounts");
+        names[2].ShouldBe("txn");
+
+        // A string-literal argument is captured in the templates list at its position.
+        var get = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Api.Get"));
+        System.Text.Json.JsonSerializer.Deserialize<string?[]>(get.ArgumentTemplates!)![0].ShouldBe("client");
+        // arg 0 of Api.Get is a literal, not a member/identifier -> JSON null in the names list.
+        System.Text.Json.JsonSerializer.Deserialize<string?[]>(get.ArgumentNames!)![0].ShouldBeNull();
+    }
+
+    [Test]
+    public void Resolves_a_const_string_argument_to_its_value_in_the_templates_list()
+    {
+        var source = """
+            namespace App
+            {
+                public static class Keys { public const string Conn = "MedDBase.DataAccessTier.ConnectionString"; }
+                public static class Db { public static int GetConnectionString(string key) => 0; }
+
+                public sealed class Caller
+                {
+                    public void Go() => Db.GetConnectionString(Keys.Conn);
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        var call = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Db.GetConnectionString"));
+        // The call site only NAMES the constant; the templates list resolves it to its value...
+        System
+            .Text.Json.JsonSerializer.Deserialize<string?[]>(call.ArgumentTemplates!)![0]
+            .ShouldBe("MedDBase.DataAccessTier.ConnectionString");
+        // ...while the names list keeps the const reference path.
+        System.Text.Json.JsonSerializer.Deserialize<string?[]>(call.ArgumentNames!)![0].ShouldBe("Keys.Conn");
+    }
+
+    // 18b lambda identity: a lambda passed as an argument to a call/ctor gets a synthetic symbol that
+    // OWNS its body's calls (so a deferred dispatcher can later promote it to an async entry point),
+    // plus a methodGroup edge consumer->lambda carrying the DelegateConsumer (the member it's handed
+    // to). Calls OUTSIDE the lambda stay attributed to the enclosing method.
+    [Test]
+    public void Lambda_argument_becomes_a_synthetic_symbol_owning_its_body_calls()
+    {
+        var source = """
+            namespace App
+            {
+                public static class Scheduler { public static void Schedule(System.Action work) { } }
+                public static class Worker { public static void DoWork() { } public static void Inline() { } }
+
+                public sealed class Caller
+                {
+                    public void Go()
+                    {
+                        Scheduler.Schedule(() => Worker.DoWork());
+                        Worker.Inline();
+                    }
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        // A synthetic lambda symbol, contained by Caller.Go.
+        var lambda = result.Symbols.SingleOrDefault(s =>
+            s.Kind == "lambda" && s.ContainingSymbolId != null && s.ContainingSymbolId.Contains("Caller.Go")
+        );
+        lambda.ShouldNotBeNull();
+
+        // A methodGroup edge consumer(Scheduler.Schedule) -> lambda, enclosed by Caller.Go.
+        result.References.ShouldContain(r =>
+            r.RefKind == "methodGroup"
+            && r.TargetSymbolId == lambda!.SymbolId
+            && r.DelegateConsumer != null
+            && r.DelegateConsumer.Contains("Scheduler.Schedule")
+            && r.EnclosingSymbolId != null
+            && r.EnclosingSymbolId.Contains("Caller.Go")
+        );
+
+        // The call INSIDE the lambda body is attributed to the lambda, NOT Caller.Go.
+        var doWork = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Worker.DoWork"));
+        doWork.EnclosingSymbolId.ShouldBe(lambda!.SymbolId);
+
+        // The call OUTSIDE the lambda still attributes to Caller.Go.
+        var inline = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Worker.Inline"));
+        inline.EnclosingSymbolId!.ShouldContain("Caller.Go");
+    }
+
+    // 18c part 1: a method-group ASSIGNED to a delegate field/property (not passed as an argument)
+    // is a binding — the delegate-as-degenerate-interface "registration". Emit a delegate_bind
+    // dispatch fact (slot -> bound target) so the seam resolver can later resolve `_handler()` to it.
+    [Test]
+    public void Method_group_assigned_to_a_delegate_field_emits_a_delegate_bind_dispatch_fact()
+    {
+        var source = """
+            namespace App
+            {
+                public static class Worker { public static void DoWork() { } }
+
+                public sealed class Host
+                {
+                    private System.Action _handler;
+                    private System.Action Prop { get; set; }
+
+                    public void Wire()
+                    {
+                        _handler = Worker.DoWork;     // assignment binding
+                        Prop = Worker.DoWork;          // property binding
+                    }
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        result.Dispatch.ShouldContain(d =>
+            d.Kind == "delegate_bind" && d.SourceMember.Contains("Host._handler") && d.TargetMember.Contains("Worker.DoWork")
+        );
+        result.Dispatch.ShouldContain(d =>
+            d.Kind == "delegate_bind" && d.SourceMember.Contains("Host.Prop") && d.TargetMember.Contains("Worker.DoWork")
+        );
+    }
+
+    // 18c part 2: invoking a delegate slot (`_handler()`) emits an invocation edge to the SLOT so the
+    // seam resolver can dispatch it to the bound target via the delegate_bind fact. Without this the
+    // call is only a field READ and the target is invisible.
+    [Test]
+    public void Delegate_slot_invocation_emits_an_invocation_edge_to_the_slot()
+    {
+        var source = """
+            namespace App
+            {
+                public sealed class Host
+                {
+                    private System.Action _handler;
+                    public void Run() { _handler(); }
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        result.References.ShouldContain(r =>
+            r.RefKind == "invocation"
+            && r.TargetSymbolId.Contains("Host._handler")
+            && r.EnclosingSymbolId != null
+            && r.EnclosingSymbolId.Contains("Host.Run")
+        );
+    }
+
+    [Test]
     public void Captures_bodied_property_accessor_calls_and_skips_auto_properties()
     {
         var source = """
@@ -148,6 +456,99 @@ public sealed class FactExtractorCaptureTests
             .ToList();
         bumpCalls.ShouldContain(id => id.Contains("get_Value"));
         bumpCalls.ShouldContain(id => id.Contains("set_Value"));
+    }
+
+    // Repro probe: invocations that appear directly as a LINQ query `from x in Expr()` clause
+    // (the compiler desugars Expr() into a SelectMany/Select collection-selector lambda). The PACS
+    // `MoveExternalFile` monadic `Try<T>` chain (`from __ in FileExt.Move(..)`) loses these effects.
+    [Test]
+    public void Captures_invocations_in_query_clause_expressions()
+    {
+        var source = """
+            namespace App
+            {
+                public struct Box<T> { }
+
+                // LanguageExt-shape query operators: Select/SelectMany are EXTENSION methods, not instance.
+                public static class BoxQuery
+                {
+                    public static Box<U> Select<T, U>(this Box<T> b, System.Func<T, U> f) => default;
+                    public static Box<V> SelectMany<T, U, V>(this Box<T> b, System.Func<T, Box<U>> bind, System.Func<T, U, V> proj) => default;
+                }
+
+                public static class Fx
+                {
+                    public static Box<int> Seed() => default;
+                    public static Box<int> Step() => default;
+                    public static Box<int> Wrap(System.Func<int> f) => default;
+                    public static int Direct() => 0;
+                }
+
+                public sealed class Caller
+                {
+                    public Box<int> Go() =>
+                        from a in Fx.Seed()
+                        from b in Fx.Step()
+                        select a + b;
+
+                    public Box<int> GoLambda() =>
+                        from a in Fx.Wrap(() => Fx.Direct())
+                        select a;
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        bool Invoked(string targetContains, string enclosingContains) =>
+            result.References.Any(r =>
+                r.RefKind == "invocation"
+                && r.TargetSymbolId.Contains(targetContains)
+                && r.EnclosingSymbolId is { } e
+                && e.Contains(enclosingContains)
+            );
+
+        // Control: the query SOURCE expression (first `from`) and invocations inside an explicit lambda
+        // are captured today.
+        Invoked("Fx.Seed", "Caller.Go").ShouldBeTrue("query source expression should be captured");
+        Invoked("Fx.Direct", "Caller.GoLambda").ShouldBeTrue("invocation inside an explicit lambda should be captured");
+
+        // The gap: the collection-selector expression of a subsequent `from` clause.
+        Invoked("Fx.Step", "Caller.Go").ShouldBeTrue("query collection-selector invocation should be captured");
+    }
+
+    // F1b: when Roslyn can't fully bind a call it resolves it to a CandidateSymbol (here forced via an
+    // arg-count mismatch; the real driver is net48 cross-assembly partial binding). The invocation edge
+    // must still be captured — dropping it silently loses effect-bearing edges (e.g. first-party FileExt.Move).
+    [Test]
+    public void Captures_invocation_resolved_only_to_a_candidate_symbol()
+    {
+        var source = """
+            namespace App
+            {
+                public static class Io
+                {
+                    public static int Move(int x) => x;
+                }
+
+                public sealed class Caller
+                {
+                    public void Go()
+                    {
+                        Io.Move(1, 2);
+                    }
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        result.References.ShouldContain(r =>
+            r.RefKind == "invocation"
+            && r.TargetSymbolId.Contains("Io.Move")
+            && r.EnclosingSymbolId != null
+            && r.EnclosingSymbolId.Contains("Caller.Go")
+        );
     }
 
     [Test]

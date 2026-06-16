@@ -1,5 +1,6 @@
 using Rig.Analysis;
 using Rig.Analysis.Rules;
+using Rig.Cli;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Tests.Fixtures;
@@ -92,6 +93,15 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
                 ("workflow", "LegacyNet48Web.Background.InvoiceWorkflowController.OnSave"),
                 ("background", "LegacyNet48Web.Background.ReportGeneratorService.Startup"),
                 ("wcf", "LegacyNet48Web.Background.ClaimsService.SubmitClaim"),
+                // Web API controller actions — detected by the builtin dotnet.webapi.controller rule
+                // (System.Web.Http.ApiController + public methods = actions). Added with F2.
+                ("http", "LegacyNet48Web.Controllers.InvoiceController.Approve"),
+                ("http", "LegacyNet48Web.Controllers.InvoiceController.GetAll"),
+                ("http", "LegacyNet48Web.Controllers.PatientController.Create"),
+                ("http", "LegacyNet48Web.Controllers.PatientController.Delete"),
+                ("http", "LegacyNet48Web.Controllers.PatientController.GetAll"),
+                ("http", "LegacyNet48Web.Controllers.PatientController.GetById"),
+                ("http", "LegacyNet48Web.Controllers.PatientController.Update"),
                 ("pagehandler", "LegacyNet48Web.Pages.Account.Public.LegacyLogin.Initialise"),
                 ("pagehandler", "LegacyNet48Web.Pages.Account.Public.LegacyLogin.OnAction"),
             }.OrderBy(e => e.Item2, StringComparer.Ordinal).ToArray());
@@ -116,6 +126,58 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
 
         reachable.Keys.ShouldContain(k => k.Contains("ReferralPane.Save", StringComparison.Ordinal));
         reachable.Keys.ShouldContain(k => k.Contains("SaveEntity", StringComparison.Ordinal));
+    }
+
+    // End-to-end generic monomorphization (mine -> store -> graph -> render). Guards GenericPipeline.cs.
+    private static string RenderTree(FactGraphData graph, string fromPattern)
+    {
+        var output = new StringWriter();
+        var noEffects = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var root in FactPathFinder.BuildTree(graph, fromPattern))
+            CliApplication.RenderTreeNode(
+                root,
+                "",
+                isLast: true,
+                isRoot: true,
+                noEffects,
+                prune: false,
+                FactRenderRules.Empty,
+                noEffects,
+                output
+            );
+        return output.ToString();
+    }
+
+    // INSTANCE forwarding: a concrete entry pins QueryResult<PatientEntity, InvoiceEntity>, and its OPEN
+    // forwarding receivers (QueryPipeline, OrderedPipeline — `<T, U>` in source) render concretely down the
+    // chain. The .#ctor nodes resolve too (declaring binding comes from the constructed containing type).
+    [Test]
+    public async Task Tree_resolves_forwarded_instance_generic_receivers_from_the_concrete_entry()
+    {
+        var graph = FactProjection.GraphData((await playgrounds.LegacyNet48Async()).Result);
+
+        var text = RenderTree(graph, "GenericPipelineDemo.RunConcretePipeline");
+
+        text.ShouldContain("QueryResult<PatientEntity, InvoiceEntity>.Enumerate");
+        text.ShouldContain("QueryPipeline<PatientEntity, InvoiceEntity>.Run");
+        text.ShouldContain("OrderedPipeline<PatientEntity, InvoiceEntity>.Sort");
+        text.ShouldNotContain("QueryPipeline<T, U>");
+    }
+
+    // STATIC-FACTORY + generic-method monomorphization (the MedDBase QueryResult/QueryPipeline.Create shape):
+    // no value receiver — concretes flow through method type-argument inference and a mix of forwarded TYPE
+    // (TColumn) and METHOD (RRecord) params. The whole static chain must monomorphize, methods included.
+    [Test]
+    public async Task Tree_monomorphizes_a_static_factory_chain_through_method_type_args()
+    {
+        var graph = FactProjection.GraphData((await playgrounds.LegacyNet48Async()).Result);
+
+        var text = RenderTree(graph, "StaticPipelineDemo.RunStaticPipeline");
+
+        text.ShouldContain("StaticResult<InvoiceEntity, PatientEntity>.Build<DataAdapter, InvoiceEntity>");
+        text.ShouldContain("StaticPipeline<InvoiceEntity, PatientEntity>.Build<DataAdapter, InvoiceEntity>");
+        text.ShouldContain("StaticOrderedPipeline<InvoiceEntity, PatientEntity>.Sort<DataAdapter>");
+        text.ShouldNotContain("StaticPipeline<T");
     }
 
     [Test]
@@ -226,6 +288,95 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         authz.ShouldNotBeEmpty();
         authz.ShouldAllBe(e => e.Operation == "deny");
         authz.ShouldContain(e => e.ResourceType.EndsWith("AccessDeniedException", StringComparison.Ordinal));
+    }
+
+    // Codifies the matching semantics behind the Xero/OpenAI/CefSharp effect-rule fixes (2026-06-14):
+    // each rule silently produced ZERO effects because it was typed against a guessed SDK surface.
+    // The three traps, locked in here:
+    //   (1) the declaring-type gate must match the INTERFACE the call dispatches through
+    //       (Xero `IAccountingApiAsync`), not the concrete `AccountingApi` the docs name;
+    //   (2) method matching is EXACT — `GetAccounts` does NOT match `GetAccountsAsyncWithHttpInfo`;
+    //   (3) resource:"declaring_type" resolves even when the receiver is statically unminable
+    //       (the fluent/extension/interface case) — resource:"receiver_type" would DROP the effect,
+    //       which is exactly why Flurl/OpenAI/CefSharp/Xero are all keyed on declaring_type.
+    [Test]
+    public void Effect_rule_matching_is_exact_and_declaring_type_resource_survives_unminable_receiver()
+    {
+        // A Xero-shaped call site: the app wrapper invokes the generated *interface*, async-with-http-info surface.
+        var inv = new FactInvocation(
+            Target: "M:Xero.NetStandard.OAuth2.Api.IAccountingApiAsync.CreateInvoicesAsyncWithHttpInfo(System.String)",
+            Enclosing: "M:App.Xero2ClientIO.CreateInvoices",
+            FilePath: "Xero2ClientIO.cs",
+            Line: 63,
+            Receiver: null
+        ); // fluent/interface receiver not statically minable
+
+        static FactEffectRule Rule(string[] methods, string[] declaringTypes, string resource) =>
+            new("xero", "write", methods, declaringTypes, Array.Empty<string>(), Resource: resource);
+
+        // OLD (broken) rule — concrete class + bare method name: misses on BOTH gates.
+        FactEffectDeriver
+            .Derive([inv], [Rule(["CreateInvoices"], ["Xero.NetStandard.OAuth2.Api.AccountingApi"], "declaring_type")])
+            .ShouldBeEmpty();
+
+        // Right type, wrong (non-exact) name -> still dropped.
+        FactEffectDeriver
+            .Derive([inv], [Rule(["CreateInvoices"], ["Xero.NetStandard.OAuth2.Api.IAccountingApiAsync"], "declaring_type")])
+            .ShouldBeEmpty();
+
+        // FIXED rule — interface declaring type + exact async-with-http-info name + declaring_type resource.
+        var effect = FactEffectDeriver
+            .Derive(
+                [inv],
+                [Rule(["CreateInvoicesAsyncWithHttpInfo"], ["Xero.NetStandard.OAuth2.Api.IAccountingApiAsync"], "declaring_type")]
+            )
+            .ShouldHaveSingleItem();
+        effect.Provider.ShouldBe("xero");
+        effect.Operation.ShouldBe("write");
+        effect.ResourceType.ShouldBe("Xero.NetStandard.OAuth2.Api.IAccountingApiAsync");
+        effect.EnclosingSymbolId.ShouldNotBeNull().ShouldContain("Xero2ClientIO.CreateInvoices");
+
+        // Same correct gates but resource:"receiver_type" -> dropped, because the receiver is unminable.
+        FactEffectDeriver
+            .Derive(
+                [inv],
+                [Rule(["CreateInvoicesAsyncWithHttpInfo"], ["Xero.NetStandard.OAuth2.Api.IAccountingApiAsync"], "receiver_type")]
+            )
+            .ShouldBeEmpty();
+    }
+
+    // F1a: an `http_argument` rule must NOT drop the effect when the URL is a variable (the common
+    // case). It keeps the literal host/path when present, else falls back to the receiver type.
+    [Test]
+    public void Http_argument_resource_falls_back_to_receiver_when_url_is_not_a_literal()
+    {
+        var rule = new FactEffectRule(
+            "http",
+            "POST",
+            ["PostAsync"],
+            ["System.Net.Http.HttpClient"],
+            Array.Empty<string>(),
+            Resource: "http_argument"
+        );
+
+        // Variable URL (no literal template) with a known receiver -> effect kept, resource = receiver type.
+        var variableUrl = new FactInvocation(
+            Target: "M:System.Net.Http.HttpClient.PostAsync(System.Uri,System.Net.Http.HttpContent)",
+            Enclosing: "M:App.WebhookHttpClient.Send",
+            FilePath: "WebhookHttpClient.cs",
+            Line: 46,
+            Receiver: "System.Net.Http.HttpClient"
+        );
+        var kept = FactEffectDeriver.Derive([variableUrl], [rule]).ShouldHaveSingleItem();
+        kept.Provider.ShouldBe("http");
+        kept.ResourceType.ShouldBe("System.Net.Http.HttpClient");
+
+        // A literal URL template still yields the normalized host/path (precision preserved).
+        var literalUrl = variableUrl with
+        {
+            FirstArgTemplate = "https://api.example.com/hook/",
+        };
+        FactEffectDeriver.Derive([literalUrl], [rule]).ShouldHaveSingleItem().ResourceType.ShouldBe("api.example.com/hook");
     }
 
     [Test]

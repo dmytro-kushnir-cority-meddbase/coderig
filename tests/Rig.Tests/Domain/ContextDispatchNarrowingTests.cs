@@ -50,7 +50,7 @@ public sealed class ContextDispatchNarrowingTests
     [Test]
     public void Dispatch_narrows_to_the_enclosing_controllers_state_family()
     {
-        var roots = FactPathFinder.BuildTree(TwoFamilyGraph("C1"), "M:N.Root.Run", contextRules: StateRule);
+        var roots = FactPathFinder.BuildTree(TwoFamilyGraph("C1") with { ContextRules = StateRule }, "M:N.Root.Run");
 
         var reg = RegisterEventsNode(roots);
         reg.Children.ShouldContain(c => c.SymbolId == "M:N.S1.RegisterEvents");
@@ -60,7 +60,7 @@ public sealed class ContextDispatchNarrowingTests
     [Test]
     public void A_different_controller_narrows_to_its_own_family()
     {
-        var roots = FactPathFinder.BuildTree(TwoFamilyGraph("C2"), "M:N.Root.Run", contextRules: StateRule);
+        var roots = FactPathFinder.BuildTree(TwoFamilyGraph("C2") with { ContextRules = StateRule }, "M:N.Root.Run");
 
         var reg = RegisterEventsNode(roots);
         reg.Children.ShouldContain(c => c.SymbolId == "M:N.S2.RegisterEvents");

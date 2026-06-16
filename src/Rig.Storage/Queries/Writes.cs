@@ -1,4 +1,6 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using System.Security.Cryptography;
+using System.Text;
+using Microsoft.EntityFrameworkCore;
 using Rig.Domain.Data;
 using Rig.Storage.Storage;
 
@@ -9,8 +11,18 @@ public static class Writes
     // fastBulkWrite trades crash durability for speed (journal/fsync off). It is the DEFAULT, because
     // it is safe for a single exclusive writer producing a throwaway-until-published DB (rig index,
     // which writes to a temp file and atomically renames on success — a corrupt temp is never
-    // published). Callers OPT OUT (set false) for consistency: mine's in-place PARALLEL appends, or a
-    // user-requested `--durable` in-place index. progress, when set, reports batched save throughput.
+    // published). It is turned OFF (set false) for the in-place APPEND path that writes the live DB
+    // directly — `--merge` and mine's `--identity` (potentially parallel) appends, which must keep the
+    // journal. progress, when set, reports batched save throughput.
+    // The required state for merging into a store: the assembly registry must exist. We DON'T migrate
+    // old stores (no ALTER clutter) — a store that predates multi-solution support is required to be
+    // re-mined. EnsureCreated builds these tables on any fresh index. See docs/multi-solution-storage.md.
+    public static async Task<bool> HasAssemblyRegistryAsync(RigDbContext context, CancellationToken cancellationToken = default)
+    {
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        return await StorageProbes.TableExistsAsync(connection, "assemblies", cancellationToken);
+    }
+
     public static async Task<string> SaveAsync(
         RigDbContext context,
         AnalysisResult result,
@@ -67,7 +79,160 @@ public static class Writes
         context.ChangeTracker.Clear();
 
         await SaveFactsBatchedAsync(context, runId, result, progress, cancellationToken);
+        try
+        {
+            await WriteAssemblyRegistryAsync(context, result, progress, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            // The assembly registry is metadata (multi-solution dedup/membership). It must NEVER lose a
+            // completed fact write — degrade to a warning and leave the facts intact.
+            progress?.Invoke($"WARN: assembly registry skipped ({exception.GetType().Name}: {exception.Message})");
+        }
         return runId;
+    }
+
+    // Populates the assembly registry + solution membership (docs/multi-solution-storage.md). An
+    // assembly is keyed by name and content-addressed by a digest over its emitted FACT identities
+    // (symbol DocIDs + reference target/enclosing/line), so a re-index of the same source is a no-op and
+    // a changed assembly is detected. Membership records that this solution contains the assembly.
+    // Additive: runs alongside the run-scoped fact write and does not change existing query behaviour.
+    private static async Task WriteAssemblyRegistryAsync(
+        RigDbContext context,
+        AnalysisResult result,
+        Action<string>? progress,
+        CancellationToken cancellationToken
+    )
+    {
+        var symbols = result.Symbols ?? [];
+        if (symbols.Count == 0)
+            return;
+        var references = result.References ?? [];
+        var solutionPath = Path.GetFullPath(result.SolutionPath);
+        var indexedAt = DateTimeOffset.UtcNow.ToString("O");
+
+        // SymbolId -> owning assembly, so a reference is attributed to the assembly of its enclosing method.
+        var symbolAssembly = new Dictionary<string, string>(symbols.Count, StringComparer.Ordinal);
+        foreach (var s in symbols)
+            symbolAssembly[s.SymbolId] = s.DefiningAssembly;
+
+        // Stream each assembly's fact identities into an order-independent XOR+sum digest, hashing and
+        // discarding per item. O(#assemblies) retained memory — the earlier list-based version
+        // materialised millions of item strings on top of the in-memory fact arrays and OOM'd a 2M+
+        // reference store. Order-independence (XOR/+ are commutative) makes a re-mine idempotent.
+        var acc = new Dictionary<string, AssemblyAccumulator>(StringComparer.Ordinal);
+        AssemblyAccumulator For(string assembly)
+        {
+            if (!acc.TryGetValue(assembly, out var a))
+                acc[assembly] = a = new AssemblyAccumulator();
+            return a;
+        }
+
+        foreach (var s in symbols)
+        {
+            if (string.IsNullOrEmpty(s.DefiningAssembly))
+                continue;
+            var a = For(s.DefiningAssembly);
+            a.Fold("S:" + s.SymbolId);
+            a.Symbols++;
+        }
+
+        foreach (var r in references)
+        {
+            if (
+                r.EnclosingSymbolId is null
+                || !symbolAssembly.TryGetValue(r.EnclosingSymbolId, out var assembly)
+                || string.IsNullOrEmpty(assembly)
+            )
+                continue;
+            var a = For(assembly);
+            a.Fold($"R:{r.TargetSymbolId}|{r.EnclosingSymbolId}|{r.Line}");
+            a.References++;
+        }
+
+        // Re-enable change detection for this small upsert (the fact write left it off + tracker cleared).
+        context.ChangeTracker.AutoDetectChangesEnabled = true;
+        var existing = await context.Assemblies.ToDictionaryAsync(a => a.AssemblyName, cancellationToken);
+        var existingMembership = new HashSet<string>(
+            await context
+                .SolutionMemberships.Where(m => m.SolutionPath == solutionPath)
+                .Select(m => m.AssemblyName)
+                .ToListAsync(cancellationToken),
+            StringComparer.Ordinal
+        );
+
+        foreach (var (assembly, a) in acc)
+        {
+            var hash = a.ContentHash();
+            if (existing.TryGetValue(assembly, out var row))
+            {
+                if (row.ContentHash != hash)
+                {
+                    // Same name, divergent content. Expected for a re-mine of the same solution; a
+                    // genuine cross-solution collision (a fork) would carry a different source solution.
+                    if (!string.Equals(row.SourceSolutionPath, solutionPath, StringComparison.OrdinalIgnoreCase))
+                        progress?.Invoke(
+                            $"WARN: assembly '{assembly}' has divergent content across solutions ('{row.SourceSolutionPath}' vs '{solutionPath}') — possible fork; keeping latest"
+                        );
+                    row.ContentHash = hash;
+                    row.SymbolCount = a.Symbols;
+                    row.ReferenceCount = a.References;
+                    row.IndexedAtUtcText = indexedAt;
+                }
+            }
+            else
+            {
+                context.Assemblies.Add(
+                    new AssemblyEntity
+                    {
+                        AssemblyName = assembly,
+                        ContentHash = hash,
+                        IndexedAtUtcText = indexedAt,
+                        SymbolCount = a.Symbols,
+                        ReferenceCount = a.References,
+                        SourceSolutionPath = solutionPath,
+                    }
+                );
+            }
+
+            if (existingMembership.Add(assembly))
+                context.SolutionMemberships.Add(new SolutionMembershipEntity { SolutionPath = solutionPath, AssemblyName = assembly });
+        }
+
+        await context.SaveChangesAsync(cancellationToken);
+        context.ChangeTracker.Clear();
+        progress?.Invoke($"Registered {acc.Count} assemblies for {Path.GetFileName(solutionPath)}");
+    }
+
+    // Order-independent, streaming content digest of an assembly's fact identities. Each item's SHA-256 is
+    // folded by XOR (commutative) + a running 64-bit sum (catches the XOR self-cancellation of an exact
+    // duplicate pair); item count rides along. Constant memory per assembly — no item retention.
+    private sealed class AssemblyAccumulator
+    {
+        private readonly byte[] xor = new byte[32];
+        private ulong sum;
+        private long count;
+
+        public int Symbols;
+        public int References;
+
+        public void Fold(string item)
+        {
+            var hash = SHA256.HashData(Encoding.UTF8.GetBytes(item));
+            for (var i = 0; i < 32; i++)
+                xor[i] ^= hash[i];
+            sum += BitConverter.ToUInt64(hash);
+            count++;
+        }
+
+        public string ContentHash()
+        {
+            Span<byte> final = stackalloc byte[32 + sizeof(ulong) + sizeof(long)];
+            xor.CopyTo(final);
+            BitConverter.TryWriteBytes(final[32..], sum);
+            BitConverter.TryWriteBytes(final[(32 + sizeof(ulong))..], count);
+            return Convert.ToHexString(SHA256.HashData(final));
+        }
     }
 
     private const int FactBatchSize = 20_000;
@@ -99,10 +264,25 @@ public static class Writes
             progress?.Invoke($"Saved {saved}/{total} fact rows");
         }
 
-        for (var i = 0; i < symbols.Count; i++)
+        // The four fact tables share one batching policy (fixed-size flush + tracker clear, cumulative
+        // progress); only the per-row entity mapping differs. This local function captures the shared
+        // `saved`/`pending`/`total` counters so the control flow lives in exactly one place — the call
+        // sites supply just the (item, index) -> entity projection.
+        async Task AddAllAsync<TSource, TEntity>(IReadOnlyList<TSource> items, Func<TSource, int, TEntity> map)
+            where TEntity : class
         {
-            var s = symbols[i];
-            context.SymbolFacts.Add(
+            for (var i = 0; i < items.Count; i++)
+            {
+                context.Add(map(items[i], i));
+                saved++;
+                if (++pending >= FactBatchSize)
+                    await FlushAsync();
+            }
+        }
+
+        await AddAllAsync(
+            symbols,
+            (s, i) =>
                 new SymbolFactEntity
                 {
                     RunId = runId,
@@ -120,16 +300,11 @@ public static class Writes
                     DefiningAssembly = s.DefiningAssembly,
                     IsOverride = s.IsOverride,
                 }
-            );
-            saved++;
-            if (++pending >= FactBatchSize)
-                await FlushAsync();
-        }
+        );
 
-        for (var i = 0; i < references.Count; i++)
-        {
-            var r = references[i];
-            context.ReferenceFacts.Add(
+        await AddAllAsync(
+            references,
+            (r, i) =>
                 new ReferenceFactEntity
                 {
                     RunId = runId,
@@ -152,17 +327,16 @@ public static class Writes
                     FirstArgumentName = r.FirstArgumentName,
                     DelegateConsumer = r.DelegateConsumer,
                     EnclosingScopes = r.EnclosingScopes,
+                    ArgumentTemplates = r.ArgumentTemplates,
+                    ArgumentNames = r.ArgumentNames,
+                    DeclaringTypeArgBinding = r.DeclaringTypeArgBinding,
+                    MethodTypeArgBinding = r.MethodTypeArgBinding,
                 }
-            );
-            saved++;
-            if (++pending >= FactBatchSize)
-                await FlushAsync();
-        }
+        );
 
-        for (var i = 0; i < relations.Count; i++)
-        {
-            var t = relations[i];
-            context.TypeRelationFacts.Add(
+        await AddAllAsync(
+            relations,
+            (t, i) =>
                 new TypeRelationFactEntity
                 {
                     RunId = runId,
@@ -171,16 +345,11 @@ public static class Writes
                     RelatedSymbolId = t.RelatedSymbolId,
                     RelationKind = t.RelationKind,
                 }
-            );
-            saved++;
-            if (++pending >= FactBatchSize)
-                await FlushAsync();
-        }
+        );
 
-        for (var i = 0; i < dispatch.Count; i++)
-        {
-            var d = dispatch[i];
-            context.DispatchFacts.Add(
+        await AddAllAsync(
+            dispatch,
+            (d, i) =>
                 new DispatchFactEntity
                 {
                     RunId = runId,
@@ -189,11 +358,7 @@ public static class Writes
                     TargetMember = d.TargetMember,
                     Kind = d.Kind,
                 }
-            );
-            saved++;
-            if (++pending >= FactBatchSize)
-                await FlushAsync();
-        }
+        );
 
         if (pending > 0)
             await FlushAsync();
@@ -367,6 +532,10 @@ public static class Writes
                 FirstArgumentName  TEXT,
                 DelegateConsumer   TEXT,
                 EnclosingScopes    TEXT,
+                ArgumentTemplates  TEXT,
+                ArgumentNames      TEXT,
+                DeclaringTypeArgBinding TEXT,
+                MethodTypeArgBinding TEXT,
                 PRIMARY KEY (RunId, ReferenceFactIndex)
             );
             """,

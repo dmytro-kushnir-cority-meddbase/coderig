@@ -18,6 +18,10 @@ public sealed class TraversalCutTests
 
     private static FactTraversalCutRule Cut(string pattern, string label = "test-cut") => new(pattern, label);
 
+    // Shaping is now carried ON the graph (set by FactPathFinder.ShapeGraph at load), so every traversal
+    // — forward AND reverse — honours the same cuts. Tests attach cuts the same way.
+    private static FactGraphData WithCuts(FactGraphData graph, params FactTraversalCutRule[] cuts) => graph with { CutRules = cuts };
+
     [Test]
     public void Tree_expands_the_first_occurrence_in_render_order_and_marks_later_ones_seen()
     {
@@ -51,9 +55,9 @@ public sealed class TraversalCutTests
             new CallEdge("M:Infra", "M:X", "invocation", "f.cs", 20),
             new CallEdge("M:X", "M:Y", "invocation", "f.cs", 30)
         );
-        var cuts = new[] { Cut("M:Infra") };
+        var graphCut = WithCuts(graph, Cut("M:Infra"));
 
-        var roots = FactPathFinder.BuildTree(graph, "M:A", cutRules: cuts);
+        var roots = FactPathFinder.BuildTree(graphCut, "M:A");
 
         roots.Count.ShouldBe(1);
         var a = roots[0];
@@ -73,13 +77,51 @@ public sealed class TraversalCutTests
             new CallEdge("M:Infra", "M:X", "invocation", "f.cs", 20),
             new CallEdge("M:X", "M:Y", "invocation", "f.cs", 30)
         );
-        var cuts = new[] { Cut("M:Infra") };
+        var graphCut = WithCuts(graph, Cut("M:Infra"));
 
-        var reach = FactPathFinder.ReachesWithFanout(graph, "M:A", cutRules: cuts);
+        var reach = FactPathFinder.ReachesWithFanout(graphCut, "M:A");
 
         reach.Keys.ShouldContain("M:Infra");
         reach.Keys.ShouldNotContain("M:X");
         reach.Keys.ShouldNotContain("M:Y");
+    }
+
+    [Test]
+    public void Cut_rule_stops_ReachedBy_at_cut_node()
+    {
+        // Reverse symmetry: a cut node has no successors forward, so it can't be a caller — `callers`
+        // must stop the reverse walk at it exactly as `reaches`/`tree` stop the forward walk. Chain
+        // A -> Infra -> Target; cutting Infra means neither Infra nor A reach Target.
+        var graph = Graph(
+            new CallEdge("M:A", "M:Infra", "invocation", "f.cs", 10),
+            new CallEdge("M:Infra", "M:Target", "invocation", "f.cs", 20)
+        );
+
+        var uncut = FactPathFinder.ReachedBy(graph, "M:Target");
+        uncut.Keys.ShouldContain("M:Infra");
+        uncut.Keys.ShouldContain("M:A");
+
+        var cut = FactPathFinder.ReachedBy(WithCuts(graph, Cut("M:Infra")), "M:Target");
+        cut.Keys.ShouldContain("M:Target");
+        cut.Keys.ShouldNotContain("M:Infra");
+        cut.Keys.ShouldNotContain("M:A");
+    }
+
+    [Test]
+    public void Cut_rule_keeps_a_cut_node_off_the_no_predecessor_roots()
+    {
+        // EntryRootsReaching (callers --roots) is built on the same cut-aware reverse walk: A reaches
+        // Target only through the cut seam Infra, so once Infra is cut neither surfaces as a root.
+        var graph = Graph(
+            new CallEdge("M:A", "M:Infra", "invocation", "f.cs", 10),
+            new CallEdge("M:Infra", "M:Target", "invocation", "f.cs", 20)
+        );
+
+        FactPathFinder.EntryRootsReaching(graph, "M:Target").ShouldContain("M:A");
+
+        var roots = FactPathFinder.EntryRootsReaching(WithCuts(graph, Cut("M:Infra")), "M:Target");
+        roots.ShouldNotContain("M:A");
+        roots.ShouldNotContain("M:Infra");
     }
 
     [Test]
@@ -109,9 +151,9 @@ public sealed class TraversalCutTests
             new CallEdge("M:A", "M:Some.ServiceHelper.CreateService(System.String)", "invocation", "f.cs", 10),
             new CallEdge("M:Some.ServiceHelper.CreateService(System.String)", "M:Downstream", "invocation", "f.cs", 20)
         );
-        var cuts = new[] { Cut("servicehelper.createservice") };
+        var graphCut = WithCuts(graph, Cut("servicehelper.createservice"));
 
-        var reach = FactPathFinder.ReachesWithFanout(graph, "M:A", cutRules: cuts);
+        var reach = FactPathFinder.ReachesWithFanout(graphCut, "M:A");
 
         reach.Keys.ShouldContain("M:Some.ServiceHelper.CreateService(System.String)");
         reach.Keys.ShouldNotContain("M:Downstream");

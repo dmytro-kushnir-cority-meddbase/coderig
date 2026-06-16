@@ -43,20 +43,12 @@ public static class FactEntryPointDeriver
         IReadOnlyList<(string TypeId, string BaseId)> BaseEdges,
         // method symbols (kind="method") — ALL methods. Page EPs use only the .ctor rows;
         // class-inheritance EPs use the named handler rows (IsOverride gates RequireOverride rules).
-        IReadOnlyList<(
-            string SymbolId,
-            string Name,
-            string? ContainingSymbolId,
-            string Signature,
-            string FilePath,
-            int Line,
-            bool IsOverride
-        )> Methods,
+        IReadOnlyList<MethodSymbol> Methods,
         // type symbols (kind="type") — for page EPs where the class has no explicit ctor.
         // IsAbstract gates out base/abstract pages, which are never navigable entry points.
-        IReadOnlyList<(string SymbolId, string Namespace, string FilePath, int Line, bool IsAbstract)> Types,
+        IReadOnlyList<TypeSymbol> Types,
         // ctor reference_facts: ctor calls to attribute constructors
-        IReadOnlyList<(string TargetSymbolId, string? EnclosingSymbolId, string FilePath, int Line)> CtorRefs,
+        IReadOnlyList<SymbolRef> CtorRefs,
         // (TypeSymbolId, RelatedSymbolId) implemented-interface edges. Merged with BaseEdges for the
         // class-inheritance closure so interface-rooted rules (IBackgroundProcess, IHealthcodeService)
         // match. Defaults to empty so existing callers/tests stay source-compatible.
@@ -99,8 +91,8 @@ public static class FactEntryPointDeriver
             // Pattern C closure spans base + interface edges (interface-rooted backend rules).
             var inheritanceEdges = TypeClosure.BuildBaseEdgeLookup(data.BaseEdges.Concat(data.InterfaceEdges ?? []));
             var attributeRefsByMethod = data
-                .CtorRefs.Where(r => r.EnclosingSymbolId is not null)
-                .ToLookup(r => r.EnclosingSymbolId!, r => r.TargetSymbolId, StringComparer.Ordinal);
+                .CtorRefs.Where(r => r.Enclosing is not null)
+                .ToLookup(r => r.Enclosing!, r => r.Target, StringComparer.Ordinal);
             var handlers = data.Methods.Where(m => m.Name != ".ctor").ToArray();
 
             foreach (var rule in classInheritanceRules)
@@ -114,11 +106,8 @@ public static class FactEntryPointDeriver
 
     private static void DerivePages(
         ILookup<string, string> baseEdges,
-        ILookup<
-            string,
-            (string SymbolId, string Name, string? ContainingSymbolId, string Signature, string FilePath, int Line, bool IsOverride)
-        > ctorsByContaining,
-        Dictionary<string, (string SymbolId, string Namespace, string FilePath, int Line, bool IsAbstract)> typeById,
+        ILookup<string, MethodSymbol> ctorsByContaining,
+        Dictionary<string, TypeSymbol> typeById,
         FactEntryPointRule rule,
         List<DerivedEntryPoint> results,
         HashSet<(string, int)> seen
@@ -154,7 +143,9 @@ public static class FactEntryPointDeriver
                     if (!seen.Add((ctor.FilePath, ctor.Line)))
                         continue;
                     var displayName = BuildPageDisplayName(rule, route, ctor.Signature);
-                    results.Add(new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, ctor.FilePath, ctor.Line));
+                    results.Add(
+                        new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, ctor.FilePath, ctor.Line, rule.Requires)
+                    );
                 }
             }
             else if (typeById.TryGetValue(typeId, out var typeRow))
@@ -162,7 +153,9 @@ public static class FactEntryPointDeriver
                 if (!seen.Add((typeRow.FilePath, typeRow.Line)))
                     continue;
                 var displayName = $"{rule.Kind} {rule.DefaultMethod} {route}";
-                results.Add(new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, typeRow.FilePath, typeRow.Line));
+                results.Add(
+                    new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, typeRow.FilePath, typeRow.Line, rule.Requires)
+                );
             }
         }
     }
@@ -214,7 +207,7 @@ public static class FactEntryPointDeriver
     // --- Pattern B: action entry points ---
 
     private static void DeriveActions(
-        IReadOnlyList<(string TargetSymbolId, string? EnclosingSymbolId, string FilePath, int Line)> ctorRefs,
+        IReadOnlyList<SymbolRef> ctorRefs,
         ILookup<string, string> baseEdges,
         FactEntryPointRule rule,
         List<DerivedEntryPoint> results,
@@ -229,39 +222,31 @@ public static class FactEntryPointDeriver
 
         foreach (var r in ctorRefs)
         {
-            if (r.EnclosingSymbolId is null)
+            if (r.Enclosing is null)
                 continue;
-            if (!rule.HandlerMethodAttributePrefixes.Any(prefix => r.TargetSymbolId.StartsWith(prefix, StringComparison.Ordinal)))
+            if (!rule.HandlerMethodAttributePrefixes.Any(prefix => r.Target.StartsWith(prefix, StringComparison.Ordinal)))
                 continue;
 
-            var declaringTypeId = DeclaringTypeId(r.EnclosingSymbolId);
+            var declaringTypeId = DeclaringTypeId(r.Enclosing);
             if (declaringTypeId is null || !TypeClosure.Contains(closure, declaringTypeId))
                 continue;
 
             if (!seen.Add((r.FilePath, r.Line)))
                 continue;
 
-            var route = BuildActionRoute(r.EnclosingSymbolId, rule.NamespacePrefix);
+            var route = BuildActionRoute(r.Enclosing, rule.NamespacePrefix);
             if (route is null)
                 continue;
 
             var displayName = $"{rule.Kind} {rule.DefaultMethod} {route}";
-            results.Add(new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, r.FilePath, r.Line));
+            results.Add(new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, r.FilePath, r.Line, rule.Requires));
         }
     }
 
     // --- Pattern C: class-inheritance entry points (background / service / WCF / HTTP / actor) ---
 
     private static void DeriveClassInheritance(
-        IReadOnlyList<(
-            string SymbolId,
-            string Name,
-            string? ContainingSymbolId,
-            string Signature,
-            string FilePath,
-            int Line,
-            bool IsOverride
-        )> handlers,
+        IReadOnlyList<MethodSymbol> handlers,
         ILookup<string, string> inheritanceEdges,
         ILookup<string, string> attributeRefsByMethod,
         FactClassInheritanceRule rule,
@@ -277,6 +262,9 @@ public static class FactEntryPointDeriver
 
         // handlerMethods:["*"] means "any method name" (again the WCF rule — gated by the attribute).
         var anyMethod = rule.HandlerMethods.Contains("*", StringComparer.Ordinal);
+        // Hoist the handler-name set out of the per-method loop: rule.HandlerMethods.Contains(name, cmp)
+        // is LINQ Enumerable.Contains, which allocates an enumerator on each of the ~50k calls per rule.
+        var handlerNames = anyMethod ? null : new HashSet<string>(rule.HandlerMethods, StringComparer.Ordinal);
 
         foreach (var m in handlers)
         {
@@ -284,7 +272,7 @@ public static class FactEntryPointDeriver
                 continue;
             if (closure is not null && !TypeClosure.Contains(closure, m.ContainingSymbolId))
                 continue;
-            if (!anyMethod && !rule.HandlerMethods.Contains(m.Name, StringComparer.Ordinal))
+            if (handlerNames is not null && !handlerNames.Contains(m.Name))
                 continue;
             if (rule.RequireOverride && !m.IsOverride)
                 continue;
@@ -304,7 +292,7 @@ public static class FactEntryPointDeriver
             if (route is null)
                 continue;
             var displayName = $"{rule.Kind} {rule.DefaultMethod} {route}";
-            results.Add(new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, m.FilePath, m.Line));
+            results.Add(new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, m.FilePath, m.Line, rule.Requires));
         }
     }
 

@@ -21,14 +21,18 @@ dotnet pack src/Rig.Cli/Rig.Cli.csproj -c Release -o .rig-nupkg /p:TreatWarnings
 # install globally from local package
 dotnet tool install -g rig --add-source .rig-nupkg
 
-# index a solution
+# index a solution (pre-build it first so cross-assembly metadata binds)
 rig index playgrounds/EntryPointEffects/EntryPointEffects.slnx
 
-# explore
-rig entrypoints
-rig effects
-rig callgraph 0          # focused by default
-rig callgraph 0 --full   # all nodes
+# build the derived call-graph + FTS views (idempotent; speeds up reaches/callers/tree/dead)
+rig graph
+
+# explore (run from the directory that holds .rig/)
+rig derive                              # effects + entry points inventory
+rig reaches "Type.Method"               # effects reachable from an entry point
+rig tree    "Type.Method" --effects     # compact call tree: only effectful methods
+rig callers "Type.Method" --entrypoints # reverse: which entry points reach this
+rig path    "From.Method" "To.Method"   # one concrete path between two symbols
 ```
 
 ## Formatting
@@ -49,18 +53,31 @@ dotnet publish src/Rig.Cli/Rig.Cli.csproj -c Release -r win-x64 --self-contained
 
 ## CLI Commands
 
+All commands except `index`/`mine` are read-only and run from the directory that holds `.rig/`.
+`--rules <path>` (repeatable) cascades extra rule files over the builtin set.
+
 | Command | Description |
 |---|---|
-| `rig index <solution> [--rules <path>...]` | Index a `.sln` / `.slnx` into a new immutable run in `.rig/rig.db`; `--rules` merges extra rule files on top of the cascade (repeatable) |
-| `rig runs` | List all runs in chronological order |
-| `rig entrypoints` | List all entry points in the latest run |
-| `rig effects [--entrypoint N]` | List all effects, optionally filtered to one entry point |
-| `rig callgraph <N> [--full\|--summary]` | Print the call graph for entry point N. Default: focused (effect-reachable nodes only). `--full` shows all nodes and boundary calls. `--summary` prints a flat effect inventory. |
-| `rig di` | List MS DI registrations found in the solution |
+| `rig index <solution\|project> [--rules <p>...] [--from <entry.csproj>] [--parallelism <n>] [--durable]` | Index a `.sln`/`.slnx`/`.csproj` into `.rig/rig.db`. `--from` indexes only the entry project's non-test closure in one workspace |
+| `rig mine <solution> --from <project.csproj> [--rules <p>...] [--parallelism <n>]` | BFS the project dependency graph from an entry project, indexing each project |
+| `rig graph` | Rebuild the derived call-graph views (`call_edges` + `dispatch_edges` + `nodes` + FTS) from facts — idempotent, no rescan |
+| `rig runs` | List indexed runs (entry-point / effect / symbol counts) |
+| `rig derive [--rules <p>...] [--only <p,..>] [--exclude <p,..>]` | Stage-2 pass over facts: re-derive effects + entry points + classified handoffs. `--exclude throw` drops exceptions |
+| `rig reaches <pat> [--async] [--only/--exclude <p,..>] [--maxdepth <n>] [--format tsv]` | Effects reachable from an entry point (synchronous by default; `--async` also walks handoffs into a separate ⚡ bucket) |
+| `rig tree <pat> [--full\|--summary\|--effects] [--async] [--only/--exclude <p,..>] [--raw] [--maxdepth <n>]` | Call tree from an entry point. Default prunes to effect-reaching paths; `--effects` lists only effectful methods; `--raw` bypasses render rules |
+| `rig callers <pat> [--roots\|--entrypoints] [--async] [--raw] [--maxdepth <n>]` | Reverse reachability: who reaches this method. `--entrypoints` = the rule-detected entry points; `--roots` = no-predecessor candidates |
+| `rig path <fromPat> <toPat> [--async] [--raw] [--maxdepth <n>]` | One concrete path between two symbols |
+| `rig dead [--lib] [--include-dispatch] [--all] [--root <pat>...] [--format tsv]` | Unreachable first-party methods (report-only — compiler-confirm before removing) |
+| `rig symbols <pat> [--kind <k>] [--limit <n>]` | Substring symbol search (FTS-accelerated) |
+| `rig refs <pat> [--first-party] [--kind <refkind>] [--limit <n>]` | References to a symbol |
+| `rig di` | List MS DI registrations (service → implementation, lifetime, source) |
 | `rig files --skipped` | List files excluded from analysis and the rule that excluded them |
 | `rig profile validate` | Validate the `rig.rules.json` profile for the current directory |
 
-Entry-point kinds detected: `mvc` (controller actions), `minapi` (`app.Map*`), `fastendpoint`.
+Patterns are case-insensitive substring matches over DocIDs (`M:Ns.Type.Method(args)`). Entry-point and
+effect detectors are **rule data** (`rig.rules.json`), not baked-in code, so the detected kinds depend on
+the active profile — common kinds include `mvc`/`minapi`/`page`/`action` plus classified async-handoff
+origins (`background`/`timer`/`actor`/`event`).
 
 ## Effect Observations
 
@@ -77,6 +94,42 @@ is detected around the effect site:
 | `[read_before_commit:before_commit]` | `SaveChangesAsync` preceded by an EF read in the same method — potential lost-update / TOCTOU site |
 | `[concurrency_handled:DbUpdateConcurrencyException]` | `SaveChangesAsync` inside a `catch(DbUpdateConcurrencyException)` — optimistic concurrency IS handled |
 
+## Deployment Attribution (`deployments.json`)
+
+Optional and opt-in. Drop a `deployments.json` next to `.rig/` and every command that renders an entry
+point annotates it with the deployed **service(s)** whose process runs it — a ▶ marker, the EP kind, the
+route, and a deployment chip. Without the file, output is unchanged.
+
+```jsonc
+{
+  "services": [
+    { "name": "MedDBase", "host": "src/main/MedDBase.Site/MedDBase/MedDBase.csproj", "kind": "iis", "provides": ["FrontEnd"] },
+    { "name": "DataServer", "host": "src/data-server/MedDBase.DataServer/MedDBase.DataServer.csproj", "kind": "iis", "provides": ["DataServer"] },
+    { "name": "PdfService2", "host": "src/pdf2/PdfService2/PdfService2.csproj", "kind": "kube" }
+  ]
+}
+```
+
+- `host` is the entry csproj, relative to the indexed solution's directory. JSONC (comments + trailing
+  commas allowed). Seed it from the build's own artifact manifest, then curate `kind`/topology by hand.
+- **Mechanism** (query-side, no re-index): each service's entry csproj → transitive `<ProjectReference>`
+  closure; an EP's source file → its owning csproj → the service(s) whose closure contains it.
+- **loaded-in vs active-in** — closure membership is "code is *loaded* in service X", an upper bound:
+  shared libraries fan out to every referencing host, so a background/actor EP is *linked* into many
+  services even when only one *runs* it. A **capability gate** refines this to **active-in**. A service
+  declares the opaque tokens it `provides`; an EP rule declares the tokens it `requires` (on
+  `handoffDispatchers` and entry-point rules — see `rig.rules.json`). An EP is **active-in** a loaded
+  service iff `provides ∩ requires ≠ ∅` (ANY semantics). A rule with no `requires` is ungated — active
+  wherever loaded — so the gate is strictly opt-in and ungated output is byte-identical to before.
+- **Rendering**: chips show the **active-in** service(s) plus the linked-but-inactive count as a dim
+  delta, e.g. `▶ echoactor SomeActor.Inbox  ⟦MedDBase (iis) · 1 linked-inactive⟧`, or `⟦N svcs: …⟧` for a
+  multi-host fan-out. Appears in `derive` (+ a per-service active-in summary and trailing `service` =
+  loaded / `activeService` = active TSV columns), `callers --entrypoints`/`--roots`, `tree`, and the
+  `reaches`/`path` From line.
+- Tokens are opaque to rig (a deployment convention, e.g. a startup-set id); a single rule gates all the
+  EPs it produces the same way. Sub-rule runtime branches (an `if` inside one registrar that starts some
+  actors only on one host) and cluster routing / lazy spawn are out of scope.
+
 ## Playgrounds
 
 | Playground | Entry points | Effects | Index time |
@@ -89,10 +142,14 @@ is detected around the effect site:
 
 The `eShop` playground is a real-world microservices reference app (41 entry points, 100 effects).
 
-### Focused call graph — `PUT /items`
+> The snippets below are illustrative of the focused-tree and effects-inventory output. The numeric
+> `callgraph N` / `effects --entrypoint N` commands were replaced by pattern-addressed `rig tree <pattern>`
+> and `rig reaches <pattern>`; current output renders with box-drawing connectors and a per-effect emoji.
+
+### Focused call tree — `PUT /items`
 
 ```
-$ rig callgraph 12
+$ rig tree "CatalogApi.UpdateItem"
 
 Callgraph: [12] minapi PUT /items (focused)
 Nodes: 8 / 18 on effect paths
@@ -118,7 +175,7 @@ concurrency token — a potential lost-update site.
 ### Flat effects summary — `PUT /items`
 
 ```
-$ rig effects --entrypoint 12
+$ rig reaches "CatalogApi.UpdateItem"
 
   efcore           read            CatalogContext.CatalogItems
   efcore           commit          CatalogContext  [x2]  [read_before_commit:before_commit]

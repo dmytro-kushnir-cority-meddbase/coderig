@@ -1,100 +1,11 @@
 {
   "entrypoints": {
-    "minimalApi": [
-      {
-        "method": "MapGet",
-        "httpMethod": "GET"
-      },
-      {
-        "method": "MapPost",
-        "httpMethod": "POST"
-      },
-      {
-        "method": "MapPut",
-        "httpMethod": "PUT"
-      },
-      {
-        "method": "MapDelete",
-        "httpMethod": "DELETE"
-      },
-      {
-        "method": "MapPatch",
-        "httpMethod": "PATCH"
-      }
-    ],
-    "mvcHttpAttributes": [
-      {
-        "attribute": "HttpGet",
-        "httpMethod": "GET"
-      },
-      {
-        "attribute": "HttpGetAttribute",
-        "httpMethod": "GET"
-      },
-      {
-        "attribute": "HttpPost",
-        "httpMethod": "POST"
-      },
-      {
-        "attribute": "HttpPostAttribute",
-        "httpMethod": "POST"
-      },
-      {
-        "attribute": "HttpPut",
-        "httpMethod": "PUT"
-      },
-      {
-        "attribute": "HttpPutAttribute",
-        "httpMethod": "PUT"
-      },
-      {
-        "attribute": "HttpDelete",
-        "httpMethod": "DELETE"
-      },
-      {
-        "attribute": "HttpDeleteAttribute",
-        "httpMethod": "DELETE"
-      },
-      {
-        "attribute": "HttpPatch",
-        "httpMethod": "PATCH"
-      },
-      {
-        "attribute": "HttpPatchAttribute",
-        "httpMethod": "PATCH"
-      }
-    ],
     "classInheritance": [
       {
         "id": "dotnet.fastendpoints.execute",
         "kind": "fastendpoint",
         "baseTypes": [
           "FastEndpoints.Endpoint"
-        ],
-        "routeProviderMethods": [
-          "Configure"
-        ],
-        "routeMethods": [
-          {
-            "method": "Get",
-            "httpMethod": "GET"
-          },
-          {
-            "method": "Post",
-            "httpMethod": "POST"
-          },
-          {
-            "method": "Put",
-            "httpMethod": "PUT"
-          },
-          {
-            "method": "Delete",
-            "httpMethod": "DELETE"
-          },
-          {
-            "method": "Patch",
-            "httpMethod": "PATCH"
-          }
         ],
         "handlerMethods": [
           "ExecuteAsync",
@@ -108,8 +19,6 @@
         "baseTypes": [
           "*"
         ],
-        "routeProviderMethods": [],
-        "routeMethods": [],
         "handlerMethods": [
           "*"
         ],
@@ -125,8 +34,6 @@
         "baseTypes": [
           "Microsoft.Extensions.Hosting.BackgroundService"
         ],
-        "routeProviderMethods": [],
-        "routeMethods": [],
         "handlerMethods": [
           "ExecuteAsync"
         ],
@@ -139,13 +46,68 @@
         "baseTypes": [
           "eShop.EventBus.Abstractions.IIntegrationEventHandler"
         ],
-        "routeProviderMethods": [],
-        "routeMethods": [],
         "handlerMethods": [
           "Handle"
         ],
         "requireOverride": false,
         "defaultMethod": "HANDLE"
+      },
+      {
+        "id": "dotnet.webapi.controller",
+        "kind": "http",
+        "baseTypes": [
+          "System.Web.Http.ApiController",
+          "System.Web.Mvc.Controller",
+          "Microsoft.AspNetCore.Mvc.ControllerBase",
+          "Microsoft.AspNetCore.Mvc.Controller"
+        ],
+        "handlerMethods": [
+          "*"
+        ],
+        "requireOverride": false,
+        "defaultMethod": "REQUEST"
+      },
+      {
+        "id": "dotnet.asmx.webmethod",
+        "kind": "soap",
+        "baseTypes": [
+          "System.Web.Services.WebService"
+        ],
+        "handlerMethods": [
+          "*"
+        ],
+        "handlerMethodAttributePrefixes": [
+          "T:System.Web.Services.WebMethodAttribute"
+        ],
+        "requireOverride": false,
+        "defaultMethod": "INVOKE"
+      },
+      {
+        "id": "dotnet.webforms.page_lifecycle",
+        "kind": "page",
+        "baseTypes": [
+          "System.Web.UI.Page"
+        ],
+        "handlerMethods": [
+          "Page_Load",
+          "Page_Init",
+          "Page_PreRender"
+        ],
+        "requireOverride": false,
+        "defaultMethod": "LOAD"
+      },
+      {
+        "id": "dotnet.signalr.hub",
+        "kind": "signalr",
+        "baseTypes": [
+          "Microsoft.AspNet.SignalR.Hub",
+          "Microsoft.AspNetCore.SignalR.Hub"
+        ],
+        "handlerMethods": [
+          "*"
+        ],
+        "requireOverride": false,
+        "defaultMethod": "INVOKE"
       }
     ]
   },
@@ -223,6 +185,161 @@
       "confidence": "high",
       "basis": "compilation+profile",
       "reason": "httpclient_send_method"
+    },
+    {
+      "provider": "http",
+      "operation": "GET",
+      "methods": [
+        "GetAsync",
+        "GetStringAsync",
+        "GetJsonAsync",
+        "GetBytesAsync",
+        "GetStreamAsync"
+      ],
+      "declaringTypes": [
+        "Flurl.Http.GeneratedExtensions"
+      ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "flurl_http_get"
+    },
+    {
+      "provider": "http",
+      "operation": "POST",
+      "methods": [
+        "PostAsync",
+        "PostJsonAsync",
+        "PostStringAsync",
+        "PostUrlEncodedAsync",
+        "PostMultipartAsync"
+      ],
+      "declaringTypes": [
+        "Flurl.Http.GeneratedExtensions"
+      ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "flurl_http_post"
+    },
+    {
+      "provider": "http",
+      "operation": "PUT",
+      "methods": [
+        "PutAsync",
+        "PutJsonAsync",
+        "PutStringAsync"
+      ],
+      "declaringTypes": [
+        "Flurl.Http.GeneratedExtensions"
+      ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "flurl_http_put"
+    },
+    {
+      "provider": "http",
+      "operation": "PATCH",
+      "methods": [
+        "PatchJsonAsync",
+        "PatchStringAsync"
+      ],
+      "declaringTypes": [
+        "Flurl.Http.GeneratedExtensions"
+      ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "flurl_http_patch"
+    },
+    {
+      "provider": "http",
+      "operation": "DELETE",
+      "methods": [
+        "DeleteAsync"
+      ],
+      "declaringTypes": [
+        "Flurl.Http.GeneratedExtensions"
+      ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "flurl_http_delete"
+    },
+    {
+      "provider": "http",
+      "operation": "send",
+      "methods": [
+        "SendAsync",
+        "SendJsonAsync",
+        "SendStringAsync",
+        "SendUrlEncodedAsync"
+      ],
+      "declaringTypes": [
+        "Flurl.Http.GeneratedExtensions"
+      ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "flurl_http_send"
+    },
+    {
+      "provider": "http",
+      "operation": "GET",
+      "methods": [
+        "DownloadString",
+        "DownloadStringTaskAsync",
+        "DownloadData",
+        "DownloadDataTaskAsync",
+        "DownloadFile",
+        "DownloadFileTaskAsync",
+        "OpenRead"
+      ],
+      "declaringTypes": [
+        "System.Net.WebClient"
+      ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "webclient_download"
+    },
+    {
+      "provider": "http",
+      "operation": "POST",
+      "methods": [
+        "UploadString",
+        "UploadStringTaskAsync",
+        "UploadData",
+        "UploadDataTaskAsync",
+        "UploadFile",
+        "UploadFileTaskAsync",
+        "UploadValues",
+        "OpenWrite"
+      ],
+      "declaringTypes": [
+        "System.Net.WebClient"
+      ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "webclient_upload"
+    },
+    {
+      "provider": "io",
+      "operation": "write",
+      "methods": [
+        "Save"
+      ],
+      "declaringTypes": [
+        "System.Xml.XmlDocument",
+        "System.Xml.Linq.XDocument",
+        "System.Xml.Linq.XElement"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "xml_document_save_file"
     },
     {
       "provider": "efcore",
@@ -1072,7 +1189,7 @@
       "provider": "io",
       "operation": "write",
       "methods": [ "Write", "WriteAsync", "WriteLine", "WriteLineAsync", "Flush", "FlushAsync" ],
-      "declaringTypes": [ "System.IO.StreamWriter", "System.IO.BinaryWriter" ],
+      "declaringTypes": [ "System.IO.StreamWriter", "System.IO.BinaryWriter", "System.IO.FileStream", "System.IO.TextWriter" ],
       "resource": "declaring_type",
       "confidence": "medium",
       "basis": "compilation+profile",
@@ -1082,17 +1199,145 @@
       "provider": "io",
       "operation": "read",
       "methods": [ "Read", "ReadAsync", "ReadLine", "ReadLineAsync", "ReadToEnd", "ReadToEndAsync" ],
-      "declaringTypes": [ "System.IO.StreamReader", "System.IO.BinaryReader" ],
+      "declaringTypes": [ "System.IO.StreamReader", "System.IO.BinaryReader", "System.IO.FileStream", "System.IO.TextReader" ],
       "resource": "declaring_type",
       "confidence": "medium",
       "basis": "compilation+profile",
       "reason": "stream_read"
     },
     {
+      "provider": "io",
+      "operation": "write",
+      "methods": [ "OpenWrite", "MoveTo", "CopyTo", "Create", "CreateText", "AppendText", "Replace", "Encrypt", "Decrypt" ],
+      "declaringTypes": [ "System.IO.FileInfo" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "fileinfo_write"
+    },
+    {
+      "provider": "io",
+      "operation": "read",
+      "methods": [ "OpenRead", "OpenText" ],
+      "declaringTypes": [ "System.IO.FileInfo" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "fileinfo_read"
+    },
+    {
+      "provider": "io",
+      "operation": "delete",
+      "methods": [ "Delete" ],
+      "declaringTypes": [ "System.IO.FileInfo" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "fileinfo_delete"
+    },
+    {
+      "provider": "fhir",
+      "operation": "read",
+      "methods": [ "Read", "ReadAsync", "Refresh", "RefreshAsync", "Get", "GetAsync", "History", "HistoryAsync", "TypeHistory", "TypeHistoryAsync", "WholeSystemHistory", "WholeSystemHistoryAsync", "Conformance", "ConformanceAsync", "CapabilityStatement", "CapabilityStatementAsync" ],
+      "declaringTypes": [ "Hl7.Fhir.Rest.FhirClient", "Hl7.Fhir.Rest.BaseFhirClient" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "fhir_read"
+    },
+    {
+      "provider": "fhir",
+      "operation": "search",
+      "methods": [ "Search", "SearchAsync", "SearchUsingPost", "SearchUsingPostAsync", "WholeSystemSearch", "WholeSystemSearchAsync", "Continue", "ContinueAsync" ],
+      "declaringTypes": [ "Hl7.Fhir.Rest.FhirClient", "Hl7.Fhir.Rest.BaseFhirClient" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "fhir_search"
+    },
+    {
+      "provider": "fhir",
+      "operation": "create",
+      "methods": [ "Create", "CreateAsync" ],
+      "declaringTypes": [ "Hl7.Fhir.Rest.FhirClient", "Hl7.Fhir.Rest.BaseFhirClient" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "fhir_create"
+    },
+    {
+      "provider": "fhir",
+      "operation": "update",
+      "methods": [ "Update", "UpdateAsync", "Patch", "PatchAsync" ],
+      "declaringTypes": [ "Hl7.Fhir.Rest.FhirClient", "Hl7.Fhir.Rest.BaseFhirClient" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "fhir_update"
+    },
+    {
+      "provider": "fhir",
+      "operation": "delete",
+      "methods": [ "Delete", "DeleteAsync" ],
+      "declaringTypes": [ "Hl7.Fhir.Rest.FhirClient", "Hl7.Fhir.Rest.BaseFhirClient" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "fhir_delete"
+    },
+    {
+      "provider": "fhir",
+      "operation": "transaction",
+      "methods": [ "Transaction", "TransactionAsync" ],
+      "declaringTypes": [ "Hl7.Fhir.Rest.FhirClient", "Hl7.Fhir.Rest.BaseFhirClient" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "fhir_transaction"
+    },
+    {
+      "provider": "fhir",
+      "operation": "operation",
+      "methods": [ "Operation", "OperationAsync", "TypeOperation", "TypeOperationAsync", "InstanceOperation", "InstanceOperationAsync", "WholeSystemOperation", "WholeSystemOperationAsync" ],
+      "declaringTypes": [ "Hl7.Fhir.Rest.FhirClient", "Hl7.Fhir.Rest.BaseFhirClient" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "fhir_operation"
+    },
+    {
+      "provider": "soap",
+      "operation": "invoke",
+      "methods": [ "Invoke", "InvokeAsync", "BeginInvoke" ],
+      "declaringTypes": [ "System.Web.Services.Protocols.SoapHttpClientProtocol" ],
+      "resource": "string_argument",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "legacy_asmx_soap_invoke: any generated ASMX proxy's wrapper body calls the inherited SoapHttpClientProtocol.Invoke(\"operation\", args); the first string literal IS the SOAP operation name. One base-type rule covers every WSDL proxy (Healthcode + Labs/Mirth/LabsServer), where per-method project rules only cover the ones explicitly enumerated."
+    },
+    {
+      "provider": "config",
+      "operation": "read",
+      "methods": [ "GetSection", "GetValue", "GetConnectionString" ],
+      "declaringTypes": [
+        "Microsoft.Extensions.Configuration.IConfiguration",
+        "Microsoft.Extensions.Configuration.IConfigurationRoot",
+        "Microsoft.Extensions.Configuration.ConfigurationManager",
+        "Microsoft.Extensions.Configuration.ConfigurationBinder",
+        "Microsoft.Extensions.Configuration.ConfigurationExtensions",
+        "System.Configuration.ConfigurationManager"
+      ],
+      "resource": "string_argument",
+      "argumentIndex": 0,
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "config_read: the configuration key / section name is the syntactic first argument of GetSection/GetValue/GetConnectionString (true even for the ConfigurationBinder extension methods — the IConfiguration receiver is not in the argument list). argumentIndex 0 reads the const-resolved list, so a const-keyed read (GetSection(Keys.Foo)) yields the value, not just a literal."
+    },
+    {
       "provider": "lock",
       "operation": "acquire",
       "methods": [ "Enter", "TryEnter", "Wait", "WaitAsync", "WaitOne", "EnterReadLock", "EnterWriteLock", "EnterUpgradeableReadLock", "AcquireReaderLock", "AcquireWriterLock" ],
-      "declaringTypes": [ "System.Threading.Monitor", "System.Threading.SemaphoreSlim", "System.Threading.Semaphore", "System.Threading.WaitHandle", "System.Threading.ReaderWriterLockSlim", "System.Threading.ReaderWriterLock" ],
+      "declaringTypes": [ "System.Threading.Monitor", "System.Threading.Semaphore", "System.Threading.WaitHandle", "System.Threading.ReaderWriterLockSlim", "System.Threading.ReaderWriterLock" ],
       "resource": "declaring_type",
       "confidence": "medium",
       "basis": "compilation+profile",
@@ -1102,11 +1347,31 @@
       "provider": "lock",
       "operation": "release",
       "methods": [ "Exit", "Release", "ReleaseMutex", "ExitReadLock", "ExitWriteLock", "ExitUpgradeableReadLock", "ReleaseReaderLock", "ReleaseWriterLock" ],
-      "declaringTypes": [ "System.Threading.Monitor", "System.Threading.SemaphoreSlim", "System.Threading.Semaphore", "System.Threading.Mutex", "System.Threading.ReaderWriterLockSlim", "System.Threading.ReaderWriterLock" ],
+      "declaringTypes": [ "System.Threading.Monitor", "System.Threading.Semaphore", "System.Threading.Mutex", "System.Threading.ReaderWriterLockSlim", "System.Threading.ReaderWriterLock" ],
       "resource": "declaring_type",
       "confidence": "medium",
       "basis": "compilation+profile",
       "reason": "lock_release"
+    },
+    {
+      "provider": "async_lock",
+      "operation": "acquire",
+      "methods": [ "Wait", "WaitAsync" ],
+      "declaringTypes": [ "System.Threading.SemaphoreSlim" ],
+      "resource": "declaring_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "async_lock_acquire"
+    },
+    {
+      "provider": "async_lock",
+      "operation": "release",
+      "methods": [ "Release" ],
+      "declaringTypes": [ "System.Threading.SemaphoreSlim" ],
+      "resource": "declaring_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "async_lock_release"
     },
     {
       "provider": "process",
@@ -1362,10 +1627,32 @@
       {
         "scopeKind": "lock",
         "scopeTypePatterns": [],
-        "excludeProviders": ["lock", "inproc_cache", "app_state", "session_state", "inproc_timer"],
+        "excludeProviders": ["lock", "async_lock", "inproc_cache", "app_state", "session_state", "inproc_timer"],
         "observationType": "lock_held_across_effect",
         "context": "lock"
       }
     ]
+  },
+  "effectEmoji": {
+    "llblgen:write": "💾",
+    "llblgen:read": "🔍",
+    "llblgen:fetch": "📥",
+    "llblgen:tx_commit": "✅",
+    "llblgen:tx_rollback": "↩️",
+    "llblgen": "🗄️",
+    "soap": "☎️",
+    "http": "🌐",
+    "queue": "📤",
+    "echo_publish": "📣",
+    "eventbus": "📡",
+    "entity_cache": "🗃️",
+    "object_store": "📦",
+    "io": "📁",
+    "throw": "⚠️",
+    "lock": "🔒",
+    "async_lock": "🔐",
+    "fhir": "🏥",
+    "permission": "🔑",
+    "config": "⚙️"
   }
 }

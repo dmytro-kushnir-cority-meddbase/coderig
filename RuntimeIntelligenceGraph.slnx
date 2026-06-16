@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/bench/">
+    <Project Path="bench/Rig.Benchmarks/Rig.Benchmarks.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/Rig.Analysis/Rig.Analysis.csproj" />
     <Project Path="src/Rig.Domain/Rig.Domain.csproj" />

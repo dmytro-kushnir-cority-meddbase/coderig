@@ -42,7 +42,8 @@ public static class FactEffectRuleProvider
             rule.Resource,
             rule.TreatAsDispatch,
             rule.TargetCallsMethods,
-            rule.TypeArgumentIndex
+            rule.TypeArgumentIndex,
+            rule.ArgumentIndex
         );
     }
 }

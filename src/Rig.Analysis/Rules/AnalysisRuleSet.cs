@@ -4,50 +4,68 @@ using Rig.Domain.Functions;
 
 namespace Rig.Analysis.Rules;
 
-internal sealed record AnalysisRuleSet(
-    IReadOnlyList<MinimalApiEntryPointRule> MinimalApiEntryPoints,
-    IReadOnlyList<MvcHttpAttributeRule> MvcHttpAttributes,
-    IReadOnlyList<ClassInheritanceEntryPointRule> ClassInheritanceEntryPoints,
-    IReadOnlyList<PageModelEntryPointRule> PageModelEntryPoints,
-    IReadOnlyList<EffectRule> Effects,
-    IReadOnlyList<DiRegistrationRule> DiRegistrations,
-    IReadOnlyList<FileRule> FileInclude,
-    IReadOnlyList<FileRule> FileExclude,
-    IReadOnlyList<string> TestProjectPatterns,
-    IReadOnlyList<string> ProjectExcludePatterns,
-    IReadOnlyList<ReadBeforeCommitObservationRule> ReadBeforeCommitObservations,
-    IReadOnlyList<ConcurrencyHandledObservationRule> ConcurrencyHandledObservations,
-    IReadOnlyList<ResilienceRetryObservationRule> ResilienceRetryObservations,
-    IReadOnlyList<string> LoadedRulesPaths,
+// Aggregate of the merged rule collections. Construct with a named object initializer — every member
+// defaults to an empty collection, so a call site sets only the rule kinds it cares about and adding a
+// new rule kind never disturbs an existing call site (the 24-positional-argument constructor this
+// replaced made argument order load-bearing and every addition a comma-counting exercise). Merging is
+// done with `this with { ... }` in MergeDocument; AnalysisRuleSet is never JSON-bound directly (the
+// JSON binds AnalysisRulesDocument, which is then projected here).
+internal sealed record AnalysisRuleSet
+{
+    public IReadOnlyList<ClassInheritanceEntryPointRule> ClassInheritanceEntryPoints { get; init; } = [];
+    public IReadOnlyList<TypeEntryPointRule> TypeEntryPoints { get; init; } = [];
+    public IReadOnlyList<EffectRule> Effects { get; init; } = [];
+    public IReadOnlyList<DiRegistrationRule> DiRegistrations { get; init; } = [];
+    public IReadOnlyList<FileRule> FileInclude { get; init; } = [];
+    public IReadOnlyList<FileRule> FileExclude { get; init; } = [];
+    public IReadOnlyList<string> TestProjectPatterns { get; init; } = [];
+    public IReadOnlyList<string> ProjectExcludePatterns { get; init; } = [];
+    public IReadOnlyList<ReadBeforeCommitObservationRule> ReadBeforeCommitObservations { get; init; } = [];
+    public IReadOnlyList<ConcurrencyHandledObservationRule> ConcurrencyHandledObservations { get; init; } = [];
+    public IReadOnlyList<ResilienceRetryObservationRule> ResilienceRetryObservations { get; init; } = [];
+    public IReadOnlyList<string> LoadedRulesPaths { get; init; } = [];
+
     // Pre-declared interface→implementation mappings (e.g. from XML service descriptors).
     // These are merged directly into the SingleImplIndex without requiring code-level DI patterns.
-    IReadOnlyList<StaticDiMapping> StaticDiMappings,
+    public IReadOnlyList<StaticDiMapping> StaticDiMappings { get; init; } = [];
+
     // Paths to XML service descriptor directories/files whose mappings are mined at index time.
-    IReadOnlyList<string> XmlDiFiles,
+    public IReadOnlyList<string> XmlDiFiles { get; init; } = [];
+
     // Curated async-handoff dispatchers (background/timer/actor/event schedulers). When one of these
     // consumes a method-group, the graph layer reclassifies that edge as a handoff (default-cut from
     // synchronous reach; --async walks it tagged). See HandoffClassifier.
-    IReadOnlyList<HandoffDispatcherRule> HandoffDispatchers,
+    public IReadOnlyList<HandoffDispatcherRule> HandoffDispatchers { get; init; } = [];
+
     // Codebase-specific `rig tree` render rules (presentation only — never affects reach).
-    IReadOnlyList<RenderRule> RenderCollapseSeams,
-    IReadOnlyList<RenderRule> RenderOpaqueTypes,
+    public IReadOnlyList<RenderRule> RenderCollapseSeams { get; init; } = [];
+    public IReadOnlyList<RenderRule> RenderOpaqueTypes { get; init; } = [];
+
     // Codebase-specific generic-factory monomorphization rules: rewrite a generic factory call edge to
     // its constructed type's method, collapsing the generic plumbing. Affects the call graph (tree /
     // reaches), unlike render rules. See FactGenericFactoryRule.
-    IReadOnlyList<GenericFactoryRule> GenericFactories,
+    public IReadOnlyList<GenericFactoryRule> GenericFactories { get; init; } = [];
+
     // Traversal-cut rules: nodes matching these patterns are emitted as leaves — their successors are
     // NOT walked. Unlike render rules (presentation-only), these stop the TRAVERSAL so deep infra
     // seams can't steal shallow direct-call expansions. `--raw` bypasses cuts. See FactTraversalCutRule.
-    IReadOnlyList<TraversalCutRule> TraversalCuts,
+    public IReadOnlyList<TraversalCutRule> TraversalCuts { get; init; } = [];
+
     // Context-bound interface-dispatch rules: narrow a context-interface's dispatch fan-out to the impls
     // bound (via a generic BindingBase<C>) to the ENCLOSING context type. Affects the call graph (tree /
     // reaches). See FactContextDispatchRule.
-    IReadOnlyList<ContextDispatchRule> ContextDispatch,
+    public IReadOnlyList<ContextDispatchRule> ContextDispatch { get; init; } = [];
+
     // Resource-span observation rules: flag a span-sensitive effect (soap/http/io/…) that occurs
     // lexically inside a transaction-`using` or `lock` scope (ordering/nesting). See FactResourceSpanRule.
-    IReadOnlyList<ResourceSpanObservationRule> ResourceSpanObservations
-)
-{
+    public IReadOnlyList<ResourceSpanObservationRule> ResourceSpanObservations { get; init; } = [];
+
+    // Per-provider (or provider:operation) glyph override for `rig tree` / `rig reaches` rendering.
+    // Looked up as "provider:operation" first, then "provider", then "•". Lives in rig.rules.json
+    // under the "effectEmoji" key; later files override earlier entries (same cascade as all other rules).
+    public IReadOnlyDictionary<string, string> EffectEmoji { get; init; } =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     public static AnalysisRuleSet LoadForSolution(string solutionPath, IReadOnlyList<string>? extraRulesPaths = null)
@@ -126,10 +144,11 @@ internal sealed record AnalysisRuleSet(
     {
         return this with
         {
-            MinimalApiEntryPoints = MinimalApiEntryPoints.Concat(document.EntryPoints?.MinimalApi ?? []).ToArray(),
-            MvcHttpAttributes = MvcHttpAttributes.Concat(document.EntryPoints?.MvcHttpAttributes ?? []).ToArray(),
             ClassInheritanceEntryPoints = ClassInheritanceEntryPoints.Concat(document.EntryPoints?.ClassInheritance ?? []).ToArray(),
-            PageModelEntryPoints = PageModelEntryPoints.Concat(document.EntryPoints?.PageModel ?? []).ToArray(),
+            TypeEntryPoints = TypeEntryPoints
+                .Concat(document.EntryPoints?.TypeEntryPoints ?? [])
+                .Concat(document.EntryPoints?.PageModel ?? [])
+                .ToArray(),
             Effects = Effects.Concat(document.Effects ?? []).ToArray(),
             DiRegistrations = DiRegistrations.Concat(document.DiRegistrations ?? []).ToArray(),
             StaticDiMappings = StaticDiMappings.Concat(document.StaticDiMappings ?? []).ToArray(),
@@ -156,7 +175,21 @@ internal sealed record AnalysisRuleSet(
             GenericFactories = GenericFactories.Concat(document.GenericFactories ?? []).ToArray(),
             TraversalCuts = TraversalCuts.Concat(document.TraversalCuts ?? []).ToArray(),
             ContextDispatch = ContextDispatch.Concat(document.ContextDispatch ?? []).ToArray(),
+            EffectEmoji = MergeEmojiMap(EffectEmoji, document.EffectEmoji),
         };
+    }
+
+    private static IReadOnlyDictionary<string, string> MergeEmojiMap(
+        IReadOnlyDictionary<string, string> existing,
+        Dictionary<string, string>? incoming
+    )
+    {
+        if (incoming is null || incoming.Count == 0)
+            return existing;
+        var merged = new Dictionary<string, string>(existing, StringComparer.OrdinalIgnoreCase);
+        foreach (var kv in incoming)
+            merged[kv.Key] = kv.Value;
+        return merged;
     }
 
     public FileRule? FindIncludedFile(string relativePath)
@@ -195,31 +228,33 @@ internal sealed record AnalysisRuleSet(
             JsonSerializer.Deserialize<AnalysisRulesDocument>(stream, JsonOptions)
             ?? throw new InvalidOperationException($"Built-in analysis rules are invalid: {rulesPath}");
 
-        return new AnalysisRuleSet(
-            document.EntryPoints?.MinimalApi ?? [],
-            document.EntryPoints?.MvcHttpAttributes ?? [],
-            document.EntryPoints?.ClassInheritance ?? [],
-            document.EntryPoints?.PageModel ?? [],
-            document.Effects ?? [],
-            document.DiRegistrations ?? [],
-            document.Files?.Include?.Select(rule => rule.ToFileRule("include")).ToArray() ?? [],
-            document.Files?.Exclude?.Select(rule => rule.ToFileRule("exclude")).ToArray() ?? [],
-            document.Files?.TestProjectPatterns ?? [],
-            document.Projects?.Exclude ?? [],
-            document.Observations?.ReadBeforeCommit ?? [],
-            document.Observations?.ConcurrencyHandled ?? [],
-            document.Observations?.ResilienceRetry ?? [],
-            [Path.GetFullPath(rulesPath)],
-            document.StaticDiMappings ?? [],
-            document.XmlDiFiles ?? [],
-            document.HandoffDispatchers ?? [],
-            document.Render?.CollapseSeams ?? [],
-            document.Render?.OpaqueTypes ?? [],
-            document.GenericFactories ?? [],
-            document.TraversalCuts ?? [],
-            document.ContextDispatch ?? [],
-            document.Observations?.ResourceSpan ?? []
-        );
+        return new AnalysisRuleSet
+        {
+            ClassInheritanceEntryPoints = document.EntryPoints?.ClassInheritance ?? [],
+            TypeEntryPoints = [.. document.EntryPoints?.TypeEntryPoints ?? [], .. document.EntryPoints?.PageModel ?? []],
+            Effects = document.Effects ?? [],
+            DiRegistrations = document.DiRegistrations ?? [],
+            FileInclude = document.Files?.Include?.Select(rule => rule.ToFileRule("include")).ToArray() ?? [],
+            FileExclude = document.Files?.Exclude?.Select(rule => rule.ToFileRule("exclude")).ToArray() ?? [],
+            TestProjectPatterns = document.Files?.TestProjectPatterns ?? [],
+            ProjectExcludePatterns = document.Projects?.Exclude ?? [],
+            ReadBeforeCommitObservations = document.Observations?.ReadBeforeCommit ?? [],
+            ConcurrencyHandledObservations = document.Observations?.ConcurrencyHandled ?? [],
+            ResilienceRetryObservations = document.Observations?.ResilienceRetry ?? [],
+            LoadedRulesPaths = [Path.GetFullPath(rulesPath)],
+            StaticDiMappings = document.StaticDiMappings ?? [],
+            XmlDiFiles = document.XmlDiFiles ?? [],
+            HandoffDispatchers = document.HandoffDispatchers ?? [],
+            RenderCollapseSeams = document.Render?.CollapseSeams ?? [],
+            RenderOpaqueTypes = document.Render?.OpaqueTypes ?? [],
+            GenericFactories = document.GenericFactories ?? [],
+            TraversalCuts = document.TraversalCuts ?? [],
+            ContextDispatch = document.ContextDispatch ?? [],
+            ResourceSpanObservations = document.Observations?.ResourceSpan ?? [],
+            EffectEmoji = document.EffectEmoji is not null
+                ? new Dictionary<string, string>(document.EffectEmoji, StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+        };
     }
 }
 
@@ -231,27 +266,28 @@ internal sealed record FileRule(string Id, string Glob, string Reason, Regex Reg
     }
 }
 
-internal sealed record MinimalApiEntryPointRule(string Method, string HttpMethod);
-
-internal sealed record MvcHttpAttributeRule(string Attribute, string HttpMethod);
-
-internal sealed record PageModelEntryPointRule(
+// A type-shaped entry point: a type deriving one of BaseTypes within NamespacePrefix whose construction
+// (or DefaultMethod) is an entry point — as opposed to ClassInheritanceEntryPointRule, which keys off
+// named handler methods. Generic matching infra; the rule DATA lives in JSON (key `typeEntryPoints`,
+// with `pageModel` accepted as a deprecated alias — the original sole use case this generalised from).
+internal sealed record TypeEntryPointRule(
     string Id,
     string Kind,
     IReadOnlyList<string> BaseTypes,
     string NamespacePrefix,
     string? DefaultMethod = null,
-    // When set, methods decorated with any of these attributes become the entry points
-    // rather than constructors.  Route = <page-route>.<MethodName>(<params>).
-    IReadOnlyList<string>? HandlerMethodAttributes = null
+    // When set, methods decorated with any of these attributes become the entry points rather than the
+    // constructor (entry route = <type>.<MethodName>(<params>)).
+    IReadOnlyList<string>? HandlerMethodAttributes = null,
+    // Capability tokens (JSON `requires`) a deployment must `provides` for EPs from this rule to be
+    // active-in it. Null/empty = ungated. Opaque tokens; see Deployments/DeploymentMap.
+    IReadOnlyList<string>? Requires = null
 );
 
 internal sealed record ClassInheritanceEntryPointRule(
     string Id,
     string Kind,
     IReadOnlyList<string> BaseTypes,
-    IReadOnlyList<string> RouteProviderMethods,
-    IReadOnlyList<RouteMethodRule> RouteMethods,
     IReadOnlyList<string> HandlerMethods,
     bool RequireOverride,
     string? DefaultMethod = null,
@@ -259,10 +295,11 @@ internal sealed record ClassInheritanceEntryPointRule(
     // When set, a matched method must additionally carry one of these attributes
     // (e.g. WCF [OperationContract]).  Gates rules with baseTypes:["*"]+handlerMethods:["*"]
     // so they don't match every method in the project.
-    IReadOnlyList<string>? HandlerMethodAttributes = null
+    IReadOnlyList<string>? HandlerMethodAttributes = null,
+    // Capability tokens (JSON `requires`) a deployment must `provides` for EPs from this rule to be
+    // active-in it. Null/empty = ungated. Opaque tokens; see Deployments/DeploymentMap.
+    IReadOnlyList<string>? Requires = null
 );
-
-internal sealed record RouteMethodRule(string Method, string HttpMethod);
 
 internal sealed record EffectRule(
     string Provider,
@@ -303,7 +340,10 @@ internal sealed record EffectRule(
     IReadOnlyList<string>? TargetCallsMethods = null,
     // Selects ONE top-level position (0-based) of the comma-joined type_argument resource instead of
     // the whole combo. Null = whole combo. See FactEffectRule.TypeArgumentIndex.
-    int? TypeArgumentIndex = null
+    int? TypeArgumentIndex = null,
+    // Selects a positional argument (0-based) for the string_argument/argument_name resource instead
+    // of the first. Null = argument 0. See FactEffectRule.ArgumentIndex.
+    int? ArgumentIndex = null
 );
 
 // A curated async-handoff dispatcher: when its consuming ctor/method is handed a method-group, the
@@ -312,7 +352,15 @@ internal sealed record EffectRule(
 // "RepeatingBackgroundProcessSchedule.#ctor", "Echo.Process.spawn", "IAsyncEvent.Add"); `kind` is the
 // execution-origin kind the callback gets (background|timer|actor|event); `repeating` flags a
 // re-firing schedule. Projected to FactHandoffRule for the Domain classifier.
-internal sealed record HandoffDispatcherRule(string Id, string Kind, IReadOnlyList<string> ConsumerPatterns, bool Repeating = false);
+internal sealed record HandoffDispatcherRule(
+    string Id,
+    string Kind,
+    IReadOnlyList<string> ConsumerPatterns,
+    bool Repeating = false,
+    // Capability tokens (JSON `requires`) a deployment must `provides` for the handoffs this dispatcher
+    // produces to be active-in it. Null/empty = ungated. Opaque tokens; see Deployments/DeploymentMap.
+    IReadOnlyList<string>? Requires = null
+);
 
 // A `rig tree` render rule: a DocID substring `Pattern` + a human `Label`/`Reason` shown in the
 // rendered marker. Used for both collapse-seams (fold a fan-out hub's children) and opaque-types
@@ -407,6 +455,10 @@ internal sealed class AnalysisRulesDocument
 
     // Top-level key "contextDispatch": list of {interface, bindingBase, id?, reason?} rules.
     public List<ContextDispatchRule>? ContextDispatch { get; set; }
+
+    // Top-level key "effectEmoji": flat { "provider:operation": "emoji", "provider": "emoji" } map.
+    // Later-loaded files override earlier entries; builtin-rules.json carries the defaults.
+    public Dictionary<string, string>? EffectEmoji { get; set; }
 }
 
 // `render` rule section — codebase-specific `rig tree` presentation rules (collapse fan-out hubs,
@@ -436,13 +488,13 @@ internal sealed class ProjectsSection
 
 internal sealed class EntryPointRulesDocument
 {
-    public List<MinimalApiEntryPointRule>? MinimalApi { get; set; }
-
-    public List<MvcHttpAttributeRule>? MvcHttpAttributes { get; set; }
-
     public List<ClassInheritanceEntryPointRule>? ClassInheritance { get; set; }
 
-    public List<PageModelEntryPointRule>? PageModel { get; set; }
+    public List<TypeEntryPointRule>? TypeEntryPoints { get; set; }
+
+    // Deprecated alias for TypeEntryPoints — the original framework-specific key this rule kind
+    // generalised from. Still bound and merged so existing rig.rules.json files keep working.
+    public List<TypeEntryPointRule>? PageModel { get; set; }
 }
 
 internal sealed class FileRulesSection

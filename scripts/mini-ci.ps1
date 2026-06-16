@@ -7,6 +7,24 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-HostRid {
+    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+    $archPart = switch ($arch) {
+        "x64"   { "x64" }
+        "x86"   { "x86" }
+        "arm64" { "arm64" }
+        "arm"   { "arm" }
+        default { "x64" }
+    }
+    if ($IsWindows) { return "win-$archPart" }
+    if ($IsMacOS)   { return "osx-$archPart" }
+    if ($IsLinux)   { return "linux-$archPart" }
+    # Windows PowerShell 5.1 has no $IsWindows; assume Windows
+    return "win-$archPart"
+}
+
+$HostRid = Get-HostRid
+
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $solution = Join-Path $repoRoot "RuntimeIntelligenceGraph.slnx"
 $toolProject = Join-Path $repoRoot "src/Rig.Cli/Rig.Cli.csproj"
@@ -33,6 +51,12 @@ try {
         dotnet test $solution -c $Configuration --no-build /p:UseSharedCompilation=false
     }
 
+    # PORTABLE pack — do NOT add `-r <rid>`/`-p:PublishReadyToRun=true`. A RID-specific / ReadyToRun
+    # publish of the tool silently breaks Buildalyzer's design-time builds of .NET FRAMEWORK (net4x)
+    # projects: they return no result and are DROPPED from the index (net48 web/Pages vanish, ~half the
+    # symbols lost), while netstandard/modern projects still index. The loader code is fine — only the
+    # packaging triggers it. Verified on playgrounds/LegacyNet48Web: portable = 408 symbols, R2R = 35.
+    # See memory `feedback_coderig_r2r_publish_net48`.
     dotnet pack $toolProject `
         -c $Configuration `
         -o $packageOutput `

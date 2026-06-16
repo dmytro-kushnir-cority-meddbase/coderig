@@ -1,79 +1,328 @@
 # rig — issue backlog from the MR-!10645 audit review
 
-Distilled from `docs/todo.md` (a fresh-Opus audit of MedDBase MR !10645 that drove rig end-to-end and
-ground-truthed every claim against source). Each item has a repro and a root-cause note. Priorities:
-**P1** = correctness/trust (act first), **P2** = cheap coverage win, **P3** = feature.
+Distilled from a fresh-Opus audit of MedDBase MR !10645 that drove rig end-to-end and ground-truthed
+every claim against source (the source `docs/todo.md` was removed once its findings were actioned).
+Priorities: **P2** = cheap coverage win, **P3** = feature.
 
 Convert to GitHub issues with `gh issue create` once `gh` is installed/authed (remote: `dv00d00/coderig`).
 
----
-
-## A. Correctness bugs (P1 — every one forced manual source verification)
-
-### A1 — `Save()` (base-virtual) dispatch fan-out over-approximates blast radius
-- **Symptom:** `rig reaches "CompanyEntity.Save"` = 642 methods / 310 effects / ~172 `llblgen write` — and `rig reaches "SiteEntity.Save"` returns the **identical** 310/172. The count is base→all-overrides dispatch fan-out (every `*Entity.Save`), not real per-entity behavior. A reviewer trusting the raw count massively overstates impact.
-- **Repro:**
-  ```
-  cd C:\Git\meddbase-analysis
-  rig reaches "CompanyEntity.Save"     # ~310 effects, ~172 writes
-  rig reaches "SiteEntity.Save"        # identical → dispatch fan-out, not real
-  ```
-- **Root cause:** `FactPathFinder` base-virtual/abstract→override dispatch (G6/G3) fires for *any* call whose target resolves to a base method that has overrides — including `base.Save()` / base-typed `Save()` — so it traverses into all ~172 `EntityBase.Save` overrides. The explosion path is `CompanyEntity.Save → base.Save (EntityBase.Save) → [override-dispatch] → all *Entity.Save`.
-- **Fix options:** (a) cheap — roll up siblings in `reaches`/`tree` output to `llblgen write ×172 via EntityBase.Save dispatch [expand]`, and tag the edge `dispatch-fanout(N)` (see D3/D7); (b) principled — suppress override-dispatch for non-virtual `base.` calls (needs an `is-base-call` reference fact → re-extraction) and/or narrow dispatch by the call site's `ReceiverType` (already stored) so `companyEntity.Save()` reaches only `CompanyEntity`-assignable overrides.
-
-### A2 — ctor-fetch + `Save()` recall is inconsistent across methods
-- **Symptom:** `rig reaches "SaveClinicians.SaveClinician"` shows only 2 throws — it **misses** the `new MpEntity(templateMpId, txn)` fetch (SaveClinicians.cs:266) and the `mp.Save()` write (:289), even though the **same** `new XxxEntity(pk,txn)`+`.Save()` pattern is captured correctly inside `Master.SetMedicalPersonSettings`.
-- **Repro:**
-  ```
-  rig reaches "SaveClinicians.SaveClinician"      # 8 methods, 2 throws — fetch+write missing
-  rig reaches "Master.SetMedicalPersonSettings"   # same pattern — fetch+write captured
-  ```
-- **Root cause (hypothesis):** the divergence (works in one method, not another) points to a per-file/per-project binding or enclosing-symbol gap in `SaveClinicians` (MedDBase.ServiceTier) — the ctor/invocation refs either bound to error types or were attributed to the wrong enclosing symbol. **Investigate with a fixture that reproduces a captured-vs-missing pair.**
-- **Priority:** P1 — recall gaps on writes silently understate migration blast radius.
-
-### A3 — overload/continuation call edge missed (`AssertRight`)
-- **Symptom:** `rig path "CompanyCache.New(System.Int32)" "CertificateEntity.AssertRight"` → **"No path"**, despite CompanyCache.cs:56 calling it directly; `rig path …New → IfCanView` resolves fine.
-- **Root cause:** the call passes a `Func<R>` continuation + `AccountCache.New(...).FkCertificate` (`Option<Guid>`); one arg bound to an error type so `GetSymbolInfo().Symbol` was null and no invocation ref was recorded. General recall class (error-type binding); partial mitigation at best.
-- **Priority:** P1 (low confidence of full fix) — at minimum, surface it via the `error-type-recovered`/`unresolved` edge tag (D3) so absence is visible.
+> **All P1 correctness bugs from the original audit (A1 `Save()` dispatch fan-out, A2 ctor-fetch+`Save()`
+> recall, A3 overload/continuation edge) and the P2 `object_store` read gap (B1) were verified
+> NON-REPRODUCIBLE on 2026-06-14 against the current build + store and removed.** Repro evidence:
+> `CompanyEntity.Save` vs `SiteEntity.Save` now diverge (1454/73/7 vs 1196/27/5 — fan-out gone);
+> `SaveClinicians.SaveClinician` now surfaces the fetch+write (6 write / 4 fetch); the `AssertRight`
+> path resolves; `object_store read` fires 147×. The `ctor_fetch` rule-tightening idea (closed A2) is
+> likewise moot.
 
 ---
 
-## B. Rule-data gaps (P2 — cheap, high value)
+## Findings from the 2026-06-14 entry-point audits (8 EPs + comms sweep)
 
-### B1 — no `object_store` **read** detector
-- **Symptom:** the ruleset has `object_store` write/delete only. So "no object_store effect on the `Get*` paths" (V6) reads as confirmation of "no read fallback" but is **vacuous** — there's no read rule to fire.
-- **Repro:** `rig derive --format tsv | grep object_store | grep -c read` → `0`.
-- **Fix:** add an `object_store` `read` rule to `meddbase-analysis/rig.rules.json` keyed on `IObjectStore.GetQuery*/GetObject*/GetQueryWithDTO`. Then queue-vs-settings reads are distinguishable and the V6 assertion becomes real.
+Full reports under [audits/2026-06-14/](audits/2026-06-14/). Eight Sonnet audits (5 forward recall,
+3 reverse EP-discovery) + a cross-service comms inventory, all ground-truthed against MedDBase source.
+
+### DONE — trivial effect-rule fixes (applied + verified 2026-06-14)
+- **Flurl HTTP** (`Flurl.Http.GeneratedExtensions` GET/POST/mutate) → `http` — closed a codebase-wide blind spot (Medicare PRODA + verification, SignatureRx, Opayo, …). `builtin-rules.json`. Verified: `MedicareVerification.VerifyPatient` reports `http POST`. NB `resource: "declaring_type"` — the fluent URL/receiver isn't statically minable, so `http_argument`/`receiver_type` dropped the effect.
+- **WebClient** (`System.Net.WebClient` download/upload) → `http`. `builtin-rules.json`. Verified on `PhysioTecAPI.GetPhysioTecAuthToken`.
+- **`XmlDocument.Save` / `XDocument.Save`** → `io:write`. `builtin-rules.json`. Verified on `Mirth.LabChannels.UpdateLab`.
+- **LLBLGen `UpdateMulti`/`UpdateMultiAsync`** → `llblgen:write` (mirrors `DeleteMulti`). meddbase `rig.rules.json`. Verified on `DataAccess.ExpireAll`.
+- **F2 — EP-detector rules for missing kinds.** builtin `entrypoints.classInheritance`: Web API `ApiController`/MVC `Controller` → http, ASMX `WebService`+`[WebMethod]` → soap, WebForms `Page` lifecycle → page, SignalR `Hub` → signalr. meddbase `rig.rules.json`: bespoke `MedDBase.AppCode.HubBase` → signalr, DataServer `ServletBase`/`IServlet` → http. Verified: `DownloadsController`/`FileController`/`FieldService`/`IndividualSchedule.Page_Load`/`ServletBase` now in `--entrypoints`; LegacyNet48 golden set updated (+7 Web API actions).
+- **F4 — EP convention loosening.** meddbase `rig.rules.json`: `IService` added to the `servicebase.startup` base types; `InstanceInbox` added to the Echo-inbox names. Verified: `AppStartupProcesses.Startup`, `PathwayInstance.InstanceInbox` now in `--entrypoints`. (Exact-name inbox matching is still brittle — a `*Inbox` suffix match needs rule-schema support; deferred.)
+- **Library I/O effect detectors (16+ rules).** Triaged every unique third-party lib in the solution for I/O surface; added meddbase `rig.rules.json` rules for twilio, sendgrid, gcp_pubsub, ldap, ironpdf, script_eval, linq2db, EventGrid + (after ground-truthing the real SDK API) openai, cefsharp, xero. Full triage + the three mis-typed-rule corrections: [audits/2026-06-14/library-io-detector-triage.md](audits/2026-06-14/library-io-detector-triage.md). **Net firing in the store: 11 detectors.** Dapper/Pgp/Parquet/LibGit2Sharp are in separate unmined solutions (`audits.slnx`/`ClientDataTransformation.slnx`/`sql-runner.slnx`); RestSharp is unused repo-wide.
+
+### Open findings — triage
+
+| ID | Finding | Root cause | Sev | Effort | Found on |
+|----|---------|-----------|-----|--------|----------|
+| ~~F1~~ | ~~Delegate/lambda **body** not traced through a wrapper/monad → effect invisible~~ | **REFUTED 2026-06-14** — lambda + query-clause bodies ARE traced; the flagship examples failed for two *other* reasons (F1a, F1b below). See investigation note. | — | — | — |
+| ~~F1a~~ | ~~`http_argument` DROPS the effect when the URL is a variable → codebase-wide HTTP blind spot~~ | **DONE 2026-06-14** — `ResolveResource` falls back to receiver/declaring type instead of dropping; verified live (`WebhookHttpClient.Send`, `ApiClient.GetAccessTokenAsync` now report `http POST`; ~POST 29 / GET 23 sites derived) | — | — | webhooks `httpClient.PostAsync`; NHS `ApiClient.GetAccessTokenAsync` |
+| ~~F1b~~ | ~~Invocations Roslyn resolves only to a **CandidateSymbol** (net48 `!:` partial binding) silently dropped~~ | **DONE 2026-06-14** — ref walk falls back to the first `CandidateSymbol`; regression test verified red-without-fix. Needs a re-mine to surface in the existing store | — | — | PACS `FileExt.Move/Delete/CreateMissingFilePathFolders` |
+| ~~F2~~ | ~~`--entrypoints` misses non-`[ClientAction]` EP kinds~~ | **DONE 2026-06-14** — rules added (builtin + meddbase), verified | — | — | SignalR `HubBase`; Web API `ApiController`; ASMX `[WebMethod]`; `Page_Load`; DataServer `ServletBase` |
+| **F3** | Background detector tags the **wiring** method, not the scheduled **delegate target** | `BackgroundProcessSchedule(…,Callback,…)` target not promoted to EP (Layer-2 handoff) | **Med** | Med | `CheckForZeroDebt`, `ProcessHealthcodeQueue`, `DoDueActions`, `ReferralSLAService.Worker` |
+| ~~F4~~ | ~~Echo inbox name too tight; `IService` vs abstract `ServiceBase`~~ | **DONE 2026-06-14** — meddbase rules loosened, verified (suffix-match still deferred) | — | — | `PathwayInstance.InstanceInbox`; `AppStartupProcesses.Startup` |
+| **F5** | Cross-project call edges dropped | scoped-mine stitch gap | **Med** | Med (miner) | `SubmitToHealthcode → ExportQueue.*` (Core.Background not stitched to Workflows) |
+| **F6** | Silent stops at boundaries (external assembly, clientpage_proxy, cross-deployment Redis) | no seam tag emitted (= D4) | **Low-Med** | Low | `RtfPipe.Rtf.ToHtml`; Medicare dialog proxy; webhook Redis handoff |
+| **F7** | `--roots` precision noise: `P:`/`F:` roots, interface stubs, unpropagated `save:false` guard | reverse-walk heuristic + no constant propagation | **Low** | Low | filterable by prefix |
+
+**Positives confirmed**: the forward `Save()` fan-out fix (retired A1) holds AND reverse base-virtual dispatch is precise (no leak); interface dispatch resolves (`IWebhooks`→concrete); `--roots` recovers ~100% of the EPs `--entrypoints` misses.
+
+**Remaining**: **F1a** + **F1b** DONE 2026-06-14 (F1b needs a re-mine to surface live). **F3** (background delegate-target promotion) and **F5** (cross-project stitch) are medium. F6/F7 are low. The cheap rule slice (F2 + F4 + the four effect rules) is DONE.
+
+### F1 investigation (2026-06-14) — the original "delegate-body tracing" finding was a misdiagnosis
+
+Drove the two flagship F1 examples to ground truth (store + source + synthetic fixtures):
+
+- **Lambda/delegate bodies ARE traced.** `EnclosingSymbolId` walks `FirstAncestorOrSelf<MemberDeclarationSyntax>()`, so a lambda is *transparent* — its invocations attribute to the enclosing named method. Proven live: `Interpreter.MoveExternalFile` reaches `GetAbsoluteQueueFilePath`, which is called **only** inside a `Try(() => …)` lambda. Proven by construction: `FactExtractorCaptureTests.Captures_invocations_in_query_clause_expressions` — invocations in a query SOURCE expression, inside an explicit lambda, AND in a desugared `SelectMany` collection-selector are all captured (instance- and extension-method query operators both). So the premise "the effect inside is invisible" is false.
+- **Webhook `httpClient.PostAsync` → it's F1a, not a lambda gap.** Even the *direct* (non-lambda) `ApiClient.GetAccessTokenAsync` PostAsync shows 0 effects. Cause: the builtin rule's `resource:"http_argument"` drops the effect because the URL is a variable.
+- **PACS `FileExt.Move/Delete` → it's F1b.** `FileExt.*` are declared first-party symbols in the *same* mined project, but their invocations carry 0 refs while sibling `this`-calls in the same method resolve. Synthetic query-clause repro does NOT reproduce → the cause is mine-time symbol resolution: `GetSymbolInfo(name).Symbol` is null (Roslyn returns a candidate under net48 partial binding) and the ref walk discards it.
+
+Regression tests added: `Captures_invocations_in_query_clause_expressions` (guards the refuted premise) and `Effect_rule_matching_is_exact_and_declaring_type_resource_survives_unminable_receiver` (codifies the Xero/OpenAI/CefSharp matching-semantics fixes).
 
 ---
 
 ## C. Detector families (P3 — ordered by audit value)
 
-1. **`entity_save_hooks`** — model `*Entity.Save()` as a typed effect (real lifecycle consequences: `webhook`, `audit:PersonEvent`, `account_resave`, `occ_bump`) instead of raw dispatch fan-out. Biggest accuracy win; pairs with A1.
+1. **`entity_save_hooks`** — model `*Entity.Save()` as a typed effect (real lifecycle consequences: `webhook`, `audit:PersonEvent`, `account_resave`, `occ_bump`) instead of relying on dispatch reach alone. Accuracy win for migration blast-radius audits.
 2. **`webhook` / `notify` provider** — keyed on the real emit API (`OnCompanyChanged`, `OnSiteModified`, `OnSystemAccountChanged`, ePrescribe publishers). Answers the core R1 question "does this write notify externally?".
-3. **`object_store read` op** — see B1.
-4. **`permission_assert` / `rights_gate` provider** — detect `CertificateEntity.AssertRight/AssertAnyRight/AssertAccountRight/HasRight` and `*Cache.IfCanView`, carrying the `Rights.*` flag + the `CertificateAccessException` it raises. Would make V2 a one-command answer.
-5. **`echo_publish` provider (seam marker)** — detect `Process.tell/ask(ProcessDns.*, new XxxMsg(...))` and `*.Async.On*(...)`. Can't cross the actor boundary but tags the publish site with the message type.
-6. **`config_setting` read/write** — detect `Settings.Get<T>/Set<T>` (`[CallerMemberName]`-keyed). Traces config deps + flags the GI4327 hard-coded-key↔property-name coupling (N3).
-7. **`ctor_fetch` rule tightening** — broaden `matchConstructor`/`minArguments` (or fix binding) so direct `new *Entity(pk[,txn])` fetches are caught everywhere (closes A2 at the rule level).
+3. **`permission_assert` / `rights_gate` provider** — detect `CertificateEntity.AssertRight/AssertAnyRight/AssertAccountRight/HasRight` and `*Cache.IfCanView`, carrying the `Rights.*` flag + the `CertificateAccessException` it raises. Would make V2 a one-command answer.
+4. **`echo_publish` provider (seam marker)** — detect `Process.tell/ask(ProcessDns.*, new XxxMsg(...))` and `*.Async.On*(...)`. Can't cross the actor boundary but tags the publish site with the message type.
+5. **`config_setting` read/write** — detect `Settings.Get<T>/Set<T>` (`[CallerMemberName]`-keyed). Traces config deps + flags the GI4327 hard-coded-key↔property-name coupling (N3).
+6. **Cross-service communication detection (sync + async)** — classify and surface every inter-process / external comm edge as a first-class effect, split by delivery semantics. Grounded in the full inventory: [audits/2026-06-14/cross-service-comms-inventory.md](audits/2026-06-14/cross-service-comms-inventory.md). The goal: `rig` answers *"what other services/systems does this entry point talk to, and is it sync or async?"*
+   - **Sync RPC (request/response)** — HTTP/REST (`HttpClient`/`WebClient`/`Flurl` — partly DONE), SOAP (`SoapHttpClientProtocol`), WCF, gRPC, FHIR (`Hl7.Fhir.Rest.FhirClient`). Tag with target host/endpoint where minable; carry the response type as the resource.
+   - **Fire-and-forget (sync call, response discarded)** — outbound webhooks (`HttpClient.PostAsync` to customer URLs), Azure EventGrid publish, one-way HTTP notifies.
+   - **Async (decoupled)** — message buses / brokers (none today — confirmed no MSMQ/RabbitMQ/ServiceBus/Kafka, so this arm is forward-looking), **Echo actors** (`Process.tell` = fire-and-forget, `Process.ask` = request/response — the existing `echo_publish` seam, classify under async), Redis pub/sub (`ISubscriber.Publish/Subscribe`), and the **ObjectStore DB-as-queue** handoff (`Chamber.ObjectStore` + a background poller).
+   Pairs with the boundary-marker work (D4) so each cross-service edge is tagged rather than silently dropped. **Depends partly on F1** (the delegate-body gap currently hides several of these — e.g. the webhook `PostAsync`), so the tracer fix unblocks full coverage.
 
 ---
 
-## D. Tool capability / UX (P3 — friction hit this session; reviewer's top-2 = D1, D3)
+## D. Tool capability / UX (P3 — friction hit this session; reviewer's top-2 = D1, D2)
 
 1. **`rig diff <ref>` / branch-aware indexing** — biggest workflow gap: had to reconcile index timestamp vs HEAD commit timezone to trust the index matched the MR branch. Want: map changed methods→runs, warn "index SHA ≠ working SHA, re-mine", and `rig reaches --changed` (effects for only diff-touched methods = the V7 task).
 2. **`rig impact <method>`** — fuse forward+reverse: return `{entry points reaching it, effects it triggers, shared resources written}` in one shot (the actual reviewer question; today = `reaches` + `callers --roots` + `path` stitched mentally).
-3. **Edge confidence/provenance flags** — annotate edges `resolved | dispatch-fanout(N) | error-type-recovered | unresolved-overload`. Directly defuses A1 (over-count) and A2/A3 (silent false-negatives). The `!:` recovery already exists internally — surface it.
+3. **Edge confidence/provenance flags** — annotate edges `resolved | dispatch-fanout(N) | error-type-recovered | unresolved-overload`. (The `Save()` over-count that motivated this is fixed, but explicit tagging still guards against silent mis-trust.) The `!:` recovery already exists internally — surface it.
 4. **Boundary markers in `tree`/`reaches`** — when a trace dead-ends at `Process.tell` / `[ClientAction]` / `Activator.CreateInstance` / an interface with no in-scope impl, print `⊘ boundary: echo .tell (effects beyond invisible)` instead of silently stopping. Half the "rig cannot adjudicate" list is exactly these seams.
 5. **`--format json` everywhere + stable DocIDs** — for `reaches`/`callers`/`path`, so an agent/CI gate consumes results without text-scraping.
 6. **`rig assert` / policy gate** — codify a claim as a check, e.g. `rig assert no-path "PageService.DoRequest" "object_store write"`. Turns a one-off audit into a regression guard (natural home for "the owner-chamber guard must sit on every `Set*` path").
-7. **Effect grouping / dedup in `reaches`** — collapse the 172-write wall to `llblgen write ×172 via EntityBase.Save dispatch [expand]` (rollup-by-cause; pairs with A1/D3).
+7. **Effect grouping / dedup in `reaches`** — collapse sibling-override walls (`AbsenceReasonEntity.Save`, `AppointmentTypeEntity.Save`, …) to `llblgen write ×N via EntityBase.Save dispatch [expand]` (rollup-by-cause).
 8. **Quote-the-source mode (`--source`)** — inline the 1–2 relevant source lines per hop in `path`/`reaches` (cut ~8 tool→Read round-trips this session).
 9. **Index health as an exit code** — `rig runs --check` returns non-zero when any in-scope run shows the base-type-chain flake (EP≈0/effects≈0 with healthy symbols), so a pre-audit script catches a bad mine.
+10. **Rule-coverage / zero-match diagnostic** (`rig derive --rule-stats` or `rig rules --coverage`) — report a per-rule firing count so a rule that matches **nothing** is flagged instead of failing silently. This session, three effect rules (OpenAI, CefSharp, Xero) were written against *guessed* SDK surfaces and silently produced **0 effects**; each was only caught by hand via `rig refs`. Real causes are unintuitive: concrete-class vs interface (`AccountingApi` vs `IAccountingApiAsync`), wrong method names (`GetAccounts` vs `GetAccountsAsyncWithHttpInfo` — matching is *exact*), wrong API family (`Chat.ChatClient` vs `Responses.OpenAIResponseClient`). A zero-match flag would have surfaced all three instantly. Distinguish "rule matched 0 sites" (likely mis-typed) from "type present but 0 invocations" (dead/unused, e.g. RestSharp).
+
+---
+
+## E. Rendering & CLI ergonomics (P3 — designed 2026-06-14)
+
+### E1. `tree --full` = maximal-fidelity tree (E1a DONE, E1b pending)
+
+**E1a — effects as provenance leaf nodes (DONE 2026-06-14, commit `tree --full: render effects…`).**
+In `--full`, each effect is promoted from the inline `{provider:op resource}` tag to its own call-site
+leaf node (`provider:op + resource + file:line`), source-ordered ahead of the call children. Verified
+live: `AuditsRepository.SubmitEvent --full` shows `dapper:execute …:15` under the method and
+`db_connection:open …:44` nested under `WithConnection`. Default/`--effects`/`--summary` keep the compact
+inline tag. Renderer-only, no re-mine; unit-tested (`TreeRenderRulesTests`).
+
+**E1b — unresolved library calls as dimmed leaves (PENDING).** Surface library invocations that resolved
+to a real target but matched no effect rule (e.g. `LanguageExt…Map`) as dimmed leaves in `--full`.
+Wrinkle: the bounded per-method invocation set can't be loaded with a naive `IN (treeMethodIds)` query —
+a large `--full` tree (`SubmitToHealthcode` ≈ 3,753 methods) exceeds SQLite's parameter limit. Correct
+shape mirrors effect handling: derive the unresolved set from the already-bounded `ReachInputs` on the
+cold path, and cache it in the render sidecar (alongside `SeamEffects`/`Locations`) so warm/cache-hit
+queries don't re-query. Gated to `--full` only, so default/compact paths are never affected.
+
+Today `tree` renders only **first-party** method nodes; a library call enters the tree **one of two ways**:
+matched by an effect rule → hoisted to an inline `{• provider:op resource}` tag on the *enclosing* method;
+unmatched → dropped entirely (no node, no tag). Two consequences a user hit this session:
+
+- The **producing call is invisible** — `dapper:execute` shows on `SubmitEvent` but the `ExecuteAsync`
+  call that caused it (and its line) is buried in the tag. Ambiguous the moment a method has >1 effect.
+- **Unresolved library calls vanish** — `LanguageExt…Map` (no effect rule) appears nowhere, in *any*
+  mode. `--full` does NOT surface it: `--full` only toggles effect-*pruning* of first-party branches
+  (`SubtreeHasEffect`), an axis orthogonal to first-party-vs-library.
+
+**Decision:** make `--full` do what the word says — the maximal-fidelity tree:
+- every reachable first-party method (current `--full`), **plus**
+- **effects as provenance leaf nodes** — `⚡ provider:op  Target.Method  file:line` at the call site,
+  source-ordered with siblings (replaces the inline tag in this mode only), **plus**
+- **unresolved library calls** (resolved to a real target, no effect rule) rendered **dimmed** as leaves.
+
+Default / `--effects` / `--summary` keep today's compact inline-tag rendering. All data needed (target
+method, file:line, receiver) is already stored — **renderer-only, no re-mine**. This folds the two
+floated flags (`--effects-as-nodes`, `--show-unresolved`) into `--full`; they do not ship separately.
+Temporal/happens-before ordering is explicitly **out of scope** (the tree is structural/lexical, not a
+trace — e.g. the `WithConnection(callback)` inversion renders `execute` above the `open` it runs after).
+
+### E2. Flag-surface unification (PROPOSED — breaking parts need sign-off)
+
+The per-command flag surface has drifted (full audit + table in commit message / session notes).
+Incoherences: dead-alias pairs (`--maxdepth`≡`--depth`, `--signatures`≡`--sig`); diagnostics
+(`--time`/`--no-cache`) stuck on `tree` only; `--format tsv` ad hoc on 3 of N commands; `--limit`
+coverage arbitrary (absent from the flood-prone `reaches`/`tree`/`callers`); the first-party/library
+axis named two ways (`refs --first-party` vs `dead --lib`); a `--root`(value, dead) / `--roots`(bool,
+callers) collision; mode flags as unvalidated booleans (`tree --full|--summary|--effects`,
+`callers --roots|--entrypoints`).
+
+**Target — three tiers, a flag means the same thing everywhere:**
+- **Tier 1 global:** `--rules`, `--format text|tsv` (default text), `--limit <n>` (default unbounded),
+  `--time`, `--no-cache` — valid on every command where sensible.
+- **Tier 2 traversal** (`path`/`reaches`/`tree`/`callers`): `--depth <n>` (canonical; `--maxdepth`
+  deprecated alias), `--async` (default sync), `--raw`, `--only`/`--exclude` (extend to `path`/`callers`).
+- **Tier 3 command-specific:** `tree` projection group (validated, mutually exclusive) default·`--full`·
+  `--summary`·`--effects` + `--signatures` (drop `--sig`) + `--files`; `callers` selector group
+  `--orphans`(rename `--roots`)·`--entrypoints`; `dead` `--lib`→`--include-lib`, `--root`→`--from`,
+  keep `--include-dispatch`/`--all`; `index`/`mine` as today.
+
+**Breaking — approved + DONE 2026-06-14:**
+- (a) renames: `callers --roots`→`--orphans` (deprecated `--roots` alias kept), `dead --lib`→`--include-lib`
+  (deprecated `--lib` alias kept). NB: `dead --root` was **left as-is** — the `--orphans` rename already
+  removes the `--root`/`--roots` collision, and reusing `--from` (which means an entry `.csproj` in
+  `index`/`mine`) would have introduced a worse cross-command inconsistency.
+- (b) `--maxdepth`/`--sig` deprecated: dropped from help, still accepted as aliases (one release).
+- (c) `index` test default **flipped** — tests EXCLUDED by default; `--include-tests` opts back in,
+  `--no-tests` accepted as a redundant no-op alias.
+- Mode-group validation: `tree --full|--summary|--effects` and `callers --orphans|--entrypoints` reject
+  conflicting combinations up front (before store access). Tests in `CliApplicationTests`.
+
+**Deferred (Tier-1 generalization — real per-command plumbing, not just whitelisting):** promoting
+`--time`/`--no-cache` (tree-only today; other query commands have no cache/timer to toggle), `--format
+text|tsv` (needs TSV emitters for `tree`/`path`/`callers`), and `--limit` (needs truncation on
+`reaches`/`tree`/`callers`) to all commands; and extending `--only`/`--exclude` to `path`/`callers`.
+These are additive and can land incrementally.
+
+### E3. Store-read guard (DONE 2026-06-14)
+
+A query command run with no `.rig` store (wrong directory) or against a store built by an older rig
+(schema drift, e.g. a column added since) previously threw an unhandled `SqliteException` stack trace.
+Now `DispatchAsync` catches the BCL `DbException` and emits a clean exit-2 message: "No indexed store at
+… — run `rig index` or cd to the owning directory" vs "built by an older rig (schema mismatch: …) —
+re-index". Verified live on both. (This was the root cause of the "tree reports no effects" confusion —
+the command had been run from the source repo against a stale store.)
+
+---
+
+## F. Validation sweep (2026-06-15) — 10 Sonnet agents, tree-vs-source
+
+Two fan-outs of 5 agents each, all ground-truthed against MedDBase source (file:line cited):
+(1) **tree-validation** over juicy endpoints — does what rig reports match the code?
+(2) **false-negative hunt** over domains that yielded no effects/EPs — what does rig miss?
+Below, **VS-Cn** = correctness defect (rig reports something WRONG), **VS-Gn** = coverage gap (rig
+MISSES something real). Severity is the agents' ground-truthed assessment.
+
+### Correctness defects (rig reports wrong / spurious)
+
+| ID | Defect | Evidence | Sev | Fix locus |
+|----|--------|----------|-----|-----------|
+| **VS-C1** | **Rx `Observable.Subscribe` phantom path** — rig inlines the Subscribe lambda as a synchronous call, so any tree through `IPersistentState.GetItem`→`AccountConfiguration.InitialiseLogger` drags in spurious transitive effects (`http:POST` audit, `gcp_pubsub:publish`) that never fire synchronously. | `AccountConfiguration.cs:210-213` (Observable.Subscribe chain) → phantom `AuditLogService.SubmitViaHttp` http:POST | **High** | Add `IObservable.Subscribe` to opaque/boundary set (like Echo `tell`) — render+traversal |
+| **VS-C2** | **Dapper `ExecuteScalar*`/`ExecuteReader*` classified as `execute` (write)** but they're READS. `AuditsRepository.Query` (a COUNT) shows spurious `dapper:execute`. *(Independently confirmed this session.)* | `AuditsRepository.cs:24` `ExecuteScalarAsync<long>` → `⚡ dapper:execute` | **Med** | `rig.rules.json` dapper rule — move ExecuteScalar*/ExecuteReader* to `query` (rules-only) |
+| **VS-C3** | **`SemaphoreSlim.WaitAsync`/`.Release` misclassified as `lock:acquire`/`lock:release`** (Monitor). An async semaphore is not a monitor lock; pollutes `lock_held_across`/`resource_span` (anchors the span at the wrong line). | `MonitorQueueBackgroundService.cs:67` WaitAsync→lock:acquire; `:111` Release→lock:release | **Med** | lock detector — distinguish SemaphoreSlim (→ `semaphore:wait/signal`) from Monitor |
+| **VS-C4** | **`XmlDocument.Save(path)` resource labelled `Xml.XmlDocument`** (the receiver) **instead of the file** — io:write fires but names the wrong resource. | `Master_HealthcodeServiceImpl.cs:1045` | Med | io rule — `XmlDocument.Save`/`XDocument.Save` resource → file/argument, not receiver_type |
+| **VS-C5** | **Flurl `PutStringAsync` → `http:send`, not `http:PUT`** — POST/GET map correctly; PUT falls through to a generic bucket, so `http:PUT` filters miss it. | `MedicareApi/DeviceRegistration/AccessRequests.cs:15` | Med | Flurl verb map — add `PutStringAsync`/`PutJsonAsync` → PUT (+ DELETE/PATCH) |
+
+### Coverage gaps (rig misses real effects / entry points)
+
+| ID | Gap | Evidence | Sev | Root cause |
+|----|-----|----------|-----|-----------|
+| **VS-G1** | **Background work scheduled via constructor-arg delegate (`new BackgroundProcessSchedule(due, MethodGroup, name)`) is NOT promoted as an entry point** — only the `SetProcessDelegate` override form is. 10 dark background EPs incl. `ProcessHealthcodeQueue` (269 effects incl. **soap:submit**), `DoDueActions` (216), `CheckForZeroDebt` (92), `RaiseMembershipSchemeInvoices` (257). Evidences open finding **F3**. | `Master_HealthcodeServiceImpl.cs:239`, `PatientContact/Master.cs:165`, +8 | **Critical** | Detector rule: method-group passed as `BackgroundProcessScheduleDelegate` ctor arg → `background` EP (flow-insensitive; rules-only) |
+| **VS-G2** | **`permission:assert` family entirely unmodeled** — `CertificateEntity.AssertRight/AssertAnyRight/AssertAccountRight`, `HasRight` (non-throwing), `PersonCache.IfCanView` (every patient load gates `CanViewPatientDemographic`). The `throw:raise CertificateAccessException` IS visible, but the Rights flag / gate semantic is not. 50+ entities. | `CertificateEntity.cs:977`, `PersonCache.cs:53`, `BillingItemEntity.cs:120` | **Critical** | New detector family (was C3) — emit `permission:assert <Rights.Flag>`; now evidenced |
+| **VS-G3** | **`config:read` family entirely unmodeled** — `Settings.*` (CallerMemberName-keyed), `ConfigurationManager.AppSettings[key]`, `AccountConfiguration.GetItem`. Feature-flag branches that gate whether SOAP submission fires are invisible. | `Settings.cs:878`, `Master_HealthcodeServiceImpl.cs:1043/1048` (`WriteToFile`/`SendToService`) | **Critical** | New detector family (was C5); key is a compile-time literal/CallerMemberName |
+| **VS-G4** | **SOAP non-Healthcode proxies unmodeled** — the soap rule is pinned to `declaringTypes:[HealthcodeWebServices]`; generic `SoapHttpClientProtocol.Invoke` isn't matched, so LabsServer (lab ordering), Mirth HL7, and Site callbacks are dark. | `LabsServer/Reference.cs:133`, `Mirth.SoapProxy.cs:87` | High | Rule with `declaringTypeBaseTypes:[SoapHttpClientProtocol]`, method `Invoke` → soap (evidences C6) |
+| **VS-G5** | **FHIR (`Hl7.Fhir.Rest.FhirClient`/`BaseFhirClient`) entirely unmodeled** — NHS GPConnect + PDS outbound calls (`TypeOperationAsync`/`GetAsync`/`SearchAsync`) are dark. | `GPConnectService.cs:99`, `Nhs.Pds/Client/ApiClient.cs:25/32` | High | New `fhir` provider rule (evidences C6) |
+| **VS-G6** | **`queue:read` unmodeled** — Redis `Enqueue`/`PublishToChannel` (write/publish) fire, but `GetAsyncQueue`/`SubscribeToChannel` (consume) have NO rule, so the whole Webhooks inbound pipeline looks like fire-and-forget HTTP. | `MonitorQueueBackgroundService.cs:76` (GetAsyncQueue), `:45` (SubscribeToChannel) | High | Add `queue:read` op to the Redis rule (asymmetric coverage) |
+| **VS-G7** | **`object_store:read` missing for generic `GetInstance<T>`/`GetObjectInstances<T>`** — the primary ObjectStore read path. Non-generic reads (`GetIndexIdentifiers`) fire; the generic ones don't — a generic-arity (`` `1 ``) DocID-matching bug. | `ObjectStore.cs:622`, `:1095` | High | rig matcher — generic-method name match must ignore the `` `1 `` arity suffix while keeping declaring-type gate |
+| **VS-G8** | **BCL filesystem types unmodeled** — `FileStream.#ctor(string,FileMode)`, `StreamReader.#ctor(string)`, `FileInfo.Delete/OpenWrite/MoveTo`, `FileStream.Read/Write`. Facts ARE indexed; no rule. `File.*` static methods fire fine. | `dfs/CheckSum.cs:16`, `SharpMessage.cs:795`, `ServerFileService.cs:57` | High | io rule — add these BCL members (rules-only) |
+| **VS-G9** | **BCL `Microsoft.Extensions.Caching.Memory.CacheExtensions.Get/Set/GetOrCreate<T>` unmodeled** — `MemoryCacheWithInvalidation` wrappers delegate to these external extension methods → no `inproc_cache:read/write`. Metafield/JobTitle/CustomisedCredit caches look read-only or absent. | `MemoryCacheWithInvalidation.cs:36-79` | High | Anchor inproc_cache effect on the first-party wrapper methods (BCL ext is unresolved) |
+| **VS-G10** | **Higher-order delegate-variable invocation drops effects** — effects attribute to the lambda DEFINITION site, not where the stored `Func<>` is invoked. `rig reaches Xero2Client.GetResult` (the sole runtime Xero dispatch) shows NO xero effects. Also `SubscriberManager.GetEndpoint` (memoized Func field) body dropped. | `Xero2Client.cs:95` `request(auth)`; `SubscriberManager.cs:27` | Med | Structural — Func-field/delegate-variable call resolution (hard; document the limit, prefer querying concrete methods) |
+| **VS-G11** | **LanguageExt functional wrappers (`Try`/`map`/`bind`) hide inner I/O** — body inside `Prelude.Try(() => …)` is a delegate handoff; `new StreamWriter(path)` + writes inside go undetected. | `LogBoxUi.cs:45` | Med | Add LanguageExt combinators to `handoffDispatchers`, or treat synchronous ones (`Try`) as inlined |
+| **VS-G12** | **Base-class dispatch `TextReader.ReadLine`/`ReadToEnd` not matched** — only `StreamReader.*`. A `StreamReader` upcast to `TextReader` loses the io:read. | `lab/Labs.Common/Logic/TDL.cs:75-84` | Med | io rule — add `TextReader.*` read methods (covers the upcast) |
+| **VS-G13** | **`DelegatingHandler.SendAsync` not traversed** — HTTP made inside a custom `LoggingHandler` is invisible to trees rooted where the handler is wired. | `Nhs.Pds/Client/LoggingHandler.cs:33` | Low | Known DelegatingHandler blind spot — document |
+| **VS-G14** | **LanguageExt `HashMap` used as a process cache not modeled** — Pathways `PersonCache.GetPerson` (`Find`/`AddOrUpdate`) looks like a pure DB read. | `Pathways.IO/Accounts/PersonCache.cs:21-30` | Med | inproc_cache rule for HashMap Find/AddOrUpdate (or accept as out-of-scope) |
+
+### Cross-cutting themes
+- **Higher-order / reactive seams** (VS-C1, VS-G10, VS-G11, VS-G13, and F3/VS-G1): the single biggest correctness theme — rig either inlines a deferred callback as synchronous (false positives, VS-C1) or can't follow a stored delegate (false negatives, VS-G10/G11). A coherent "deferred-execution boundary" model (opaque for Rx/Func-fields, inlined for synchronous combinators, promoted-EP for schedulers) would address five findings.
+- **Rule-gap vs resolution-gap:** most coverage gaps are pure **rules-only** wins (VS-G6/G8/G9 + VS-C2/C4/C5) — add/relabel rules, no engine change, no re-mine. VS-G7 is a real matcher bug (generic arity). VS-G2/G3/G4/G5 are new detector families/providers.
+- **`rig --files`/leaf paths are shortened tails** (e.g. `src/Audits/…`) not solution-root-relative (real: `src/audits/src/Audits/…`), so they can't be opened directly — every agent had to glob by basename. Worth making paths root-relative or absolute (ties to D8 quote-source).
+
+### Quick-win batch — DONE 2026-06-15 (rules-only, verified live)
+- **VS-C5** Flurl `Put*`/`Patch*`/`Delete*` split out of the `send` bucket → `http:PUT/PATCH/DELETE` (builtin-rules.json). Verified `http:PUT` on `AccessRequests.ExecuteActivateDeviceRequest`.
+- **VS-C3** SemaphoreSlim removed from the Monitor `lock` rules and retagged `async_lock:acquire/release` (🔐) — detector kept, just no longer conflated with Monitor; added to `lock_held_across` excludeProviders. Verified on `MonitorQueueBackgroundService`.
+- **VS-G6** Redis consume (`GetAsyncQueue`/`Dequeue`/`Subscribe*`) → `queue:read` (meddbase rig.rules.json). Verified `queue:read` at `MonitorQueueBackgroundService.cs:76`.
+- **VS-G8** BCL filesystem: `FileStream` added to stream read/write; `FileInfo` write/read/delete rules; `TextReader`/`TextWriter` added (also covers **VS-G12** base-class dispatch). Verified `io:delete`/`io:write` on `SharpAttachment.Save`.
+- **VS-G5** FHIR: new `fhir` provider (🏥) on `Hl7.Fhir.Rest.FhirClient`/`BaseFhirClient` — ops read/search/create/update/delete/transaction/operation (method surface confirmed by ILSpy-decompiling Hl7.Fhir.Base 5.2.0; declaring types confirmed via `rig refs`). builtin-rules.json. Verified live: GPConnect `fhir:operation`/`fhir:read`, PDS `fhir:search`/`fhir:read` — both NHS spine integrations now lit.
+- **VS-G9** in-proc cache: `inproc_cache:read` (GetOrCreate*/GetAll/TryGet) + `write` (Update/Merge) anchored on the first-party `MedDBase.Application.Core.MemoryCacheWithInvalidation` wrappers (the BCL `CacheExtensions` they delegate to are unresolved). meddbase rig.rules.json. Verified read on `GetAllDefinitionIds`, write on `PreCache`.
+- **VS-G4** generic SOAP — DONE 2026-06-15 (dig confirmed it's rules-only after all). rig binds `this.Invoke(...)` to the inherited base with declaringType recorded as exactly `System.Web.Services.Protocols.SoapHttpClientProtocol`. Added one builtin rule `soap:invoke` (methods `Invoke`/`InvokeAsync`/`BeginInvoke`, that base type, **`resource:string_argument`** → captures the SOAP operation name from the first literal). Subsumes the brittle per-method Healthcode project rules AND lights the previously-dark Labs/Mirth/LabsServer proxies. Verified `☎️ soap:invoke billStatus` (Healthcode) and `☎️ soap:invoke acceptMessage` (Mirth). builtin-rules.json. (Minor: Healthcode now double-emits wrapper `soap:query` + inner `soap:invoke`; consolidation = remove per-method rules, loses submit/query intent — postponed as a decision.)
+- **VS-G7** generic object_store read — DONE 2026-06-15 (root cause found). NOT arity: the missed read is the generic wrapper `LookupByDTO<,>` / `GetDynamicQueryWithDTO` on the static `ObjectStoreExtensions` classes — neither the method name nor the extension declaring type was in the rule, so the read only attributed one level deeper (shallow-attribution gap; full-depth traces were fine). Added `LookupByDTO`/`GetDynamicQueryWithDTO` to `methods` and the 4 `*.ObjectStoreExtensions` types to `declaringTypes` in the meddbase object_store read rule. Verified `📦 object_store:read` now attributes at `ObjectStoreDataAccess.GetCheckout`. meddbase rig.rules.json.
+
+**Not done (need engine, NOT rules-only):**
+- **VS-C2 dropped** — ExecuteScalar genuinely ambiguous (`INSERT … SELECT SCOPE_IDENTITY()` is a scalar write); can't classify without SQL parsing. Stays `execute`.
+- **VS-C4** XmlDocument-resource → needs a literal/constant resource strategy (only `declaring_type`/`receiver_type`/`*_argument` exist).
+- **VS-G4** generic SOAP → effect rules match `declaringTypes` exact/prefix only; needs base-type matching for `SoapHttpClientProtocol.Invoke` (or enumerate each proxy type).
+- **VS-G7 reclassified** — the missed `object_store:read` on generic `GetInstance``1` is NOT the arity suffix (the deriver already strips `` `N `` at match time, FactEffectDeriver.cs:90); root cause still open, needs its own dig.
+
+**Postponed 2026-06-15 (need a dig or a decision, per the "postpone if decision needed" directive):**
+- **VS-G4** (generic SOAP): the inherited `Invoke` should exact-match `System.Web.Services.Protocols.SoapHttpClientProtocol` in the DocID, but `rig refs` couldn't confirm the recorded declaring type — needs a dig (which type rig attributes the inherited `Invoke` to) before a rule can be trusted not to no-match.
+- **VS-C1** (Rx Subscribe phantom): fixable via a `handoffDispatchers` entry on the Subscribe call (cuts the deferred callback from synchronous reach), but the exact `Subscribe` target wasn't pinned (`rig refs` surfaced a first-party `WithGlobal.DefaultSubscriber.Subscribe` wrapper, not the BCL `IObservable.Subscribe`) and the cut needs verifying that the phantom effects actually disappear — an investigation cycle, not a clean drop.
+- **VS-G2 / VS-G3** (permission:assert + config:read families): new detector families whose value is in extracting the `Rights.*` flag / config key from the call args — needs a design decision (effect naming + arg-extraction approach, likely engine work).
+- **VS-G1 / F3** (background ctor-arg-delegate EP promotion), **VS-C3-Rx-class deferred-execution model** (VS-G10/G11/G13), **VS-G7 dig**, **VS-C4** (literal-resource strategy): engine changes; ordered after the rule wins.
+
+### #18 delegate/Rx deferred-EP — architecture map + decomposition (2026-06-15, pre-build)
+The handoff infra is MORE complete than the backlog implied — confirmed by reading the code:
+- `DelegateConsumer` fact (method-group → consumer DocID, ancestor-walk) + `HandoffClassifier.Classify` rewrites dispatcher-consumed method-group edges to `Kind=Handoff` (consumer-pattern matching, rule data = `handoffDispatchers`).
+- `TraversalMode.AsyncInclude` + `HandoffVia` provenance → `rig tree --async` ALREADY renders deferred subtrees, marked `⤳`. Sync traversal cuts handoffs (no phantom for method-groups).
+- `handoffDispatchers` already covers schedulers (Repeating/BackgroundProcessSchedule.#ctor), `IAsyncEvent.Add`, Echo `spawn`/`Router.fromConfig`, `WithGlobal.Schedule`. `HandoffEntryPoint` derivation + `rig handoffs`/`derive` exist.
+
+**✅ ALL SHIPPED + validated live 2026-06-15 (re-mined run b82ce792: 267,843 symbols incl. 38,513 lambda symbols, 699 delegate_bind facts).** 18b `c10815f`/`ae81461`, 18c `77dec49`, 18a meddbase `15585db`. Live proof: 18b — `MetafieldDefinitionCacheService.Startup~λ0` owns `PreCache`; 18c — `RequireTransaction.Call~λ0 → F:…CreateTransaction → [delegate-dispatch] → Transaction.New`; 18a — `Startup~λ0 ⤳handoff via rx.subscribe [cross_thread]`. 203 tests green.
+
+**Gaps (the real #18 work), in order:**
+- **18a — Rx `Subscribe` handoff rule** (rule data, reuses infra): add Rx subscribe consumers to `handoffDispatchers`. ONLY fixes the **method-group** form (`obs.Subscribe(Handle)`); needs the real first-party Subscribe consumer DocID pinned (VS-C1 noted `WithGlobal.DefaultSubscriber.Subscribe`). Quick.
+- **18b — lambda identity (CORE engine gap)**: lambdas are host-context-only (no DocID), so a lambda handed to a dispatcher (`Subscribe(x => ..)`, `new Job(() => Work())`) is neither promoted NOR cut — its inner calls attribute to the enclosing method (the lambda-form Rx phantom + invisible lambda jobs). Fix = synthesize a stable identity for a lambda passed as a dispatcher arg + capture its body's calls as a promotable async-EP unit. Without this, rules can't help the dominant lambda case. Synthetic playground + TDD.
+- **18c — stored delegate-field seam** (`Func<T> _h = X; _h()`): the delegate-as-degenerate-interface binding-fact + seam-resolver (VS-G10/G11). Biggest; separate slice. **Design (traced 2026-06-15):** TWO coordinated extractor changes are required for it to pay off, because `FactPathFinder.DispatchTargets` keys dispatch on the *method node* and the existing closure consumes `dispatch_facts` (Impl/Override):
+  1. **Mine the binding fact** — a method-group/lambda ASSIGNED to a delegate field/property/event (RHS of `=`, field initializer, `+=`) → `DispatchFact(SourceMember = field/property/event DocID, TargetMember = bound method/synthetic-lambda id, Kind = "delegate_bind")`. The "registration" (analog of DI). Clean, TDD-able in isolation.
+  2. **Re-key the delegate invocation to the slot** — `_handler()` today emits an edge to BCL `Func.Invoke` + a field READ; neither is dispatchable. Emit (or redirect) the invocation edge to target the FIELD/property DocID (the delegate slot) so `DispatchTargets` can look up `MinedDispatchBySource[slot]` → the bound targets, reusing the impl/override closure + NarrowByReceiver machinery verbatim. Multi-binding → multiple candidates (like multi-impl). Field-assigned LAMBDAS need a synthetic id too (extend 18b's `CollectLambdaSymbols` to also cover delegate-field-assigned lambdas, not just arg-passed).
+  NOTE: shipping (1) without (2) is a consumer-less no-op — do them together. Needs a re-mine (both are fact changes). Lower frequency than arg-lambdas (18b), so lower priority despite being "the delegate-as-interface" framing.
+
+Decision point: 18b (lambda identity) is the substance and a meaty extractor+domain change; 18a is a quick rule add but only covers method-group Subscribe. Recommend confirming depth (18a only / 18a+18b / +18c) before the engine build.
+
+### Engine primitives + detectors SHIPPED 2026-06-15 (validated live on re-mined store 471174d2)
+- **nth-argument resolution** (`FactEffectRule.ArgumentIndex`): all positional args mined as JSON `string?[]` lists (`ArgumentTemplates`/`ArgumentNames`); the deriver reads the nth element over a stack buffer. `Rig.Domain` retargeted net10. coderig `c10815f`.
+- **const-string resolution**: a non-literal arg resolving to a compile-time constant string is captured in the templates list (`model.GetConstantValue`). coderig `de6b1de`.
+- **#14 permission:assert** (meddbase `b3325f2`): `CertificateEntity` `HasRight`/`HasAccountRight`/`HasAnyRight`→arg1, `AssertRight`→arg2, `HasChamber/AssertChamberRight`→arg0, `resource:argument_name`. Live: `🔑 permission:assert Rights.MedicalPerson.CanEditSettings`, `Company.CanViewServices`, `Person.CanViewPatientMedicalRecord`. 71/92 HasRight calls carry the right at arg1; minority are param pass-throughs; the profileId-second overload mis-index is negligible.
+- **#15 config:read** (builtin `f9fc2e0`): `GetSection`/`GetValue`/`GetConnectionString` over IConfiguration/ConfigurationManager/ConfigurationBinder, `resource:string_argument argumentIndex:0` (key is the syntactic first arg even for the extension methods; index 0 also resolves const keys). Legacy `AppSettings["x"]` dropped — `NameValueCollection.get_Item` has 0 invocation facts. Live: `⚙️ config:read accept-any`/`secret`.
+- **Store schema evolution**: `ArgumentTemplates`/`ArgumentNames` added to the live store via `sqlite3 ALTER` (no migration code); re-mine repopulated. Stale main-app run deleted by RunId before `index --merge` to avoid append-doubling (12 aux runs preserved).
+
+### Render — propagate concrete generic types into tree labels (SHIPPED 2026-06-15)
+Tree nodes rendered generics with placeholder params (`QueryPipeline<T, U>.Enumerate`) because the label used only the DocID open form (`PrettyGenericName(ShortName(node.SymbolId))`). Now substitutes the real instantiation → `QueryPipeline<PersonDataFieldDefinition, DefinitionAndRangeDto>.Enumerate`.
+
+**Correction to the original backlog premise:** the concrete instantiation was NOT already in the store. `ReferenceFact.ReceiverType` (and thus `CallEdge.ReceiverType`/`Successors.OutReceiver`) is mined via `.OriginalDefinition.ToDisplayString()` — the OPEN form (`QueryPipeline<T, U>`, `Option<A>`), kept open deliberately for dispatch narrowing (identity, not args). `OutBinding` carries only concrete *method* type-args (unordered set), not the declaring-type instantiation. So a re-mine was required to capture the concrete receiver.
+
+**Implemented (tier 1 — declaring-type args from the concrete receiver):**
+- Extractor: `ReceiverTypeConcreteOf` captures the receiver's constructed type WITH args (no `OriginalDefinition`), gated by `HasTypeParameter` (rejects open-typed receivers inside a generic body, e.g. `QueryPipeline<X, Y>` in `Helper<X, Y>` — those args are still type parameters) and stored only when the callee is first-party (`inSource`) so BCL receivers aren't dead storage. New nullable column `reference_facts.ReceiverTypeConcrete` (EF model + CREATE TABLE; live store via `sqlite3 ALTER`, no migration code).
+- Threading: `CallEdge.ReceiverTypeConcrete` → `Successors.OutReceiverConcrete` (direct/handoff edges; null for dispatch hops) → `MutableNode` → `TraceNode.ConcreteReceiver` (`BuildTree`, EF read path only — the materialized `call_edges`/handoff-EP path doesn't render labels).
+- Renderer: `ConcreteReceiverArgs` extracts the receiver's ordered, namespace-stripped args (only when it's a single top-level `Name<…>` group running to end — a nested/qualified `Outer<X>.Inner<Y>` bails, since ShortName shows only the innermost type); `PrettyGenericName` substitutes them into the FIRST arity expansion (the declaring type's), only when the arity matches the arg count. A generic METHOD's own arity stays `<T>` (its args aren't the receiver's). Constructed-brace DocIDs (`{Ns.A,Ns.B}`) were already concrete and are untouched.
+- Tests (9, all green): extractor capture + open-typed-body rejection; renderer substitution + no-receiver placeholders + method-arity-stays-placeholder + nested-receiver fallback + arity-mismatch fallback; BuildTree propagation (+ null cases).
+
+**Caveat that stands:** a node renders ONCE (first BFS path), so it shows THAT path's instantiation; a method reached with several instantiations shows one. A `(+N)` hint was considered, not built.
+
+**Not done (tier 2):** concrete generic METHOD args (`Repository.Get<Account>()`) from the in-store `TypeArguments`/`OutBinding` — orderable via the comma-split, but left for later; the headline win was the declaring-type case.
+
+### Perf backlog — save-phase bulk insert (2026-06-15)
+**Save phase is ~4 min for ~2.2M fact rows (~9k rows/sec) — EF Core `SaveChangesAsync` is the bottleneck.** The PRAGMA half is already optimal (`Writes.fastBulkWrite`: journal_mode=OFF, synchronous=OFF, temp_store=MEMORY, cache_size=-64MB, locking_mode=EXCLUSIVE — safe because index writes a temp DB + atomic-renames). Fix, priority order:
+1. **Replace EF with a raw reused prepared `SqliteCommand` in one transaction** for the fact-row save (`SaveFactsBatchedAsync`) — the pattern `GraphMaterializer` already uses in-repo (one `CreateCommand`, bound params, `ExecuteNonQuery` loop in a `BeginTransaction`). Removes EF change-tracking/materialization overhead. Target: 4 min → ~15–30 s. No new dependency (raw `Microsoft.Data.Sqlite`).
+2. **Defer secondary indexes to AFTER the bulk load** (e.g. `IX_dispatch_facts_SourceMember`); the PK `(RunId, ReferenceFactIndex)` is insert-ordered so its b-tree appends cheaply — leave it.
+3. **Synchronous `ExecuteNonQuery`** (not `…Async`) per row — 2.2M awaited calls add Task overhead for zero real I/O with journal OFF.
+4. *(Incremental)* multi-row `INSERT … VALUES (…),(…)` ~200 rows/stmt; larger `page_size` (8192) set before table creation.
+
+**Approach review (Milan Jovanović, "Fast SQL Bulk Inserts", + SQLite reality).** The article benchmarks **SQL Server** (1M rows): one-by-one 8.8s/10k = anti-pattern; EF `AddRange`+1×`SaveChanges` ≈ **21.6s** (rig's current shape — matches our ~4 min for 2.2M); **Dapper `ExecuteAsync` ≈ 109s — SLOWER than EF batching** (many parameterized inserts, no batching win) → not a path; `SqlBulkCopy` ≈ **7.3s (fastest)**, `EFCore.BulkExtensions` ≈ 8.3s, EF Extensions ≈ 7.1s. **CRITICAL caveat: rig is SQLite, not SQL Server.** `SqlBulkCopy` and the bulk-copy protocol the fast libraries use **have no SQLite equivalent** (SQLite has no bulk-copy wire protocol), so the article's winners don't transfer. Ranking for rig (SQLite), least-code-change × max-speedup:
+   - **(A) Raw reused-prepared `SqliteCommand` in one transaction — RECOMMENDED.** The SQLite analog of "bypass the ORM"; Microsoft's documented fast path; *already implemented in-repo* (`GraphMaterializer`), so it's a port of `SaveFactsBatchedAsync`, not new tech. **Max SQLite speedup, no new dependency** (our dependency-light preference), moderate code change. ~4 min → ~15–30 s.
+   - **(B) `EFCore.BulkExtensions.BulkInsertAsync` — lowest code change** (swap `AddRange`→one call) and it *does* support the SQLite provider — BUT on SQLite it falls back to batched multi-row INSERTs (no native bulk copy), so the gain is **far smaller than the SQL-Server numbers** above, and it adds a third-party dependency. Only worth it if (A)'s port is judged too invasive.
+   - **(C) Dapper — skip.** The article shows it's slower than EF batching at scale; no win.
+   - **(D) `SqlBulkCopy` / commercial EF Extensions — N/A** (SQL Server only).
+   Conclusion: **(A) wins on speedup-per-LOC for rig** because the raw pattern already exists in `GraphMaterializer` — reuse it, keep zero new deps, get the SQL-Server-class throughput SQLite can actually deliver.
+
+### Decisions taken 2026-06-15 (user)
+- **#1 LINQ deferred effects → KEEP heuristic, no work.** Eager materialization (`ToList`/`foreach`) sits next to the query ~99.9% of the time, so attributing the effect at the query call is correct in practice. Stays in backlog only as a documented edge.
+- **Rx Subscribe (VS-C1) → fold into the delegate-tracking engine feature, NOT a handoff cut.** Treat an Rx subscription like an async entry point: promote the `Subscribe(handler)` delegate to an EP node and **render it in the tree** (subscription body + its effects hang off the promoted node) rather than inlining it as synchronous (phantom) or silently cutting it. Easier for the reader, and it kills the false positive correctly.
+- **#5 / VS-G1 / F3 background-delegate EP promotion → APPROVED, and unified with Rx above.** Same shape: a delegate handed to something that defers execution (scheduler/ctor arg, or Rx operator) becomes a promoted async entry point. One engine feature, two triggers. Build in isolation, **hard-TDD'd, synthetic playground first.**
+- **VS-C4 literal_argument resource strategy → APPROVED, triage first.** Candidate targets flagged by user: outbound HTTP endpoint URLs, Echo actor/process names, DB named-connection strings. Triage in flight to pick the highest-value first target.
+- **VS-G3 config:read → APPROVED, capture the key** (depends on the literal_argument strategy above).
+- **VS-G2 permission:assert → too vague, gathering real code examples first** before defining the detector surface.
+- **VS-G4 (SOAP) → quick dig in flight. VS-G7 (object_store generic read) → dig + fix in flight.**
+
+> Unified engine theme: "**deferred-delegate → promoted async entry point, rendered in tree**" now covers Rx subscriptions AND background/scheduler/ctor-arg delegates (VS-C1 + VS-G1/F3). LINQ explicitly excluded (eager heuristic kept). VS-G10/G11/G13 (stored Func fields / LanguageExt combinators) remain a separate later design slice.
+
+> **#2 literal_argument triage outcome (2026-06-15, 4-agent survey).** The standalone "literal_argument strategy" mostly ALREADY EXISTS: `string_argument` (`GetStringTemplate`, StringTemplateExtensions.cs) captures inline string literals verbatim AND interpolated strings as `{placeholder}` templates; `argument_name` captures the member path of an identifier/member arg (`Rights.X.Y`, `ProcessDns.AccountService`). So the literal landscape decomposes into three layers (user's framing): (1) inline literal / interpolated → **already shipped**; (2) value from config → **#4 config:read provider, rules-only** (the key is itself a captured literal); (3) const-field / enum-member ref → **const-value resolution**, the one genuinely-new engine bit (`model.GetConstantValue(arg)` — small, clean). Target ranking for where it pays off: **(1) Echo actor `spawn`/`register` — WINNER** (~60% inline literal at arg-1, remaining ~40% all route through ONE `MedDBase.ProcessDns.Names.ProcessNames` const table → const-resolution lifts capture to near-total; the process NAME is the right resource for `actor:spawn`/`tell`/`ask`); (2) HTTP scoped to **Flurl segment literals** (`AppendPathSegment`/`ApiRequest`) for precision, raw HttpClient URLs ~40% inline rest interpolated (still captured as templates); (3) DB connection names — SKIP, dominated by const-stored keys passed through DAO base classes, ~0 inline at call site. **General lesson reinforced by every survey: MedDBase centralizes its architecturally-significant string resources into `const`/`static readonly` tables (`ProcessNames`, `connectionKeyString`, `Rights.*`, `Roles.*`), so CONST-VALUE RESOLUTION is the highest-leverage capability — it unlocks named actor processes, connection keys, and permission rights at once.**
+
+> **#3 permission:assert surface (2026-06-15 survey).** One dominant family: static `CertificateEntity.(Has|Assert)(Account|Chamber|Any)?Right(...)` (144+ hits/75 files), disambiguated from the polluting LLBLGen entity-nav `AssertRight()` by the presence of a `Rights.*`/`Rights.Wrapper`/`IRightsWrapper` argument. **Basic detection** (provider/operation, `resource:declaring_type=CertificateEntity`) is rules-only and the CertificateEntity declaringType gate already excludes the polluting LLBLGen entity-nav `AssertRight()`. **NAME extraction is the catch:** rig currently records only the FIRST argument, but `Rights.*` sits at DIFFERENT positions — arg-1 for the dominant `CertificateEntity.HasRight(cert, Rights.X.Y, txn)`, arg-0 for the chamber/workflow wrappers (`AssertChamberRight(Rights.Company.X)`, `WorkflowControllerBase.HasRight(Rights.Wrapper)`). So `argument_name` lifts the right name ONLY for the arg-0 wrappers; the arg-1 majority needs a new **nth-argument capture** engine primitive (record arg[n], not just arg[0]). Further nuances: bitwise-OR composites (`A | B`) → BinaryExpression, needs set-extraction; some args are param-flowed variables (needs dataflow). Secondary clean surfaces: `[Authorize(Roles=Roles.X)]` attributes (EnterpriseApi, ~68, const-string name) and an isolated WebDav `RequirePermission(PermissionKinds)` model — each its own rule. **Implication: "an assert happened here" is rules-only; the VALUABLE per-right-name detector needs nth-argument capture (engine) — a sibling primitive to const-value resolution.**
+
+> **Design (user, 2026-06-15): treat a delegate as a degenerate single-method interface — reuse the existing single-impl/DI seam resolver instead of a bespoke mechanism.** Mapping: delegate invocation `work()` ≡ interface call `IFoo.Bar()`; the assignment/method-group bound to the delegate at its construction/arg site ≡ the DI registration `Foo : IFoo` (the binding fact); resolving the delegate target ≡ resolving the single impl. Implementation shrinks to: (1) mine a new **"delegate binding" fact** (delegate-typed symbol ← bound target method at site S, analogous to a `DiRegistration` fact), and (2) teach the seam resolver that delegate types are seams. Multi/re-assignment → multiple candidate targets (already handled like multi-impl interfaces). Remote binding sites (Func fields, VS-G10/G11) → same registration-in-one-file/use-in-another join rig already does for DI, so this sets those up for free. The **deferred-vs-inline split stays in the rule layer**: existing `handoffDispatchers` data marks which APIs defer their delegate arg (scheduler ctor, `Subscribe`) → promote to async EP node; otherwise inline. So: binding-resolution answers *what* the delegate calls; handoffDispatchers answers *whether* it's deferred. Synthetic-playground TDD should target this fact+seam design.
+
+### Suggested order (by value ÷ effort)
+1. **Rules-only quick wins (no re-mine):** VS-C2 (dapper scalar), VS-C5 (Flurl PUT), VS-G6 (queue:read), VS-G8 (BCL file I/O), VS-G4 (generic SOAP), VS-C4 (XmlDocument resource). A few lines of `rig.rules.json`/builtin-rules each; re-derive at query time.
+2. **High-value detector families:** VS-G2 (permission:assert) + VS-G3 (config:read) — biggest audit value; VS-G1/F3 (background ctor-delegate EP).
+3. **Engine fixes:** VS-G7 (generic-arity match — likely small + broadly beneficial), VS-C1 + VS-C3 (boundary/primitive classification), VS-G5 (FHIR provider).
+4. **Structural/documented limits:** VS-G10/G11/G13 (deferred-execution model) — design first.
 
 ---
 
 ## Suggested first slice
-- **A1 + D3 + D7 together** (dispatch-fanout tagging + rollup) — one coherent change that turns the single biggest noise source into a readable, trustworthy result.
-- **B1** — trivial, closes the V6 blind spot.
-- **A2** — investigate the recall divergence (fixture-first); likely also informs A3.
+- **DONE 2026-06-14**: the four effect-rule fixes (Flurl/WebClient/XmlDocument/UpdateMulti) + F2 (EP-detector rules) + F4 (convention loosening).
+- **Next**: F1 (delegate-body tracing) — deepest and highest-impact; also unblocks C6 (cross-service comm detection).
+- **Then**: F3 (background delegate-target promotion), F5 (cross-project stitch), D1 (diff/branch awareness).
