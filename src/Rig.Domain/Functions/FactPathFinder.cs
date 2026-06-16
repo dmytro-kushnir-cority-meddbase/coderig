@@ -703,6 +703,62 @@ public static partial class FactPathFinder
         return depthOf;
     }
 
+    // Multi-source reverse reachability — like ReachedBy, but seeded from a SET of EXACT SymbolIds
+    // (not a substring pattern), returning the union of everything that can reach ANY of them keyed
+    // to its shortest reverse hop count to the nearest seed. Mirrors ReachableFromAll's exact-id
+    // seeding on the reverse maps: unknown seed ids (not graph nodes) are skipped. This is the engine
+    // `rig impact` reverse-reaches from a diff's changed-method set with — one index/reverse-map build
+    // shared across all seeds, instead of calling ReachedBy once per changed method (which rebuilds
+    // both each time). Same Predecessors edge model as ReachedBy, so the closure is identical.
+    public static IReadOnlyDictionary<string, int> ReachedByAny(
+        FactGraphData graph,
+        IEnumerable<string> seeds,
+        int maxDepth = 20,
+        int maxNodes = 20000,
+        bool narrowDispatch = true,
+        TraversalMode mode = TraversalMode.SyncCut
+    )
+    {
+        var index = BuildIndex(graph, narrowDispatch);
+        var rev = BuildReverseMaps(graph, narrowDispatch, mode);
+
+        var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
+        var queue = new Queue<string>();
+        foreach (var seed in seeds)
+        {
+            // Seed by EXACT id (the changed methods are concrete DocIDs). A seed absent from the graph
+            // (e.g. a method with no edges either way) is simply not a traversal node — skip it.
+            if (index.Nodes.Contains(seed) && !depthOf.ContainsKey(seed))
+            {
+                depthOf[seed] = 0;
+                queue.Enqueue(seed);
+            }
+        }
+
+        while (queue.Count > 0 && depthOf.Count < maxNodes)
+        {
+            var current = queue.Dequeue();
+            var depth = depthOf[current];
+            if (depth >= maxDepth)
+            {
+                continue;
+            }
+
+            foreach (var pred in Predecessors(current, index, rev))
+            {
+                if (depthOf.ContainsKey(pred))
+                {
+                    continue;
+                }
+
+                depthOf[pred] = depth + 1;
+                queue.Enqueue(pred);
+            }
+        }
+
+        return depthOf;
+    }
+
     // Entry-point CANDIDATES that reach toPattern: the reachable methods with NO predecessor at all
     // (no caller, not an impl of a called interface, not an override of a called base) — the tops of
     // the reverse closure, i.e. methods invoked only by the framework / DI / reflection / externally.
