@@ -1166,6 +1166,16 @@ internal static class FactExtractor
                 return lambdaId;
             }
 
+            // A node inside a bodied accessor (`get {…}`/`set {…}`/`init {…}`/`add`/`remove`, or
+            // `get => …`) is owned by the ACCESSOR method (M:get_X/M:set_X) — the symbol the access-site
+            // call edge targets and the graph node that is emitted — NOT the property (P:X), which is
+            // never a call-graph node. Keying effects to the property orphaned them from reachability
+            // (reaches/tree intersect call-graph method ids against effect enclosing ids).
+            if (cur is AccessorDeclarationSyntax accessor)
+            {
+                return model.GetDeclaredSymbol(accessor)?.GetDocumentationCommentId();
+            }
+
             if (cur is MemberDeclarationSyntax member)
             {
                 if (member is BaseFieldDeclarationSyntax field)
@@ -1173,6 +1183,22 @@ internal static class FactExtractor
                     var first = field.Declaration.Variables.FirstOrDefault();
                     return first is null ? null : model.GetDeclaredSymbol(first)?.GetDocumentationCommentId();
                 }
+
+                // Expression-bodied property/indexer (`PersonRecord Person => PersonCache.New(…);`): the
+                // body IS the getter's, so own it by the getter accessor (M:get_X) to match the node +
+                // edge. Auto-property initializers (`{ get; } = Compute()`, no ExpressionBody) run in the
+                // ctor — not an accessor node — so they fall through to the property id unchanged.
+                ArrowExpressionClauseSyntax? expressionBody = member switch
+                {
+                    PropertyDeclarationSyntax p => p.ExpressionBody,
+                    IndexerDeclarationSyntax ix => ix.ExpressionBody,
+                    _ => null,
+                };
+                if (expressionBody is not null && model.GetDeclaredSymbol(member) is IPropertySymbol { GetMethod: { } getter })
+                {
+                    return getter.GetDocumentationCommentId();
+                }
+
                 return model.GetDeclaredSymbol(member)?.GetDocumentationCommentId();
             }
         }

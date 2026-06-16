@@ -428,6 +428,63 @@ public sealed class FactExtractorCaptureTests
         );
     }
 
+    // An effect-bearing call inside a property/indexer accessor BODY must be owned by the accessor
+    // method (M:get_X / M:set_X) — the symbol the access-site call edge targets and the graph node that
+    // is emitted — NOT the property (P:X), which is never a call-graph node. Keying to the property
+    // orphaned the effect from reachability: `reaches`/`tree` intersect call-graph method ids against
+    // effect enclosing ids, so a P:-keyed effect could never match a reachable accessor node.
+    [Test]
+    public void Calls_inside_accessor_bodies_are_owned_by_the_accessor_not_the_property()
+    {
+        var source = """
+            namespace App
+            {
+                public static class Repo { public static int Fetch() => 0; public static void Store(int v) { } }
+
+                public sealed class Model
+                {
+                    // expression-bodied property: body is the getter's
+                    public int Lazy => Repo.Fetch();
+
+                    // full-block accessors
+                    public int Block
+                    {
+                        get { return Repo.Fetch(); }
+                        set { Repo.Store(value); }
+                    }
+
+                    // expression-bodied accessors
+                    public int Arrow
+                    {
+                        get => Repo.Fetch();
+                        set => Repo.Store(value);
+                    }
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        var fetchEnclosings = result
+            .References.Where(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Repo.Fetch"))
+            .Select(r => r.EnclosingSymbolId!)
+            .ToList();
+        // The getter of every form — including the expression-bodied property `Lazy` that used to key to P:.
+        fetchEnclosings.ShouldContain(e => e.Contains("get_Lazy"));
+        fetchEnclosings.ShouldContain(e => e.Contains("get_Block"));
+        fetchEnclosings.ShouldContain(e => e.Contains("get_Arrow"));
+        // The regression guard: no accessor-body effect is ever keyed to a property id (P:).
+        fetchEnclosings.ShouldAllBe(e => e.StartsWith("M:"));
+
+        var storeEnclosings = result
+            .References.Where(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Repo.Store"))
+            .Select(r => r.EnclosingSymbolId!)
+            .ToList();
+        storeEnclosings.ShouldContain(e => e.Contains("set_Block"));
+        storeEnclosings.ShouldContain(e => e.Contains("set_Arrow"));
+        storeEnclosings.ShouldAllBe(e => e.StartsWith("M:"));
+    }
+
     [Test]
     public void Compound_assignment_invokes_both_accessors()
     {
