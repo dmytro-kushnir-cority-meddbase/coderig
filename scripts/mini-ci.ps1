@@ -48,7 +48,11 @@ try {
     dotnet build $solution -c $Configuration /p:UseSharedCompilation=false -warnaserror
 
     if (-not $SkipTests) {
+        # `dotnet test` (Microsoft.Testing.Platform) reports failures via EXIT CODE, not a terminating
+        # error, so $ErrorActionPreference="Stop" does NOT halt on a red suite. Gate explicitly, or a
+        # failing test silently sails through to pack + global reinstall ("green" that isn't).
         dotnet test $solution -c $Configuration --no-build /p:UseSharedCompilation=false
+        if ($LASTEXITCODE -ne 0) { throw "Tests failed (exit $LASTEXITCODE) - not packing/installing." }
     }
 
     # PORTABLE pack — do NOT add `-r <rid>`/`-p:PublishReadyToRun=true`. A RID-specific / ReadyToRun

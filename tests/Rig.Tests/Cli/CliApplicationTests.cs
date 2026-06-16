@@ -27,7 +27,7 @@ public sealed class CliApplicationTests
         help.ShouldContain("callers");
         help.ShouldContain("reaches");
         help.ShouldContain("derive");
-        help.ShouldContain("dead");
+        // `dead` is intentionally NOT registered (disabled until moved onto the one-hop engine — see Root.cs).
         help.ShouldContain("profile");
     }
 
@@ -185,9 +185,8 @@ public sealed class CliApplicationTests
         (await CliApplication.RunAsync(["files", "--skipped"], output, error, workingDirectory)).ShouldBe(0);
         output.ToString().ShouldContain("GeneratedEndpoint.g.cs");
 
-        output.GetStringBuilder().Clear();
-        (await CliApplication.RunAsync(["dead"], output, error, workingDirectory)).ShouldBe(0);
-        output.ToString().ShouldContain("Dead-code candidates:");
+        // `dead` is intentionally disabled (unregistered until moved onto the one-hop engine — see Root.cs),
+        // so it is no longer part of this round-trip. The DeadCodeFinder logic is covered by DeadCodeFinderTests.
 
         var rulesPath = Path.Combine(Path.GetDirectoryName(solutionPath)!, "rig.rules.json");
         output.GetStringBuilder().Clear();
