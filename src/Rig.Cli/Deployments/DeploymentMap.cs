@@ -2,20 +2,16 @@ using System.Text.Json;
 
 namespace Rig.Cli.Deployments;
 
-// A deployed service from deployments.json: a name, its entry csproj (relative to the solution dir),
-// a best-effort host kind, and the capability tokens it `provides`. A token is an opaque string; an
-// entry point whose rule `requires` a token is ACTIVE-IN this service only when Provides intersects
-// that requirement (ANY semantics). Services that declare no `provides` activate every loaded EP
-// (ungated), so the gate is strictly opt-in. See DeploymentMap.ActiveServices.
+// A deployed service from deployments.json with the capability tokens it `provides`. A token is opaque;
+// an EP whose rule `requires` a token is ACTIVE-IN this service only when Provides intersects that
+// requirement (ANY semantics). A service that declares no `provides` activates every EP (ungated), so the
+// gate is strictly opt-in. See DeploymentMap.ActiveServices.
 internal sealed record ServiceDef(string Name, string Host, string? Kind, string? Note, IReadOnlyList<string> Provides);
 
-// Maps source files to the deployed service(s) whose process loads them.
-//
-// Built entirely query-side (no re-index): load deployments.json, walk each service's entry-csproj
-// transitive <ProjectReference> closure via DependencyGraph, then index every project in a closure back
-// to the owning service(s). A source file attributes to a service when its owning project is in that
-// service's closure. Membership is therefore "this code is LOADED in service X" — an upper bound for
-// actor/background EPs, which only ACTIVATE in the Echo-bootstrapping host (BootstrapsEcho).
+// Maps source files to the deployed service(s) whose process loads them. Built query-side (no re-index):
+// load deployments.json, walk each service's entry-csproj transitive <ProjectReference> closure, index
+// every project back to the owning service(s). Membership is "this code is LOADED in service X" — an upper
+// bound for actor/background EPs, which only ACTIVATE in the Echo-bootstrapping host.
 internal sealed class DeploymentMap
 {
     public static readonly DeploymentMap Empty = new([], new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase), []);
@@ -27,9 +23,7 @@ internal sealed class DeploymentMap
 
     public IReadOnlyList<ServiceDef> Services { get; }
     public bool IsEmpty => Services.Count == 0;
-
-    // Internal (not private) so tests can construct a map directly from service defs to exercise the
-    // capability gate without standing up a solution + ProjectReference closure.
+    
     internal DeploymentMap(
         IReadOnlyList<ServiceDef> services,
         Dictionary<string, List<string>> projectToServices,
@@ -42,11 +36,8 @@ internal sealed class DeploymentMap
         _byName = services.GroupBy(s => s.Name, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
     }
 
-    // The service definition for a name (for kind/note lookup), or null if unknown.
     public ServiceDef? Service(string name) => _byName.GetValueOrDefault(name);
 
-    // The deployed service(s) whose process loads this source file, in deployments.json order.
-    // Empty when the file belongs to no service closure (e.g. a test/tool project) or no config exists.
     public IReadOnlyList<string> ServicesForFile(string? filePath)
     {
         if (string.IsNullOrEmpty(filePath) || _projectDirs.Length == 0)
@@ -68,12 +59,10 @@ internal sealed class DeploymentMap
         return [];
     }
 
-    // The subset of `loadedServices` in which an entry point requiring `requires` actually ACTIVATES:
-    // a loaded service activates it iff the service `provides` at least one required token (ANY /
-    // non-empty-intersection semantics). When `requires` is null/empty the EP is ungated and active in
-    // every service that loads it — so active-in collapses to loaded-in and output is unchanged. This
-    // is the generic active-in vs loaded-in distinction; tokens are opaque (a future ALL mode would
-    // change only the predicate here). `loadedServices` is assumed to come from ServicesForFile.
+    // The subset of `loadedServices` in which an EP requiring `requires` actually ACTIVATES: a loaded
+    // service activates it iff it `provides` at least one required token (ANY / non-empty-intersection).
+    // When `requires` is null/empty the EP is ungated and active in every service that loads it, so
+    // active-in collapses to loaded-in. Tokens are opaque (a future ALL mode would change only this predicate).
     public IReadOnlyList<string> ActiveServices(IReadOnlyList<string> loadedServices, IReadOnlyList<string>? requires)
     {
         if (requires is null || requires.Count == 0 || loadedServices.Count == 0)
@@ -81,10 +70,7 @@ internal sealed class DeploymentMap
         var required = new HashSet<string>(requires, StringComparer.OrdinalIgnoreCase);
         return loadedServices.Where(s => Service(s) is { } def && def.Provides.Any(required.Contains)).ToArray();
     }
-
-    // Loads deployments.json from workingDirectory and resolves it against the indexed solution.
-    // Returns Empty (feature off, no output noise) when the config is absent or the solution path is
-    // unknown/missing — so deployment annotations are strictly opt-in.
+    
     public static async Task<DeploymentMap> LoadAsync(string workingDirectory, string? solutionPath, TextWriter? log = null)
     {
         var configPath = Path.Combine(workingDirectory, "deployments.json");
@@ -136,9 +122,7 @@ internal sealed class DeploymentMap
 
         return new DeploymentMap(services, projectToServices, projectDirs);
     }
-
-    // BFS the transitive ProjectReference closure from the entry project (inclusive). Paths are the
-    // graph's already-normalised full paths; a host outside the graph yields just itself.
+    
     private static IEnumerable<string> Closure(string entry, Dictionary<string, List<string>> depGraph)
     {
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -160,7 +144,7 @@ internal sealed class DeploymentMap
     private static string EnsureTrailingSeparator(string dir) =>
         dir.EndsWith(Path.DirectorySeparatorChar) ? dir : dir + Path.DirectorySeparatorChar;
 
-    private static IReadOnlyList<ServiceDef> ParseServices(string configPath, TextWriter? log)
+    private static List<ServiceDef> ParseServices(string configPath, TextWriter? log)
     {
         try
         {

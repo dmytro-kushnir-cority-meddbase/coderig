@@ -7,12 +7,9 @@ using Rig.Storage.Storage;
 
 namespace Rig.Benchmarks;
 
-// The PURE, no-IO compute of a `rig tree` query, isolated from the SQLite load. All IO happens once in
-// [GlobalSetup] (open the store read-only, load the bounded reach inputs + rules + EP data into memory);
-// every [Benchmark] then runs over those in-memory inputs only. Targets the phases the timing harness
-// attributes to compute: ShapeGraph, MarkEventSubscriptionHandoffs, BuildTree, effect derivation, and the
-// in-memory entry-point derivation.
-//
+// The PURE, no-IO compute of a `rig tree` query, isolated from the SQLite load: ALL IO happens once in
+// [GlobalSetup] (open the store read-only, load reach inputs + rules + EP data into memory), and every
+// [Benchmark] runs over those in-memory inputs only — so measurements attribute to compute, not IO.
 //   Store:   env RIG_BENCH_STORE   (default C:\Git\meddbase-analysis) — must contain .rig\rig.db + rules.
 //   Pattern: env RIG_BENCH_PATTERN (default Master.SubmitToHealthcode) — the traversal root.
 [MemoryDiagnoser]
