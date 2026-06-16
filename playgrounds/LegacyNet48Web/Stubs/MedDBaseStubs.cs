@@ -91,10 +91,24 @@ namespace MedDBase.Application.Core.Background
 
 namespace Echo
 {
-    // Echo actor spawn (M6): the inbox delegate handles messages later on the actor's thread.
+    // A routing handle to a spawned process (Echo's real ProcessId). ProcessDns tables hold these as
+    // static-readonly fields, so the actor:* rules resolve the routing target via argument_name.
+    public struct ProcessId { }
+
+    // Echo actor prelude (M6 + #16). spawn's inbox delegate handles messages later on the actor's
+    // thread; tell/ask route to the ProcessId at arg 0; tellSelf targets the current actor implicitly,
+    // so its arg 0 is the MESSAGE — excluded from the tell rule.
     public static class Process
     {
         public static object spawn<TMsg>(string name, System.Action<TMsg> inbox) => null;
+
+        public static object tell<T>(ProcessId pid, T message) => null;
+
+        public static object tellSelf<T>(T message) => null;
+
+        public static R ask<R>(ProcessId pid, object message) => default;
+
+        public static ProcessId register(string name, ProcessId process) => default;
     }
 }
 
