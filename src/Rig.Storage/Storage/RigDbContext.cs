@@ -42,9 +42,15 @@ public sealed class RigDbContext(string databasePath, bool pooling = true, bool 
     {
         var connectionString = $"Data Source={databasePath}";
         if (!pooling)
+        {
             connectionString += ";Pooling=False";
+        }
+
         if (readOnly)
+        {
             connectionString += ";Mode=ReadOnly";
+        }
+
         optionsBuilder.UseSqlite(connectionString);
     }
 

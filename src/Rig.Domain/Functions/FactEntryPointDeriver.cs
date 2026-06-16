@@ -96,7 +96,9 @@ public static class FactEntryPointDeriver
             var handlers = data.Methods.Where(m => m.Name != ".ctor").ToArray();
 
             foreach (var rule in classInheritanceRules)
+            {
                 DeriveClassInheritance(handlers, inheritanceEdges, attributeRefsByMethod, rule, results, seen);
+            }
         }
 
         return results;
@@ -119,19 +121,26 @@ public static class FactEntryPointDeriver
         {
             // Abstract/base pages are never navigable — skip them (they only exist to be subclassed).
             if (typeById.TryGetValue(typeId, out var typeInfo) && typeInfo.IsAbstract)
+            {
                 continue;
+            }
 
             // Route = strip the namespace prefix, convert remaining '.' to '/'
             // e.g. T:MedDBase.Pages.Accounts.MakePaymentComponents.Create2
             //   -> strip "T:" prefix -> strip "MedDBase.Pages." -> "Accounts.MakePaymentComponents.Create2"
             //   -> "Accounts/MakePaymentComponents/Create2"
             if (!typeId.StartsWith("T:", StringComparison.Ordinal))
+            {
                 continue;
+            }
+
             var fqn = typeId.Substring(2); // strip "T:"
 
             var route = BuildTypeRoute(fqn, rule.NamespacePrefix);
             if (route is null)
+            {
                 continue; // type is outside the namespace prefix
+            }
 
             var ctors = ctorsByContaining[typeId];
             var ctorList = ctors.OrderBy(c => c.Line).ToList();
@@ -141,7 +150,10 @@ public static class FactEntryPointDeriver
                 foreach (var ctor in ctorList)
                 {
                     if (!seen.Add((ctor.FilePath, ctor.Line)))
+                    {
                         continue;
+                    }
+
                     var displayName = BuildPageDisplayName(rule, route, ctor.Signature);
                     results.Add(
                         new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, ctor.FilePath, ctor.Line, rule.Requires)
@@ -151,7 +163,10 @@ public static class FactEntryPointDeriver
             else if (typeById.TryGetValue(typeId, out var typeRow))
             {
                 if (!seen.Add((typeRow.FilePath, typeRow.Line)))
+                {
                     continue;
+                }
+
                 var displayName = $"{rule.Kind} {rule.DefaultMethod} {route}";
                 results.Add(
                     new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, typeRow.FilePath, typeRow.Line, rule.Requires)
@@ -165,7 +180,10 @@ public static class FactEntryPointDeriver
     private static string? BuildTypeRoute(string fqn, string namespacePrefix)
     {
         if (!fqn.StartsWith(namespacePrefix, StringComparison.Ordinal))
+        {
             return null;
+        }
+
         return StripArityMarkers(fqn.Substring(namespacePrefix.Length)).Replace('.', '/');
     }
 
@@ -176,7 +194,10 @@ public static class FactEntryPointDeriver
     {
         var backtick = text.IndexOf('`');
         if (backtick < 0)
+        {
             return text;
+        }
+
         var sb = new System.Text.StringBuilder(text.Length);
         for (var i = 0; i < text.Length; i++)
         {
@@ -184,7 +205,10 @@ public static class FactEntryPointDeriver
             {
                 i++; // skip the backtick
                 while (i < text.Length && char.IsDigit(text[i]))
+                {
                     i++; // skip the arity digits
+                }
+
                 i--; // the for-loop will re-increment
                 continue;
             }
@@ -223,20 +247,31 @@ public static class FactEntryPointDeriver
         foreach (var r in ctorRefs)
         {
             if (r.Enclosing is null)
+            {
                 continue;
+            }
+
             if (!rule.HandlerMethodAttributePrefixes.Any(prefix => r.Target.StartsWith(prefix, StringComparison.Ordinal)))
+            {
                 continue;
+            }
 
             var declaringTypeId = DeclaringTypeId(r.Enclosing);
             if (declaringTypeId is null || !TypeClosure.Contains(closure, declaringTypeId))
+            {
                 continue;
+            }
 
             if (!seen.Add((r.FilePath, r.Line)))
+            {
                 continue;
+            }
 
             var route = BuildActionRoute(r.Enclosing, rule.NamespacePrefix);
             if (route is null)
+            {
                 continue;
+            }
 
             var displayName = $"{rule.Kind} {rule.DefaultMethod} {route}";
             results.Add(new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, r.FilePath, r.Line, rule.Requires));
@@ -269,28 +304,50 @@ public static class FactEntryPointDeriver
         foreach (var m in handlers)
         {
             if (m.ContainingSymbolId is null)
+            {
                 continue;
+            }
+
             if (closure is not null && !TypeClosure.Contains(closure, m.ContainingSymbolId))
+            {
                 continue;
+            }
+
             if (handlerNames is not null && !handlerNames.Contains(m.Name))
+            {
                 continue;
+            }
+
             if (rule.RequireOverride && !m.IsOverride)
+            {
                 continue;
+            }
+
             if (
                 rule.HandlerMethodAttributePrefixes.Count > 0
                 && !attributeRefsByMethod[m.SymbolId]
                     .Any(target => rule.HandlerMethodAttributePrefixes.Any(p => target.StartsWith(p, StringComparison.Ordinal)))
             )
+            {
                 continue;
+            }
+
             if (rule.HandlerParameterTypeSimpleNames.Count > 0 && !HasAllParameterTypes(m.Signature, rule.HandlerParameterTypeSimpleNames))
+            {
                 continue;
+            }
 
             if (!seen.Add((m.FilePath, m.Line)))
+            {
                 continue;
+            }
 
             var route = BuildInheritanceRoute(m.ContainingSymbolId, m.Name);
             if (route is null)
+            {
                 continue;
+            }
+
             var displayName = $"{rule.Kind} {rule.DefaultMethod} {route}";
             results.Add(new DerivedEntryPoint(rule.Kind, rule.DefaultMethod, route, displayName, m.FilePath, m.Line, rule.Requires));
         }
@@ -305,7 +362,10 @@ public static class FactEntryPointDeriver
         var open = signature.IndexOf('(');
         var close = signature.LastIndexOf(')');
         if (open < 0 || close <= open)
+        {
             return false;
+        }
+
         var paramSimpleNames = new HashSet<string>(
             signature
                 .Substring(open + 1, close - open - 1)
@@ -323,10 +383,16 @@ public static class FactEntryPointDeriver
     {
         var space = token.LastIndexOf(' '); // drop ref/out/in/params modifiers
         if (space >= 0)
+        {
             token = token.Substring(space + 1);
+        }
+
         var generic = token.IndexOf('<');
         if (generic >= 0)
+        {
             token = token.Substring(0, generic);
+        }
+
         var lastDot = token.LastIndexOf('.');
         return lastDot >= 0 ? token.Substring(lastDot + 1) : token;
     }
@@ -338,7 +404,10 @@ public static class FactEntryPointDeriver
     private static string? BuildInheritanceRoute(string containingTypeId, string methodName)
     {
         if (!containingTypeId.StartsWith("T:", StringComparison.Ordinal))
+        {
             return null;
+        }
+
         var type = StripArityMarkers(containingTypeId.Substring(2));
         return $"{type}.{methodName}";
     }
@@ -350,11 +419,17 @@ public static class FactEntryPointDeriver
     private static string? BuildActionRoute(string enclosingSymbolId, string namespacePrefix)
     {
         if (!enclosingSymbolId.StartsWith("M:", StringComparison.Ordinal))
+        {
             return null;
+        }
+
         var body = enclosingSymbolId.Substring(2);
         var paren = body.IndexOf('(');
         if (paren >= 0)
+        {
             body = body.Substring(0, paren);
+        }
+
         // Strip generic arity markers in place (WorkflowPaneBase`1.Save -> WorkflowPaneBase.Save) —
         // truncating at the first '`' would wrongly drop the method name for generic declaring types.
         body = StripArityMarkers(body);
@@ -362,14 +437,19 @@ public static class FactEntryPointDeriver
         // body = "MedDBase.Pages.Accounts.AdvancedPayerDialog.HandleEvent"
         // Strip namespace prefix "MedDBase.Pages."
         if (!body.StartsWith(namespacePrefix, StringComparison.Ordinal))
+        {
             return null;
+        }
+
         body = body.Substring(namespacePrefix.Length);
 
         // "Accounts.AdvancedPayerDialog.HandleEvent"
         // Find the last '.' which separates ClassName.MethodName
         var lastDot = body.LastIndexOf('.');
         if (lastDot < 0)
+        {
             return body; // single-segment method (no class prefix)
+        }
 
         // Everything before the last dot: replace remaining '.' with '/'
         var classPath = body.Substring(0, lastDot).Replace('.', '/');
@@ -383,17 +463,26 @@ public static class FactEntryPointDeriver
     private static string? DeclaringTypeId(string enclosingSymbolId)
     {
         if (!enclosingSymbolId.StartsWith("M:", StringComparison.Ordinal))
+        {
             return null;
+        }
+
         var body = enclosingSymbolId.Substring(2);
         var paren = body.IndexOf('(');
         if (paren >= 0)
+        {
             body = body.Substring(0, paren);
+        }
+
         // Do NOT strip the generic arity globally: a generic *type* keeps its `n (e.g.
         // ConfigurationPaneBase`1.Save) and ClosureContains normalises it. Only the segment after
         // the last '.' is the method name, which we drop to leave the declaring type.
         var lastDot = body.LastIndexOf('.');
         if (lastDot <= 0)
+        {
             return null; // no declaring type segment
+        }
+
         return "T:" + body.Substring(0, lastDot);
     }
 }

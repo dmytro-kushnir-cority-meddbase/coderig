@@ -1,4 +1,5 @@
 using Rig.Cli;
+using Rig.Cli.Rendering;
 using Rig.Domain.Data;
 using Shouldly;
 using TUnit.Core;
@@ -16,7 +17,10 @@ public sealed class TreeRenderRulesTests
     {
         var map = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var (sym, effect) in pairs)
+        {
             (map.TryGetValue(sym, out var l) ? l : map[sym] = new List<string>()).Add(effect);
+        }
+
         return map;
     }
 
@@ -30,7 +34,7 @@ public sealed class TreeRenderRulesTests
     {
         var output = new StringWriter();
         seamEffects ??= new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        CliApplication.RenderTreeNode(root, prefix: "", isLast: true, isRoot: true, effects, prune, rules, seamEffects, output);
+        TreeRenderer.RenderTreeNode(root, prefix: "", isLast: true, isRoot: true, effects, prune, rules, seamEffects, output);
         return output.ToString();
     }
 
@@ -242,9 +246,9 @@ public sealed class TreeRenderRulesTests
             Dispatch("M:App.QueryResult`2.Enumerate()", 1, Bind("M:App.QueryPipeline`2.Enumerate()", """["T:0","T:1"]""", null))
         );
 
-        var folded = CliApplication.FoldSingleImplHops(iface, new Dictionary<string, List<string>>(StringComparer.Ordinal));
+        var folded = TreeRenderer.FoldSingleImplHops(iface, new Dictionary<string, List<string>>(StringComparer.Ordinal));
         var output = new StringWriter();
-        CliApplication.RenderTreeNode(
+        TreeRenderer.RenderTreeNode(
             folded,
             "",
             isLast: true,
@@ -385,7 +389,7 @@ public sealed class TreeRenderRulesTests
             ["M:Ns.Repo.WithConnection()"] = ["• db_connection:open SqlConnection  Repo.cs:44"],
         };
         var output = new StringWriter();
-        CliApplication.RenderTreeNode(
+        TreeRenderer.RenderTreeNode(
             root,
             prefix: "",
             isLast: true,

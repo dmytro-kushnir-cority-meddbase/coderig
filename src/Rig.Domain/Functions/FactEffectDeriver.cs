@@ -40,10 +40,16 @@ public static class FactEffectDeriver
         HashSet<string>? ClosureFor(FactEffectRule rule)
         {
             if (rule.DeclaringTypeBaseTypes is not { Count: > 0 } roots)
+            {
                 return null;
+            }
+
             if (baseEdgeLookup is null)
+            {
                 return EmptyClosure;
-            var key = string.Join("|", roots);
+            }
+
+            var key = string.Join('|', roots);
             if (!closureCache.TryGetValue(key, out var closure))
             {
                 closure = TypeClosure.Compute(baseEdgeLookup, roots);
@@ -70,7 +76,10 @@ public static class FactEffectDeriver
         // method-name substring, skipping the declaring-type substring + arity strip for non-candidates.
         var candidateMethodNames = new HashSet<string>(StringComparer.Ordinal);
         foreach (var entry in invocationRules)
+        {
             candidateMethodNames.UnionWith(entry.Methods);
+        }
+
         var constructorRules = rules.Where(r => r.MatchConstructor && !r.TreatAsDispatch).ToArray();
         var throwRules = rules.Where(r => r.MatchThrow && !r.TreatAsDispatch).ToArray();
 
@@ -82,33 +91,59 @@ public static class FactEffectDeriver
             // ParseMethod exactly for the accepted case.
             var target = inv.Target;
             if (!target.StartsWith("M:", StringComparison.Ordinal))
+            {
                 continue;
+            }
+
             var searchEnd = target.IndexOf('(');
             if (searchEnd < 0)
+            {
                 searchEnd = target.Length;
+            }
+
             var lastDot = target.LastIndexOf('.', searchEnd - 1);
             if (lastDot < 2)
+            {
                 continue;
+            }
+
             var methodStart = lastDot + 1;
             var methodTick = target.IndexOf('`', methodStart, searchEnd - methodStart);
             var methodEnd = methodTick >= 0 ? methodTick : searchEnd;
             if (methodEnd <= methodStart)
+            {
                 continue;
+            }
+
             var methodName = target.Substring(methodStart, methodEnd - methodStart);
             if (!candidateMethodNames.Contains(methodName))
+            {
                 continue; // no invocation rule names this method — skip before allocating the declaring type
+            }
+
             var declaringType = StripTypeArityMarkers(target.Substring(2, lastDot - 2));
 
             foreach (var (rule, methods, closure) in invocationRules)
             {
                 if (providerFilter is not null && !string.Equals(rule.Provider, providerFilter, StringComparison.OrdinalIgnoreCase))
+                {
                     continue;
+                }
+
                 if (!methods.Contains(methodName))
+                {
                     continue;
+                }
+
                 if (!TypeGateMatches(rule, declaringType, receiverType: inv.Receiver, closure))
+                {
                     continue;
+                }
+
                 if (!ContainingGateMatches(rule, inv.Enclosing))
+                {
                     continue;
+                }
 
                 // Resolve the resource the same way the Roslyn path does; when it can't be resolved
                 // the effect is DROPPED (Roslyn returns null from TryCreateEffect), which is what
@@ -127,7 +162,9 @@ public static class FactEffectDeriver
                     rule.ArgumentIndex
                 );
                 if (string.IsNullOrWhiteSpace(resource))
+                {
                     continue; // matched, but the resource is unresolvable — no effect; let a later rule try
+                }
 
                 var observations = observationRules is null
                     ? null
@@ -163,11 +200,16 @@ public static class FactEffectDeriver
                 {
                     var set = new HashSet<string>(StringComparer.Ordinal);
                     foreach (var inv in invocations)
+                    {
                         if (
                             inv.Enclosing is not null
                             && rule.TargetCallsMethods!.Any(p => inv.Target.IndexOf(p, StringComparison.Ordinal) >= 0)
                         )
+                        {
                             set.Add(inv.Enclosing);
+                        }
+                    }
+
                     return set;
                 }
             );
@@ -177,9 +219,15 @@ public static class FactEffectDeriver
                 foreach (var rule in wrapperRules)
                 {
                     if (providerFilter is not null && !string.Equals(rule.Provider, providerFilter, StringComparison.OrdinalIgnoreCase))
+                    {
                         continue;
+                    }
+
                     if (!wrapperSets[rule].Contains(inv.Target))
+                    {
                         continue; // the called method is not a wrapper for this rule
+                    }
+
                     // Wrapper rules resolve from the call-site type args / arg name (not the declaring type).
                     var resource = ResolveResource(
                         rule.Resource,
@@ -195,7 +243,10 @@ public static class FactEffectDeriver
                         rule.ArgumentIndex
                     );
                     if (string.IsNullOrWhiteSpace(resource))
+                    {
                         continue;
+                    }
+
                     results.Add(new DerivedEffect(rule.Provider, rule.Operation, resource!, inv.Enclosing, inv.FilePath, inv.Line));
                     break;
                 }
@@ -211,17 +262,28 @@ public static class FactEffectDeriver
             {
                 var parsed = ParseConstructor(ctor.Target);
                 if (parsed is null)
+                {
                     continue;
+                }
+
                 var (constructedType, argCount) = parsed.Value;
 
                 foreach (var rule in constructorRules)
                 {
                     if (providerFilter is not null && !string.Equals(rule.Provider, providerFilter, StringComparison.OrdinalIgnoreCase))
+                    {
                         continue;
+                    }
+
                     if (argCount < rule.MinArguments)
+                    {
                         continue;
+                    }
+
                     if (!TypeGateMatches(rule, constructedType, receiverType: null, ClosureFor(rule)))
+                    {
                         continue;
+                    }
 
                     results.Add(
                         new DerivedEffect(rule.Provider, rule.Operation, constructedType, ctor.Enclosing, ctor.FilePath, ctor.Line)
@@ -241,14 +303,21 @@ public static class FactEffectDeriver
             {
                 var exceptionType = ParseType(thrown.Target);
                 if (exceptionType is null)
+                {
                     continue;
+                }
 
                 foreach (var rule in throwRules)
                 {
                     if (providerFilter is not null && !string.Equals(rule.Provider, providerFilter, StringComparison.OrdinalIgnoreCase))
+                    {
                         continue;
+                    }
+
                     if (!TypeGateMatches(rule, exceptionType, receiverType: null, ClosureFor(rule)))
+                    {
                         continue;
+                    }
 
                     results.Add(
                         new DerivedEffect(rule.Provider, rule.Operation, exceptionType, thrown.Enclosing, thrown.FilePath, thrown.Line)
@@ -278,7 +347,10 @@ public static class FactEffectDeriver
         if (rule.DeclaringTypeBaseTypes is { Count: > 0 })
         {
             if (declaringBaseClosure is null || !TypeClosure.Contains(declaringBaseClosure, "T:" + declaringType))
+            {
                 return false;
+            }
+
             return DeclaringTypeNameSuffixMatches(rule, declaringType);
         }
 
@@ -294,7 +366,10 @@ public static class FactEffectDeriver
         {
             // Namespace/prefix gate passed — apply the optional simple-name suffix gate.
             if (!DeclaringTypeNameSuffixMatches(rule, declaringType))
+            {
                 return false;
+            }
+
             return true;
         }
 
@@ -315,7 +390,9 @@ public static class FactEffectDeriver
                     TypeNameMatches(declaringType, gate) || (receiverType is not null && TypeNameMatches(receiverType, gate))
                 )
             )
+            {
                 return true;
+            }
         }
 
         return false;
@@ -327,7 +404,9 @@ public static class FactEffectDeriver
     {
         var suffixes = rule.DeclaringTypeNameEndsWith;
         if (suffixes is null || suffixes.Count == 0)
+        {
             return true;
+        }
 
         // Simple name = last dot-separated segment (e.g. "BillingItemListProxy" from
         // "MedDBase.Pages.Accounts.BillingItemComponents.BillingItemListProxy").
@@ -352,17 +431,28 @@ public static class FactEffectDeriver
         var hasType = rule.ContainingTypes is { Count: > 0 };
         var hasMethod = rule.ContainingMethods is { Count: > 0 };
         if (!hasNamespace && !hasType && !hasMethod)
+        {
             return true;
+        }
 
         var parsed = enclosingDocId is null ? null : ParseMethod(enclosingDocId);
         if (parsed is null)
+        {
             return false; // a containing gate is set but there is no enclosing method to match
+        }
+
         var (containingType, containingMethod) = parsed.Value;
 
         if (hasMethod && !rule.ContainingMethods!.Contains(containingMethod, StringComparer.Ordinal))
+        {
             return false;
+        }
+
         if (hasType && !rule.ContainingTypes!.Any(gate => TypeNameMatches(containingType, gate)))
+        {
             return false;
+        }
+
         if (hasNamespace)
         {
             var ns = NamespaceOf(containingType);
@@ -371,7 +461,9 @@ public static class FactEffectDeriver
                     string.Equals(ns, gate, StringComparison.Ordinal) || ns.StartsWith(gate + ".", StringComparison.Ordinal)
                 )
             )
+            {
                 return false;
+            }
         }
 
         return true;
@@ -450,7 +542,10 @@ public static class FactEffectDeriver
     private static string? NthTypeArgument(string? typeArguments, int index)
     {
         if (string.IsNullOrWhiteSpace(typeArguments) || index < 0)
+        {
             return null;
+        }
+
         var depth = 0;
         var position = 0;
         var start = 0;
@@ -458,13 +553,20 @@ public static class FactEffectDeriver
         {
             var c = typeArguments[i];
             if (c is '<' or '(' or '[')
+            {
                 depth++;
+            }
             else if (c is '>' or ')' or ']')
+            {
                 depth--;
+            }
             else if (c == ',' && depth == 0)
             {
                 if (position == index)
+                {
                     return typeArguments.Substring(start, i - start).Trim();
+                }
+
                 position++;
                 start = i + 1;
             }
@@ -486,7 +588,9 @@ public static class FactEffectDeriver
     private static string? NthJsonString(string? jsonArray, int index)
     {
         if (string.IsNullOrEmpty(jsonArray) || index < 0)
+        {
             return null;
+        }
 
         var maxBytes = Encoding.UTF8.GetMaxByteCount(jsonArray!.Length);
         byte[]? rented = null;
@@ -503,7 +607,9 @@ public static class FactEffectDeriver
         finally
         {
             if (rented is not null)
+            {
                 ArrayPool<byte>.Shared.Return(rented);
+            }
         }
     }
 
@@ -514,15 +620,23 @@ public static class FactEffectDeriver
     {
         var reader = new Utf8JsonReader(utf8Json);
         if (!reader.Read() || reader.TokenType != JsonTokenType.StartArray)
+        {
             return null;
+        }
 
         var position = 0;
         while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
         {
             if (position == index)
+            {
                 return reader.TokenType == JsonTokenType.String ? reader.GetString() : null;
+            }
+
             if (reader.TokenType is JsonTokenType.StartArray or JsonTokenType.StartObject)
+            {
                 reader.Skip();
+            }
+
             position++;
         }
         return null;
@@ -544,25 +658,37 @@ public static class FactEffectDeriver
     private static (string DeclaringType, string Name)? ParseMethod(string docId)
     {
         if (!docId.StartsWith("M:", StringComparison.Ordinal))
+        {
             return null;
+        }
+
         // Index-based so only the two RESULT strings are allocated — this runs once per invocation
         // (hundreds of thousands), and the prior form cut four intermediate substrings (body, body-
         // without-params, declaringRaw, methodRaw) on every call.
         var searchEnd = docId.IndexOf('('); // params start; everything past it is the signature
         if (searchEnd < 0)
+        {
             searchEnd = docId.Length;
+        }
+
         // Last dot before the params separates the declaring type from the member name.
         // We do NOT strip backticks before this search; `Ns.Foo`1.Bar` has lastDot at Bar.
         var lastDot = docId.LastIndexOf('.', searchEnd - 1);
         if (lastDot < 2) // no dot in the body region (index 0/1 are the "M:" prefix)
+        {
             return null;
+        }
+
         var declaringRaw = docId.Substring(2, lastDot - 2);
         // Method name = (lastDot+1 .. searchEnd), trimmed at a method-level generic arity marker (``1).
         var methodStart = lastDot + 1;
         var backtick = docId.IndexOf('`', methodStart, searchEnd - methodStart);
         var methodEnd = backtick >= 0 ? backtick : searchEnd;
         if (methodEnd <= methodStart)
+        {
             return null;
+        }
+
         // Strip generic arity markers from the declaring type (e.g. Foo`1 -> Foo, Bar`2 -> Bar).
         var declaring = StripTypeArityMarkers(declaringRaw);
         var methodName = docId.Substring(methodStart, methodEnd - methodStart);
@@ -576,14 +702,20 @@ public static class FactEffectDeriver
     private static (string ConstructedType, int ArgCount)? ParseConstructor(string docId)
     {
         if (!docId.StartsWith("M:", StringComparison.Ordinal))
+        {
             return null;
+        }
+
         var body = docId.Substring(2);
         var paren = body.IndexOf('(');
         var head = paren >= 0 ? body.Substring(0, paren) : body;
         // head ends with ".#ctor" (instance) or ".#cctor" (static) — strip the ctor segment.
         var ctorMarker = head.LastIndexOf(".#", StringComparison.Ordinal);
         if (ctorMarker < 0)
+        {
             return null;
+        }
+
         var constructedType = StripTypeArityMarkers(head.Substring(0, ctorMarker));
 
         var argCount = 0;
@@ -600,11 +732,17 @@ public static class FactEffectDeriver
                     foreach (var c in inner)
                     {
                         if (c == '{' || c == '<' || c == '(')
+                        {
                             depth++;
+                        }
                         else if (c == '}' || c == '>' || c == ')')
+                        {
                             depth--;
+                        }
                         else if (c == ',' && depth == 0)
+                        {
                             argCount++;
+                        }
                     }
                 }
             }
@@ -616,7 +754,10 @@ public static class FactEffectDeriver
     private static string? ParseType(string docId)
     {
         if (!docId.StartsWith("T:", StringComparison.Ordinal))
+        {
             return null;
+        }
+
         return StripTypeArityMarkers(docId.Substring(2));
     }
 
@@ -626,7 +767,10 @@ public static class FactEffectDeriver
     {
         // Fast path: no backtick at all.
         if (typeName.IndexOf('`') < 0)
+        {
             return typeName;
+        }
+
         // Split on dots, strip arity from each segment, rejoin.
         var segments = typeName.Split('.');
         for (int i = 0; i < segments.Length; i++)
@@ -634,8 +778,10 @@ public static class FactEffectDeriver
             var seg = segments[i];
             var bt = seg.IndexOf('`');
             if (bt >= 0)
+            {
                 segments[i] = seg.Substring(0, bt);
+            }
         }
-        return string.Join(".", segments);
+        return string.Join('.', segments);
     }
 }

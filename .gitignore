@@ -23,3 +23,6 @@ BenchmarkDotNet.Artifacts/
 
 # git worktrees created by agents (never track)
 .claude/worktrees/
+
+# local refactor golden-output scratch (not committed)
+.golden/

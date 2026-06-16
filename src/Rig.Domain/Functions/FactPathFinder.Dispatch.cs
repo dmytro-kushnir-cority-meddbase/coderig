@@ -61,7 +61,9 @@ public static partial class FactPathFinder
         // Traversal cut: if the current node matches a cut rule, emit no successors — it is a leaf.
         // The node itself was already emitted by the caller; we just stop walking into it here.
         if (index.ApplyTraversalCuts && index.IsTraversalCut(current))
+        {
             yield break;
+        }
 
         // Emit direct call edges in CALL-SITE SOURCE ORDER (by line, then callee for stable ties), not
         // storage order. The graph is loaded from SQL with no ORDER BY, so adjacency order is arbitrary
@@ -70,6 +72,7 @@ public static partial class FactPathFinder
         // (Approximation only: branches/loops/early-return mean lexical order != runtime order.) Each edge
         // carries its ReceiverType forward so the target's dispatch can be narrowed when it is expanded.
         if (index.Adjacency.TryGetValue(current, out var edges))
+        {
             foreach (var edge in edges.OrderBy(e => e.Line).ThenBy(e => e.Callee, StringComparer.Ordinal))
             {
                 // Sync-cut: an async handoff edge schedules its callback to run later / elsewhere — it
@@ -81,7 +84,10 @@ public static partial class FactPathFinder
                 if (edge.Kind == EdgeKinds.Handoff)
                 {
                     if (mode == TraversalMode.SyncCut)
+                    {
                         continue;
+                    }
+
                     yield return (
                         edge.Callee,
                         edge.Kind,
@@ -117,6 +123,7 @@ public static partial class FactPathFinder
                     edge.MethodTypeArgBinding
                 );
             }
+        }
 
         // Dispatch (synthetic, no call-site line) edges AFTER the line-ordered real calls — the fan-out
         // of `current` itself when it is a virtual/base/interface method, narrowed by the receiver of the
@@ -142,6 +149,7 @@ public static partial class FactPathFinder
         // declaring type and CHA-fanning. Falls back to the declaring type for interface/abstract dispatch
         // where the incoming receiver isn't a concrete subtype (the original behaviour).
         foreach (var d in dispatch)
+        {
             yield return (
                 d.Node,
                 d.Kind,
@@ -158,6 +166,7 @@ public static partial class FactPathFinder
                 null,
                 null
             );
+        }
     }
 
     // The `this`-type to carry into a dispatched-to method `targetMethod`: the incoming concrete receiver
@@ -168,11 +177,17 @@ public static partial class FactPathFinder
     {
         var declDisplay = DeclaringTypeDisplay(targetMethod);
         if (incomingReceiver is null || declDisplay is null)
+        {
             return declDisplay;
+        }
+
         var inStripped = ReceiverToStrippedTypeId(incomingReceiver);
         var declStripped = ReceiverToStrippedTypeId(declDisplay);
         if (inStripped is null || declStripped is null)
+        {
             return declDisplay;
+        }
+
         return AncestorOrEqual(declStripped, inStripped, index) ? incomingReceiver : declDisplay;
     }
 
@@ -195,7 +210,9 @@ public static partial class FactPathFinder
     private static IReadOnlyCollection<string>? ExtendBinding(IReadOnlyCollection<string>? current, string? typeArguments)
     {
         if (string.IsNullOrEmpty(typeArguments) || typeArguments!.IndexOf('.') < 0)
+        {
             return current;
+        }
 
         HashSet<string>? extended = null;
         var depth = 0;
@@ -206,11 +223,18 @@ public static partial class FactPathFinder
             {
                 var c = typeArguments[i];
                 if (c is '<' or '(' or '[')
+                {
                     depth++;
+                }
                 else if (c is '>' or ')' or ']')
+                {
                     depth--;
+                }
+
                 if (!(c == ',' && depth == 0) && i < typeArguments.Length)
+                {
                     continue;
+                }
             }
             var part = typeArguments.Substring(start, i - start).Trim();
             start = i + 1;
@@ -252,10 +276,16 @@ public static partial class FactPathFinder
     private static string? ContextControllerCarry(string? incomingReceiver, CallEdge edge, GraphIndex index)
     {
         if (incomingReceiver is null || index.StateFamilyByController.Count == 0)
+        {
             return null;
+        }
+
         var calleeType = ParseMethod(edge.Callee)?.TypeId;
         if (calleeType is null || !index.IsContextInterface(calleeType))
+        {
             return null;
+        }
+
         var controllerKey = ReceiverToStrippedTypeId(incomingReceiver);
         return controllerKey is not null && index.StateFamilyByController.ContainsKey(controllerKey) ? incomingReceiver : null;
     }
@@ -271,7 +301,9 @@ public static partial class FactPathFinder
     {
         var inThis = incomingReceiver is null ? null : ReceiverToStrippedTypeId(incomingReceiver);
         if (inThis is null)
+        {
             return false;
+        }
 
         if (!string.IsNullOrEmpty(edge.ReceiverType))
         {
@@ -281,7 +313,10 @@ public static partial class FactPathFinder
 
         var calleeType = ParseMethod(edge.Callee)?.TypeId;
         if (calleeType is null)
+        {
             return false;
+        }
+
         var calleeStripped = TypeClosure.StripGeneric(calleeType);
         return AncestorOrEqual(calleeStripped, inThis, index) || AncestorOrEqual(inThis, calleeStripped, index);
     }
@@ -292,7 +327,10 @@ public static partial class FactPathFinder
     private static bool AncestorOrEqual(string ancestor, string descendant, GraphIndex index)
     {
         if (string.Equals(ancestor, descendant, StringComparison.Ordinal))
+        {
             return true;
+        }
+
         return Descendants(ancestor, index).Contains(descendant) || DescendantsContainStripped(ancestor, descendant, index);
     }
 
@@ -342,13 +380,21 @@ public static partial class FactPathFinder
         // method-parse, because a slot is a field/property/event DocID (not a method) and would
         // otherwise early-return. Multiple bindings -> multiple targets (like a multi-impl interface).
         if (index.MinedDispatchBySource.TryGetValue(method, out var bindings))
+        {
             foreach (var (target, kind) in bindings)
+            {
                 if (kind == DispatchKinds.DelegateBind && seen.Add(target))
+                {
                     targets.Add((target, "delegate-dispatch", "roslyn"));
+                }
+            }
+        }
 
         var parsed = ParseMethod(method);
         if (parsed is null)
+        {
             return targets;
+        }
 
         // Source method's parameter ARITY — heuristic dispatch is gated on it so an interface/base
         // call only reaches an impl/override with the MATCHING signature, not a same-named OVERLOAD.
@@ -381,15 +427,23 @@ public static partial class FactPathFinder
             {
                 var current = stack.Pop();
                 if (!index.MinedDispatchBySource.TryGetValue(current, out var outs))
+                {
                     continue;
+                }
+
                 foreach (var (target, kind) in outs)
                 {
                     if (!visited.Add(target))
+                    {
                         continue;
+                    }
+
                     hasMined = true;
                     stack.Push(target); // walk the whole closure; NarrowByReceiver trims at the end
                     if (seen.Add(target))
+                    {
                         targets.Add((target, kind == DispatchKinds.Impl ? "impl-dispatch" : "override-dispatch", "roslyn"));
+                    }
                 }
             }
         }
@@ -399,14 +453,21 @@ public static partial class FactPathFinder
             foreach (var impl in impls)
             {
                 if (!index.MethodsByStrippedType.TryGetValue(TypeClosure.StripGeneric(impl), out var implMethods))
+                {
                     continue;
+                }
+
                 foreach (var concrete in implMethods)
+                {
                     if (
                         string.Equals(concrete.Name, parsed.Value.Name, StringComparison.Ordinal)
                         && ParamArity(concrete.SymbolId) == arity
                         && seen.Add(concrete.SymbolId)
                     )
+                    {
                         targets.Add((concrete.SymbolId, "impl-dispatch", "heuristic"));
+                    }
+                }
             }
         }
 
@@ -417,7 +478,9 @@ public static partial class FactPathFinder
         // slightly over-dispatch across same-named interfaces in different namespaces — a deliberate
         // recall-over-precision trade for broken bindings.) Deduped against the mined set via `seen`.
         if (index.ImplsByErrorInterfaceName.TryGetValue(SimpleTypeName(parsed.Value.TypeId), out var nameImpls))
+        {
             AddImplMethods(nameImpls);
+        }
 
         // 3. Name/arity CHA fallback — only when the member has NO mined dispatch edge (residual
         // binding gaps + stores without dispatch_facts). Same scan as before mining existed.
@@ -425,7 +488,9 @@ public static partial class FactPathFinder
         {
             // Interface -> concrete DI dispatch.
             if (index.ImplsByInterface.TryGetValue(parsed.Value.TypeId, out var impls))
+            {
                 AddImplMethods(impls);
+            }
 
             // Base-virtual/abstract -> override dispatch (G6/G3): a call resolved to a base-type method
             // also reaches the SAME-named OVERRIDE on every (transitive) subtype. This is what makes an
@@ -437,15 +502,22 @@ public static partial class FactPathFinder
             foreach (var sub in Descendants(parsed.Value.TypeId, index))
             {
                 if (!index.MethodsByStrippedType.TryGetValue(TypeClosure.StripGeneric(sub), out var subMethods))
+                {
                     continue;
+                }
+
                 foreach (var m in subMethods)
+                {
                     if (
                         m.IsOverride
                         && string.Equals(m.Name, parsed.Value.Name, StringComparison.Ordinal)
                         && ParamArity(m.SymbolId) == arity
                         && seen.Add(m.SymbolId)
                     )
+                    {
                         targets.Add((m.SymbolId, "override-dispatch", "heuristic"));
+                    }
+                }
             }
         }
 
@@ -469,12 +541,21 @@ public static partial class FactPathFinder
     )
     {
         if (index.StateFamilyByController.Count == 0 || receiverType is null || targets.Count <= 1)
+        {
             return targets;
+        }
+
         if (!index.IsContextInterface(methodDeclaringTypeId))
+        {
             return targets;
+        }
+
         var controllerKey = ReceiverToStrippedTypeId(receiverType);
         if (controllerKey is null || !index.StateFamilyByController.TryGetValue(controllerKey, out var family))
+        {
             return targets;
+        }
+
         var filtered = targets.Where(t => ParseMethod(t.Node)?.TypeId is { } dt && family.Contains(NormType(dt))).ToList();
         return filtered.Count > 0 ? filtered : targets;
     }
@@ -494,21 +575,32 @@ public static partial class FactPathFinder
     )
     {
         if (!index.NarrowDispatch || carriedBinding is not { Count: > 0 } || targets.Count <= 1)
+        {
             return targets;
+        }
 
         var roots = new List<string>();
         foreach (var t in carriedBinding)
+        {
             if (ReceiverToStrippedTypeId(t) is { } root)
+            {
                 roots.Add(root);
+            }
+        }
+
         if (roots.Count == 0)
+        {
             return targets;
+        }
 
         var narrowed = new List<(string Node, string Kind, string Basis)>();
         foreach (var t in targets)
         {
             var declType = ParseMethod(t.Node)?.TypeId;
             if (declType is not null && roots.Any(r => InNarrowSubtree(declType, r, index)))
+            {
                 narrowed.Add(t);
+            }
         }
         return narrowed.Count > 0 ? narrowed : targets;
     }
@@ -525,18 +617,24 @@ public static partial class FactPathFinder
     private static string? ResolveNarrowRoot(string? receiverType, string declaringTypeId, GraphIndex index)
     {
         if (string.IsNullOrEmpty(receiverType))
+        {
             return null;
+        }
 
         var stripped = ReceiverToStrippedTypeId(receiverType!);
         if (stripped is null)
+        {
             return null;
+        }
 
         var declaringStripped = TypeClosure.StripGeneric(declaringTypeId);
 
         // Receiver IS the declaring base type (or its stripped form): no narrowing — a `base.M()` or a
         // call typed as the base could dispatch to any override, so keep CHA.
         if (string.Equals(stripped, declaringStripped, StringComparison.Ordinal))
+        {
             return null;
+        }
 
         // The receiver must be a real CHA dispatch target of `declaringTypeId` to narrow to it:
         //  * a (transitive) base-edge descendant — the base-virtual/override case, OR
@@ -551,7 +649,9 @@ public static partial class FactPathFinder
         var isBaseDescendant =
             Descendants(declaringTypeId, index).Contains(stripped) || DescendantsContainStripped(declaringTypeId, stripped, index);
         if (!isBaseDescendant && !ImplementsInterface(stripped, declaringTypeId, index))
+        {
             return null;
+        }
 
         return stripped;
     }
@@ -561,15 +661,23 @@ public static partial class FactPathFinder
     private static bool ImplementsInterface(string strippedType, string interfaceTypeId, GraphIndex index)
     {
         if (!index.ImplsByInterface.TryGetValue(interfaceTypeId, out var impls))
+        {
             return false;
+        }
+
         foreach (var impl in impls)
         {
             var implStripped = TypeClosure.StripGeneric(impl);
             if (string.Equals(implStripped, strippedType, StringComparison.Ordinal))
+            {
                 return true;
+            }
+
             // The receiver may be a subtype of a declared implementer.
             if (Descendants(impl, index).Contains(strippedType) || DescendantsContainStripped(impl, strippedType, index))
+            {
                 return true;
+            }
         }
         return false;
     }
@@ -577,8 +685,13 @@ public static partial class FactPathFinder
     private static bool DescendantsContainStripped(string declaringTypeId, string strippedReceiver, GraphIndex index)
     {
         foreach (var d in Descendants(declaringTypeId, index))
+        {
             if (string.Equals(TypeClosure.StripGeneric(d), strippedReceiver, StringComparison.Ordinal))
+            {
                 return true;
+            }
+        }
+
         return false;
     }
 
@@ -601,15 +714,21 @@ public static partial class FactPathFinder
     )
     {
         if (narrowRoot is null || targets.Count <= 1)
+        {
             return targets;
+        }
 
         var subtree = targets.Where(t => ParseMethod(t.Node)?.TypeId is { } dt && InNarrowSubtree(dt, narrowRoot, index)).ToList();
         if (subtree.Count > 0)
+        {
             return subtree;
+        }
 
         var ancestors = targets.Where(t => ParseMethod(t.Node)?.TypeId is { } dt && AncestorOrEqual(dt, narrowRoot, index)).ToList();
         if (ancestors.Count == 0)
+        {
             return targets; // no candidate on the receiver's line at all — suspect binding, keep CHA
+        }
 
         // Among ancestor overrides, keep only the NEAREST to the receiver: one with no other ancestor
         // candidate strictly between it and the receiver (i.e. not a strict ancestor of another kept one).
@@ -632,10 +751,18 @@ public static partial class FactPathFinder
     {
         var stripped = TypeClosure.StripGeneric(typeId);
         if (string.Equals(stripped, narrowRoot, StringComparison.Ordinal))
+        {
             return true;
+        }
+
         foreach (var d in Descendants(narrowRoot, index))
+        {
             if (string.Equals(TypeClosure.StripGeneric(d), stripped, StringComparison.Ordinal))
+            {
                 return true;
+            }
+        }
+
         return false;
     }
 
@@ -650,7 +777,9 @@ public static partial class FactPathFinder
     {
         // Anonymous/error type (leading '<') -> CHA.
         if (receiver.Length == 0 || receiver[0] == '<')
+        {
             return null;
+        }
 
         // Remove generic argument LISTS at every nesting depth (balanced "<...>"), so a multi-arg
         // ("Foo<A, B>") or nested-generic ("Outer<A, B>.Inner") receiver normalises to its bare dotted
@@ -670,7 +799,9 @@ public static partial class FactPathFinder
             || receiver.IndexOf('[') >= 0
             || receiver.IndexOf(' ') >= 0
         )
+        {
             return null;
+        }
 
         // Strip the `n arity form too; the MethodsByStrippedType key is the generic-stripped DocID.
         receiver = TypeClosure.StripGeneric(receiver);
@@ -682,20 +813,29 @@ public static partial class FactPathFinder
     private static string RemoveGenericArguments(string type)
     {
         if (type.IndexOf('<') < 0)
+        {
             return type;
+        }
+
         var sb = new System.Text.StringBuilder(type.Length);
         var depth = 0;
         foreach (var c in type)
         {
             if (c == '<')
+            {
                 depth++;
+            }
             else if (c == '>')
             {
                 if (depth > 0)
+                {
                     depth--;
+                }
             }
             else if (depth == 0)
+            {
                 sb.Append(c);
+            }
         }
         return sb.ToString();
     }

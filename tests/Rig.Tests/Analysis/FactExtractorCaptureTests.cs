@@ -503,9 +503,9 @@ public sealed class FactExtractorCaptureTests
         bool Invoked(string targetContains, string enclosingContains) =>
             result.References.Any(r =>
                 r.RefKind == "invocation"
-                && r.TargetSymbolId.Contains(targetContains)
+                && r.TargetSymbolId.Contains(targetContains, StringComparison.Ordinal)
                 && r.EnclosingSymbolId is { } e
-                && e.Contains(enclosingContains)
+                && e.Contains(enclosingContains, StringComparison.Ordinal)
             );
 
         // Control: the query SOURCE expression (first `from`) and invocations inside an explicit lambda

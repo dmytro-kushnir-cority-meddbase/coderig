@@ -1,6 +1,7 @@
 using Rig.Analysis;
 using Rig.Analysis.Rules;
 using Rig.Cli;
+using Rig.Cli.Rendering;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Tests.Fixtures;
@@ -22,7 +23,11 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var rules = FactEntryPointRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
         var entryPoints = FactEntryPointDeriver.Derive(FactProjection.EntryPointData(result), rules);
 
-        var actionRoutes = entryPoints.Where(e => e.Kind == "action").Select(e => e.Route).OrderBy(r => r).ToArray();
+        var actionRoutes = entryPoints
+            .Where(e => e.Kind == "action")
+            .Select(e => e.Route)
+            .OrderBy(r => r, StringComparer.Ordinal)
+            .ToArray();
         actionRoutes.ShouldBe(
             new[]
             {
@@ -134,7 +139,8 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var output = new StringWriter();
         var noEffects = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var root in FactPathFinder.BuildTree(graph, fromPattern))
-            CliApplication.RenderTreeNode(
+        {
+            TreeRenderer.RenderTreeNode(
                 root,
                 "",
                 isLast: true,
@@ -145,6 +151,8 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
                 noEffects,
                 output
             );
+        }
+
         return output.ToString();
     }
 
@@ -193,7 +201,9 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         overloadEdges.Count.ShouldBe(2);
         overloadEdges.ShouldAllBe(e => e.Basis == "roslyn");
         foreach (var edge in overloadEdges)
+        {
             edge.To.ShouldBe(edge.From.Replace("IDispatchWorkflows", "WorkflowRegistry"));
+        }
 
         var reach = FactPathFinder.Reaches(graph, "WorkflowCaller.RegisterController");
         reach.Keys.ShouldContain(k => k.Contains("WorkflowRegistry.Register(System.Int32", StringComparison.Ordinal));
@@ -492,6 +502,44 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
                 $"expected a {provider}/{operation} effect from OutboundGateway.SendEverything"
             );
         }
+    }
+
+    // #16: Echo actor effects attribute to the routing target (the ProcessDns member path at arg 0),
+    // and Flurl URL building scopes the http effect to the path-segment literal. The implicit-target
+    // tellSelf is excluded so its MESSAGE argument is never mislabeled as a process name.
+    [Test]
+    public async Task Echo_actor_and_flurl_route_effects_resolve_their_first_argument_target()
+    {
+        var playground = await playgrounds.LegacyNet48Async();
+        var result = playground.Result;
+
+        var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
+        var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var effects = FactEffectDeriver.Derive(
+            FactProjection.Invocations(result),
+            rules,
+            providerFilter: null,
+            baseEdges: FactProjection.EntryPointData(result).BaseEdges
+        );
+
+        var actor = effects
+            .Where(e => e.Provider == "actor" && e.EnclosingSymbolId!.Contains("OutboundGateway.SendEverything", StringComparison.Ordinal))
+            .ToArray();
+
+        actor.ShouldContain(e => e.Operation == "spawn" && e.ResourceType == "ProcessDns.WorkerName");
+        actor.ShouldContain(e => e.Operation == "tell" && e.ResourceType == "ProcessDns.AccountService");
+        actor.ShouldContain(e => e.Operation == "ask" && e.ResourceType == "ProcessDns.AccountService");
+
+        // Implicit-target tellSelf is NOT in the tell rule: no actor effect names the message expression.
+        actor.ShouldNotContain(e => e.ResourceType.Contains("self-msg", StringComparison.Ordinal));
+        actor.ShouldNotContain(e => e.Operation == "tell" && e.ResourceType != "ProcessDns.AccountService");
+
+        effects.ShouldContain(e =>
+            e.Provider == "http"
+            && e.Operation == "route"
+            && e.ResourceType == "submit"
+            && e.EnclosingSymbolId!.Contains("OutboundGateway.SendEverything", StringComparison.Ordinal)
+        );
     }
 
     [Test]

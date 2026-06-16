@@ -60,9 +60,15 @@ public static class DeadCodeFinder
         // Library mode: fold externally-visible members into the roots so the BFS marks them — and
         // everything they reach — live, rather than flagging the public API surface.
         if (treatExternallyVisibleAsRoots)
+        {
             foreach (var m in methods)
+            {
                 if (IsExternallyVisible(m.Modifiers))
+                {
                     rootList.Add(m.SymbolId);
+                }
+            }
+        }
 
         var reachable = FactPathFinder.ReachableFromAll(graph, rootList);
         var rootSet = new HashSet<string>(rootList, StringComparer.Ordinal);
@@ -79,15 +85,29 @@ public static class DeadCodeFinder
         foreach (var m in methods)
         {
             if (reachable.Contains(m.SymbolId) || rootSet.Contains(m.SymbolId))
+            {
                 continue;
+            }
+
             if (m.IsGenerated)
+            {
                 continue;
+            }
+
             if (IsExcludedKind(m.Name))
+            {
                 continue;
+            }
+
             if (IsAbstract(m.Modifiers))
+            {
                 continue;
+            }
+
             if (!includeDispatchMembers && (m.IsOverride || IsVirtual(m.Modifiers)))
+            {
                 continue;
+            }
 
             directCallers.TryGetValue(m.SymbolId, out var callers);
             candidates.Add(
@@ -111,9 +131,15 @@ public static class DeadCodeFinder
     private static Tier ClassifyTier(string modifiers, int directCallers)
     {
         if (HasToken(modifiers, "private"))
+        {
             return Tier.High;
+        }
+
         if (HasToken(modifiers, "public") || HasToken(modifiers, "protected"))
+        {
             return Tier.Low;
+        }
+
         return Tier.Medium; // internal / unspecified
     }
 
@@ -138,8 +164,13 @@ public static class DeadCodeFinder
     private static bool HasToken(string modifiers, string token)
     {
         foreach (var part in modifiers.Split(' '))
+        {
             if (string.Equals(part, token, StringComparison.Ordinal))
+            {
                 return true;
+            }
+        }
+
         return false;
     }
 }

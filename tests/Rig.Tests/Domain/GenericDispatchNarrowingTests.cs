@@ -35,7 +35,9 @@ public sealed class GenericDispatchNarrowingTests
         {
             set.Add(n.SymbolId);
             foreach (var c in n.Children)
+            {
                 Walk(c);
+            }
         }
         Walk(node);
         return set;

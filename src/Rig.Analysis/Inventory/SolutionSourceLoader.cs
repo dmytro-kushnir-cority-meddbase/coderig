@@ -47,16 +47,15 @@ internal static class SolutionSourceLoader
         // from their compiled DLLs rather than re-evaluating the source .csproj files.
         ReportProgress(progress, "Loading solution");
         var workspace = await Task.Run(
-                () => BuildWorkspace(solutionPath, progress, scopeProjectPaths, maxParallelism, excludeTests),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
+            () => BuildWorkspace(solutionPath, progress, scopeProjectPaths, maxParallelism, excludeTests),
+            cancellationToken
+        );
 
         // Wire OutputItemType="Analyzer" ProjectReferences (source generators like the ClientPage
         // proxy generator) that Buildalyzer drops: emit each generator project's compilation to a temp
         // DLL and add it as an analyzer reference on the referencing project, so RunSourceGenerators
         // can execute it and the generated types get indexed.
-        await WireGeneratorAnalyzersAsync(workspace, progress, cancellationToken).ConfigureAwait(false);
+        await WireGeneratorAnalyzersAsync(workspace, progress, cancellationToken);
 
         var csharpProjects = workspace
             .CurrentSolution.Projects.Where(p => p.Language == LanguageNames.CSharp)
@@ -69,38 +68,37 @@ internal static class SolutionSourceLoader
         var compiledProjects = 0;
         var compileSemaphore = new SemaphoreSlim(maxParallelism);
         await Task.WhenAll(
-                csharpProjects.Select(async project =>
+            csharpProjects.Select(async project =>
+            {
+                await compileSemaphore.WaitAsync(cancellationToken);
+                try
                 {
-                    await compileSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
-                    try
+                    var current = Interlocked.Increment(ref compiledProjects);
+                    if (ShouldReportProgress(current, csharpProjects.Length))
                     {
-                        var current = Interlocked.Increment(ref compiledProjects);
-                        if (ShouldReportProgress(current, csharpProjects.Length))
-                            ReportProgress(progress, $"Compiling project {current}/{csharpProjects.Length}: {project.Name}");
-
-                        var compilation = await project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
-                        if (compilation is null)
-                        {
-                            compilationErrors.Add($"{project.Name}: compilation unavailable");
-                            return;
-                        }
-
-                        foreach (
-                            var diagnostic in compilation
-                                .GetDiagnostics(cancellationToken)
-                                .Where(d => d.Severity == DiagnosticSeverity.Error)
-                        )
-                        {
-                            compilationErrors.Add($"{project.Name}: {diagnostic}");
-                        }
+                        ReportProgress(progress, $"Compiling project {current}/{csharpProjects.Length}: {project.Name}");
                     }
-                    finally
+
+                    var compilation = await project.GetCompilationAsync(cancellationToken);
+                    if (compilation is null)
                     {
-                        compileSemaphore.Release();
+                        compilationErrors.Add($"{project.Name}: compilation unavailable");
+                        return;
                     }
-                })
-            )
-            .ConfigureAwait(false);
+
+                    foreach (
+                        var diagnostic in compilation.GetDiagnostics(cancellationToken).Where(d => d.Severity == DiagnosticSeverity.Error)
+                    )
+                    {
+                        compilationErrors.Add($"{project.Name}: {diagnostic}");
+                    }
+                }
+                finally
+                {
+                    compileSemaphore.Release();
+                }
+            })
+        );
 
         var compilationErrorList = compilationErrors.OrderBy(e => e, StringComparer.Ordinal).ToArray();
         if (compilationErrorList.Length > 0)
@@ -112,35 +110,39 @@ internal static class SolutionSourceLoader
             var errorCount = compilationErrorList.Length;
             ReportProgress(progress, $"Warning: {errorCount} compilation error(s) — analysis will be partial for affected files");
             foreach (var error in compilationErrorList.Take(10))
+            {
                 ReportProgress(progress, $"  {error}");
+            }
+
             if (errorCount > 10)
+            {
                 ReportProgress(progress, $"  ... and {errorCount - 10} more (set --verbose to see all)");
+            }
         }
 
         var projectResults = new ConcurrentBag<ProjectSourceLoadResult>();
         var readProjects = 0;
         var readSemaphore = new SemaphoreSlim(maxParallelism);
         await Task.WhenAll(
-                csharpProjects.Select(async project =>
+            csharpProjects.Select(async project =>
+            {
+                await readSemaphore.WaitAsync(cancellationToken);
+                try
                 {
-                    await readSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
-                    try
+                    var current = Interlocked.Increment(ref readProjects);
+                    if (ShouldReportProgress(current, csharpProjects.Length))
                     {
-                        var current = Interlocked.Increment(ref readProjects);
-                        if (ShouldReportProgress(current, csharpProjects.Length))
-                            ReportProgress(progress, $"Reading source project {current}/{csharpProjects.Length}: {project.Name}");
+                        ReportProgress(progress, $"Reading source project {current}/{csharpProjects.Length}: {project.Name}");
+                    }
 
-                        projectResults.Add(
-                            await LoadProjectSourcesAsync(solutionPath, project, rules, cancellationToken).ConfigureAwait(false)
-                        );
-                    }
-                    finally
-                    {
-                        readSemaphore.Release();
-                    }
-                })
-            )
-            .ConfigureAwait(false);
+                    projectResults.Add(await LoadProjectSourcesAsync(solutionPath, project, rules, cancellationToken));
+                }
+                finally
+                {
+                    readSemaphore.Release();
+                }
+            })
+        );
 
         var projectDirectories = csharpProjects
             .Select(p => p.FilePath)
@@ -151,8 +153,8 @@ internal static class SolutionSourceLoader
             .ToArray();
 
         return new SolutionSourceSet(
-            projectResults.SelectMany(r => r.SourceFiles).OrderBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase).ToArray(),
-            projectResults.SelectMany(r => r.Sources).OrderBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase).ToArray(),
+            projectResults.SelectMany(r => r.SourceFiles).OrderBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
+            projectResults.SelectMany(r => r.Sources).OrderBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
             projectDirectories
         );
     }
@@ -201,13 +203,15 @@ internal static class SolutionSourceLoader
                 )
                 .Where(pa => scopeProjectPaths is null || scopeProjectPaths.Contains(Path.GetFullPath(pa.ProjectFile.Path.ToString())))
                 .Where(pa => !excludeTests || !IsTestProjectPath(pa.ProjectFile.Path.ToString()))
-                .ToArray();
+                .ToList();
 
             if (scopeProjectPaths is not null)
+            {
                 progress?.Invoke(
-                    $"Scoped to {toBuild.Length} project(s) in the entry closure "
-                        + $"(skipping {manager.Projects.Count - toBuild.Length} out-of-scope / non-C# project(s))"
+                    $"Scoped to {toBuild.Count} project(s) in the entry closure "
+                        + $"(skipping {manager.Projects.Count - toBuild.Count} out-of-scope / non-C# project(s))"
                 );
+            }
             else if (excludeTests)
             {
                 var testCount = manager.Projects.Values.Count(pa => IsTestProjectPath(pa.ProjectFile.Path.ToString()));
@@ -219,7 +223,7 @@ internal static class SolutionSourceLoader
             // historically run serially. Parallel.ForEach bounds the concurrent MSBuild processes.
             var resultsBag = new ConcurrentBag<IAnalyzerResult>();
             var done = 0;
-            var total = toBuild.Length;
+            var total = toBuild.Count;
             Parallel.ForEach(
                 toBuild,
                 new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, parallelism) },
@@ -228,7 +232,10 @@ internal static class SolutionSourceLoader
                     var projectName = projectAnalyzer.ProjectFile.Name;
                     var current = Interlocked.Increment(ref done);
                     if (current == 1 || current == total || current % 10 == 0)
+                    {
                         ReportProgress(progress, $"MSBuild: design-time build {current}/{total}: {projectName}");
+                    }
+
                     projectAnalyzer.SetGlobalProperty("DesignTimeBuild", "true");
                     projectAnalyzer.SetGlobalProperty("UseSharedCompilation", "false");
                     projectAnalyzer.SetGlobalProperty("BuildingInsideVisualStudio", "true");
@@ -236,7 +243,9 @@ internal static class SolutionSourceLoader
                     {
                         var built = projectAnalyzer.Build().FirstOrDefault();
                         if (built is not null)
+                        {
                             resultsBag.Add(built);
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -301,7 +310,10 @@ internal static class SolutionSourceLoader
             // Falls back to LanguageVersion.Default if unset or unparseable.
             LanguageVersion langVersion = LanguageVersion.Default;
             if (result.Properties.TryGetValue("LangVersion", out var lv) && lv is not null)
+            {
                 Microsoft.CodeAnalysis.CSharp.LanguageVersionFacts.TryParse(lv, out langVersion);
+            }
+
             var parseOptions = new CSharpParseOptions(languageVersion: langVersion, preprocessorSymbols: result.PreprocessorSymbols ?? []);
 
             // Compilation options: OutputKind must be Library for class library / web projects
@@ -429,9 +441,9 @@ internal static class SolutionSourceLoader
             var projectInfo = Microsoft.CodeAnalysis.ProjectInfo.Create(
                 projectId,
                 VersionStamp.Create(),
-                projectName,
-                assemblyName,
-                LanguageNames.CSharp,
+                name: projectName,
+                assemblyName: assemblyName,
+                language: LanguageNames.CSharp,
                 filePath: result.ProjectFilePath,
                 compilationOptions: compilationOptions,
                 parseOptions: parseOptions,
@@ -470,10 +482,16 @@ internal static class SolutionSourceLoader
                 reference.Elements().FirstOrDefault(c => c.Name.LocalName == "OutputItemType")?.Value
                 ?? reference.Attribute("OutputItemType")?.Value;
             if (!string.Equals(outputItemType, "Analyzer", StringComparison.OrdinalIgnoreCase))
+            {
                 continue;
+            }
+
             var include = reference.Attribute("Include")?.Value;
             if (string.IsNullOrEmpty(include))
+            {
                 continue;
+            }
+
             yield return Path.GetFullPath(Path.Combine(projectDir, include.Replace('\\', Path.DirectorySeparatorChar)));
         }
     }
@@ -500,13 +518,21 @@ internal static class SolutionSourceLoader
         {
             var include = reference.Attribute("Include")?.Value;
             if (string.IsNullOrEmpty(include))
+            {
                 continue;
+            }
+
             var refPath = Path.GetFullPath(Path.Combine(projectDir, include.Replace('\\', Path.DirectorySeparatorChar)));
             var ext = Path.GetExtension(refPath);
             if (!ext.Equals(".fsproj", StringComparison.OrdinalIgnoreCase) && !ext.Equals(".vbproj", StringComparison.OrdinalIgnoreCase))
+            {
                 continue;
+            }
+
             if (ResolveBuiltOutputDll(refPath) is { } dll)
+            {
                 yield return dll;
+            }
         }
     }
 
@@ -516,13 +542,18 @@ internal static class SolutionSourceLoader
     {
         var projectDir = Path.GetDirectoryName(projectFilePath);
         if (projectDir is null)
+        {
             return null;
+        }
+
         var assemblyName = Path.GetFileNameWithoutExtension(projectFilePath);
         try
         {
             var declared = XDocument.Load(projectFilePath).Descendants().FirstOrDefault(e => e.Name.LocalName == "AssemblyName")?.Value;
             if (!string.IsNullOrWhiteSpace(declared))
+            {
                 assemblyName = declared;
+            }
         }
         catch
         {
@@ -531,9 +562,12 @@ internal static class SolutionSourceLoader
 
         var bin = Path.Combine(projectDir, "bin");
         if (!Directory.Exists(bin))
+        {
             return null;
+        }
+
         return Directory
-            .EnumerateFiles(bin, assemblyName + ".dll", SearchOption.AllDirectories)
+            .EnumerateFiles(path: bin, searchPattern: assemblyName + ".dll", searchOption: SearchOption.AllDirectories)
             .OrderByDescending(path => path.Contains("Release", StringComparison.OrdinalIgnoreCase))
             .ThenByDescending(File.GetLastWriteTimeUtc)
             .FirstOrDefault();
@@ -548,7 +582,9 @@ internal static class SolutionSourceLoader
     {
         var closure = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (projectFilePath is null)
+        {
             return closure;
+        }
 
         var start = Path.GetFullPath(projectFilePath);
         var stack = new Stack<string>();
@@ -557,10 +593,17 @@ internal static class SolutionSourceLoader
         {
             var current = stack.Pop();
             if (!directInSetRefsByPath.TryGetValue(current, out var refs))
+            {
                 continue;
+            }
+
             foreach (var dep in refs)
+            {
                 if (closure.Add(dep)) // first time we've seen this dependency
+                {
                     stack.Push(dep);
+                }
+            }
         }
         closure.Remove(start); // a self-cycle must not make a project reference itself
         return closure;
@@ -583,32 +626,46 @@ internal static class SolutionSourceLoader
         )
         {
             if (document.FilePath is null)
+            {
                 continue;
+            }
 
             var classification = SourceFileClassifier.Classify(solutionPath, project, document.FilePath, rules);
             sourceFiles.Add(
                 new SourceFileInfo(
-                    project.Name,
-                    document.FilePath,
-                    classification.Status,
-                    classification.Confidence,
-                    classification.Basis,
-                    classification.Reason,
-                    classification.Evidence
+                    ProjectName: project.Name,
+                    FilePath: document.FilePath,
+                    Status: classification.Status,
+                    Confidence: classification.Confidence,
+                    Basis: classification.Basis,
+                    Reason: classification.Reason,
+                    Evidence: classification.Evidence
                 )
             );
 
             if (classification.Status != "indexed")
+            {
                 continue;
+            }
 
             var tree = await document.GetSyntaxTreeAsync(cancellationToken);
             var root = tree is null ? null : await tree.GetRootAsync(cancellationToken);
             var semanticModel = await document.GetSemanticModelAsync(cancellationToken);
 
             if (tree is null || root is null || semanticModel is null)
+            {
                 continue;
+            }
 
-            sources.Add(new SourceModel(project.Name, document.FilePath, tree, root, semanticModel));
+            sources.Add(
+                new SourceModel(
+                    ProjectName: project.Name,
+                    FilePath: document.FilePath,
+                    Tree: tree,
+                    Root: root,
+                    SemanticModel: semanticModel
+                )
+            );
         }
 
         // Also index SOURCE-GENERATED documents (Roslyn source generators wired as analyzer refs,
@@ -618,9 +675,19 @@ internal static class SolutionSourceLoader
         // explicitly with a CSharpGeneratorDriver over the project compilation and index the trees it
         // produces — that's what makes the generated proxy base-type facts (the clientpage_proxy
         // effect gate's discriminator) exist.
-        foreach (var generated in await RunSourceGeneratorsAsync(project, cancellationToken).ConfigureAwait(false))
+        foreach (var generated in await RunSourceGeneratorsAsync(project, cancellationToken))
         {
-            sourceFiles.Add(new SourceFileInfo(project.Name, generated.FilePath, "indexed", "high", "generated", "source_generator", ""));
+            sourceFiles.Add(
+                new SourceFileInfo(
+                    ProjectName: project.Name,
+                    FilePath: generated.FilePath,
+                    Status: "indexed",
+                    Confidence: "high",
+                    Basis: "generated",
+                    Reason: "source_generator",
+                    Evidence: ""
+                )
+            );
             sources.Add(generated);
         }
 
@@ -651,24 +718,30 @@ internal static class SolutionSourceLoader
         foreach (var project in solution.Projects.ToArray())
         {
             if (project.FilePath is null)
+            {
                 continue;
+            }
 
             foreach (var generatorProjectPath in AnalyzerProjectReferencePaths(project.FilePath))
             {
                 if (!emittedDllByGeneratorPath.TryGetValue(generatorProjectPath, out var dllPath))
                 {
                     dllPath = projectByPath.TryGetValue(generatorProjectPath, out var generatorId)
-                        ? await EmitCompilationToTempAsync(solution.GetProject(generatorId)!, cancellationToken).ConfigureAwait(false)
+                        ? await EmitCompilationToTempAsync(solution.GetProject(generatorId)!, cancellationToken)
                         : null;
                     emittedDllByGeneratorPath[generatorProjectPath] = dllPath;
                 }
 
                 if (dllPath is null)
+                {
                     continue;
+                }
 
                 var reference = new AnalyzerFileReference(dllPath, HostRedirectingAnalyzerLoader.Instance);
                 if (!reference.GetGenerators(LanguageNames.CSharp).Any())
+                {
                     continue;
+                }
 
                 solution = solution.AddAnalyzerReference(project.Id, reference);
                 changed = true;
@@ -680,7 +753,9 @@ internal static class SolutionSourceLoader
         }
 
         if (changed)
+        {
             workspace.TryApplyChanges(solution);
+        }
     }
 
     // Emits a project's compilation to a temp DLL so its source generators can be loaded as an analyzer
@@ -690,9 +765,12 @@ internal static class SolutionSourceLoader
     {
         try
         {
-            var compilation = await project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
+            var compilation = await project.GetCompilationAsync(cancellationToken);
             if (compilation is null)
+            {
                 return null;
+            }
+
             var tempDll = Path.Combine(Path.GetTempPath(), $"rig-gen-{project.AssemblyName}-{Guid.NewGuid():N}.dll");
             await using var stream = File.Create(tempDll);
             var emitResult = compilation.Emit(stream, cancellationToken: cancellationToken);
@@ -713,13 +791,17 @@ internal static class SolutionSourceLoader
     {
         var generators = project.AnalyzerReferences.SelectMany(ar => ar.GetGenerators(LanguageNames.CSharp)).ToArray();
         if (generators.Length == 0)
+        {
             return [];
+        }
 
         try
         {
-            var compilation = await project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
+            var compilation = await project.GetCompilationAsync(cancellationToken);
             if (compilation is null)
+            {
                 return [];
+            }
 
             var parseOptions = project.ParseOptions as CSharpParseOptions;
             GeneratorDriver driver = CSharpGeneratorDriver.Create(generators, parseOptions: parseOptions);
@@ -730,8 +812,11 @@ internal static class SolutionSourceLoader
             foreach (var tree in generatedCompilation.SyntaxTrees)
             {
                 if (originalTrees.Contains(tree))
+                {
                     continue;
-                var root = await tree.GetRootAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                var root = await tree.GetRootAsync(cancellationToken);
                 var semanticModel = generatedCompilation.GetSemanticModel(tree);
                 // Generated trees carry a generator hint-name path; fall back to a synthetic one.
                 var generatedPath = string.IsNullOrEmpty(tree.FilePath)
@@ -783,16 +868,25 @@ internal static class SolutionSourceLoader
         private static void EnsureRedirectHook()
         {
             if (Interlocked.Exchange(ref _hooked, 1) != 0)
+            {
                 return;
+            }
+
             System.Runtime.Loader.AssemblyLoadContext.Default.Resolving += (_, name) =>
             {
                 if (name.Name is null)
+                {
                     return null;
+                }
+
                 var redirect =
                     name.Name.StartsWith("Microsoft.CodeAnalysis", StringComparison.Ordinal)
                     || name.Name is "System.Collections.Immutable" or "System.Reflection.Metadata";
                 if (!redirect)
+                {
                     return null;
+                }
+
                 return AppDomain
                     .CurrentDomain.GetAssemblies()
                     .FirstOrDefault(a => string.Equals(a.GetName().Name, name.Name, StringComparison.Ordinal));
@@ -807,7 +901,10 @@ internal static class SolutionSourceLoader
         public override void WriteLine(string? value)
         {
             if (string.IsNullOrWhiteSpace(value))
+            {
                 return;
+            }
+
             // Only surface high-signal lines from MSBuild output to avoid noise
             if (
                 value.Contains("error", StringComparison.OrdinalIgnoreCase)

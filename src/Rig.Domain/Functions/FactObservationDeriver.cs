@@ -88,7 +88,9 @@ public static class FactObservationDeriver
         foreach (var rule in rules.ConcurrencyHandled)
         {
             if (!rule.CommitMethods.Contains(methodName, StringComparer.Ordinal))
+            {
                 continue;
+            }
 
             foreach (var caught in catchTypes)
             {
@@ -110,7 +112,9 @@ public static class FactObservationDeriver
             }
 
             if (observations.Any(o => o.Type == "concurrency_handled"))
+            {
                 break;
+            }
         }
 
         // resource_span (ordering/nesting) — a span-sensitive effect (this provider) is lexically
@@ -123,7 +127,9 @@ public static class FactObservationDeriver
             {
                 // Deny-list: flag every effect except the scope's own expected family.
                 if (rule.ExcludeProviders.Contains(provider, StringComparer.Ordinal))
+                {
                     continue;
+                }
 
                 var scope = enclosingScopes.FirstOrDefault(s =>
                     string.Equals(s.Kind, rule.ScopeKind, StringComparison.Ordinal)
@@ -134,7 +140,9 @@ public static class FactObservationDeriver
                 );
                 // EnclosingScope is a struct; a no-match FirstOrDefault yields Kind == null.
                 if (scope.Kind is null)
+                {
                     continue;
+                }
 
                 observations.Add(
                     new EffectObservationInfo(

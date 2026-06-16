@@ -51,7 +51,9 @@ public static class Writes
                     "PRAGMA locking_mode=EXCLUSIVE;",
                 }
             )
+            {
                 await context.Database.ExecuteSqlRawAsync(pragma, cancellationToken);
+            }
         }
 
         // Bulk insert: skip per-Add change detection (we never mutate tracked entities) and flush in
@@ -106,7 +108,10 @@ public static class Writes
     {
         var symbols = result.Symbols ?? [];
         if (symbols.Count == 0)
+        {
             return;
+        }
+
         var references = result.References ?? [];
         var solutionPath = Path.GetFullPath(result.SolutionPath);
         var indexedAt = DateTimeOffset.UtcNow.ToString("O");
@@ -114,7 +119,9 @@ public static class Writes
         // SymbolId -> owning assembly, so a reference is attributed to the assembly of its enclosing method.
         var symbolAssembly = new Dictionary<string, string>(symbols.Count, StringComparer.Ordinal);
         foreach (var s in symbols)
+        {
             symbolAssembly[s.SymbolId] = s.DefiningAssembly;
+        }
 
         // Stream each assembly's fact identities into an order-independent XOR+sum digest, hashing and
         // discarding per item. O(#assemblies) retained memory — the earlier list-based version
@@ -124,14 +131,20 @@ public static class Writes
         AssemblyAccumulator For(string assembly)
         {
             if (!acc.TryGetValue(assembly, out var a))
+            {
                 acc[assembly] = a = new AssemblyAccumulator();
+            }
+
             return a;
         }
 
         foreach (var s in symbols)
         {
             if (string.IsNullOrEmpty(s.DefiningAssembly))
+            {
                 continue;
+            }
+
             var a = For(s.DefiningAssembly);
             a.Fold("S:" + s.SymbolId);
             a.Symbols++;
@@ -144,7 +157,10 @@ public static class Writes
                 || !symbolAssembly.TryGetValue(r.EnclosingSymbolId, out var assembly)
                 || string.IsNullOrEmpty(assembly)
             )
+            {
                 continue;
+            }
+
             var a = For(assembly);
             a.Fold($"R:{r.TargetSymbolId}|{r.EnclosingSymbolId}|{r.Line}");
             a.References++;
@@ -171,9 +187,12 @@ public static class Writes
                     // Same name, divergent content. Expected for a re-mine of the same solution; a
                     // genuine cross-solution collision (a fork) would carry a different source solution.
                     if (!string.Equals(row.SourceSolutionPath, solutionPath, StringComparison.OrdinalIgnoreCase))
+                    {
                         progress?.Invoke(
                             $"WARN: assembly '{assembly}' has divergent content across solutions ('{row.SourceSolutionPath}' vs '{solutionPath}') — possible fork; keeping latest"
                         );
+                    }
+
                     row.ContentHash = hash;
                     row.SymbolCount = a.Symbols;
                     row.ReferenceCount = a.References;
@@ -196,7 +215,9 @@ public static class Writes
             }
 
             if (existingMembership.Add(assembly))
+            {
                 context.SolutionMemberships.Add(new SolutionMembershipEntity { SolutionPath = solutionPath, AssemblyName = assembly });
+            }
         }
 
         await context.SaveChangesAsync(cancellationToken);
@@ -220,7 +241,10 @@ public static class Writes
         {
             var hash = SHA256.HashData(Encoding.UTF8.GetBytes(item));
             for (var i = 0; i < 32; i++)
+            {
                 xor[i] ^= hash[i];
+            }
+
             sum += BitConverter.ToUInt64(hash);
             count++;
         }
@@ -276,7 +300,9 @@ public static class Writes
                 context.Add(map(items[i], i));
                 saved++;
                 if (++pending >= FactBatchSize)
+                {
                     await FlushAsync();
+                }
             }
         }
 
@@ -361,7 +387,9 @@ public static class Writes
         );
 
         if (pending > 0)
+        {
             await FlushAsync();
+        }
     }
 
     private static void AddSourceFiles(RigDbContext context, string runId, AnalysisResult result)

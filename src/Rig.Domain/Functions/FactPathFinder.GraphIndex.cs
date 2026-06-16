@@ -40,19 +40,31 @@ public static partial class FactPathFinder
             // registrar reaches the callback synchronously, and the callback wouldn't surface as a
             // background origin via `--roots`). --async keeps the link.
             if (mode == TraversalMode.SyncCut && edge.Kind == EdgeKinds.Handoff)
+            {
                 continue;
+            }
 
             if (!rev.Callers.TryGetValue(edge.Callee, out var list))
+            {
                 rev.Callers[edge.Callee] = list = new List<string>();
+            }
+
             list.Add(edge.Caller);
 
             if (!rev.ReceiverProfileByCallee.TryGetValue(edge.Callee, out var profile))
+            {
                 rev.ReceiverProfileByCallee[edge.Callee] = profile = new ReceiverProfile();
+            }
+
             var stripped = string.IsNullOrEmpty(edge.ReceiverType) ? null : ReceiverToStrippedTypeId(edge.ReceiverType!);
             if (stripped is null)
+            {
                 profile.AnyUnreliable = true; // null/unresolved receiver — can dispatch anywhere (CHA)
+            }
             else
+            {
                 profile.StrippedReceivers.Add(stripped);
+            }
         }
 
         // Reverse dispatch = the forward CHA dispatch edges, inverted. (The receiver-blind superset;
@@ -62,7 +74,10 @@ public static partial class FactPathFinder
         foreach (var target in DispatchTargets(node, index, receiverType: null))
         {
             if (!rev.ReverseDispatch.TryGetValue(target.Node, out var sources))
+            {
                 rev.ReverseDispatch[target.Node] = sources = new List<string>();
+            }
+
             sources.Add(node);
         }
         return rev;
@@ -78,9 +93,15 @@ public static partial class FactPathFinder
         var cutting = index.ApplyTraversalCuts;
 
         if (rev.Callers.TryGetValue(current, out var direct))
+        {
             foreach (var c in direct)
+            {
                 if (!cutting || !index.IsTraversalCut(c))
+                {
                     yield return c;
+                }
+            }
+        }
 
         // Reverse dispatch: every source method whose (forward) dispatch resolves to `current` —
         // its interface declaration, base virtual, or transitive base of the override chain. Narrowed:
@@ -92,8 +113,12 @@ public static partial class FactPathFinder
             var parsed = ParseMethod(current);
             var typeId = parsed?.TypeId;
             foreach (var s in sources)
+            {
                 if ((!cutting || !index.IsTraversalCut(s)) && (typeId is null || ReverseDispatchReaches(s, typeId, index, rev)))
+                {
                     yield return s;
+                }
+            }
         }
     }
 
@@ -105,11 +130,19 @@ public static partial class FactPathFinder
     private static bool ReverseDispatchReaches(string baseMethod, string overrideTypeId, GraphIndex index, ReverseMaps rev)
     {
         if (!rev.NarrowDispatch)
+        {
             return true;
+        }
+
         if (!rev.ReceiverProfileByCallee.TryGetValue(baseMethod, out var profile))
+        {
             return true; // no call edges target it (framework-invoked) — don't narrow it away
+        }
+
         if (profile.AnyUnreliable || profile.StrippedReceivers.Count == 0)
+        {
             return true;
+        }
 
         var overrideStripped = TypeClosure.StripGeneric(overrideTypeId);
         foreach (var r in profile.StrippedReceivers)
@@ -118,11 +151,19 @@ public static partial class FactPathFinder
             // descendant of R (R is a base typing of the runtime object), or R is a descendant of
             // overrideType (the override lives on a supertype of R's static type — the CLR walks up).
             if (string.Equals(r, overrideStripped, StringComparison.Ordinal))
+            {
                 return true;
+            }
+
             if (Descendants(r, index).Contains(overrideTypeId) || DescendantsContainStripped(r, overrideStripped, index))
+            {
                 return true;
+            }
+
             if (Descendants(overrideTypeId, index).Contains(r) || DescendantsContainStripped(overrideTypeId, r, index))
+            {
                 return true;
+            }
         }
         return false;
     }
@@ -182,10 +223,18 @@ public static partial class FactPathFinder
         public bool IsTraversalCut(string symbolId)
         {
             if (TraversalCutRules is null)
+            {
                 return false;
+            }
+
             foreach (var rule in TraversalCutRules)
+            {
                 if (rule.IsMatch(symbolId))
+                {
                     return true;
+                }
+            }
+
             return false;
         }
 
@@ -201,8 +250,13 @@ public static partial class FactPathFinder
         public bool IsContextInterface(string typeId)
         {
             foreach (var pattern in ContextInterfacePatterns)
+            {
                 if (typeId.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
                     return true;
+                }
+            }
+
             return false;
         }
     }
@@ -213,7 +267,10 @@ public static partial class FactPathFinder
         foreach (var edge in graph.CallEdges)
         {
             if (!index.Adjacency.TryGetValue(edge.Caller, out var list))
+            {
                 index.Adjacency[edge.Caller] = list = new List<CallEdge>();
+            }
+
             list.Add(edge);
             index.Nodes.Add(edge.Caller);
             index.Nodes.Add(edge.Callee);
@@ -228,11 +285,11 @@ public static partial class FactPathFinder
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
         index.ImplsByInterface = graph
             .ImplementsEdges.GroupBy(e => e.InterfaceType, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.Select(e => e.ImplType).Distinct().ToList(), StringComparer.Ordinal);
+            .ToDictionary(g => g.Key, g => g.Select(e => e.ImplType).Distinct(StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
         index.ImplsByErrorInterfaceName = graph
             .ImplementsEdges.Where(e => e.InterfaceType.StartsWith("!:", StringComparison.Ordinal))
             .GroupBy(e => SimpleTypeName(e.InterfaceType), StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.Select(e => e.ImplType).Distinct().ToList(), StringComparer.Ordinal);
+            .ToDictionary(g => g.Key, g => g.Select(e => e.ImplType).Distinct(StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
         index.StrippedBaseEdges = TypeClosure.BuildBaseEdgeLookup(
             (graph.BaseEdges ?? new List<BaseEdge>()).Select(e => (e.SubType, e.BaseType))
         );
@@ -248,12 +305,20 @@ public static partial class FactPathFinder
         foreach (var fact in graph.MinedDispatch ?? new List<DispatchFact>())
         {
             if (!index.MinedDispatchBySource.TryGetValue(fact.SourceMember, out var list))
+            {
                 index.MinedDispatchBySource[fact.SourceMember] = list = new List<(string, string)>();
+            }
+
             if (!list.Contains((fact.TargetMember, fact.Kind)))
+            {
                 list.Add((fact.TargetMember, fact.Kind));
+            }
         }
         foreach (var method in graph.Methods)
+        {
             index.Nodes.Add(method.SymbolId);
+        }
+
         return index;
     }
 
@@ -264,13 +329,19 @@ public static partial class FactPathFinder
     private static void BuildContextFamilies(GraphIndex index, FactGraphData graph, IReadOnlyList<FactContextDispatchRule>? rules)
     {
         if (rules is not { Count: > 0 })
+        {
             return;
+        }
+
         index.ContextInterfacePatterns = rules.Select(r => r.Interface).Distinct(StringComparer.Ordinal).ToArray();
 
         void Bind(string controllerKey, string stateTypeId)
         {
             if (!index.StateFamilyByController.TryGetValue(controllerKey, out var family))
+            {
                 index.StateFamilyByController[controllerKey] = family = new HashSet<string>(StringComparer.Ordinal);
+            }
+
             family.Add(stateTypeId);
         }
 
@@ -278,14 +349,22 @@ public static partial class FactPathFinder
         foreach (var rule in rules)
         {
             if (edge.BaseType.IndexOf(rule.BindingBase, StringComparison.OrdinalIgnoreCase) < 0)
+            {
                 continue;
+            }
+
             var contextArg = ExtractGenericArg(edge.BaseType);
             if (contextArg is null)
+            {
                 continue;
+            }
+
             var controllerKey = NormType(contextArg);
             Bind(controllerKey, NormType(edge.SubType));
             foreach (var descendant in Descendants(edge.SubType, index))
+            {
                 Bind(controllerKey, NormType(descendant));
+            }
         }
     }
 
@@ -304,14 +383,21 @@ public static partial class FactPathFinder
     {
         var open = typeId.IndexOf('{');
         if (open < 0)
+        {
             return null;
+        }
+
         var depth = 0;
         for (var i = open; i < typeId.Length; i++)
         {
             if (typeId[i] == '{')
+            {
                 depth++;
+            }
             else if (typeId[i] == '}' && --depth == 0)
+            {
                 return typeId.Substring(open + 1, i - open - 1).Trim();
+            }
         }
         return null;
     }

@@ -85,7 +85,9 @@ public sealed class QueryCacheTests
         const int depth = 200;
         TraceNode node = new("M:Leaf", EdgeKinds.Invocation, null, null, Children: []);
         for (var i = depth; i > 0; i--)
+        {
             node = new($"M:N{i}", EdgeKinds.Invocation, null, null, Children: [node]);
+        }
 
         var blob = TreeCacheCodec.Encode(new TreeCachePayload([node], []));
         var back = TreeCacheCodec.Decode(blob);
@@ -93,8 +95,13 @@ public sealed class QueryCacheTests
         back.ShouldNotBeNull();
         var d = 0;
         for (var n = back.Forest[0]; ; n = n.Children[0], d++)
+        {
             if (n.Children.Count == 0)
+            {
                 break;
+            }
+        }
+
         d.ShouldBe(depth);
     }
 
@@ -162,11 +169,15 @@ public sealed class QueryCacheTests
 
             // Same store identity → entry survives a reopen.
             using (var reopened = QueryCache.Open(dir, "store-A").ShouldNotBeNull())
+            {
                 reopened.Get("key1").ShouldBe(blob);
+            }
 
             // A reindex changes the store identity → Open purges the stale entry (auto-invalidation).
             using (var afterReindex = QueryCache.Open(dir, "store-B").ShouldNotBeNull())
+            {
                 afterReindex.Get("key1").ShouldBeNull();
+            }
         }
         finally
         {

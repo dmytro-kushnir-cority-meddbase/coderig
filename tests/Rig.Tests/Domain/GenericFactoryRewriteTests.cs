@@ -171,7 +171,9 @@ public sealed class GenericFactoryRewriteTests
         {
             ids.Add(n.SymbolId);
             foreach (var c in n.Children)
+            {
                 Walk(c);
+            }
         }
         Walk(root);
 

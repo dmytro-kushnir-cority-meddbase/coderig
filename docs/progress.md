@@ -193,7 +193,7 @@ Status: `verified`
 - Default trace output lists entrypoints whose persisted callgraph contains the target symbol.
 - `--paths` builds reverse edges in memory per invocation, prints upstream paths to the target, then prints downstream calls, boundaries, and effects from the target.
 - No reverse graph or transitive reachability table was added; trace is derived from persisted forward callgraph rows.
-- Documented trace complexity and future indexing thresholds in `docs/sqlite-persistence-notes.md`.
+- Documented trace complexity and future indexing thresholds (was `docs/sqlite-persistence-notes.md`, since removed — superseded by `query-strategy.md` + `incremental-indexing.md`; recover original from git history).
 - Verification: `dotnet build RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false -warnaserror`; `dotnet test RuntimeIntelligenceGraph.slnx /p:UseSharedCompilation=false`.
 
 ### Focused fast test expansion

@@ -31,7 +31,10 @@ public static class TreeCacheCodec
         var json = JsonSerializer.SerializeToUtf8Bytes(payload, Context.TreeCachePayload);
         using var output = new MemoryStream();
         using (var gzip = new GZipStream(output, CompressionLevel.Optimal))
+        {
             gzip.Write(json, 0, json.Length);
+        }
+
         return output.ToArray();
     }
 
@@ -78,7 +81,10 @@ public static class EpSiteCacheCodec
         var json = JsonSerializer.SerializeToUtf8Bytes(payload, Context.EpSiteCachePayload);
         using var output = new MemoryStream();
         using (var gzip = new GZipStream(output, CompressionLevel.Optimal))
+        {
             gzip.Write(json, 0, json.Length);
+        }
+
         return output.ToArray();
     }
 
@@ -94,10 +100,16 @@ public static class EpSiteCacheCodec
             json.Position = 0;
             var payload = JsonSerializer.Deserialize(json, Context.EpSiteCachePayload);
             if (payload is null)
+            {
                 return null;
+            }
+
             var map = new Dictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>();
             foreach (var s in payload.Sites)
+            {
                 map[(s.File, s.Line)] = (s.Kind, s.Requires);
+            }
+
             return map;
         }
         catch (Exception ex) when (ex is InvalidDataException or JsonException or NotSupportedException)
@@ -137,7 +149,10 @@ public static class RenderSidecarCodec
         var json = JsonSerializer.SerializeToUtf8Bytes(payload, Context.RenderSidecarPayload);
         using var output = new MemoryStream();
         using (var gzip = new GZipStream(output, CompressionLevel.Optimal))
+        {
             gzip.Write(json, 0, json.Length);
+        }
+
         return output.ToArray();
     }
 
@@ -155,11 +170,17 @@ public static class RenderSidecarCodec
             json.Position = 0;
             var payload = JsonSerializer.Deserialize(json, Context.RenderSidecarPayload);
             if (payload is null)
+            {
                 return null;
+            }
+
             var seam = payload.SeamEffects.ToDictionary(kv => kv.Key, kv => kv.Value.ToList(), StringComparer.Ordinal);
             var loc = new Dictionary<string, (string? File, int Line)>(StringComparer.Ordinal);
             foreach (var e in payload.Locations)
+            {
                 loc[e.Symbol] = (e.File, e.Line);
+            }
+
             return (seam, loc);
         }
         catch (Exception ex) when (ex is InvalidDataException or JsonException or NotSupportedException)

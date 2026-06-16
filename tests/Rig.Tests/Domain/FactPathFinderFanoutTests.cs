@@ -11,7 +11,7 @@ public sealed class FactPathFinderFanoutTests
 
     private static FactGraphData Graph(params CallEdge[] edges)
     {
-        var nodes = edges.SelectMany(e => new[] { e.Caller, e.Callee }).Distinct().Select(M).ToArray();
+        var nodes = edges.SelectMany(e => new[] { e.Caller, e.Callee }).Distinct(StringComparer.Ordinal).Select(M).ToArray();
         return new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), nodes);
     }
 

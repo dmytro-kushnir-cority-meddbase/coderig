@@ -36,7 +36,7 @@ public static class FactProjection
 
         var types = result
             .Symbols!.Where(s => s.Kind == "type")
-            .GroupBy(t => t.SymbolId)
+            .GroupBy(t => t.SymbolId, StringComparer.Ordinal)
             .Select(g => g.First())
             .Select(t => new TypeSymbol(
                 SymbolId: t.SymbolId,
@@ -103,7 +103,7 @@ public static class FactProjection
 
         var methods = result
             .Symbols!.Where(s => s.Kind == "method")
-            .GroupBy(m => m.SymbolId)
+            .GroupBy(m => m.SymbolId, StringComparer.Ordinal)
             .Select(g => g.First())
             .Select(m => new MethodRef(
                 SymbolId: m.SymbolId,

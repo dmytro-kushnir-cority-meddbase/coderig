@@ -33,7 +33,9 @@ public static class HandoffClassifier
     public static IReadOnlyList<CallEdge> Classify(IReadOnlyList<CallEdge> edges, IReadOnlyList<FactHandoffRule>? rules)
     {
         if (rules is null || rules.Count == 0)
+        {
             return edges;
+        }
 
         // Co-location fallback index: the consumer targets present at each call SITE (Caller, FilePath,
         // Line) — the invocation/ctor edges a same-line method-group could be an argument to. Only
@@ -42,10 +44,16 @@ public static class HandoffClassifier
         foreach (var e in edges)
         {
             if (e.Kind is not (EdgeKinds.Invocation or EdgeKinds.Ctor))
+            {
                 continue;
+            }
+
             var key = (e.Caller, e.FilePath, e.Line);
             if (!consumersBySite.TryGetValue(key, out var list))
+            {
                 consumersBySite[key] = list = new List<string>();
+            }
+
             list.Add(e.Callee);
         }
 
@@ -76,12 +84,17 @@ public static class HandoffClassifier
     )
     {
         if (!consumersBySite.TryGetValue(site, out var consumers))
+        {
             return null;
+        }
+
         foreach (var consumer in consumers)
         {
             var rule = Match(consumer, rules);
             if (rule is not null)
+            {
                 return rule;
+            }
         }
         return null;
     }
@@ -94,18 +107,31 @@ public static class HandoffClassifier
         var normalized = StripArity(consumerDocId);
         foreach (var rule in rules)
         foreach (var pattern in rule.ConsumerPatterns)
+        {
             if (normalized.IndexOf(pattern, StringComparison.Ordinal) >= 0)
+            {
                 return rule;
+            }
+        }
+
         return null;
     }
 
     public static FactHandoffRule? ById(string? dispatcherId, IReadOnlyList<FactHandoffRule> rules)
     {
         if (dispatcherId is null)
+        {
             return null;
+        }
+
         foreach (var rule in rules)
+        {
             if (string.Equals(rule.Id, dispatcherId, StringComparison.Ordinal))
+            {
                 return rule;
+            }
+        }
+
         return null;
     }
 
@@ -140,7 +166,10 @@ public static class HandoffClassifier
             var key = (e.Callee, e.Caller, e.FilePath, e.Line);
             // A handoff classification wins over an unclassified duplicate at the same key.
             if (byKey.TryGetValue(key, out var existing) && existing.Dispatcher is not null)
+            {
                 continue;
+            }
+
             byKey[key] = new HandoffEntryPoint(e.Callee, e.Caller, e.FilePath, e.Line, dispatcher, kind, requires);
         }
 
@@ -157,7 +186,10 @@ public static class HandoffClassifier
     private static string StripArity(string docId)
     {
         if (docId.IndexOf('`') < 0)
+        {
             return docId;
+        }
+
         var sb = new System.Text.StringBuilder(docId.Length);
         for (var i = 0; i < docId.Length; i++)
         {
@@ -165,7 +197,10 @@ public static class HandoffClassifier
             {
                 i++;
                 while (i < docId.Length && char.IsDigit(docId[i]))
+                {
                     i++;
+                }
+
                 i--;
                 continue;
             }

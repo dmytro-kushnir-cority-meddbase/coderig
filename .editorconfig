@@ -1,5 +1,17 @@
 root = true
 
 [*.cs]
+dotnet_diagnostic.MA0004.severity = none
+dotnet_diagnostic.MA0042.severity = none
+dotnet_diagnostic.MA0016.severity = none
+dotnet_diagnostic.MA0048.severity = none
+dotnet_diagnostic.MA0051.severity = none
+dotnet_diagnostic.MA0006.severity = none
+dotnet_diagnostic.MA0009.severity = none
 dotnet_diagnostic.CS8602.severity = error
 dotnet_diagnostic.CS8604.severity = error
+
+resharper_csharp_arguments_literal_style = named_for_same_type_adjacent
+resharper_csharp_arguments_other_style = named_for_same_type_adjacent
+csharp_prefer_braces = true:suggestion
+resharper_csharp_blank_lines_after_block_statements = 1

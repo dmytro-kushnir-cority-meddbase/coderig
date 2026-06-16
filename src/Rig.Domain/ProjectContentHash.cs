@@ -23,7 +23,7 @@ public static class ProjectContentHash
         var perItem = items
             .Select(item => ToHex(sha.ComputeHash(Encoding.UTF8.GetBytes(item))))
             .OrderBy(hash => hash, StringComparer.Ordinal);
-        var combined = string.Join("\n", perItem);
+        var combined = string.Join('\n', perItem);
         return ToHex(sha.ComputeHash(Encoding.UTF8.GetBytes(combined)));
     }
 
@@ -31,7 +31,10 @@ public static class ProjectContentHash
     {
         var builder = new StringBuilder(bytes.Length * 2);
         foreach (var b in bytes)
+        {
             builder.Append(b.ToString("x2"));
+        }
+
         return builder.ToString();
     }
 }

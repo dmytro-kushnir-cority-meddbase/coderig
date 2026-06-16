@@ -2,8 +2,15 @@
 
 Two intertwined topics: (1) the concrete "OOP zoo" of background mechanisms in the MedDBase monolith and
 how to detect their entry points; (2) the deeper model problem — rig is a SYNCHRONOUS reachability tool and
-models async handoffs as synchronous call edges. This doc is the brief for both the near-term custom rules
-and the larger async-flow design.
+models async handoffs as synchronous call edges. This doc is the living model + the phased roadmap.
+
+> **STATUS 2026-06-16.** Phases 0–3 of the roadmap below (L1 entry-point rules, handoff edge-kind
+> classification, sync-cut/`--async` traversal, origin EPs) have **SHIPPED** via the deferred-delegate work
+> (#18–21: Rx-subscribe handoff, lambda identity, stored delegate-field seam). Phase 4 (extractor facts:
+> `DelegateConsumer`/`InLambda`/`NotAwaited`) is **partly done** — `DelegateConsumer` + the delegate-field
+> seam landed; `NotAwaited`/fire-and-forget tagging is not. Phase 5 (message report-only) is open. The
+> original standalone phased-plan doc and the P1–3 build spec were merged into this file and removed
+> (recover from git history if needed); their substance is folded into "Phased plan & ROI" below.
 
 ## Central runtime truth
 All background work funnels through one boundary: `IBackground.AddProcess(IBackgroundProcess)`
@@ -71,9 +78,29 @@ no re-index — rules reload per query): `IBackgroundProcess`→`Process`, `Serv
 →`Startup`, RepeatingBPS/BPS subclasses, `WorkflowMasterBase`→`RegisterEvents`. The delegate-callback
 linkage (L2) and async edge model are the larger task below.
 
-## Larger task (Fable 5 — PLAN + ROI first, do not one-shot)
-The `handoff` edge kind, execution-origin roots, sync-cut/`--async` traversal modes, concurrency
-observations, lambda extractor support, message-boundary handling. Requires thoughtful phased execution.
+## Phased plan & ROI (folded from the archived async-flow plan)
+The model fix reuses the receiver-narrowing precedent: facts are immutable/rule-agnostic, derived tables
+rebuild cheaply via `rig graph` (no Roslyn), so anything expressible as a join over existing facts needs
+**no re-index**. Bound = sound CHA superset; precision = in-memory; equivalence test asserts
+`CHA-oracle == SQL` per mode and `narrowed ⊆ SQL`. The handoff cut keeps handoff edges in the superset and
+sync-cut is a filtered traversal. **Not every methodGroup is a handoff** (`list.ForEach(Foo)` is
+synchronous) — the fix splits *dispatcher-consumed* methodGroups (→ handoff, cut) from the rest, never the
+reverse, or recall collapses.
+
+| Phase | Effort | Re-index | Value | Status |
+|---|---|---|---|---|
+| **0. L1 entry-point rules** | S | No | dead roots + EP labels (M3/M4/M7b + Echo Inbox + WorkflowMaster) | ✅ shipped |
+| **1. Handoff classification** (co-location + `handoffDispatchers`) | M | No (re-graph) | splits the 4,503 methodGroup firehose; classifies timer/actor/event callbacks | ✅ shipped (#18–21) |
+| **2. Sync-cut default + `--async`** | L | No | the core fix — kills false synchronous reach; `callers --roots` shows true origins | ✅ shipped |
+| **3. Origin EPs + `async_handoff`/`cross_thread`** | M | No | classified origins as `from` patterns; effect tags | ✅ shipped |
+| **4. Extractor facts** (`DelegateConsumer`/`InLambda`/`NotAwaited`) | L | **Yes** | exact classification; `event +=`; lambdas; `fire_and_forget` | ◑ partial (DelegateConsumer + field seam done; NotAwaited not) |
+| **5. Message report** (no traversable edges) | S | No | orientation at uncrossable boundaries (M6 `.tell`/queues) | ☐ open |
+
+**Design axes (per the original plan, retained for the open work):** lambdas via `InLambda` flag +
+single-method-group-call heuristic before full synthetic symbols; message/actor sender→handler is
+**report-only** (candidate handlers by `FirstArgumentType` ⋈ signature, NO traversable edges — routing is
+unsound). **Permanent no:** interleaving/races/happens-before/thread identity (outside static reach — tag,
+never order); message-type→handler traversable edges; a third traversal mode.
 
 ## Key files
 - `…/MedDBase.Application.Core.Interfaces/IBackground.cs` — `IBackgroundProcess`/`IBackground`

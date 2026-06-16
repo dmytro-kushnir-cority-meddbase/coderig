@@ -21,7 +21,9 @@ public sealed class EntryPointSiteStoreTests
             };
 
             await using (var write = new RigDbContext(dbPath, pooling: false))
+            {
                 await EntryPointSiteStore.PersistAsync(write, sites, "hash-A");
+            }
 
             await using (var read = new RigDbContext(dbPath, pooling: false))
             {

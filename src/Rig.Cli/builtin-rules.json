@@ -1316,6 +1316,61 @@
       "reason": "legacy_asmx_soap_invoke: any generated ASMX proxy's wrapper body calls the inherited SoapHttpClientProtocol.Invoke(\"operation\", args); the first string literal IS the SOAP operation name. One base-type rule covers every WSDL proxy (Healthcode + Labs/Mirth/LabsServer), where per-method project rules only cover the ones explicitly enumerated."
     },
     {
+      "provider": "actor",
+      "operation": "spawn",
+      "methods": [ "spawn", "spawnUnit", "spawnMany" ],
+      "declaringTypes": [ "Echo.Process" ],
+      "resource": "argument_name",
+      "argumentIndex": 0,
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "echo_actor_spawn: Echo.Process.spawn<…>(ProcessName Name, …) creates an actor named by its FIRST argument. The name is referenced through a static-readonly ProcessName/ProcessId field in a per-service ProcessDns/EchoConfig.ProcessNames table — NOT a compile-time const — so argument_name (the member/identifier path, e.g. ProcessDns.AccountService) attributes the spawn to the actual process rather than the declaring type, which would collapse every spawn to one node. (string_argument would miss these: static-readonly is not const.)"
+    },
+    {
+      "provider": "actor",
+      "operation": "register",
+      "methods": [ "register" ],
+      "declaringTypes": [ "Echo.Process" ],
+      "resource": "argument_name",
+      "argumentIndex": 0,
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "echo_actor_register: Echo.Process.register(ProcessName name, …) binds a name to a process; arg 0 is the registered name (a ProcessName field path). Same argument_name rationale as spawn."
+    },
+    {
+      "provider": "actor",
+      "operation": "tell",
+      "methods": [ "tell", "tellSystem" ],
+      "declaringTypes": [ "Echo.Process" ],
+      "resource": "argument_name",
+      "argumentIndex": 0,
+      "confidence": "medium",
+      "basis": "compilation",
+      "reason": "echo_actor_tell: Echo.Process.tell(ProcessId pid, msg, …) / tellSystem(ProcessId pid, …) fire-and-forget sends to the actor at arg 0. The routing target is usually a ProcessId DNS field (tell(ProcessDns.AccountService, msg)) → argument_name names the destination; medium confidence because a bare local-var pid resolves only to the variable name, not the process. Implicit-target variants (tellSelf/tellChildren/tellParent) are excluded: their arg 0 is the MESSAGE, not a ProcessId."
+    },
+    {
+      "provider": "actor",
+      "operation": "ask",
+      "methods": [ "ask", "askAsync", "askIfAlive" ],
+      "declaringTypes": [ "Echo.Process" ],
+      "resource": "argument_name",
+      "argumentIndex": 0,
+      "confidence": "medium",
+      "basis": "compilation",
+      "reason": "echo_actor_ask: Echo.Process.ask<T>(ProcessId pid, msg, …) / askAsync / askIfAlive request-response to the actor at arg 0. Same routing-target rationale as tell; implicit-target askChildren/askParent excluded (arg 0 is the message)."
+    },
+    {
+      "provider": "http",
+      "operation": "route",
+      "methods": [ "AppendPathSegment", "AppendPathSegments" ],
+      "declaringTypes": [ "Flurl.GeneratedExtensions", "Flurl.Url" ],
+      "resource": "string_argument",
+      "argumentIndex": 0,
+      "confidence": "medium",
+      "basis": "compilation",
+      "reason": "flurl_url_route: Flurl URL building — AppendPathSegment(segment, …) / AppendPathSegments(params …). The path-segment literal at arg 0 (the extension receiver is the URL, NOT in the syntactic arg list) names the route being constructed, scoping the http effect to the endpoint (\"submit\", \"enterprise-api\") instead of the generic Flurl declaring type. Medium: URL building is not the I/O itself, and only the first segment of a multi-segment append is captured."
+    },
+    {
       "provider": "config",
       "operation": "read",
       "methods": [ "GetSection", "GetValue", "GetConnectionString" ],

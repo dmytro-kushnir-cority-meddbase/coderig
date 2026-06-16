@@ -19,7 +19,9 @@ internal static class DependencyGraph
         foreach (var projPath in projectPaths)
         {
             if (!File.Exists(projPath))
+            {
                 continue;
+            }
 
             try
             {
@@ -33,6 +35,37 @@ internal static class DependencyGraph
         }
 
         return graph;
+    }
+
+    // Transitive closure (BFS) of `entry` over a project dependency graph: the entry plus every project
+    // reachable by following ProjectReference edges. The single "everything reachable from a root" walk
+    // shared by `index --from` and deployment attribution (which previously each open-coded the same
+    // visited/queue loop). Paths are matched case-insensitively (the graph's key comparer).
+    public static HashSet<string> TransitiveClosure(string entry, IReadOnlyDictionary<string, List<string>> graph)
+    {
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var queue = new Queue<string>();
+        queue.Enqueue(entry);
+        while (queue.Count > 0)
+        {
+            var p = queue.Dequeue();
+            if (!visited.Add(p))
+            {
+                continue;
+            }
+
+            if (graph.TryGetValue(p, out var deps))
+            {
+                foreach (var d in deps)
+                {
+                    if (!visited.Contains(d))
+                    {
+                        queue.Enqueue(d);
+                    }
+                }
+            }
+        }
+        return visited;
     }
 
     private static List<string> ParseProjectReferences(string projPath)
@@ -53,10 +86,14 @@ internal static class DependencyGraph
         var dir = Path.GetDirectoryName(solutionPath) ?? Directory.GetCurrentDirectory();
 
         if (ext == ".slnx")
+        {
             return ParseSlnx(solutionPath, dir);
+        }
 
         if (ext is ".sln")
+        {
             return ParseSln(await File.ReadAllTextAsync(solutionPath), dir);
+        }
 
         if (ext is ".slnf")
         {
@@ -66,13 +103,15 @@ internal static class DependencyGraph
         }
 
         if (ext is ".csproj")
+        {
             return [solutionPath];
+        }
 
         log?.WriteLine($"[mine] Warning: unrecognised solution format {ext}");
         return [];
     }
 
-    private static IReadOnlyList<string> ParseSlnx(string slnxPath, string baseDir)
+    private static string[] ParseSlnx(string slnxPath, string baseDir)
     {
         var doc = XDocument.Load(slnxPath);
         return doc.Descendants()
@@ -83,36 +122,49 @@ internal static class DependencyGraph
             .ToArray();
     }
 
-    private static IReadOnlyList<string> ParseSln(string content, string baseDir)
+    private static List<string> ParseSln(string content, string baseDir)
     {
         var result = new List<string>();
         foreach (var line in content.Split('\n'))
         {
             var trimmed = line.Trim();
             if (!trimmed.StartsWith("Project(", StringComparison.Ordinal))
+            {
                 continue;
+            }
+
             var parts = trimmed.Split('"');
             if (parts.Length < 6)
+            {
                 continue;
+            }
+
             var projRelPath = parts[5].Trim();
             if (!projRelPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+            {
                 continue;
+            }
+
             result.Add(Path.GetFullPath(Path.Combine(baseDir, projRelPath.Replace('\\', Path.DirectorySeparatorChar))));
         }
         return result;
     }
 
-    private static IReadOnlyList<string> ParseSlnf(string json, string baseDir)
+    private static string[] ParseSlnf(string json, string baseDir)
     {
         // Minimal JSON parse — extract paths from "projects":["...","..."]
         var idx = json.IndexOf("\"projects\"", StringComparison.Ordinal);
         if (idx < 0)
+        {
             return [];
+        }
 
         var start = json.IndexOf('[', idx);
         var end = json.IndexOf(']', start);
         if (start < 0 || end < 0)
+        {
             return [];
+        }
 
         var segment = json[(start + 1)..end];
         return segment

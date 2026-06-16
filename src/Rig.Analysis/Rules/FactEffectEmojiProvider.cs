@@ -16,9 +16,15 @@ public static class FactEffectEmojiProvider
     public static string For(IReadOnlyDictionary<string, string> map, string provider, string operation)
     {
         if (map.TryGetValue($"{provider}:{operation}", out var glyph))
+        {
             return glyph;
+        }
+
         if (map.TryGetValue(provider, out glyph))
+        {
             return glyph;
+        }
+
         return "⚡";
     }
 }

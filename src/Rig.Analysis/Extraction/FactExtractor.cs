@@ -31,7 +31,9 @@ internal static class FactExtractor
         {
             var symbol = model.GetDeclaredSymbol(decl);
             if (symbol is null)
+            {
                 continue;
+            }
 
             // Field/event declarations declare one symbol per variable; handle below.
             if (decl is BaseFieldDeclarationSyntax fieldDecl)
@@ -39,14 +41,18 @@ internal static class FactExtractor
                 foreach (var variable in fieldDecl.Declaration.Variables)
                 {
                     if (model.GetDeclaredSymbol(variable) is { } fieldSymbol)
+                    {
                         AddSymbol(symbols, fieldSymbol, tree, variable);
+                    }
                 }
                 continue;
             }
 
             var docId = symbol.GetDocumentationCommentId();
             if (docId is null)
+            {
                 continue;
+            }
 
             AddSymbol(symbols, symbol, tree, decl);
 
@@ -66,10 +72,15 @@ internal static class FactExtractor
                 foreach (var accessor in Accessors(property))
                 {
                     if (!HasAccessorBody(accessor))
+                    {
                         continue;
+                    }
+
                     AddSymbol(symbols, accessor, tree, AccessorNode(accessor) ?? decl);
                     if (accessor.OverriddenMethod is { } overriddenAccessor)
+                    {
                         AddDispatchFact(dispatch, dispatchSeen, overriddenAccessor, accessor, DispatchKinds.Override);
+                    }
                 }
             }
 
@@ -77,7 +88,9 @@ internal static class FactExtractor
             // guessing). The transitive chain (A.M ← B.M ← C.M) is reconstructed by forward closure at
             // query time, so only the immediate hop is stored.
             if (symbol is IMethodSymbol { OverriddenMethod: { } overridden } overrideMethod)
+            {
                 AddDispatchFact(dispatch, dispatchSeen, overridden, overrideMethod, DispatchKinds.Override);
+            }
         }
 
         // --- Lambda identity (18b): synthesize a symbol + handoff edge for each argument-passed lambda
@@ -96,11 +109,15 @@ internal static class FactExtractor
             var symbolInfo = model.GetSymbolInfo(name);
             var target = symbolInfo.Symbol ?? symbolInfo.CandidateSymbols.FirstOrDefault();
             if (target is null || target is INamespaceSymbol)
+            {
                 continue;
+            }
 
             var refKind = ClassifyReference(name, target);
             if (refKind is null)
+            {
                 continue;
+            }
 
             var invocation = refKind == RefKinds.Invocation ? InvocationOf(name) : null;
             var receiverType = refKind == RefKinds.Invocation ? ReceiverTypeOf(name, model) : null;
@@ -140,7 +157,9 @@ internal static class FactExtractor
                     resolvedTarget.GetDocumentationCommentId() is { } boundId
                     && dispatchSeen.Add((slot, boundId, DispatchKinds.DelegateBind))
                 )
+                {
                     dispatch.Add(new DispatchFact(slot, boundId, DispatchKinds.DelegateBind));
+                }
             }
 
             // A property/indexer access is, semantically, a call to its get_/set_ accessor. The
@@ -148,7 +167,9 @@ internal static class FactExtractor
             // accessor so reach walks its effects (a setter that validates/persists, a lazy getter that
             // fetches). See AddAccessorInvocations for the body-only selectivity.
             if (target is IPropertySymbol propertyAccess && refKind is RefKinds.Read or RefKinds.Write)
+            {
                 AddAccessorInvocations(references, propertyAccess, name, model, tree, lambdaIds);
+            }
         }
 
         // --- Object creations -> ctor refs ---
@@ -159,7 +180,9 @@ internal static class FactExtractor
         foreach (var creation in root.DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>())
         {
             if (model.GetSymbolInfo(creation).Symbol is IMethodSymbol { MethodKind: MethodKind.Constructor } ctor)
+            {
                 AddReference(references, ctor, RefKinds.Ctor, EnclosingSymbolId(creation, model, lambdaIds), tree, creation);
+            }
         }
 
         // --- 18c: delegate-slot INVOCATIONS -> an invocation edge to the SLOT ---
@@ -170,7 +193,10 @@ internal static class FactExtractor
         foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
             if (DelegateSlotDocId(model.GetSymbolInfo(invocation.Expression).Symbol) is not { } slot)
+            {
                 continue;
+            }
+
             references.Add(
                 new ReferenceFact(
                     TargetSymbolId: slot,
@@ -194,7 +220,10 @@ internal static class FactExtractor
         {
             var type = model.GetTypeInfo(thrown).Type;
             if (type is null or IErrorTypeSymbol)
+            {
                 continue;
+            }
+
             AddReference(
                 references,
                 type,
@@ -237,13 +266,17 @@ internal static class FactExtractor
     {
         var locks = root.DescendantNodes().OfType<LockStatementSyntax>().ToArray();
         if (locks.Length == 0)
+        {
             return;
+        }
 
         var monitor = model.Compilation.GetTypeByMetadataName("System.Threading.Monitor");
         var enter = monitor?.GetMembers("Enter").OfType<IMethodSymbol>().FirstOrDefault();
         var exit = monitor?.GetMembers("Exit").OfType<IMethodSymbol>().FirstOrDefault();
         if (enter is null || exit is null)
+        {
             return; // no Monitor in this compilation's references — nothing to lower against.
+        }
 
         foreach (var lockStmt in locks)
         {
@@ -292,7 +325,9 @@ internal static class FactExtractor
     )
     {
         if (type.TypeKind is not (TypeKind.Class or TypeKind.Struct))
+        {
             return;
+        }
 
         foreach (var iface in type.AllInterfaces)
         foreach (var member in iface.GetMembers())
@@ -301,7 +336,10 @@ internal static class FactExtractor
             {
                 case IMethodSymbol { MethodKind: MethodKind.Ordinary } interfaceMethod:
                     if (type.FindImplementationForInterfaceMember(interfaceMethod) is IMethodSymbol impl)
+                    {
                         AddDispatchFact(dispatch, seen, interfaceMethod, impl, DispatchKinds.Impl);
+                    }
+
                     break;
 
                 // Interface PROPERTY members resolve to the impl property's accessors — the same typed
@@ -326,7 +364,9 @@ internal static class FactExtractor
     )
     {
         if (interfaceAccessor is not null && implAccessor is not null && HasAccessorBody(implAccessor))
+        {
             AddDispatchFact(dispatch, seen, interfaceAccessor, implAccessor, DispatchKinds.Impl);
+        }
     }
 
     // Emits one deduped (Source, Target, Kind) dispatch fact keyed by OriginalDefinition DocIDs (the
@@ -343,22 +383,30 @@ internal static class FactExtractor
         var resolvedTarget = target.OriginalDefinition;
         // Only first-party targets become graph nodes; a metadata-only impl/override can't carry facts.
         if (!resolvedTarget.Locations.Any(location => location.IsInSource))
+        {
             return;
+        }
 
         var sourceId = source.OriginalDefinition.GetDocumentationCommentId();
         var targetId = resolvedTarget.GetDocumentationCommentId();
         if (sourceId is null || targetId is null || sourceId == targetId)
+        {
             return;
+        }
 
         if (seen.Add((sourceId, targetId, kind)))
+        {
             dispatch.Add(new DispatchFact(sourceId, targetId, kind));
+        }
     }
 
     private static void AddSymbol(List<SymbolFact> symbols, ISymbol symbol, SyntaxTree tree, SyntaxNode node)
     {
         var docId = symbol.GetDocumentationCommentId();
         if (docId is null)
+        {
             return;
+        }
 
         symbols.Add(
             new SymbolFact(
@@ -388,7 +436,9 @@ internal static class FactExtractor
         foreach (var iface in type.Interfaces)
         {
             if (iface.GetDocumentationCommentId() is { } ifaceDocId)
+            {
                 relations.Add(new TypeRelationFact(typeDocId, ifaceDocId, "interface"));
+            }
         }
     }
 
@@ -414,7 +464,7 @@ internal static class FactExtractor
         // Generic type arguments at the CALL SITE — read from the constructed `target` BEFORE
         // OriginalDefinition strips them below (e.g. `ask<PaymentGatewayResponse<T>>` → that type).
         var typeArguments = target is IMethodSymbol { TypeArguments.Length: > 0 } generic
-            ? string.Join(",", generic.TypeArguments.Select(t => t.ToDisplayString()))
+            ? string.Join(',', generic.TypeArguments.Select(t => t.ToDisplayString()))
             : null;
 
         // Generic monomorphization bindings (RENDERING only) — see ReferenceFact. The DECLARING binding is
@@ -434,7 +484,9 @@ internal static class FactExtractor
         var resolved = target is IMethodSymbol method ? (method.ReducedFrom ?? method).OriginalDefinition : target.OriginalDefinition;
         var docId = resolved.GetDocumentationCommentId();
         if (docId is null)
+        {
             return;
+        }
 
         var inSource = resolved.Locations.Any(loc => loc.IsInSource);
         var assembly = resolved.ContainingAssembly?.Name ?? "";
@@ -449,7 +501,9 @@ internal static class FactExtractor
         // effect consumer. allowRuntime additionally keeps runtime throws (the throw site is ours).
         var isCallFact = refKind is RefKinds.Invocation or RefKinds.Ctor;
         if (!inSource && !allowRuntime && !isCallFact && IsRuntimeAssembly(assembly))
+        {
             return;
+        }
 
         references.Add(
             new ReferenceFact(
@@ -496,11 +550,15 @@ internal static class FactExtractor
     )
     {
         if (refKind != RefKinds.Invocation || invocation is null)
+        {
             return (null, null);
+        }
 
         var arguments = invocation.ArgumentList.Arguments;
         if (arguments.Count == 0)
+        {
             return (null, null);
+        }
 
         var templates = new string?[arguments.Count];
         var names = new string?[arguments.Count];
@@ -527,7 +585,9 @@ internal static class FactExtractor
     {
         var template = expression.GetStringTemplate();
         if (template is not null)
+        {
             return template;
+        }
 
         return model.GetConstantValue(expression) is { HasValue: true, Value: string constant } ? constant : null;
     }
@@ -538,10 +598,14 @@ internal static class FactExtractor
     private static string? ReceiverTypeOf(SimpleNameSyntax name, SemanticModel model)
     {
         if (name.Parent is MemberAccessExpressionSyntax member && member.Name == name)
+        {
             return model.GetTypeInfo(member.Expression).Type?.OriginalDefinition.ToDisplayString();
+        }
 
         if (name.Parent is MemberBindingExpressionSyntax binding && binding.Parent is ConditionalAccessExpressionSyntax conditional)
+        {
             return model.GetTypeInfo(conditional.Expression).Type?.OriginalDefinition.ToDisplayString();
+        }
 
         return null;
     }
@@ -556,7 +620,10 @@ internal static class FactExtractor
     private static string? GenericArgBinding(System.Collections.Immutable.ImmutableArray<ITypeSymbol>? args)
     {
         if (args is not { Length: > 0 } list)
+        {
             return null;
+        }
+
         var tokens = new string[list.Length];
         for (var i = 0; i < list.Length; i++)
         {
@@ -577,13 +644,26 @@ internal static class FactExtractor
     private static bool HasTypeParameter(ITypeSymbol type)
     {
         if (type.TypeKind == TypeKind.TypeParameter)
+        {
             return true;
+        }
+
         if (type is IArrayTypeSymbol array)
+        {
             return HasTypeParameter(array.ElementType);
+        }
+
         if (type is INamedTypeSymbol named)
+        {
             foreach (var arg in named.TypeArguments)
+            {
                 if (HasTypeParameter(arg))
+                {
                     return true;
+                }
+            }
+        }
+
         return false;
     }
 
@@ -599,10 +679,14 @@ internal static class FactExtractor
     )
     {
         if (refKind == RefKinds.Invocation)
+        {
             return invocation?.ArgumentList.Arguments.FirstOrDefault()?.Expression;
+        }
 
         if (refKind == RefKinds.Ctor && IsAttributeName(name))
+        {
             return name.FirstAncestorOrSelf<AttributeSyntax>()?.ArgumentList?.Arguments.FirstOrDefault()?.Expression;
+        }
 
         return null;
     }
@@ -614,7 +698,9 @@ internal static class FactExtractor
     private static (string? Template, string? Type, string? Name) FirstArgumentOf(ExpressionSyntax? argument, SemanticModel model)
     {
         if (argument is null)
+        {
             return (null, null, null);
+        }
 
         var template = argument.GetStringTemplate();
         var type = model.GetTypeInfo(argument).Type?.OriginalDefinition.ToDisplayString();
@@ -636,7 +722,9 @@ internal static class FactExtractor
     private static StructuralContext StructuralContextOf(SyntaxNode? invocation, SemanticModel model)
     {
         if (invocation is null)
+        {
             return default;
+        }
 
         string? loopKind = null;
         string? loopDetail = null;
@@ -659,14 +747,18 @@ internal static class FactExtractor
             }
 
             if (loopKind is not null)
+            {
                 break;
+            }
         }
 
         var enclosing = new List<FactStructuralContext.EnclosingInvocation>();
         foreach (var ancestor in invocation.Ancestors().OfType<InvocationExpressionSyntax>())
         {
             if (ancestor.Expression is not MemberAccessExpressionSyntax memberAccess)
+            {
                 continue;
+            }
 
             var receiverText = memberAccess.Expression.ToString();
             var receiverType = model.GetTypeInfo(memberAccess.Expression).Type?.OriginalDefinition.ToDisplayString() ?? "";
@@ -681,7 +773,9 @@ internal static class FactExtractor
             foreach (var catchClause in tryStatement.Catches)
             {
                 if (catchClause.Declaration is not null)
+                {
                     catchTypes.Add(model.GetTypeInfo(catchClause.Declaration.Type).Type?.ToDisplayString() ?? "");
+                }
             }
         }
 
@@ -693,11 +787,17 @@ internal static class FactExtractor
         foreach (var ancestor in invocation.Ancestors())
         {
             if (ancestor is LockStatementSyntax lockStmt)
+            {
                 scopes.Add(new FactStructuralContext.EnclosingScope("lock", TypeDisplayOf(lockStmt.Expression, model)));
+            }
             else if (ancestor is UsingStatementSyntax usingStmt)
+            {
                 scopes.Add(new FactStructuralContext.EnclosingScope("using", UsingResourceType(usingStmt, model)));
+            }
             else if (ancestor is LocalDeclarationStatementSyntax local && local.UsingKeyword.IsKind(SyntaxKind.UsingKeyword))
+            {
                 scopes.Add(new FactStructuralContext.EnclosingScope("using", DeclarationType(local.Declaration, model)));
+            }
         }
 
         return new StructuralContext(
@@ -715,9 +815,15 @@ internal static class FactExtractor
     private static string UsingResourceType(UsingStatementSyntax usingStmt, SemanticModel model)
     {
         if (usingStmt.Declaration is { } declaration)
+        {
             return DeclarationType(declaration, model);
+        }
+
         if (usingStmt.Expression is { } expression)
+        {
             return TypeDisplayOf(expression, model);
+        }
+
         return "";
     }
 
@@ -727,7 +833,10 @@ internal static class FactExtractor
     {
         var type = model.GetTypeInfo(declaration.Type).Type;
         if (type is null or IErrorTypeSymbol && declaration.Variables.FirstOrDefault()?.Initializer?.Value is { } initializer)
+        {
             type = model.GetTypeInfo(initializer).Type;
+        }
+
         return type?.OriginalDefinition.ToDisplayString() ?? "";
     }
 
@@ -749,9 +858,13 @@ internal static class FactExtractor
         foreach (var node in root.DescendantNodes())
         {
             if (node is ThrowStatementSyntax { Expression: { } stmtOperand })
+            {
                 yield return stmtOperand;
+            }
             else if (node is ThrowExpressionSyntax exprThrow)
+            {
                 yield return exprThrow.Expression;
+            }
         }
     }
 
@@ -760,16 +873,25 @@ internal static class FactExtractor
     private static InvocationExpressionSyntax? InvocationOf(SimpleNameSyntax name)
     {
         if (name.Parent is InvocationExpressionSyntax direct && direct.Expression == name)
+        {
             return direct;
+        }
+
         if (
             name.Parent is MemberAccessExpressionSyntax member
             && member.Name == name
             && member.Parent is InvocationExpressionSyntax memberInvocation
             && memberInvocation.Expression == member
         )
+        {
             return memberInvocation;
+        }
+
         if (name.Parent is MemberBindingExpressionSyntax binding && binding.Parent is InvocationExpressionSyntax conditionalInvocation)
+        {
             return conditionalInvocation;
+        }
+
         return null;
     }
 
@@ -813,7 +935,10 @@ internal static class FactExtractor
     private static string? ConsumerDocId(ISymbol? symbol)
     {
         if (symbol is not IMethodSymbol method)
+        {
             return symbol?.OriginalDefinition.GetDocumentationCommentId();
+        }
+
         return (method.ReducedFrom ?? method).OriginalDefinition.GetDocumentationCommentId();
     }
 
@@ -877,7 +1002,10 @@ internal static class FactExtractor
     private static bool IsInvoked(SimpleNameSyntax name)
     {
         if (name.Parent is InvocationExpressionSyntax direct && direct.Expression == name)
+        {
             return true;
+        }
+
         return name.Parent is MemberAccessExpressionSyntax member
             && member.Name == name
             && member.Parent is InvocationExpressionSyntax invocation
@@ -911,15 +1039,22 @@ internal static class FactExtractor
         var getter = reads && property.GetMethod is { } g && HasAccessorBody(g) ? g : null;
         var setter = writes && property.SetMethod is { } s && HasAccessorBody(s) ? s : null;
         if (getter is null && setter is null)
+        {
             return;
+        }
 
         var enclosing = EnclosingSymbolId(name, model, lambdaIds);
         var receiver = ReceiverTypeOf(name, model);
         var structural = StructuralContextOf(name, model);
         if (getter is not null)
+        {
             AddReference(references, getter, RefKinds.Invocation, enclosing, tree, name, receiver, structural: structural);
+        }
+
         if (setter is not null)
+        {
             AddReference(references, setter, RefKinds.Invocation, enclosing, tree, name, receiver, structural: structural);
+        }
     }
 
     // Read/write shape of a property access: a plain read -> (read); a simple `=` assignment -> (write
@@ -948,9 +1083,14 @@ internal static class FactExtractor
     private static IEnumerable<IMethodSymbol> Accessors(IPropertySymbol property)
     {
         if (property.GetMethod is { } getter)
+        {
             yield return getter;
+        }
+
         if (property.SetMethod is { } setter)
+        {
             yield return setter;
+        }
     }
 
     // True for a first-party accessor with a REAL body: a full `get {…}`/`set {…}`, an expression-bodied
@@ -987,7 +1127,10 @@ internal static class FactExtractor
         for (var cur = node; cur is not null; cur = cur.Parent)
         {
             if (cur is AnonymousFunctionExpressionSyntax && lambdaIds.TryGetValue(cur, out var lambdaId))
+            {
                 return lambdaId;
+            }
+
             if (cur is MemberDeclarationSyntax member)
             {
                 if (member is BaseFieldDeclarationSyntax field)
@@ -1024,13 +1167,17 @@ internal static class FactExtractor
         {
             var consumer = LambdaConsumerOf(lambda, model);
             if (consumer is null)
+            {
                 continue; // not an argument-passed lambda — no deferred identity
+            }
 
             var member = lambda.FirstAncestorOrSelf<MemberDeclarationSyntax>();
             var memberSymbol = member is null ? null : model.GetDeclaredSymbol(member);
             var memberId = memberSymbol?.GetDocumentationCommentId();
             if (memberId is null)
+            {
                 continue;
+            }
 
             var ordinal = ordinalByMember.TryGetValue(memberId, out var n) ? n : 0;
             ordinalByMember[memberId] = ordinal + 1;
@@ -1115,21 +1262,45 @@ internal static class FactExtractor
         // (private uncalled = high confidence; public = possible external API), so it's recorded here.
         var access = AccessibilityOf(symbol.DeclaredAccessibility);
         if (access is not null)
+        {
             parts.Add(access);
+        }
+
         if (symbol.IsStatic)
+        {
             parts.Add("static");
+        }
+
         if (symbol.IsAbstract)
+        {
             parts.Add("abstract");
+        }
+
         if (symbol.IsSealed)
+        {
             parts.Add("sealed");
+        }
+
         if (symbol.IsVirtual)
+        {
             parts.Add("virtual");
+        }
+
         if (symbol.IsOverride)
+        {
             parts.Add("override");
+        }
+
         if (symbol is IMethodSymbol { IsAsync: true })
+        {
             parts.Add("async");
+        }
+
         if (symbol is IFieldSymbol { IsReadOnly: true } or IPropertySymbol { IsReadOnly: true })
+        {
             parts.Add("readonly");
+        }
+
         return string.Join(' ', parts);
     }
 

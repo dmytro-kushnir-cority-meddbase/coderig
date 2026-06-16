@@ -17,7 +17,9 @@ public static class Reads
     )
     {
         if (!await context.Database.CanConnectAsync(cancellationToken))
+        {
             return null;
+        }
 
         var rows = await context
             .DiRegistrations.Select(x => new DiRegistrationInfo(
@@ -48,7 +50,9 @@ public static class Reads
     )
     {
         if (!await context.Database.CanConnectAsync(cancellationToken))
+        {
             return null;
+        }
 
         var rows = await context
             .SourceFiles.Where(x => x.Status == "skipped")
@@ -73,7 +77,7 @@ public static class Reads
             .ThenByDescending(run => run.Id)
             .Select(run => new RunSummary(
                 run.Id,
-                DateTimeOffset.Parse(run.CreatedAtUtcText),
+                DateTimeOffset.Parse(run.CreatedAtUtcText, System.Globalization.CultureInfo.InvariantCulture),
                 run.SolutionPath,
                 run.SymbolCount,
                 run.ReferenceCount,
@@ -98,8 +102,8 @@ public static class Reads
         CancellationToken cancellationToken = default
     )
     {
-        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken).ConfigureAwait(false);
-        if (pattern.Length >= 3 && await StorageProbes.TableExistsAsync(connection, "symbol_fts", cancellationToken).ConfigureAwait(false))
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        if (pattern.Length >= 3 && await StorageProbes.TableExistsAsync(connection, "symbol_fts", cancellationToken))
         {
             var hits = new List<SymbolSearchHit>();
             await using var command = connection.CreateCommand();
@@ -113,10 +117,14 @@ public static class Reads
                 + " ORDER BY symbolid LIMIT $lim;";
             AddParam(command, "$q", FtsPhrase(pattern));
             if (kind is not null)
+            {
                 AddParam(command, "$kind", kind);
+            }
+
             AddParam(command, "$lim", limit);
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
                 hits.Add(
                     new SymbolSearchHit(
                         reader.GetString(0),
@@ -127,6 +135,8 @@ public static class Reads
                         reader.IsDBNull(5) ? "" : reader.GetString(5)
                     )
                 );
+            }
+
             return hits;
         }
 
@@ -136,13 +146,15 @@ public static class Reads
         // tracker — pure overhead on a read-only query, and it grows the working set for nothing.
         var query = context.SymbolFacts.AsNoTracking().Where(s => EF.Functions.Like(s.Name, like) || EF.Functions.Like(s.SymbolId, like));
         if (kind is not null)
+        {
             query = query.Where(s => s.Kind == kind);
+        }
 
         // Dedupe by SymbolId across runs (multi-target siblings / re-indexed projects) on the CLIENT: the
         // dup ratio is small (~2% — see docs/query-strategy.md) and this is over a bounded Take(5000), so a
         // server-side GROUP BY would add a sort without meaningfully cutting rows; one HashSet pass is cheaper.
         var rows = await query.OrderBy(s => s.SymbolId).Take(5000).ToListAsync(cancellationToken);
-        return rows.GroupBy(s => s.SymbolId)
+        return rows.GroupBy(s => s.SymbolId, StringComparer.Ordinal)
             .Take(limit)
             .Select(g => g.First())
             .Select(s => new SymbolSearchHit(s.SymbolId, s.Kind, s.Signature, s.FilePath, s.Line, s.DefiningAssembly))
@@ -162,11 +174,8 @@ public static class Reads
         CancellationToken cancellationToken = default
     )
     {
-        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken).ConfigureAwait(false);
-        if (
-            pattern.Length >= 3
-            && await StorageProbes.TableExistsAsync(connection, "ref_target_fts", cancellationToken).ConfigureAwait(false)
-        )
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        if (pattern.Length >= 3 && await StorageProbes.TableExistsAsync(connection, "ref_target_fts", cancellationToken))
         {
             var hits = new List<ReferenceHit>();
             await using var command = connection.CreateCommand();
@@ -179,10 +188,14 @@ public static class Reads
                 + " ORDER BY r.TargetSymbolId, r.FilePath, r.Line LIMIT $lim;";
             AddParam(command, "$q", FtsPhrase(pattern));
             if (refKind is not null)
+            {
                 AddParam(command, "$kind", refKind);
+            }
+
             AddParam(command, "$lim", limit);
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
                 hits.Add(
                     new ReferenceHit(
                         reader.GetString(0),
@@ -193,6 +206,8 @@ public static class Reads
                         !reader.IsDBNull(5) && reader.GetInt64(5) != 0
                     )
                 );
+            }
+
             return hits;
         }
 
@@ -201,9 +216,14 @@ public static class Reads
         // so without it EF change-tracks every one of the `limit` rows — needless work on a read path.
         var query = context.ReferenceFacts.AsNoTracking().Where(r => EF.Functions.Like(r.TargetSymbolId, like));
         if (firstPartyOnly)
+        {
             query = query.Where(r => r.TargetInSource);
+        }
+
         if (refKind is not null)
+        {
             query = query.Where(r => r.RefKind == refKind);
+        }
 
         var rows = await query
             .OrderBy(r => r.TargetSymbolId)
@@ -234,14 +254,17 @@ public static class Reads
     private static int ReadInt(DbDataReader reader, int ordinal)
     {
         if (reader.IsDBNull(ordinal))
+        {
             return 0;
+        }
+
         try
         {
             return reader.GetInt32(ordinal);
         }
         catch (InvalidCastException)
         {
-            return int.TryParse(reader.GetString(ordinal), out var v) ? v : 0;
+            return int.TryParse(reader.GetString(ordinal), System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0;
         }
     }
 
@@ -325,7 +348,7 @@ public static class Reads
             .Select(s => new MethodRef(s.SymbolId, s.Name, s.ContainingSymbolId, s.IsOverride, s.FilePath, s.Line))
             .ToListAsync(cancellationToken);
 
-        var methods = methodRows.GroupBy(m => m.SymbolId).Select(g => g.First()).ToList();
+        var methods = methodRows.GroupBy(m => m.SymbolId, StringComparer.Ordinal).Select(g => g.First()).ToList();
 
         var classifiedEdges = HandoffClassifier.Classify(callEdges, handoffRules);
         var minedDispatch = await LoadDispatchFactsAsync(context, cancellationToken);
@@ -360,9 +383,11 @@ public static class Reads
         CancellationToken cancellationToken
     )
     {
-        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken).ConfigureAwait(false);
-        if (!await StorageProbes.TableExistsAsync(connection, "dispatch_facts", cancellationToken).ConfigureAwait(false))
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        if (!await StorageProbes.TableExistsAsync(connection, "dispatch_facts", cancellationToken))
+        {
             return null;
+        }
 
         // Direct DispatchFact projection (no anonymous intermediate / second pass; AsNoTracking is a no-op
         // on a projection, kept as intent). dispatch_facts has a higher dup ratio (~25%), but it's a small
@@ -420,9 +445,12 @@ public static class Reads
     private static bool IsGeneratedPath(string filePath)
     {
         if (string.IsNullOrEmpty(filePath))
+        {
             return false;
+        }
+
         var p = filePath.Replace('\\', '/');
-        return p.Contains("<generated>")
+        return p.Contains("<generated>", StringComparison.Ordinal)
             || p.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)
             || p.EndsWith(".g.i.cs", StringComparison.OrdinalIgnoreCase)
             || p.EndsWith(".designer.cs", StringComparison.OrdinalIgnoreCase)
@@ -443,7 +471,7 @@ public static class Reads
     )
     {
         var rules = handoffRules ?? [];
-        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken).ConfigureAwait(false);
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
 
         // Fast path: `rig graph` already classified every edge and persisted Kind + HandoffDispatcher into
         // call_edges, and the handoff-EP classifier consumes ONLY the handoff + methodGroup edges (~5k of
@@ -453,16 +481,17 @@ public static class Reads
         // so this is equivalence-preserving; the classifier still attaches kind/requires from the passed
         // rules by HandoffDispatcher id.
         if (
-            await StorageProbes.TableExistsAsync(connection, "call_edges", cancellationToken).ConfigureAwait(false)
-            && await StorageProbes.ColumnExistsAsync(connection, "call_edges", "HandoffDispatcher", cancellationToken).ConfigureAwait(false)
+            await StorageProbes.TableExistsAsync(connection, "call_edges", cancellationToken)
+            && await StorageProbes.ColumnExistsAsync(connection, "call_edges", "HandoffDispatcher", cancellationToken)
         )
         {
             var edges = new List<CallEdge>();
             await using var command = connection.CreateCommand();
             command.CommandText =
                 "SELECT FromSym, ToSym, Kind, FilePath, Line, HandoffDispatcher FROM call_edges WHERE Kind IN ('handoff', 'methodGroup');";
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
                 edges.Add(
                     new CallEdge(
                         Caller: reader.GetString(0),
@@ -473,11 +502,13 @@ public static class Reads
                         HandoffDispatcher: reader.IsDBNull(5) ? null : reader.GetString(5)
                     )
                 );
+            }
+
             return HandoffClassifier.HandoffEntryPoints(edges, rules).Take(limit).ToList();
         }
 
         // Fallback: no materialized graph (`rig graph` not run) — derive from the full reference graph.
-        var graph = await LoadFactGraphAsync(context, rules, cancellationToken).ConfigureAwait(false);
+        var graph = await LoadFactGraphAsync(context, rules, cancellationToken);
         return HandoffClassifier.HandoffEntryPoints(graph.CallEdges, rules).Take(limit).ToList();
     }
 
@@ -530,7 +561,7 @@ public static class Reads
             })
             .ToListAsync(cancellationToken);
         var types = typeRows
-            .GroupBy(t => t.SymbolId)
+            .GroupBy(t => t.SymbolId, StringComparer.Ordinal)
             .Select(g => g.First())
             .Select(t => new TypeSymbol(t.SymbolId, t.Namespace, t.FilePath, t.Line, t.Modifiers.Split(' ').Contains("abstract")))
             .ToList();

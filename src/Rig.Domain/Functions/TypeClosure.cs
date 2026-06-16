@@ -22,8 +22,12 @@ public static class TypeClosure
         {
             var normalised = root.StartsWith("T:", StringComparison.Ordinal) ? root : $"T:{root}";
             foreach (var seed in ExpandGeneric(normalised))
+            {
                 if (visited.Add(seed))
+                {
                     frontier.Enqueue(seed);
+                }
+            }
         }
 
         while (frontier.Count > 0)
@@ -31,8 +35,12 @@ public static class TypeClosure
             var current = frontier.Dequeue();
             foreach (var child in strippedBaseEdges[StripGeneric(current)])
             foreach (var expanded in ExpandGeneric(child))
+            {
                 if (visited.Add(expanded))
+                {
                     frontier.Enqueue(expanded);
+                }
+            }
         }
 
         return visited;
@@ -53,8 +61,12 @@ public static class TypeClosure
         {
             var normalised = root.StartsWith("T:", StringComparison.Ordinal) ? root : $"T:{root}";
             foreach (var seed in ExpandGeneric(normalised))
+            {
                 if (visited.Add(seed))
+                {
                     frontier.Enqueue(seed);
+                }
+            }
         }
 
         var strict = new HashSet<string>(StringComparer.Ordinal);
@@ -66,7 +78,9 @@ public static class TypeClosure
             {
                 strict.Add(expanded); // reached via an edge => a strict descendant of some root
                 if (visited.Add(expanded))
+                {
                     frontier.Enqueue(expanded);
+                }
             }
         }
 
@@ -81,13 +95,22 @@ public static class TypeClosure
     public static bool Contains(HashSet<string> closure, string typeId)
     {
         if (closure.Contains(typeId))
+        {
             return true;
+        }
+
         var brace = typeId.IndexOf('{');
         if (brace > 0)
+        {
             return closure.Contains(typeId.Substring(0, brace));
+        }
+
         var backtick = typeId.IndexOf('`');
         if (backtick > 0)
+        {
             return closure.Contains(typeId.Substring(0, backtick));
+        }
+
         return false;
     }
 
@@ -97,7 +120,10 @@ public static class TypeClosure
     {
         var brace = typeId.IndexOf('{');
         if (brace > 0)
+        {
             typeId = typeId.Substring(0, brace);
+        }
+
         var backtick = typeId.IndexOf('`');
         return backtick > 0 ? typeId.Substring(0, backtick) : typeId;
     }
@@ -115,6 +141,8 @@ public static class TypeClosure
         }
         var backtick = typeId.IndexOf('`');
         if (backtick > 0)
+        {
             yield return typeId.Substring(0, backtick);
+        }
     }
 }

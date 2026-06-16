@@ -119,10 +119,14 @@ public sealed class SqlReachabilityTests(AnalyzedPlaygrounds playgrounds)
                     Sorted(sqlAsync).ShouldBe(Sorted(oracleAsync), customMessage: $"async {direction} mismatch for {pattern}");
 
                     foreach (var key in OracleDepth(graph, pattern, direction, maxDepth, narrow: true, SyncMode).Keys)
+                    {
                         sqlSync.Keys.ShouldContain(key, $"narrowed sync {direction} {key} must be within the SQL superset for {pattern}");
+                    }
 
                     foreach (var key in sqlSync.Keys)
+                    {
                         sqlAsync.Keys.ShouldContain(key, $"sync ⊆ async violated for {pattern} {direction} at {key}");
+                    }
                 }
             }
         );
@@ -277,11 +281,19 @@ public sealed class SqlReachabilityTests(AnalyzedPlaygrounds playgrounds)
         try
         {
             await using (var write = new RigDbContext(databasePath, pooling: false))
+            {
                 await Writes.SaveAsync(write, playground.Result);
+            }
+
             await using (var build = new RigDbContext(databasePath, pooling: false))
+            {
                 await GraphMaterializer.BuildAsync(build, rules, factoryRules: factoryRules);
+            }
+
             await using (var read = new RigDbContext(databasePath, pooling: false))
+            {
                 await assert(read);
+            }
         }
         finally
         {
