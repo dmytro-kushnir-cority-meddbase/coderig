@@ -45,6 +45,12 @@ internal static class ImpactCommand
         var rules = CommonOptions.Rules();
         var format = CommonOptions.Format();
         var limit = CommonOptions.Limit();
+        var perEp = new Option<bool>("--per-ep")
+        {
+            Description =
+                "Per-entry-point behavioral attribution: diff each shared EP's reachable-effect set across the two stores "
+                + "(surfaces deltas the change-level set-diff masks when a shared sink stays reachable). Requires a base store.",
+        };
         var cmd = new Command(name: "impact", description: "Blast radius of a git diff: affected entry points, services, effects.")
         {
             @base,
@@ -54,6 +60,7 @@ internal static class ImpactCommand
             rules,
             format,
             limit,
+            perEp,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -68,6 +75,7 @@ internal static class ImpactCommand
                         extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                         format: pr.GetValue(format),
                         limit: pr.GetValue(limit),
+                        perEp: pr.GetValue(perEp),
                         output: output,
                         error: error,
                         workingDirectory: workingDirectory
@@ -85,6 +93,7 @@ internal static class ImpactCommand
         IReadOnlyList<string> extraRules,
         string? format,
         int? limit,
+        bool perEp,
         TextWriter output,
         TextWriter error,
         string workingDirectory
@@ -234,9 +243,37 @@ internal static class ImpactCommand
         // signature edits don't churn — only genuine behavior moves. This is "what did the change DO":
         // +effect = newly reachable (e.g. a new DB write), -effect = no longer reachable (e.g. the retired
         // object_store read), +observation = newly introduced risk (e.g. became an n+1). See §3.3.
-        var behavioral = baseDbPath is null
-            ? null
-            : await ComputeBehavioralDeltaAsync(
+        // --- Per-EP behavioral attribution (--per-ep): diff EACH shared EP's reachable-effect set across the
+        // two stores. The change-level delta is path-INSENSITIVE — a removed path to a sink that stays
+        // reachable from OTHER callers is invisible there. Per-EP forward-reach makes it visible exactly where
+        // it changed (e.g. EditLive.Save no longer reaching object_store write). In-process: the BRANCH graph
+        // + effects loaded above are reused as-is, and the base store is loaded ONCE for BOTH the behavioral
+        // delta and the base footprints (ComputeBehavioralAndFootprintsAsync) — 2 store loads, not 4.
+        BehavioralDelta? behavioral;
+        IReadOnlyList<EpFootprintDelta>? perEpDeltas = null;
+        if (baseDbPath is null)
+        {
+            behavioral = null;
+        }
+        else if (perEp)
+        {
+            var branchFootprints = ComputeFootprints(graph, branchEps, MethodIdBySite(methods), EffectKeysByEnclosing(effects), mode);
+            var (delta, baseFootprints) = await ComputeBehavioralAndFootprintsAsync(
+                baseDbPath: baseDbPath,
+                branchEffects: affectedEffects,
+                branchReach: forward.Count,
+                changedMethods: changedMethods,
+                workingDirectory: workingDirectory,
+                extraRules: extraRules,
+                handoffRules: handoffRules,
+                mode: mode
+            );
+            behavioral = delta;
+            perEpDeltas = DiffFootprints(branch: branchFootprints, baseStore: baseFootprints);
+        }
+        else
+        {
+            behavioral = await ComputeBehavioralDeltaAsync(
                 baseDbPath,
                 branchEffects: affectedEffects,
                 branchReach: forward.Count,
@@ -246,12 +283,14 @@ internal static class ImpactCommand
                 handoffRules: handoffRules,
                 mode: mode
             );
+        }
 
         if (tsv)
         {
             EmitTsv(output, changedMethods, affectedEps, deployments, affectedEffects, max);
             EmitEpDiffTsv(output, epDiff);
             EmitBehavioralDeltaTsv(output, behavioral);
+            EmitPerEpTsv(output, perEpDeltas);
             return 0;
         }
 
@@ -274,6 +313,7 @@ internal static class ImpactCommand
         );
         WriteEpDiffHuman(output, baseRef, baseDbPath, epDiff, StoreLayout.AvailableStoreIds(workingDirectory), max);
         WriteBehavioralDeltaHuman(output, baseRef, behavioral, max);
+        WritePerEpHuman(output, baseRef, perEp, baseDbPath, perEpDeltas, max);
         return 0;
     }
 
@@ -467,7 +507,20 @@ internal static class ImpactCommand
             .ToHashSet(StringComparer.Ordinal);
 
         var (baseEffects, baseReach) = await ReachEffectsAsync(baseContext, baseSeed, workingDirectory, extraRules, handoffRules, mode);
+        return DiffBehavioral(branchEffects, baseEffects, branchReach, baseReach);
+    }
 
+    // The pure change-level set-diff: branch vs base effect/observation sets, keyed param-free so formatting
+    // and signature edits don't churn. Shared by ComputeBehavioralDeltaAsync (loads base itself, used by the
+    // tests + the non-`--per-ep` path) and ComputeBehavioralAndFootprintsAsync (loads base ONCE for both the
+    // delta and per-EP footprints).
+    private static BehavioralDelta DiffBehavioral(
+        IReadOnlyList<DerivedEffect> branchEffects,
+        IReadOnlyList<DerivedEffect> baseEffects,
+        int branchReach,
+        int baseReach
+    )
+    {
         (string, string, string, string) EffectKey(DerivedEffect e) =>
             (e.Provider, e.Operation, e.ResourceType, StripParams(e.EnclosingSymbolId));
         var branchEffectKeys = branchEffects.Select(EffectKey).ToHashSet();
@@ -494,6 +547,254 @@ internal static class ImpactCommand
             AddedObservations: addedObs,
             RemovedObservations: removedObs
         );
+    }
+
+    // One entry point whose reachable-effect FOOTPRINT differs between the two stores, with the per-EP
+    // added/removed effects. EffectKey = (provider, operation, resource, param-free enclosing method).
+    internal sealed record EpFootprintDelta(
+        string Kind,
+        string Route,
+        int BranchEffects,
+        int BaseEffects,
+        IReadOnlyList<(string Provider, string Operation, string Resource, string Enclosing)> Added,
+        IReadOnlyList<(string Provider, string Operation, string Resource, string Enclosing)> Removed
+    );
+
+    // enclosing-method-id -> the distinct effect keys (provider, op, resource, param-free enclosing) declared
+    // there, so a per-EP footprint is assembled by unioning the effects of every reachable enclosing node.
+    private static Dictionary<string, List<(string, string, string, string)>> EffectKeysByEnclosing(IReadOnlyList<DerivedEffect> effects) =>
+        effects
+            .Where(e => e.EnclosingSymbolId is not null)
+            .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
+            .ToDictionary(
+                g => g.Key,
+                g => g.Select(e => (e.Provider, e.Operation, e.ResourceType, StripParams(e.EnclosingSymbolId))).Distinct().ToList(),
+                StringComparer.Ordinal
+            );
+
+    // (FilePath, Line) -> the method declared there, so an EP (which carries a declaration site, not an id)
+    // can seed a forward reach from its method node.
+    private static Dictionary<(string, int), string> MethodIdBySite(IReadOnlyList<DeadCodeFinder.MethodMeta> methods)
+    {
+        var idBySite = new Dictionary<(string, int), string>();
+        foreach (var m in methods)
+        {
+            if (!string.IsNullOrEmpty(m.FilePath))
+            {
+                idBySite[(m.FilePath, m.Line)] = m.SymbolId;
+            }
+        }
+
+        return idBySite;
+    }
+
+    // The reachable-effect footprint of each entry point, keyed on (Kind, Route), over an ALREADY-LOADED graph
+    // + effects (no store I/O — the caller loaded the store once). Forward-reaches every EP in parallel
+    // (ReachesFromEachSeed: one shared index, all cores). An EP whose (FilePath, Line) maps to no method node
+    // seeds empty; duplicate (Kind, Route) sites union their footprints.
+    private static Dictionary<(string Kind, string Route), HashSet<(string, string, string, string)>> ComputeFootprints(
+        FactGraphData graph,
+        IReadOnlyList<DerivedEntryPoint> eps,
+        Dictionary<(string, int), string> idBySite,
+        Dictionary<string, List<(string, string, string, string)>> effectsByEnclosing,
+        FactPathFinder.TraversalMode mode
+    )
+    {
+        var distinct = eps.GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line)).Select(g => g.Key).ToList();
+        var seedIds = distinct.Select(e => idBySite.TryGetValue((e.FilePath, e.Line), out var id) ? id : "").ToList();
+        var reached = FactPathFinder.ReachesFromEachSeed(graph, seedIds, mode: mode);
+
+        var footprints = new Dictionary<(string, string), HashSet<(string, string, string, string)>>();
+        for (var i = 0; i < distinct.Count; i++)
+        {
+            var key = (distinct[i].Kind, distinct[i].Route);
+            if (!footprints.TryGetValue(key, out var set))
+            {
+                footprints[key] = set = new HashSet<(string, string, string, string)>();
+            }
+
+            foreach (var node in reached[i])
+            {
+                if (effectsByEnclosing.TryGetValue(node, out var keys))
+                {
+                    set.UnionWith(keys);
+                }
+            }
+        }
+
+        return footprints;
+    }
+
+    // Load the BASE store ONCE and produce BOTH the change-level behavioral delta AND the base per-EP
+    // footprints from the single load — so a `--per-ep` run loads base once, not twice (once here for the
+    // delta, once more for footprints). The branch side reuses the graph/effects `RunAsync` already built,
+    // so a `--per-ep` run is 2 store loads total, down from 4.
+    private static async Task<(
+        BehavioralDelta Delta,
+        Dictionary<(string Kind, string Route), HashSet<(string, string, string, string)>> BaseFootprints
+    )> ComputeBehavioralAndFootprintsAsync(
+        string baseDbPath,
+        IReadOnlyList<DerivedEffect> branchEffects,
+        int branchReach,
+        IReadOnlyList<DeadCodeFinder.MethodMeta> changedMethods,
+        string workingDirectory,
+        IReadOnlyList<string> extraRules,
+        IReadOnlyList<FactHandoffRule> handoffRules,
+        FactPathFinder.TraversalMode mode
+    )
+    {
+        await using var context = new Rig.Storage.Storage.RigDbContext(baseDbPath, readOnly: true);
+        var graph = await Reads.LoadFactGraphAsync(context, handoffRules);
+        var shaping = ShapingRuleSet.Load(workingDirectory, extraRules, raw: false);
+        graph = FactPathFinder.ShapeGraph(graph, shaping.Factory, shaping.Cut, shaping.Context);
+        graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+
+        var methods = await Reads.LoadDeadCodeMethodsAsync(context);
+        var epData = await Reads.LoadFactEntryPointDataAsync(context);
+        var epSet = await DeriveEntryPointsAsync(context, epData, workingDirectory, extraRules, handoffRules);
+        var invocations = await Reads.LoadInvocationRefsAsync(context);
+        var throwRefs = await Reads.LoadThrowRefsAsync(context);
+        var effects = DeriveEffects(
+            workingDirectory,
+            extraRules,
+            invocations,
+            baseEdges: epData.BaseEdges,
+            ctorRefs: epData.CtorRefs,
+            throwRefs: throwRefs
+        );
+
+        // Behavioral delta: reach FROM the changed methods (seeded param-free so a signature-changed method
+        // matches its pre-change self), intersect with base effects, diff against the branch.
+        var changedStems = changedMethods.Select(m => StripParams(m.SymbolId)).ToHashSet(StringComparer.Ordinal);
+        var baseSeed = methods
+            .Where(m => changedStems.Contains(StripParams(m.SymbolId)))
+            .Select(m => m.SymbolId)
+            .ToHashSet(StringComparer.Ordinal);
+        var forward = FactPathFinder.ReachableFromAll(graph, baseSeed, mode: mode);
+        var baseReached = effects.Where(e => e.EnclosingSymbolId is not null && forward.Contains(e.EnclosingSymbolId)).ToList();
+        var delta = DiffBehavioral(
+            branchEffects: branchEffects,
+            baseEffects: baseReached,
+            branchReach: branchReach,
+            baseReach: forward.Count
+        );
+
+        // Per-EP footprints over the SAME loaded graph + effects.
+        var footprints = ComputeFootprints(
+            graph,
+            epSet.Derived.Concat(epSet.PromotedOrigins).ToList(),
+            MethodIdBySite(methods),
+            EffectKeysByEnclosing(effects),
+            mode
+        );
+
+        return (delta, footprints);
+    }
+
+    // Diff two stores' per-EP footprints: for every EP present in BOTH (paired on Kind+Route), the effects its
+    // reach gained/lost. Returns only EPs whose footprint changed, busiest-delta first. EPs added/removed
+    // wholesale are the EP-diff section's job, not this.
+    private static IReadOnlyList<EpFootprintDelta> DiffFootprints(
+        Dictionary<(string Kind, string Route), HashSet<(string, string, string, string)>> branch,
+        Dictionary<(string Kind, string Route), HashSet<(string, string, string, string)>> baseStore
+    )
+    {
+        var deltas = new List<EpFootprintDelta>();
+        foreach (var (key, branchSet) in branch)
+        {
+            if (!baseStore.TryGetValue(key, out var baseSet))
+            {
+                continue;
+            }
+
+            var added = branchSet.Where(k => !baseSet.Contains(k)).OrderBy(k => k).ToList();
+            var removed = baseSet.Where(k => !branchSet.Contains(k)).OrderBy(k => k).ToList();
+            if (added.Count > 0 || removed.Count > 0)
+            {
+                deltas.Add(
+                    new EpFootprintDelta(
+                        Kind: key.Item1,
+                        Route: key.Item2,
+                        BranchEffects: branchSet.Count,
+                        BaseEffects: baseSet.Count,
+                        Added: added,
+                        Removed: removed
+                    )
+                );
+            }
+        }
+
+        return deltas.OrderByDescending(d => d.Added.Count + d.Removed.Count).ThenBy(d => d.Route, StringComparer.Ordinal).ToList();
+    }
+
+    private static void EmitPerEpTsv(TextWriter output, IReadOnlyList<EpFootprintDelta>? deltas)
+    {
+        if (deltas is null)
+        {
+            return;
+        }
+
+        foreach (var d in deltas)
+        {
+            output.WriteLine($"ep_delta\t{d.Kind}\t{d.Route}\t{d.BranchEffects}\t{d.BaseEffects}\t+{d.Added.Count}\t-{d.Removed.Count}");
+            foreach (var (provider, operation, resource, enclosing) in d.Added)
+            {
+                output.WriteLine($"ep_effect_added\t{d.Kind}\t{d.Route}\t{provider}\t{operation}\t{resource}\t{enclosing}");
+            }
+
+            foreach (var (provider, operation, resource, enclosing) in d.Removed)
+            {
+                output.WriteLine($"ep_effect_removed\t{d.Kind}\t{d.Route}\t{provider}\t{operation}\t{resource}\t{enclosing}");
+            }
+        }
+    }
+
+    private static void WritePerEpHuman(
+        TextWriter output,
+        string baseRef,
+        bool perEp,
+        string? baseDbPath,
+        IReadOnlyList<EpFootprintDelta>? deltas,
+        int max
+    )
+    {
+        if (!perEp)
+        {
+            return;
+        }
+
+        output.WriteLine();
+        if (baseDbPath is null)
+        {
+            output.WriteLine("Per-EP attribution: skipped (no base store resolved — see the entry-point-diff note above).");
+            return;
+        }
+
+        output.WriteLine($"Per-EP behavioral attribution vs '{baseRef}' (entry points whose reachable-effect set changed):");
+        if (deltas is null || deltas.Count == 0)
+        {
+            output.WriteLine($"{Indent.L1}none — no shared entry point's effect footprint changed.");
+            return;
+        }
+
+        output.WriteLine($"{Indent.L1}{deltas.Count} entry point(s) changed:");
+        foreach (var d in deltas.Take(max))
+        {
+            output.WriteLine(
+                $"{Indent.L2}{d.Kind} {d.Route}  (effects {d.BaseEffects}→{d.BranchEffects}, +{d.Added.Count}/-{d.Removed.Count})"
+            );
+            foreach (var (provider, operation, resource, enclosing) in d.Added.Take(max))
+            {
+                output.WriteLine($"{Indent.L3}+ {provider} {operation}{Resource(resource)}  ({enclosing})");
+            }
+
+            foreach (var (provider, operation, resource, enclosing) in d.Removed.Take(max))
+            {
+                output.WriteLine($"{Indent.L3}- {provider} {operation}{Resource(resource)}  ({enclosing})");
+            }
+        }
+
+        static string Resource(string resource) => string.IsNullOrEmpty(resource) ? "" : $" {resource}";
     }
 
     private static void EmitBehavioralDeltaTsv(TextWriter output, BehavioralDelta? delta)

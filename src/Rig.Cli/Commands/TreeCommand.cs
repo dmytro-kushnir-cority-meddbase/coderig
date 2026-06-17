@@ -40,6 +40,7 @@ internal static class TreeCommand
         var noCache = CommonOptions.NoCache();
         var time = CommonOptions.Time();
         var format = CommonOptions.Format();
+        var store = CommonOptions.Store();
         var cmd = new Command(name: "tree", description: "Print the first-party call tree from an entry point, annotated with effects.")
         {
             from,
@@ -57,6 +58,7 @@ internal static class TreeCommand
             noCache,
             time,
             format,
+            store,
         };
         // --full / --summary / --effects are three distinct projections of the same tree; only one applies.
         cmd.Validators.Add(result =>
@@ -105,7 +107,8 @@ internal static class TreeCommand
                         format: pr.GetValue(format),
                         output: output,
                         error: error,
-                        workingDirectory: workingDirectory
+                        workingDirectory: workingDirectory,
+                        storeRef: pr.GetValue(store)
                     )
             )
         );
@@ -130,7 +133,8 @@ internal static class TreeCommand
         string? format,
         TextWriter output,
         TextWriter error,
-        string workingDirectory
+        string workingDirectory,
+        string? storeRef
     )
     {
         var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
@@ -141,7 +145,7 @@ internal static class TreeCommand
         // only — never affects reach. `--raw` bypasses them to print the exact unfiltered tree.
         var renderRules = raw ? FactRenderRules.Empty : FactRenderRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
 
-        await using var context = OpenReadContext(workingDirectory);
+        await using var context = OpenReadContext(workingDirectory, storeRef);
         var timer = new PhaseTimer(time, error);
 
         // Query cache (best-effort, opt-out via --no-cache). A `rig tree` query recomputes the call-tree
@@ -149,7 +153,7 @@ internal static class TreeCommand
         // store + effective rules + traversal params. Cache the pair in a separate writable `.rig/cache.db`
         // (rig.db itself is opened read-only); a repeat query skips both and only re-loads the cheaper graph
         // to render. Auto-invalidates on reindex: the key embeds a store identity that index/graph change.
-        var rigDir = CommandLine.StoreLayout.ResolveStoreDir(workingDirectory);
+        var rigDir = CommandLine.StoreLayout.ResolveReadStoreDir(workingDirectory, storeRef);
         var storeKey = StoreKey(Path.Combine(rigDir, CommandLine.StoreLayout.DbFileName));
         using var cache = noCache ? null : QueryCache.Open(rigDirectory: rigDir, storeKey: storeKey);
         var cacheKey = cache is null

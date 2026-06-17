@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Rig.Domain.Data;
 
 namespace Rig.Domain.Functions;
@@ -212,8 +213,10 @@ public static partial class FactPathFinder
         public ILookup<string, string> StrippedBaseEdges = Enumerable.Empty<string>().ToLookup(x => x, StringComparer.Ordinal);
 
         // Memoised strict-descendant closure per (stripped) base type, so transitive override dispatch
-        // doesn't re-BFS the hierarchy on every visit during the main traversal.
-        public Dictionary<string, HashSet<string>> DescendantsCache = new(StringComparer.Ordinal);
+        // doesn't re-BFS the hierarchy on every visit during the main traversal. Concurrent so ONE index
+        // can be shared across threads (ReachesFromEachSeed's parallel per-seed reach): the cache is pure
+        // idempotent memoization — a racing double-compute yields the same set, harmless.
+        public ConcurrentDictionary<string, HashSet<string>> DescendantsCache = new(StringComparer.Ordinal);
         public HashSet<string> Nodes = new(StringComparer.Ordinal);
 
         // When true (the default for the in-memory traversal), virtual/base/interface dispatch is

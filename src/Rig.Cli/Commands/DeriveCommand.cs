@@ -25,6 +25,7 @@ internal static class DeriveCommand
         var only = CommonOptions.Only();
         var exclude = CommonOptions.Exclude();
         var format = CommonOptions.Format();
+        var store = CommonOptions.Store();
         var cmd = new Command(name: "derive", description: "Re-derive effects + entry points from facts (no Roslyn).")
         {
             rules,
@@ -32,6 +33,7 @@ internal static class DeriveCommand
             only,
             exclude,
             format,
+            store,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -46,7 +48,8 @@ internal static class DeriveCommand
                         format: pr.GetValue(format),
                         output: output,
                         error: error,
-                        workingDirectory: workingDirectory
+                        workingDirectory: workingDirectory,
+                        storeRef: pr.GetValue(store)
                     )
             )
         );
@@ -61,11 +64,12 @@ internal static class DeriveCommand
         string? format,
         TextWriter output,
         TextWriter error,
-        string workingDirectory
+        string workingDirectory,
+        string? storeRef
     )
     {
         var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        await using var context = OpenReadContext(workingDirectory);
+        await using var context = OpenReadContext(workingDirectory, storeRef);
 
         // Deployment attribution (opt-in: only when deployments.json sits next to .rig). Empty (no-op) when
         // the config is absent; `error` is the log sink so config problems surface.

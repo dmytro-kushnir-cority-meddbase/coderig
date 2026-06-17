@@ -33,6 +33,28 @@ internal static class StoreLayout
     // The db path of the resolved read store.
     internal static string DbPath(string workingDirectory) => Path.Combine(ResolveStoreDir(workingDirectory), DbFileName);
 
+    // The db path a read command should open, honoring an explicit `--store` ref. Empty/null => the LATEST
+    // store (the default). A given ref must match an indexed per-commit store (by store-id, or a commit
+    // sha prefix either way — see ResolveStoreDirByRef); an unmatched ref throws StoreRefNotFoundException
+    // so CommandGuard can list what IS indexed instead of failing into a raw "no such file" open error.
+    internal static string DbPathForRef(string workingDirectory, string? storeRef) =>
+        Path.Combine(ResolveReadStoreDir(workingDirectory, storeRef), DbFileName);
+
+    // The store DIRECTORY a read command should use, honoring `--store`. Empty/null => the LATEST store dir
+    // (ResolveStoreDir). A given ref must match an indexed per-commit store; an unmatched ref throws
+    // StoreRefNotFoundException. Commands that key a cache to the store dir (tree) resolve through here too,
+    // so `--store` steers the context AND the cache consistently.
+    internal static string ResolveReadStoreDir(string workingDirectory, string? storeRef)
+    {
+        if (string.IsNullOrWhiteSpace(storeRef))
+        {
+            return ResolveStoreDir(workingDirectory);
+        }
+
+        return ResolveStoreDirByRef(workingDirectory: workingDirectory, refOrId: storeRef)
+            ?? throw new StoreRefNotFoundException(storeRef, AvailableStoreIds(workingDirectory));
+    }
+
     // The newest per-commit store dir — the LATEST pointer wins, else the newest subdir holding a rig.db by
     // write time; null when no per-commit store exists (caller falls back to the flat layout).
     private static string? LatestStoreDir(string rigDir)

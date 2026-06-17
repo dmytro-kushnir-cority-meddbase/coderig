@@ -34,6 +34,7 @@ internal static class CallersCommand
         var depth = CommonOptions.Depth();
         var format = CommonOptions.Format();
         var limit = CommonOptions.Limit();
+        var store = CommonOptions.Store();
         var cmd = new Command(name: "callers", description: "Reverse reachability: which methods reach the target.")
         {
             to,
@@ -45,6 +46,7 @@ internal static class CallersCommand
             depth,
             format,
             limit,
+            store,
         };
         // --orphans (the candidate heuristic) and --entrypoints (the precise rule set) are distinct lenses.
         cmd.Validators.Add(result =>
@@ -70,7 +72,8 @@ internal static class CallersCommand
                         format: pr.GetValue(format),
                         limit: pr.GetValue(limit),
                         output: output,
-                        workingDirectory: workingDirectory
+                        workingDirectory: workingDirectory,
+                        storeRef: pr.GetValue(store)
                     )
             )
         );
@@ -88,7 +91,8 @@ internal static class CallersCommand
         string? format,
         int? limit,
         TextWriter output,
-        string workingDirectory
+        string workingDirectory,
+        string? storeRef
     )
     {
         var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
@@ -101,7 +105,7 @@ internal static class CallersCommand
         // closure, for inspecting the exact plumbing).
         var shaping = ShapingRuleSet.Load(workingDirectory, extraRules, raw);
 
-        await using var context = OpenReadContext(workingDirectory);
+        await using var context = OpenReadContext(workingDirectory, storeRef);
 
         // One shaped reverse subgraph (bounded when `rig graph` has run, else the full EF graph) drives all
         // three callers modes — the set, the no-predecessor roots, and the rule-detected entrypoints.

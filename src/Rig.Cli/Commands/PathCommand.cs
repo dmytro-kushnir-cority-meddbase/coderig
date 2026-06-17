@@ -24,6 +24,7 @@ internal static class PathCommand
         var rules = CommonOptions.Rules();
         var depth = CommonOptions.Depth();
         var format = CommonOptions.Format();
+        var store = CommonOptions.Store();
         var cmd = new Command(name: "path", description: "Print the first call path from one method to another.")
         {
             from,
@@ -33,6 +34,7 @@ internal static class PathCommand
             rules,
             depth,
             format,
+            store,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -48,7 +50,8 @@ internal static class PathCommand
                         depth: pr.GetValue(depth),
                         format: pr.GetValue(format),
                         output: output,
-                        workingDirectory: workingDirectory
+                        workingDirectory: workingDirectory,
+                        storeRef: pr.GetValue(store)
                     )
             )
         );
@@ -64,14 +67,15 @@ internal static class PathCommand
         int? depth,
         string? format,
         TextWriter output,
-        string workingDirectory
+        string workingDirectory,
+        string? storeRef
     )
     {
         var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
         var mode = CommonOptions.Mode(async);
         var shaping = ShapingRuleSet.Load(workingDirectory, extraRules, raw);
 
-        await using var context = OpenReadContext(workingDirectory);
+        await using var context = OpenReadContext(workingDirectory, storeRef);
         // Any path from a `from` node lies entirely within that node's forward closure, so the BOUNDED
         // forward subgraph (loaded on disk via the derived edge views, sized to the result) finds the
         // same first path as the full graph. Falls back to the full EF graph when `rig graph` hasn't run.

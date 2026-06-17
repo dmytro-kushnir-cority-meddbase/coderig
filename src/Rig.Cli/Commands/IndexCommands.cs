@@ -23,6 +23,10 @@ internal static class IndexCommands
         var parallelism = new Option<int?>("--parallelism") { Description = "Max concurrent project analyses." };
         var merge = new Option<bool>("--merge") { Description = "Accumulate into an existing store (multi-solution unified store)." };
         var includeTests = new Option<bool>("--include-tests") { Description = "Keep test projects (excluded by default)." };
+        var noGraph = new Option<bool>("--no-graph")
+        {
+            Description = "Skip building the call-graph views after indexing (run `rig graph` later to enable the fast query path).",
+        };
 
         var cmd = new Command(name: "index", description: "Index a solution/project into a .rig store.")
         {
@@ -33,6 +37,7 @@ internal static class IndexCommands
             parallelism,
             merge,
             includeTests,
+            noGraph,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -47,6 +52,7 @@ internal static class IndexCommands
                         parallelism: pr.GetValue(parallelism),
                         merge: pr.GetValue(merge),
                         includeTests: pr.GetValue(includeTests),
+                        noGraph: pr.GetValue(noGraph),
                         output: output,
                         error: error,
                         workingDirectory: workingDirectory
@@ -64,6 +70,7 @@ internal static class IndexCommands
         int? parallelism,
         bool merge,
         bool includeTests,
+        bool noGraph,
         TextWriter output,
         TextWriter error,
         string workingDirectory
@@ -242,6 +249,16 @@ internal static class IndexCommands
         output.WriteLine($"References: {result.References?.Count ?? 0}");
         output.WriteLine($"DiRegistrations: {result.DiRegistrations.Count}");
 
+        // Build the call-graph views now so the store is query-ready on the fast SQL path immediately —
+        // no forgotten `rig graph` follow-up (the reason a "fresh" store kept paying the full in-memory
+        // graph load per query). Idempotent; opt out with --no-graph. Skipped for append/merge — `mine`
+        // builds once after all batches, and a --merge accumulation rebuilds via a final `rig graph`.
+        if (!noGraph && !appendMode)
+        {
+            output.WriteLine("Progress: Building call-graph views");
+            await MaterializeGraphAsync(dbPath: finalDbPath, workingDirectory: workingDirectory, output: output);
+        }
+
         return 0;
     }
 
@@ -348,6 +365,7 @@ internal static class IndexCommands
                         parallelism: null,
                         merge: false,
                         includeTests: false,
+                        noGraph: true, // mine builds the graph ONCE after all batches (see end of RunMineAsync)
                         output: output,
                         error: error,
                         workingDirectory: workingDirectory
@@ -402,6 +420,15 @@ internal static class IndexCommands
         );
         output.WriteLine($"[mine] Reachable projects index written: {indexPath}");
 
+        // Build the call-graph views ONCE over the accumulated store (per-project indexing ran with
+        // --no-graph), so the mined store is query-ready on the fast SQL path without a manual `rig graph`.
+        var minedDbPath = StoreLayout.DbPath(workingDirectory);
+        if (File.Exists(minedDbPath))
+        {
+            output.WriteLine("[mine] Building call-graph views");
+            await MaterializeGraphAsync(dbPath: minedDbPath, workingDirectory: workingDirectory, output: output);
+        }
+
         return totalFailed > 0 ? 1 : 0;
     }
 
@@ -411,21 +438,38 @@ internal static class IndexCommands
             name: "graph",
             description: "Rebuild the derived call-graph views (call_edges + dispatch_edges) from facts; idempotent, no rescan."
         );
-        cmd.SetAction(_ => CommandGuard.RunGuardedAsync(workingDirectory, error, () => RunGraphAsync(output, error, workingDirectory)));
+        var store = CommonOptions.Store();
+        cmd.Add(store);
+        cmd.SetAction(pr =>
+            CommandGuard.RunGuardedAsync(
+                workingDirectory,
+                error,
+                () => RunGraphAsync(output: output, error: error, workingDirectory: workingDirectory, storeRef: pr.GetValue(store))
+            )
+        );
         return cmd;
     }
 
     // Rebuilds the derived call-graph views (call_edges + dispatch_edges) from facts already in the
     // store. Decoupled from index/mine and idempotent — no Roslyn, no rescan; rerun any time. These
     // views back the SQL recursive-CTE reachability path (reaches/callers/tree/dead).
-    private static async Task<int> RunGraphAsync(TextWriter output, TextWriter error, string workingDirectory)
+    private static async Task<int> RunGraphAsync(TextWriter output, TextWriter error, string workingDirectory, string? storeRef)
     {
-        var dbPath = StoreLayout.DbPath(workingDirectory);
+        var dbPath = StoreLayout.DbPathForRef(workingDirectory, storeRef);
         if (!File.Exists(dbPath))
         {
             return CommandGuard.NoRunError(error);
         }
 
+        await MaterializeGraphAsync(dbPath: dbPath, workingDirectory: workingDirectory, output: output);
+        return 0;
+    }
+
+    // Build the derived call-graph views (call_edges + dispatch_edges) + the EP-site table into the store at
+    // dbPath. Shared by the standalone `graph` command and the tail of `index` (so a freshly-indexed store is
+    // query-ready on the fast SQL path without a manual follow-up). Idempotent — rerun any time, no rescan.
+    private static async Task MaterializeGraphAsync(string dbPath, string workingDirectory, TextWriter output)
+    {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         await using var context = new RigDbContext(dbPath);
         // Classification rules flow in here so call_edges is written with Kind="handoff" baked in — the
@@ -448,7 +492,6 @@ internal static class IndexCommands
         // Materialize the pattern-independent EP-site set into a table now, so every later query reads it
         // directly instead of re-deriving from the whole-store fact tables. No-op without deployments.json.
         await MaterializeEntryPointSitesAsync(context, workingDirectory);
-        return 0;
     }
 
     // Transitive ProjectReference closure of an entry project, minus test projects — the build scope

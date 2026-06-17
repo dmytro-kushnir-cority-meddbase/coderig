@@ -49,6 +49,14 @@ internal static class CommonOptions
 
     internal static Option<string?> Format() => new("--format") { Description = "Output format; `tsv` for machine-readable rows." };
 
+    // --store <ref> (aliases --commit/--at): read from a specific per-commit store instead of the latest
+    // index. The ref is a store-id or a commit sha (full or short) — resolved by StoreLayout.DbPathForRef.
+    internal static Option<string?> Store() =>
+        new("--store", "--commit", "--at")
+        {
+            Description = "Read from a specific indexed store (commit sha/short-sha or store-id); default is the latest index.",
+        };
+
     internal static Option<string?> Kind() => new("--kind") { Description = "Filter by symbol/reference kind." };
 
     internal static Option<int> Limit(int defaultValue) =>

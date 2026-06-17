@@ -199,6 +199,51 @@ public static partial class FactPathFinder
     )
     {
         var index = BuildIndex(graph, narrowDispatch);
+        return ReachesWithFanoutCore(index, index.Nodes.Where(n => Contains(value: n, pattern: fromPattern)), maxDepth, maxNodes, mode);
+    }
+
+    // Exact-id, one-hop forward reach from EACH seed independently, returning one reachable-node set per
+    // seed (same dispatch semantics as ReachesWithFanout — narrowDispatch one-hop — but seeded by EXACT
+    // symbol id, not a substring pattern, so `EditLive.Save` does NOT also seed `EditLive.SaveFinal`).
+    // The index is built ONCE and shared across a parallel per-seed loop (read-only traversal over an
+    // immutable graph; the lone mutable cache is concurrent + idempotent). This is the engine behind
+    // `rig impact`'s per-EP behavioral attribution: forward-reach hundreds of EPs over one loaded graph.
+    public static IReadOnlyList<HashSet<string>> ReachesFromEachSeed(
+        FactGraphData graph,
+        IReadOnlyList<string> seedIds,
+        int maxDepth = 20,
+        int maxNodes = 20000,
+        bool narrowDispatch = true,
+        TraversalMode mode = TraversalMode.SyncCut
+    )
+    {
+        var index = BuildIndex(graph, narrowDispatch);
+        var results = new HashSet<string>[seedIds.Count];
+        System.Threading.Tasks.Parallel.For(
+            fromInclusive: 0,
+            toExclusive: seedIds.Count,
+            body: i =>
+            {
+                var seed = seedIds[i];
+                var seeds = index.Nodes.Contains(seed) ? new[] { seed } : System.Array.Empty<string>();
+                var info = ReachesWithFanoutCore(index, seeds, maxDepth, maxNodes, mode);
+                results[i] = new HashSet<string>(info.Keys, StringComparer.Ordinal);
+            }
+        );
+        return results;
+    }
+
+    // The shared BFS body of ReachesWithFanout / ReachesFromEachSeed: one-hop dispatch forward reach over a
+    // PREBUILT index from the given seed nodes. All traversal state below is LOCAL — safe to run concurrently
+    // over one shared (read-only) index (DescendantsCache is concurrent).
+    private static IReadOnlyDictionary<string, ReachInfo> ReachesWithFanoutCore(
+        GraphIndex index,
+        IEnumerable<string> seeds,
+        int maxDepth,
+        int maxNodes,
+        TraversalMode mode
+    )
+    {
         var info = new Dictionary<string, ReachInfo>(StringComparer.Ordinal);
         // The static receiver type of the (BFS-shortest) edge that reached each node, carried so that
         // node's own dispatch fan-out can be narrowed edge-aware when it is expanded.
@@ -215,7 +260,7 @@ public static partial class FactPathFinder
         // of a resolved concrete target). BFS-first-reach wins, matching the DispatchVia tagging above.
         var viaDispatchOf = new Dictionary<string, bool>(StringComparer.Ordinal);
         var queue = new Queue<string>();
-        foreach (var start in index.Nodes.Where(n => Contains(value: n, pattern: fromPattern)))
+        foreach (var start in seeds)
         {
             if (info.ContainsKey(start))
             {
@@ -842,12 +887,7 @@ public static partial class FactPathFinder
     private static HashSet<string> Descendants(string typeId, GraphIndex index)
     {
         var key = TypeClosure.StripGeneric(typeId);
-        if (!index.DescendantsCache.TryGetValue(key, out var set))
-        {
-            index.DescendantsCache[key] = set = TypeClosure.ComputeStrictDescendants(index.StrippedBaseEdges, new[] { typeId });
-        }
-
-        return set;
+        return index.DescendantsCache.GetOrAdd(key, _ => TypeClosure.ComputeStrictDescendants(index.StrippedBaseEdges, new[] { typeId }));
     }
 
     private static void Enqueue(

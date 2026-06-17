@@ -29,6 +29,7 @@ internal static class ReachesCommand
         var only = CommonOptions.Only();
         var exclude = CommonOptions.Exclude();
         var limit = CommonOptions.Limit();
+        var store = CommonOptions.Store();
         var cmd = new Command(name: "reaches", description: "Effects reachable from an entry point, by depth.")
         {
             from,
@@ -40,6 +41,7 @@ internal static class ReachesCommand
             only,
             exclude,
             limit,
+            store,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -57,7 +59,8 @@ internal static class ReachesCommand
                         exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
                         limit: pr.GetValue(limit),
                         output: output,
-                        workingDirectory: workingDirectory
+                        workingDirectory: workingDirectory,
+                        storeRef: pr.GetValue(store)
                     )
             )
         );
@@ -75,7 +78,8 @@ internal static class ReachesCommand
         HashSet<string> exclude,
         int? limit,
         TextWriter output,
-        string workingDirectory
+        string workingDirectory,
+        string? storeRef
     )
     {
         var maxDepth = CommonOptions.DepthOrUnbounded(depth);
@@ -89,7 +93,7 @@ internal static class ReachesCommand
             Factory = FactGenericFactoryRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules),
         };
 
-        await using var context = OpenReadContext(workingDirectory);
+        await using var context = OpenReadContext(workingDirectory, storeRef);
 
         var inputs = await LoadEffectReachInputsAsync(
             context,

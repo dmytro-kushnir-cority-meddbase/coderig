@@ -14,6 +14,17 @@ This file is only the things that aren't obvious from those and that you'd other
   (prints help, "Zero tests ran"). Run a subset with:
   `dotnet run --project tests/Rig.Tests --no-build -- --treenode-filter "/*/*/<ClassName>/*"`
   (path is `/Assembly/Namespace/Class/Test`; `*` wildcards each segment). `dotnet test` with no filter is fine.
+- **Analyzer errors are `-warnaserror` and mechanical to fix — just do it, don't ask:**
+  - `error UseNamedArgs: Consider invoking <Method> with named arguments` → name the args at that call
+    site (`Foo(x: a, y: b)`). The forked analyzer (`use-named-args-fs`) fires on EVERY multi-arg
+    first-party call, so **write new multi-arg calls with named args up front** to avoid the round-trip.
+    Genuinely-noisy stdlib methods are exempt via `.editorconfig` `UseNamedArgs.exclude_methods`
+    (`|`-separated; e.g. `String.Equals`, `Path.Combine`, `Dictionary.TryGetValue`) — add to that list
+    rather than naming args for a framework call that reads fine positionally.
+  - `MA0011` (format-provider) → pass `System.Globalization.CultureInfo.InvariantCulture`.
+  - **The csharpier auto-format races an in-flight `dotnet build`** (format edits a file the compiler is
+    reading) → spurious "N Error(s)" with no diagnostic. Re-run the build once it settles; verify green
+    with `--no-incremental`.
 
 ## Effect ↔ reachability model (read before touching effects or `EnclosingSymbolId`)
 
