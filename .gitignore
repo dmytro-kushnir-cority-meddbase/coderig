@@ -26,3 +26,7 @@ BenchmarkDotNet.Artifacts/
 
 # local refactor golden-output scratch (not committed)
 .golden/
+
+# rig index artifacts (generated)
+relevant-projects.json
+trace-*.txt

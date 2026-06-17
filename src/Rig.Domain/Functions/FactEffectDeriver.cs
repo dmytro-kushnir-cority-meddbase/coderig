@@ -559,11 +559,37 @@ public static class FactEffectDeriver
             // F1a). This deliberately diverges from the Roslyn EffectExtractor's drop-on-fail — the fact
             // path favours recall, and `http`+receiver-type is a true, useful effect even without the host.
             "http_argument" => firstArgTemplate is not null ? NormalizeHttpResource(firstArgTemplate) : receiver ?? declaringType,
-            // ef_dbset_receiver / ef_query_root / ef_context_receiver / ef_database_facade need EF
-            // receiver/DbSet shape facts the stage-1 layer doesn't carry (deferred — not used by the
-            // LLBLGen/MedDBase target). Unknown or empty strategy -> null (effect dropped).
+            // EF Core resource strategies. Stage-1 carries no DbSet/DbContext SHAPE facts (the generic
+            // entity behind a `context.Set<T>()` chain), so the fact path resolves these to the closest
+            // faithful proxy from what IS recorded — recall over the Roslyn path's drop-on-fail (same
+            // stance as http_argument above). These never drop when the call is on a concrete
+            // receiver/typed query, which an EF read/write always is.
+            //  - ef_query_root: the queried entity = the call's generic type argument (ToListAsync<T>),
+            //    else the receiver (FromSqlRaw on a DbSet<T>).
+            //  - ef_context_receiver / ef_dbset_receiver / ef_database_facade: the receiver's static type
+            //    (DbContext / DbSet<T> / DatabaseFacade), else the declaring type.
+            "ef_query_root" => FirstNonBlank(typeArguments, receiver, declaringType),
+            "ef_context_receiver" => FirstNonBlank(receiver, declaringType),
+            "ef_dbset_receiver" => FirstNonBlank(receiver, typeArguments, declaringType),
+            "ef_database_facade" => FirstNonBlank(receiver, declaringType),
+            // Unknown or empty strategy -> null (effect dropped).
             _ => null,
         };
+    }
+
+    // First non-blank candidate, else null — the recall-favoring fallback chain for the EF resource
+    // strategies (resolve to the most specific recorded proxy, drop only when nothing is recorded).
+    private static string? FirstNonBlank(params string?[] candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (!string.IsNullOrWhiteSpace(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     // The Nth (0-based) element of a comma-joined display-type list, split on the TOP-LEVEL comma
