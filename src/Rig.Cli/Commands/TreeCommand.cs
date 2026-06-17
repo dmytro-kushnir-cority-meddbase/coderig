@@ -422,9 +422,10 @@ internal static class TreeCommand
             TryCache(() => cache!.Put(sidecarKey, RenderSidecarCodec.Encode(seamEffects, locations)));
         }
 
-        // Print-order source-loc dedup: in --full, collapse a repeated `  <path>:<line>` to `  :<line>` so the
-        // file name shows only when it changes down the tree. One writer for the whole forest (cursor spans roots).
-        var renderOut = full ? new SourceLocDedupWriter(output) : output;
+        // Print-order source-loc dedup: collapse a repeated trailing path (the --full call-site/leaf locs AND
+        // the --files 📄 definition-loc) so the file name shows only when it changes down the tree. Mode-
+        // agnostic — always on; it's a no-op when no loc is rendered (default mode). One writer per forest.
+        var renderOut = new SourceLocDedupWriter(output);
         foreach (var root in roots)
         {
             if (!full && !SubtreeHasEffect(root, effectsByMethod))

@@ -226,9 +226,12 @@ internal static class TreeRenderer
                 parentDeclaring: parentDeclaringConcrete,
                 parentMethod: parentMethodConcrete
             );
-        // A lambda renders AS its enclosing method (ShortName drops ~λN — load-bearing for the generic-chain
-        // monomorphization above), so the sibling lambdas of one method look like identical duplicate lines.
-        // Append the lambda discriminator to tell them apart (display-only; the symbol id is unchanged).
+        // A lambda renders AS its enclosing method when ShortName drops `~λN` (it does so only for a
+        // PARAMETERFUL method — load-bearing for the generic-chain monomorphization above), so sibling
+        // lambdas of one method look like identical duplicate lines. Append ONE `λN` discriminator. ShortName
+        // KEEPS `~λN` for a PARAMETERLESS enclosing method, so strip that first or we'd double it
+        // (`LoadBuiltIn~λ0 λ0`).
+        var shortName = ShortName(node.SymbolId);
         var lambdaTag = "";
         var lambdaAt = node.SymbolId.IndexOf("~λ", StringComparison.Ordinal);
         if (lambdaAt >= 0)
@@ -236,9 +239,14 @@ internal static class TreeRenderer
             var seg = node.SymbolId[lambdaAt..];
             var segParen = seg.IndexOf('(');
             lambdaTag = " " + (segParen >= 0 ? seg[..segParen] : seg).TrimStart('~');
+            var keptAt = shortName.IndexOf("~λ", StringComparison.Ordinal);
+            if (keptAt >= 0)
+            {
+                shortName = shortName[..keptAt];
+            }
         }
         var name =
-            PrettyGenericName(ShortName(node.SymbolId), declaringArgs: declaringConcrete, methodArgs: methodConcrete)
+            PrettyGenericName(shortName, declaringArgs: declaringConcrete, methodArgs: methodConcrete)
             + (signatures ? ShortSignature(node.SymbolId) : "")
             + lambdaTag;
         // EP marker: when this node is itself a rule-detected entry point, wrap its name with "▶ kind"
@@ -519,17 +527,20 @@ internal static class TreeRenderer
     }
 }
 
-// Print-order source-loc dedup for the `--full` tree. A method's effect/library leaves all carry the same
-// `  <relpath>:<line>`, and consecutive leaves usually share a file, so the path is re-printed on nearly
-// every line. This wraps the tree's output and rewrites a trailing `  <path>:<line>` to `  :<line>` when the
-// path is unchanged from the previously written line — the file name appears only when it CHANGES, in print
-// order. Display-only: leaf bodies, line numbers, and the `--files 📄` definition-loc (different separator)
-// are untouched. One instance per forest so the cursor spans every root.
+// Print-order source-loc dedup for the tree. Nodes/leaves carry a trailing source location
+// (`  <relpath>:<line>`, or the `--files` definition form `  📄 <relpath>:<line>`), and consecutive lines
+// usually share a file, so the path is re-printed on nearly every line. This wraps the tree's output and
+// rewrites the path to nothing — `  :<line>` / `  📄 :<line>` — when it is unchanged from the previously
+// written line, so the file name appears only when it CHANGES, in print order. MODE-AGNOSTIC by design: it
+// keys off the rendered location, not on which flag produced it (--files/--full/--raw), so every loc dedups
+// through one filter with no per-flag matrix. Display-only; line numbers and the `📄` marker are preserved.
+// One instance per forest so the cursor spans every root.
 internal sealed class SourceLocDedupWriter(TextWriter inner) : TextWriter
 {
-    // Trailing "  <relpath>:<line>": the path must contain '/' (ShortenPath emits forward-slash relpaths)
-    // and no ':' before the line number, so resources like "Data.RunSummary" or "<anon>" never match.
-    private static readonly Regex LocSuffix = new(@"  (?<p>[^\s:]+/[^\s:]+):(?<l>\d+)$", RegexOptions.CultureInvariant);
+    // Trailing "  [📄 ]<relpath>:<line>": the path must contain '/' (ShortenPath emits forward-slash
+    // relpaths) and no ':' before the line number, so resources like "Data.RunSummary"/"<anon>" never match.
+    // The optional 📄 prefix is the --files definition-loc marker, captured so it survives the rewrite.
+    private static readonly Regex LocSuffix = new(@"  (?<icon>📄 )?(?<p>[^\s:]+/[^\s:]+):(?<l>\d+)$", RegexOptions.CultureInvariant);
 
     private string? _lastPath;
 
@@ -554,7 +565,8 @@ internal sealed class SourceLocDedupWriter(TextWriter inner) : TextWriter
         var path = m.Groups["p"].Value;
         if (string.Equals(path, _lastPath, StringComparison.Ordinal))
         {
-            return $"{line[..m.Index]}  :{m.Groups["l"].Value}";
+            // Drop the repeated path, keep the marker (📄 or none) and the line number.
+            return $"{line[..m.Index]}  {m.Groups["icon"].Value}:{m.Groups["l"].Value}";
         }
 
         _lastPath = path;
