@@ -12,6 +12,16 @@ internal static class CommandGuard
         {
             return await body();
         }
+        catch (StoreRefNotFoundException notFound)
+        {
+            error.WriteLine($"No indexed store matches --store '{notFound.StoreRef}'.");
+            error.WriteLine(
+                notFound.Available.Count == 0
+                    ? "Nothing is indexed here. Run `rig index <solution>` first."
+                    : "Indexed stores: " + string.Join(separator: ", ", values: notFound.Available) + "."
+            );
+            return 2;
+        }
         catch (System.Data.Common.DbException exception)
         {
             // A SQLite error escaping a command almost always means the store is missing (wrong cwd) or
@@ -26,7 +36,7 @@ internal static class CommandGuard
     // from "older-rig schema mismatch" (re-index needed) from any other read failure.
     internal static int StoreError(string workingDirectory, System.Data.Common.DbException exception, TextWriter error)
     {
-        var dbPath = Path.Combine(workingDirectory, ".rig", "rig.db");
+        var dbPath = StoreLayout.DbPath(workingDirectory);
         if (!File.Exists(dbPath))
         {
             error.WriteLine($"No indexed store at {dbPath}.");

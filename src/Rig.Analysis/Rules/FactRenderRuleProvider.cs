@@ -13,10 +13,10 @@ public static class FactRenderRuleProvider
         var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
         var ruleSet = AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths);
         return new FactRenderRules(
-            ruleSet.RenderCollapseSeams.Select(Project).ToArray(),
-            ruleSet.RenderOpaqueTypes.Select(Project).ToArray()
+            CollapseSeams: ruleSet.RenderCollapseSeams.Select(Project).ToArray(),
+            OpaqueTypes: ruleSet.RenderOpaqueTypes.Select(Project).ToArray()
         );
     }
 
-    private static FactRenderRule Project(RenderRule rule) => new(rule.Pattern, rule.Label ?? rule.Reason ?? rule.Pattern);
+    private static FactRenderRule Project(RenderRule rule) => new(Pattern: rule.Pattern, Label: rule.Label ?? rule.Reason ?? rule.Pattern);
 }

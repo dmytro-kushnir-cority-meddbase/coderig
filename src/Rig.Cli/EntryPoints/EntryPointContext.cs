@@ -19,8 +19,24 @@ internal static class EntryPointContext
     // deployments.json resolved against the store's primary (max-symbol) solution — the opt-in deployment
     // map every command loads the same way. Empty (no-op) when unconfigured. `log` surfaces config
     // problems (only `derive` passes one today).
-    internal static async Task<DeploymentMap> LoadDeploymentsAsync(RigDbContext context, string workingDirectory, TextWriter? log = null) =>
-        await DeploymentMap.LoadAsync(workingDirectory, await PrimaryDeploymentSolutionPathAsync(context), log);
+    internal static async Task<DeploymentMap> LoadDeploymentsAsync(RigDbContext context, string workingDirectory, TextWriter? log = null)
+    {
+        // Short-circuit before touching the DB. DeploymentMap.LoadAsync returns Empty when deployments.json
+        // is absent (the default), but resolving the primary solution path first issues an EF query
+        // (ListRunsAsync). On a warm `rig tree` cache hit the graph is never loaded, so that query is the
+        // FIRST EF touch and absorbs EF's cold model-build — ~410ms (Release) spent only to discard the
+        // result. Gate on the file the map itself requires.
+        if (!File.Exists(Path.Combine(workingDirectory, "deployments.json")))
+        {
+            return DeploymentMap.Empty;
+        }
+
+        return await DeploymentMap.LoadAsync(
+            workingDirectory: workingDirectory,
+            solutionPath: await PrimaryDeploymentSolutionPathAsync(context),
+            log: log
+        );
+    }
 
     // The solution to resolve deployments.json against: the run with the MOST symbols — the primary/root
     // solution (e.g. MedDBase.slnx at the monorepo root), NOT ListRunsAsync().FirstOrDefault() (which is
@@ -81,7 +97,17 @@ internal static class EntryPointContext
 
             var kind = h.Kind ?? "background";
             var method = kind.ToUpperInvariant();
-            result.Add(new DerivedEntryPoint(kind, method, route, $"{kind} {method} {route}", h.FilePath, h.Line, h.Requires));
+            result.Add(
+                new DerivedEntryPoint(
+                    Kind: kind,
+                    Method: method,
+                    Route: route,
+                    DisplayName: $"{kind} {method} {route}",
+                    FilePath: h.FilePath,
+                    Line: h.Line,
+                    Requires: h.Requires
+                )
+            );
         }
         return result;
     }
@@ -99,7 +125,7 @@ internal static class EntryPointContext
         var paren = body.IndexOf('(');
         if (paren >= 0)
         {
-            body = body.Substring(0, paren);
+            body = body.Substring(startIndex: 0, length: paren);
         }
 
         var sb = new System.Text.StringBuilder(body.Length);
@@ -183,9 +209,9 @@ internal static class EntryPointContext
         }
 
         // Tier 2: query cache (handles --rules, which the table doesn't cover).
-        var rigDir = Path.Combine(workingDirectory, ".rig");
-        var storeKey = StoreKey(Path.Combine(rigDir, "rig.db"));
-        using var cache = QueryCache.Open(rigDir, storeKey);
+        var rigDir = CommandLine.StoreLayout.ResolveStoreDir(workingDirectory);
+        var storeKey = StoreKey(Path.Combine(rigDir, CommandLine.StoreLayout.DbFileName));
+        using var cache = QueryCache.Open(rigDirectory: rigDir, storeKey: storeKey);
         var key = cache is null ? null : EpCacheKey(storeKey, rulesHash);
         if (key is not null && cache!.Get(key) is { } blob && EpSiteCacheCodec.Decode(blob) is { } hit)
         {

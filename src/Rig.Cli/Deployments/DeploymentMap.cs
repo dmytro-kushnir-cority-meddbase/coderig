@@ -108,7 +108,10 @@ internal sealed class DeploymentMap
         foreach (var service in services)
         {
             var hostFull = Path.GetFullPath(
-                Path.Combine(solutionDir, service.Host.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar))
+                Path.Combine(
+                    solutionDir,
+                    service.Host.Replace(oldChar: '\\', newChar: Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar)
+                )
             );
             if (!depGraph.ContainsKey(hostFull) && !File.Exists(hostFull))
             {
@@ -166,7 +169,15 @@ internal sealed class DeploymentMap
                     continue;
                 }
 
-                result.Add(new ServiceDef(name, host, GetString(e, "kind"), GetString(e, "note"), GetStringArray(e, "provides")));
+                result.Add(
+                    new ServiceDef(
+                        Name: name,
+                        Host: host,
+                        Kind: GetString(e, "kind"),
+                        Note: GetString(e, "note"),
+                        Provides: GetStringArray(e, "provides")
+                    )
+                );
             }
             return result;
         }

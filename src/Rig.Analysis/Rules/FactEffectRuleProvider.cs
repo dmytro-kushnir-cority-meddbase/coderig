@@ -26,24 +26,24 @@ public static class FactEffectRuleProvider
     private static FactEffectRule Project(EffectRule rule)
     {
         return new FactEffectRule(
-            rule.Provider,
-            rule.Operation,
-            rule.Methods,
-            rule.DeclaringTypes ?? [],
-            rule.ReceiverTypes ?? [],
-            rule.DeclaringTypeNameEndsWith,
-            rule.DeclaringTypeBaseTypes,
-            rule.MatchConstructor,
-            rule.MinArguments,
-            rule.MatchThrow,
-            rule.ContainingNamespaces,
-            rule.ContainingTypes,
-            rule.ContainingMethods,
-            rule.Resource,
-            rule.TreatAsDispatch,
-            rule.TargetCallsMethods,
-            rule.TypeArgumentIndex,
-            rule.ArgumentIndex
+            Provider: rule.Provider,
+            Operation: rule.Operation,
+            Methods: rule.Methods,
+            DeclaringTypes: rule.DeclaringTypes ?? [],
+            ReceiverTypes: rule.ReceiverTypes ?? [],
+            DeclaringTypeNameEndsWith: rule.DeclaringTypeNameEndsWith,
+            DeclaringTypeBaseTypes: rule.DeclaringTypeBaseTypes,
+            MatchConstructor: rule.MatchConstructor,
+            MinArguments: rule.MinArguments,
+            MatchThrow: rule.MatchThrow,
+            ContainingNamespaces: rule.ContainingNamespaces,
+            ContainingTypes: rule.ContainingTypes,
+            ContainingMethods: rule.ContainingMethods,
+            Resource: rule.Resource,
+            TreatAsDispatch: rule.TreatAsDispatch,
+            TargetCallsMethods: rule.TargetCallsMethods,
+            TypeArgumentIndex: rule.TypeArgumentIndex,
+            ArgumentIndex: rule.ArgumentIndex
         );
     }
 }

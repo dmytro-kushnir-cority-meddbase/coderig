@@ -25,18 +25,24 @@ public static class FactObservationRuleProvider
         var rules = AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths);
 
         var resilience = rules
-            .ResilienceRetryObservations.Select(r => new FactResilienceRetryRule(r.WrapperMethods, r.ReceiverTypePatterns))
+            .ResilienceRetryObservations.Select(r => new FactResilienceRetryRule(
+                WrapperMethods: r.WrapperMethods,
+                ReceiverTypePatterns: r.ReceiverTypePatterns
+            ))
             .ToArray();
         var concurrency = rules
-            .ConcurrencyHandledObservations.Select(r => new FactConcurrencyHandledRule(r.CommitMethods, r.CatchTypePatterns))
+            .ConcurrencyHandledObservations.Select(r => new FactConcurrencyHandledRule(
+                CommitMethods: r.CommitMethods,
+                CatchTypePatterns: r.CatchTypePatterns
+            ))
             .ToArray();
         var resourceSpan = rules
             .ResourceSpanObservations.Select(r => new FactResourceSpanRule(
-                r.ScopeKind,
-                r.ScopeTypePatterns,
-                r.ExcludeProviders,
-                r.ObservationType,
-                r.Context
+                ScopeKind: r.ScopeKind,
+                ScopeTypePatterns: r.ScopeTypePatterns,
+                ExcludeProviders: r.ExcludeProviders,
+                ObservationType: r.ObservationType,
+                Context: r.Context
             ))
             .ToArray();
 

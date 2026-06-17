@@ -19,5 +19,6 @@ public static class FactTraversalCutRuleProvider
         return ruleSet.TraversalCuts.Select(Project).ToArray();
     }
 
-    private static FactTraversalCutRule Project(TraversalCutRule rule) => new(rule.Pattern, rule.Label ?? rule.Reason ?? rule.Pattern);
+    private static FactTraversalCutRule Project(TraversalCutRule rule) =>
+        new(Pattern: rule.Pattern, Label: rule.Label ?? rule.Reason ?? rule.Pattern);
 }

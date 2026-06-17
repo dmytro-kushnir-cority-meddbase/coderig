@@ -28,9 +28,10 @@ internal static class CommonOptions
     // --maxdepth / --depth (alias): unbounded when absent (the action substitutes int.MaxValue).
     internal static Option<int?> Depth() => new("--maxdepth", "--depth") { Description = "Max traversal depth (default: unbounded)." };
 
-    internal static Option<string[]> Only() => FilterList("--only", "Keep only these effects (provider or provider:operation).");
+    internal static Option<string[]> Only() =>
+        FilterList(name: "--only", description: "Keep only these effects (provider or provider:operation).");
 
-    internal static Option<string[]> Exclude() => FilterList("--exclude", "Drop these effects (e.g. --exclude throw).");
+    internal static Option<string[]> Exclude() => FilterList(name: "--exclude", description: "Drop these effects (e.g. --exclude throw).");
 
     // A repeatable list option whose value is split on commas OR whitespace (also ';' / tab) with empties
     // trimmed — so `--exclude throw`, `--exclude throw,llblgen:read`, `--exclude "throw cache"`, and
@@ -47,6 +48,14 @@ internal static class CommonOptions
         };
 
     internal static Option<string?> Format() => new("--format") { Description = "Output format; `tsv` for machine-readable rows." };
+
+    // --store <ref> (aliases --commit/--at): read from a specific per-commit store instead of the latest
+    // index. The ref is a store-id or a commit sha (full or short) — resolved by StoreLayout.DbPathForRef.
+    internal static Option<string?> Store() =>
+        new("--store", "--commit", "--at")
+        {
+            Description = "Read from a specific indexed store (commit sha/short-sha or store-id); default is the latest index.",
+        };
 
     internal static Option<string?> Kind() => new("--kind") { Description = "Filter by symbol/reference kind." };
 

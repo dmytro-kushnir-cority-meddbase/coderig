@@ -14,8 +14,8 @@ internal static class TraversalGraphLoader
     // Every query command opens the store READ-ONLY (see RigDbContext.readOnly): the engine rejects any
     // write to the main DB, so a read command can never mutate the index. Writers (index/mine/graph) use
     // the default read-write constructor.
-    internal static RigDbContext OpenReadContext(string workingDirectory) =>
-        new(Path.Combine(workingDirectory, ".rig", "rig.db"), readOnly: true);
+    internal static RigDbContext OpenReadContext(string workingDirectory, string? storeRef = null) =>
+        new(CommandLine.StoreLayout.DbPathForRef(workingDirectory, storeRef), readOnly: true);
 
     // The call graph for a traversal command (reaches/tree/path/callers). When the derived edge views
     // exist (`rig graph` has been run) it returns the BOUNDED subgraph for `pattern` in the given
@@ -96,7 +96,7 @@ internal static class TraversalGraphLoader
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
-        return new SqlReachability.ReachInputs(graph, invocations, epData.CtorRefs, throwRefs);
+        return new SqlReachability.ReachInputs(graph, invocations, CtorRefs: epData.CtorRefs, ThrowRefs: throwRefs);
     }
 
     // Base edges in the (TypeId, BaseId) shape FactEffectDeriver.Derive expects, from a graph's edges.

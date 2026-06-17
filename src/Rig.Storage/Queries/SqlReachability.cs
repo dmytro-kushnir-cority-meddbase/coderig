@@ -339,19 +339,19 @@ public static class SqlReachability
                     // Positional through FirstArgName (index 12); the new nth-argument lists are
                     // appended as NAMED args because EnclosingScopes (param 13) is skipped on this path.
                     new FactInvocation(
-                        reader.GetString(0),
-                        reader.IsDBNull(1) ? null : reader.GetString(1),
-                        reader.IsDBNull(2) ? "" : reader.GetString(2),
-                        reader.IsDBNull(3) ? 0 : reader.GetInt32(3),
-                        reader.IsDBNull(4) ? null : reader.GetString(4),
-                        reader.IsDBNull(5) ? null : reader.GetString(5),
-                        reader.IsDBNull(6) ? null : reader.GetString(6),
-                        reader.IsDBNull(7) ? null : reader.GetString(7),
-                        reader.IsDBNull(8) ? null : reader.GetString(8),
-                        reader.IsDBNull(9) ? null : reader.GetString(9),
-                        reader.IsDBNull(10) ? null : reader.GetString(10),
-                        reader.IsDBNull(11) ? null : reader.GetString(11),
-                        reader.IsDBNull(12) ? null : reader.GetString(12),
+                        Target: reader.GetString(0),
+                        Enclosing: reader.IsDBNull(1) ? null : reader.GetString(1),
+                        FilePath: reader.IsDBNull(2) ? "" : reader.GetString(2),
+                        Line: reader.IsDBNull(3) ? 0 : reader.GetInt32(3),
+                        Receiver: reader.IsDBNull(4) ? null : reader.GetString(4),
+                        FirstArgTemplate: reader.IsDBNull(5) ? null : reader.GetString(5),
+                        FirstArgType: reader.IsDBNull(6) ? null : reader.GetString(6),
+                        LoopKind: reader.IsDBNull(7) ? null : reader.GetString(7),
+                        LoopDetail: reader.IsDBNull(8) ? null : reader.GetString(8),
+                        EnclosingInvocations: reader.IsDBNull(9) ? null : reader.GetString(9),
+                        CatchTypes: reader.IsDBNull(10) ? null : reader.GetString(10),
+                        TypeArguments: reader.IsDBNull(11) ? null : reader.GetString(11),
+                        FirstArgName: reader.IsDBNull(12) ? null : reader.GetString(12),
                         ArgumentTemplates: reader.IsDBNull(13) ? null : reader.GetString(13),
                         ArgumentNames: reader.IsDBNull(14) ? null : reader.GetString(14)
                     )
@@ -374,7 +374,12 @@ public static class SqlReachability
                 var line = reader.IsDBNull(3) ? 0 : reader.GetInt32(3);
                 ctorByLoc.TryAdd(
                     (file, line),
-                    new SymbolRef(reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1), file, line)
+                    new SymbolRef(
+                        Target: reader.GetString(0),
+                        Enclosing: reader.IsDBNull(1) ? null : reader.GetString(1),
+                        FilePath: file,
+                        Line: line
+                    )
                 );
             },
             cancellationToken
@@ -394,12 +399,15 @@ public static class SqlReachability
                 var target = reader.GetString(0);
                 var file = reader.IsDBNull(2) ? "" : reader.GetString(2);
                 var line = reader.IsDBNull(3) ? 0 : reader.GetInt32(3);
-                throwByKey.TryAdd((file, line, target), new SymbolRef(target, reader.IsDBNull(1) ? null : reader.GetString(1), file, line));
+                throwByKey.TryAdd(
+                    (file, line, target),
+                    new SymbolRef(Target: target, Enclosing: reader.IsDBNull(1) ? null : reader.GetString(1), FilePath: file, Line: line)
+                );
             },
             cancellationToken
         );
 
-        return new ReachInputs(graph, invocations, ctorByLoc.Values.ToArray(), throwByKey.Values.ToArray());
+        return new ReachInputs(graph, invocations, CtorRefs: ctorByLoc.Values.ToArray(), ThrowRefs: throwByKey.Values.ToArray());
     }
 
     // Loads the bounded FactGraphData from the already-built reach_set temp table. Forward joins
@@ -415,13 +423,23 @@ public static class SqlReachability
         // ReceiverType drives the in-memory edge-aware dispatch narrowing. Old stores (built before the
         // column existed and never re-`rig graph`-ed) lack it — probe so the SELECT degrades to a null
         // receiver (full CHA) instead of throwing.
-        var hasReceiver = await StorageProbes.ColumnExistsAsync(connection, "call_edges", "ReceiverType", cancellationToken);
+        var hasReceiver = await StorageProbes.ColumnExistsAsync(
+            connection,
+            table: "call_edges",
+            column: "ReceiverType",
+            cancellationToken: cancellationToken
+        );
         var receiverSelect = hasReceiver ? "c.ReceiverType" : "NULL";
         // HandoffDispatcher rides along so the bounded in-memory graph carries the async-handoff
         // classification — the in-memory FactPathFinder applies the sync-cut / --async filter over the
         // (superset) bounded graph, so this column is what lets it tell handoff edges apart. Null on a
         // store built before classification (degrades to no handoffs = the pre-async behavior).
-        var hasHandoff = await StorageProbes.ColumnExistsAsync(connection, "call_edges", "HandoffDispatcher", cancellationToken);
+        var hasHandoff = await StorageProbes.ColumnExistsAsync(
+            connection,
+            table: "call_edges",
+            column: "HandoffDispatcher",
+            cancellationToken: cancellationToken
+        );
         var handoffSelect = hasHandoff ? "c.HandoffDispatcher" : "NULL";
 
         // Call-site generic type arguments aren't stored on call_edges; they live on reference_facts
@@ -432,7 +450,12 @@ public static class SqlReachability
         // thousands of times. The bulk query is bounded to reach_set on the caller-side index and returns
         // only the (few) generic call sites. Probed so a store predating the column degrades to no
         // narrowing (full CHA). Non-generic / synthesized dispatch edges have no entry -> null.
-        var hasTypeArgs = await StorageProbes.ColumnExistsAsync(connection, "reference_facts", "TypeArguments", cancellationToken);
+        var hasTypeArgs = await StorageProbes.ColumnExistsAsync(
+            connection,
+            table: "reference_facts",
+            column: "TypeArguments",
+            cancellationToken: cancellationToken
+        );
         var typeArgsByEdge = new Dictionary<(string, string, int), string>();
         if (hasTypeArgs)
         {
@@ -467,16 +490,16 @@ public static class SqlReachability
                 typeArgsByEdge.TryGetValue((from, to, line), out var typeArgs);
                 callEdges.Add(
                     new CallEdge(
-                        from,
-                        to,
-                        reader.GetString(2),
-                        reader.IsDBNull(3) ? "" : reader.GetString(3),
-                        line,
-                        reader.IsDBNull(5) ? null : reader.GetString(5),
-                        reader.IsDBNull(6) ? null : reader.GetString(6),
-                        reader.IsDBNull(7) ? null : reader.GetString(7),
-                        reader.IsDBNull(8) ? null : reader.GetString(8),
-                        typeArgs
+                        Caller: from,
+                        Callee: to,
+                        Kind: reader.GetString(2),
+                        FilePath: reader.IsDBNull(3) ? "" : reader.GetString(3),
+                        Line: line,
+                        LoopKind: reader.IsDBNull(5) ? null : reader.GetString(5),
+                        LoopDetail: reader.IsDBNull(6) ? null : reader.GetString(6),
+                        ReceiverType: reader.IsDBNull(7) ? null : reader.GetString(7),
+                        HandoffDispatcher: reader.IsDBNull(8) ? null : reader.GetString(8),
+                        TypeArguments: typeArgs
                     )
                 );
             },
@@ -494,12 +517,12 @@ public static class SqlReachability
                 if (!methodById.ContainsKey(id))
                 {
                     methodById[id] = new MethodRef(
-                        id,
-                        reader.GetString(1),
-                        reader.IsDBNull(2) ? null : reader.GetString(2),
-                        !reader.IsDBNull(3) && reader.GetInt32(3) != 0,
-                        reader.IsDBNull(4) ? null : reader.GetString(4),
-                        reader.IsDBNull(5) ? 0 : reader.GetInt32(5)
+                        SymbolId: id,
+                        Name: reader.GetString(1),
+                        ContainingTypeId: reader.IsDBNull(2) ? null : reader.GetString(2),
+                        IsOverride: !reader.IsDBNull(3) && reader.GetInt32(3) != 0,
+                        FilePath: reader.IsDBNull(4) ? null : reader.GetString(4),
+                        Line: reader.IsDBNull(5) ? 0 : reader.GetInt32(5)
                     );
                 }
             },
@@ -517,11 +540,11 @@ public static class SqlReachability
                 var related = reader.GetString(1);
                 if (reader.GetString(2) == "interface")
                 {
-                    implEdges.Add(new ImplementsEdge(type, related));
+                    implEdges.Add(new ImplementsEdge(ImplType: type, InterfaceType: related));
                 }
                 else
                 {
-                    baseEdges.Add(new BaseEdge(type, related));
+                    baseEdges.Add(new BaseEdge(SubType: type, BaseType: related));
                 }
             },
             cancellationToken
@@ -540,7 +563,10 @@ public static class SqlReachability
             await ReadAsync(
                 connection,
                 "SELECT DISTINCT SourceMember, TargetMember, Kind FROM dispatch_facts;",
-                reader => mined.Add(new DispatchFact(reader.GetString(0), reader.GetString(1), reader.GetString(2))),
+                reader =>
+                    mined.Add(
+                        new DispatchFact(SourceMember: reader.GetString(0), TargetMember: reader.GetString(1), Kind: reader.GetString(2))
+                    ),
                 cancellationToken
             );
             minedDispatch = mined.ToArray();
@@ -611,7 +637,8 @@ public static class SqlReachability
         }
     }
 
-    private static string EscapeLike(string value) => value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+    private static string EscapeLike(string value) =>
+        value.Replace(oldValue: "\\", newValue: "\\\\").Replace(oldValue: "%", newValue: "\\%").Replace(oldValue: "_", newValue: "\\_");
 
     private static async Task ReadAsync(
         DbConnection connection,

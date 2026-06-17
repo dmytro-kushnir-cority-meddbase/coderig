@@ -87,19 +87,19 @@ internal static class DependencyGraph
 
         if (ext == ".slnx")
         {
-            return ParseSlnx(solutionPath, dir);
+            return ParseSlnx(slnxPath: solutionPath, baseDir: dir);
         }
 
         if (ext is ".sln")
         {
-            return ParseSln(await File.ReadAllTextAsync(solutionPath), dir);
+            return ParseSln(content: await File.ReadAllTextAsync(solutionPath), baseDir: dir);
         }
 
         if (ext is ".slnf")
         {
             // solution filter — projects listed under solution.projects
             var json = await File.ReadAllTextAsync(solutionPath);
-            return ParseSlnf(json, dir);
+            return ParseSlnf(json: json, baseDir: dir);
         }
 
         if (ext is ".csproj")
@@ -169,7 +169,12 @@ internal static class DependencyGraph
         var segment = json[(start + 1)..end];
         return segment
             .Split(',')
-            .Select(s => s.Trim().Trim('"').Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar))
+            .Select(s =>
+                s.Trim()
+                    .Trim('"')
+                    .Replace(oldChar: '/', newChar: Path.DirectorySeparatorChar)
+                    .Replace(oldChar: '\\', newChar: Path.DirectorySeparatorChar)
+            )
             .Where(s => s.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
             .Select(s => Path.GetFullPath(Path.Combine(baseDir, s)))
             .ToArray();

@@ -55,7 +55,16 @@ public static partial class FactPathFinder
         GraphIndex index,
         string? incomingReceiver = null,
         IReadOnlyCollection<string>? incomingBinding = null,
-        TraversalMode mode = TraversalMode.SyncCut
+        TraversalMode mode = TraversalMode.SyncCut,
+        // True when `current` was itself reached via a dispatch edge (impl/override/delegate). DISPATCH
+        // IS A SINGLE HOP: resolving a virtual/interface call already yields the concrete runtime method,
+        // so that method must NOT be re-dispatched as if it were another virtual call site. Re-dispatching
+        // is how IPerformanceLogger.Startup (impl-resolved to the INHERITED ServiceBase.Startup) leaked
+        // into ServiceBase.Startup's 31 unrelated service overrides. The node's BODY (direct call edges)
+        // is still walked — only its own dispatch fan-out is suppressed. Set by the user-facing forward
+        // traversals (tree/reaches/path); the receiver-blind oracle (ReachableFromAll) leaves it false, so
+        // the SQL-equivalence superset is unchanged.
+        bool fromDispatch = false
     )
     {
         // Traversal cut: if the current node matches a cut rule, emit no successors — it is a leaf.
@@ -125,16 +134,23 @@ public static partial class FactPathFinder
             }
         }
 
+        // One-hop dispatch: a node reached via a dispatch edge is the resolved concrete method — walk its
+        // body (emitted above) but do NOT re-dispatch it (see `fromDispatch`).
+        if (fromDispatch)
+        {
+            yield break;
+        }
+
         // Dispatch (synthetic, no call-site line) edges AFTER the line-ordered real calls — the fan-out
         // of `current` itself when it is a virtual/base/interface method, narrowed by the receiver of the
         // call that REACHED current (edge-aware) AND by the carried type-arg binding (generic-dispatch
         // narrowing). Tagged with the group's fan-out degree (N) and attributed to `current` (the dispatch
         // source). The dispatch hop adds no call-site type args, so targets inherit `current`'s binding.
         var dispatch = DispatchTargets(
-            current,
-            index,
-            index.NarrowDispatch ? incomingReceiver : null,
-            index.NarrowDispatch ? incomingBinding : null
+            method: current,
+            index: index,
+            receiverType: index.NarrowDispatch ? incomingReceiver : null,
+            carriedBinding: index.NarrowDispatch ? incomingBinding : null
         );
         var degree = dispatch.Count;
         // Dispatch SEEDS the concrete `this`-type for the target frame: resolving a virtual/interface call
@@ -159,7 +175,7 @@ public static partial class FactPathFinder
                 null,
                 degree,
                 current,
-                SeedReceiver(incomingReceiver, d.Node, index),
+                SeedReceiver(incomingReceiver: incomingReceiver, targetMethod: d.Node, index: index),
                 null,
                 d.Basis,
                 incomingBinding,
@@ -168,6 +184,11 @@ public static partial class FactPathFinder
             );
         }
     }
+
+    // The synthetic edge kinds emitted by the dispatch block (a virtual/interface/base/delegate fan-out),
+    // as opposed to a real call ("invocation"/"methodGroup"/"ctor"/…) or an async "handoff". A node reached
+    // by one of these is an already-resolved concrete target and must not be re-dispatched (one-hop).
+    private static bool IsDispatchEdgeKind(string? kind) => kind is "impl-dispatch" or "override-dispatch" or "delegate-dispatch";
 
     // The `this`-type to carry into a dispatched-to method `targetMethod`: the incoming concrete receiver
     // when it is the override's declaring type or a SUBTYPE of it (the precise runtime object, more derived
@@ -188,7 +209,7 @@ public static partial class FactPathFinder
             return declDisplay;
         }
 
-        return AncestorOrEqual(declStripped, inStripped, index) ? incomingReceiver : declDisplay;
+        return AncestorOrEqual(ancestor: declStripped, descendant: inStripped, index: index) ? incomingReceiver : declDisplay;
     }
 
     // The display-FQN form of a method's declaring type ("M:Ns.Bar.M(..)" -> "Ns.Bar"), as ResolveNarrowRoot
@@ -236,7 +257,7 @@ public static partial class FactPathFinder
                     continue;
                 }
             }
-            var part = typeArguments.Substring(start, i - start).Trim();
+            var part = typeArguments.Substring(startIndex: start, length: i - start).Trim();
             start = i + 1;
             // Only namespaced types can name a dispatch candidate's declaring type; tuples/primitives/
             // type-parameter tokens can't, so they're never useful as a binding and are skipped.
@@ -308,7 +329,7 @@ public static partial class FactPathFinder
         if (!string.IsNullOrEmpty(edge.ReceiverType))
         {
             var edgeRecv = ReceiverToStrippedTypeId(edge.ReceiverType!);
-            return edgeRecv is not null && AncestorOrEqual(edgeRecv, inThis, index);
+            return edgeRecv is not null && AncestorOrEqual(ancestor: edgeRecv, descendant: inThis, index: index);
         }
 
         var calleeType = ParseMethod(edge.Callee)?.TypeId;
@@ -318,7 +339,8 @@ public static partial class FactPathFinder
         }
 
         var calleeStripped = TypeClosure.StripGeneric(calleeType);
-        return AncestorOrEqual(calleeStripped, inThis, index) || AncestorOrEqual(inThis, calleeStripped, index);
+        return AncestorOrEqual(ancestor: calleeStripped, descendant: inThis, index: index)
+            || AncestorOrEqual(ancestor: inThis, descendant: calleeStripped, index: index);
     }
 
     // True when `ancestor` == `descendant`, or `descendant` is a transitive base-edge subtype of
@@ -331,7 +353,8 @@ public static partial class FactPathFinder
             return true;
         }
 
-        return Descendants(ancestor, index).Contains(descendant) || DescendantsContainStripped(ancestor, descendant, index);
+        return Descendants(ancestor, index).Contains(descendant)
+            || DescendantsContainStripped(declaringTypeId: ancestor, strippedReceiver: descendant, index: index);
     }
 
     // All synthetic dispatch successors of `method` (a virtual/base/interface method node), with the
@@ -408,7 +431,7 @@ public static partial class FactPathFinder
 
         // Resolve the receiver to a narrowing subtree, if it is reliable. `narrowRoot` non-null means
         // dispatch restricts to {narrowRoot} ∪ descendants(narrowRoot) instead of every candidate.
-        var narrowRoot = ResolveNarrowRoot(receiverType, parsed.Value.TypeId, index);
+        var narrowRoot = ResolveNarrowRoot(receiverType: receiverType, declaringTypeId: parsed.Value.TypeId, index: index);
 
         // Candidates are collected receiver-BLIND below; receiver-type devirtualization is applied once,
         // as a set, by NarrowByReceiver at the end (a per-candidate filter can't tell an INHERITED
@@ -420,12 +443,24 @@ public static partial class FactPathFinder
         var hasMined = false;
         if (index.MinedDispatchBySource.Count > 0)
         {
+            // Walk the mined-dispatch closure, but NEVER CROSS edge kinds after the root hop. An impl edge
+            // resolves an interface method to the concrete method on ONE implementing type; the override
+            // edges out of THAT method belong to an unrelated base-virtual fan-out whose siblings do NOT
+            // implement the interface. Crossing impl->override is unsound: e.g. IPerformanceLogger.Startup
+            // impl-resolves to the INHERITED ServiceBase.Startup (a logger that derives ServiceBase and
+            // doesn't override Startup), and continuing into ServiceBase.Startup's 31 service overrides
+            // claimed the interface reaches every CacheManager/Service Startup — none of which are loggers.
+            // No recall is lost: per-type AllInterfaces mining already emits a DIRECT impl edge from the
+            // interface method to every implementing subtype (incl. ones that override the method), and
+            // override chains are walked transitively within their own kind. The root may take EITHER kind
+            // (an interface method has impl edges; a base virtual has override edges); after the first hop
+            // we stay within the kind we took. (`null` viaKind at the root = either kind allowed.)
             var visited = new HashSet<string>(StringComparer.Ordinal) { method };
-            var stack = new Stack<string>();
-            stack.Push(method);
+            var stack = new Stack<(string Node, string? ViaKind)>();
+            stack.Push((method, null));
             while (stack.Count > 0)
             {
-                var current = stack.Pop();
+                var (current, viaKind) = stack.Pop();
                 if (!index.MinedDispatchBySource.TryGetValue(current, out var outs))
                 {
                     continue;
@@ -433,13 +468,18 @@ public static partial class FactPathFinder
 
                 foreach (var (target, kind) in outs)
                 {
+                    if (viaKind is not null && !string.Equals(kind, viaKind, StringComparison.Ordinal))
+                    {
+                        continue; // don't cross from an impl hop into override siblings (or vice versa)
+                    }
+
                     if (!visited.Add(target))
                     {
                         continue;
                     }
 
                     hasMined = true;
-                    stack.Push(target); // walk the whole closure; NarrowByReceiver trims at the end
+                    stack.Push((target, kind)); // walk the closure WITHIN this kind; NarrowByReceiver trims at the end
                     if (seen.Add(target))
                     {
                         targets.Add((target, kind == DispatchKinds.Impl ? "impl-dispatch" : "override-dispatch", "roslyn"));
@@ -522,7 +562,12 @@ public static partial class FactPathFinder
         }
 
         return NarrowByTypeArguments(
-            NarrowByContextFamily(NarrowByReceiver(targets, narrowRoot, index), receiverType, parsed.Value.TypeId, index),
+            NarrowByContextFamily(
+                targets: NarrowByReceiver(targets, narrowRoot, index),
+                receiverType: receiverType,
+                methodDeclaringTypeId: parsed.Value.TypeId,
+                index: index
+            ),
             carriedBinding,
             index
         );
@@ -597,7 +642,7 @@ public static partial class FactPathFinder
         foreach (var t in targets)
         {
             var declType = ParseMethod(t.Node)?.TypeId;
-            if (declType is not null && roots.Any(r => InNarrowSubtree(declType, r, index)))
+            if (declType is not null && roots.Any(r => InNarrowSubtree(typeId: declType, narrowRoot: r, index: index)))
             {
                 narrowed.Add(t);
             }
@@ -647,8 +692,9 @@ public static partial class FactPathFinder
         // pure intermediate base like ReferralEntityBase legitimately has none; its concrete override on
         // ReferralEntity is what matters and is found by scanning the narrowed subtree below.)
         var isBaseDescendant =
-            Descendants(declaringTypeId, index).Contains(stripped) || DescendantsContainStripped(declaringTypeId, stripped, index);
-        if (!isBaseDescendant && !ImplementsInterface(stripped, declaringTypeId, index))
+            Descendants(declaringTypeId, index).Contains(stripped)
+            || DescendantsContainStripped(declaringTypeId: declaringTypeId, strippedReceiver: stripped, index: index);
+        if (!isBaseDescendant && !ImplementsInterface(strippedType: stripped, interfaceTypeId: declaringTypeId, index: index))
         {
             return null;
         }
@@ -674,7 +720,10 @@ public static partial class FactPathFinder
             }
 
             // The receiver may be a subtype of a declared implementer.
-            if (Descendants(impl, index).Contains(strippedType) || DescendantsContainStripped(impl, strippedType, index))
+            if (
+                Descendants(impl, index).Contains(strippedType)
+                || DescendantsContainStripped(declaringTypeId: impl, strippedReceiver: strippedType, index: index)
+            )
             {
                 return true;
             }
@@ -718,13 +767,17 @@ public static partial class FactPathFinder
             return targets;
         }
 
-        var subtree = targets.Where(t => ParseMethod(t.Node)?.TypeId is { } dt && InNarrowSubtree(dt, narrowRoot, index)).ToList();
+        var subtree = targets
+            .Where(t => ParseMethod(t.Node)?.TypeId is { } dt && InReceiverScope(typeId: dt, narrowRoot: narrowRoot, index: index))
+            .ToList();
         if (subtree.Count > 0)
         {
             return subtree;
         }
 
-        var ancestors = targets.Where(t => ParseMethod(t.Node)?.TypeId is { } dt && AncestorOrEqual(dt, narrowRoot, index)).ToList();
+        var ancestors = targets
+            .Where(t => ParseMethod(t.Node)?.TypeId is { } dt && AncestorOrEqual(ancestor: dt, descendant: narrowRoot, index: index))
+            .ToList();
         if (ancestors.Count == 0)
         {
             return targets; // no candidate on the receiver's line at all — suspect binding, keep CHA
@@ -735,7 +788,9 @@ public static partial class FactPathFinder
         var nearest = ancestors
             .Where(a =>
                 ParseMethod(a.Node)?.TypeId is { } ad
-                && !ancestors.Any(b => ParseMethod(b.Node)?.TypeId is { } bd && IsStrictAncestor(ad, bd, index))
+                && !ancestors.Any(b =>
+                    ParseMethod(b.Node)?.TypeId is { } bd && IsStrictAncestor(ancestorType: ad, descendantType: bd, index: index)
+                )
             )
             .ToList();
         return nearest.Count > 0 ? nearest : ancestors;
@@ -745,7 +800,21 @@ public static partial class FactPathFinder
     // of, and not the same (generic-stripped) type as, the descendant.
     private static bool IsStrictAncestor(string ancestorType, string descendantType, GraphIndex index) =>
         !string.Equals(TypeClosure.StripGeneric(ancestorType), TypeClosure.StripGeneric(descendantType), StringComparison.Ordinal)
-        && AncestorOrEqual(ancestorType, descendantType, index);
+        && AncestorOrEqual(ancestor: ancestorType, descendant: descendantType, index: index);
+
+    // A candidate target's declaring type is a possible runtime type for a receiver narrowed to
+    // `narrowRoot` when it IS narrowRoot / a base-edge subtype of it (the class-receiver case), OR —
+    // when narrowRoot is an INTERFACE — a type that implements it. The interface arm is what lets a
+    // sub-interface receiver (e.g. `IConfiguration`) trim a fan-out that was resolved against a BASE
+    // interface (`IConfiguration : IPersistentState`, call bound to `IPersistentState.GetItem`) down to
+    // the receiver interface's own implementers, instead of every `IPersistentState` implementer (which
+    // pulls in unrelated sibling-interface configs). `Descendants`/`InNarrowSubtree` only follow class
+    // base-edges, so without this an interface receiver can't narrow and falls back to full CHA. For a
+    // CLASS narrowRoot, `ImplsByInterface` has no entry so `ImplementsInterface` is false — behaviour
+    // unchanged. Recall-safe: NarrowByReceiver still falls back to the full set if NOTHING matches.
+    private static bool InReceiverScope(string typeId, string narrowRoot, GraphIndex index) =>
+        InNarrowSubtree(typeId: typeId, narrowRoot: narrowRoot, index: index)
+        || ImplementsInterface(strippedType: TypeClosure.StripGeneric(typeId), interfaceTypeId: narrowRoot, index: index);
 
     private static bool InNarrowSubtree(string typeId, string narrowRoot, GraphIndex index)
     {

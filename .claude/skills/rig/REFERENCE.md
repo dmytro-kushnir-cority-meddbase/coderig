@@ -12,6 +12,8 @@
 | `rig tree <pat> [--full\|--summary\|--effects] [--async] [--only p,…] [--exclude p,…] [--maxdepth n]` | Call TREE (box-drawing, source-ordered, emoji per effect). **Synchronous by default**; **`--async`** crosses handoffs, marking the hop `⤳handoff via <dispatcher> [cross_thread]`. `--full` = all; `--summary` = rollup; **`--effects` = only effectful methods**. `↺seen` marks cycle/shared-callee re-entry. |
 | `rig callers <pat> [--roots\|--entrypoints] [--async] [--rules p…] [--maxdepth n]` | Reverse reachability. **Synchronous by default**, so a background callback has no synchronous predecessor → it surfaces as its own `--roots` origin; **`--async`** counts the registrar as reaching it via the handoff. `--roots` = no-predecessor candidates (heuristic — also surfaces unbound interface members). **`--entrypoints` = the RULE-DETECTED entry points (the `derive` set: page/action/handler + promoted handoff origins) that reach the target** — the precise "which of my real entry points touch this code", joined by declaration site. |
 | `rig path <from> <to> [--async]` | One concrete path (BFS-shortest), with per-hop file:line + loop context. Synchronous by default; **`--async`** crosses + renders the `⤳ handoff via <dispatcher>` hop. |
+| `rig impact [--base <ref>] [--base-store p] [--repo p] [--per-ep] [--async] [--format tsv]` | Blast radius + behavioral diff of a git change vs another commit. (1) changed methods (FILE-granular over-approx), (2) affected entry points by deployed service, (3) behavioral delta = effects/observations reachable from the changed set, branch vs base (`+`/`-effect`, `+/-observation`; param-free keys → formatting/signature-immune). **`--per-ep`** = per-entry-point effect-set diff (surfaces path-masked deltas + relocations). Needs BOTH commits indexed; `--base` resolves a ref→sha→store, or `--base-store <path>`; `--repo` = source repo for the diff when it's a separate tree. See SKILL.md. |
+| `rig graph` | Rebuild the derived call-graph views (`call_edges`+`dispatch_edges`) from facts — the fast SQL traversal path. Idempotent, no rescan. **Now run automatically at the tail of `index`** (opt out: `index --no-graph`); run standalone after editing `handoffDispatchers`/factory rules (no re-index needed). |
 | `rig dead [--lib] [--include-dispatch] [--all] [--root pat…] [--rules p…] [--format tsv]` | Unreachable first-party methods. Report-only. See SKILL.md. |
 | `rig refs <pat> [--first-party] [--kind <refkind>] [--limit n]` | Reference facts to a symbol (invocation/methodGroup/ctor/typeUse/throw/attributeUse). |
 | `rig symbols <pat> [--kind <k>] [--limit n]` | Declared symbols (method/type/property/field/event). |
@@ -23,6 +25,13 @@ There is no longer a separate "legacy" command model: everything is computed fro
 (`symbol_facts`/`reference_facts`/`type_relation_facts` + run-agnostic `di_registrations`/`source_files`),
 DocID-joined, with no per-run stitching. The old `entrypoints`/`effects`/`trace`/`callgraph(s)` commands
 were removed — use `derive` (effects + entry points), `reaches`/`tree`/`callers`/`path` (call graph).
+
+**Commit-scoped stores + `--store`.** `index` writes a per-commit store `.rig/<short-commit>/` (`-dirty`
+when the work tree is dirty, `ts-<stamp>` off-git) + a `.rig/LATEST` pointer; reads default to LATEST. Every
+read command (`reaches`/`tree`/`path`/`callers`/`derive`/`graph`) and `impact --base` accepts **`--store
+<ref>`** (aliases `--commit`/`--at`) to target a specific store by store-id or commit-sha prefix — hold two
+commits side by side and diff. A pre-layout flat `.rig/rig.db` is still read (moved to `.legacy.bak` on the
+next index).
 
 DocID shapes: `M:Ns.Type.Method(ArgTypes)`, `T:Ns.Type`, `!:Name` (error type — a reference that
 failed to bind). Generic: open form `Foo\`1`, instantiated `Foo{T:Ns.X}`.

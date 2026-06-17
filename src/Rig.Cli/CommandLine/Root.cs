@@ -23,8 +23,14 @@ internal static class Root
             CallersCommand.Build(output, error, workingDirectory),
             ReachesCommand.Build(output, error, workingDirectory),
             DeriveCommand.Build(output, error, workingDirectory),
+            ImpactCommand.Build(output, error, workingDirectory),
             IndexCommands.BuildGraph(output, error, workingDirectory),
-            DeadCommand.Build(output, error, workingDirectory),
+            // `dead` is DISABLED for now: it runs on the receiver-blind SQL reachability superset, which
+            // since the one-hop dispatch fix (FactPathFinder.Successors `fromDispatch`) no longer matches
+            // the precise tree/reaches/path engine. Rather than ship a dead-code report that disagrees with
+            // what `tree` shows reachable, it stays unregistered until it's moved onto the same engine.
+            // The command + DeadCommand.cs are retained; re-add this line to re-enable. (No users yet.)
+            // DeadCommand.Build(output, error, workingDirectory),
             FactCommands.BuildFiles(output, error, workingDirectory),
             FactCommands.BuildProfile(output, error, workingDirectory),
         };

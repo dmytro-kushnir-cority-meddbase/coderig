@@ -1,0 +1,1 @@
+deployments.json: host project not found for 'SnomedExtensionIdProvider': src/snomed-extension-id-provider/SnomedExtensionIdProvider/SnomedExtensionIdProvider.csproj

@@ -65,7 +65,7 @@ public static partial class FactPathFinder
         var queue = new Queue<(string Node, int Depth)>();
         // Receiver of the edge that reached each node — narrows that node's dispatch when expanded.
         var receiverOf = new Dictionary<string, string?>(StringComparer.Ordinal);
-        foreach (var start in index.Nodes.Where(n => Contains(n, fromPattern)))
+        foreach (var start in index.Nodes.Where(n => Contains(value: n, pattern: fromPattern)))
         {
             if (parent.ContainsKey(start))
             {
@@ -81,7 +81,7 @@ public static partial class FactPathFinder
         {
             var (current, depth) = queue.Dequeue();
 
-            if (parent[current] is not null && Contains(current, toPattern))
+            if (parent[current] is not null && Contains(value: current, pattern: toPattern))
             {
                 return Reconstruct(parent, current);
             }
@@ -91,7 +91,16 @@ public static partial class FactPathFinder
                 continue;
             }
 
-            foreach (var s in Successors(current, index, receiverOf.TryGetValue(current, out var rc) ? rc : null, null, mode))
+            foreach (
+                var s in Successors(
+                    current: current,
+                    index: index,
+                    incomingReceiver: receiverOf.TryGetValue(key: current, value: out var rc) ? rc : null,
+                    incomingBinding: null,
+                    mode: mode,
+                    fromDispatch: parent.TryGetValue(current, out var pe) && pe is { } p && IsDispatchEdgeKind(p.Kind)
+                )
+            )
             {
                 if (!parent.ContainsKey(s.Node))
                 {
@@ -101,17 +110,17 @@ public static partial class FactPathFinder
                 Enqueue(
                     parent,
                     queue,
-                    s.Node,
-                    current,
-                    s.Kind,
-                    s.File,
-                    s.Line,
-                    s.LoopKind,
-                    s.LoopDetail,
-                    s.Fanout,
-                    s.HandoffVia,
-                    s.Basis,
-                    depth
+                    node: s.Node,
+                    from: current,
+                    kind: s.Kind,
+                    file: s.File,
+                    line: s.Line,
+                    loopKind: s.LoopKind,
+                    loopDetail: s.LoopDetail,
+                    fanout: s.Fanout,
+                    handoffVia: s.HandoffVia,
+                    basis: s.Basis,
+                    depth: depth
                 );
             }
         }
@@ -190,6 +199,51 @@ public static partial class FactPathFinder
     )
     {
         var index = BuildIndex(graph, narrowDispatch);
+        return ReachesWithFanoutCore(index, index.Nodes.Where(n => Contains(value: n, pattern: fromPattern)), maxDepth, maxNodes, mode);
+    }
+
+    // Exact-id, one-hop forward reach from EACH seed independently, returning one reachable-node set per
+    // seed (same dispatch semantics as ReachesWithFanout — narrowDispatch one-hop — but seeded by EXACT
+    // symbol id, not a substring pattern, so `EditLive.Save` does NOT also seed `EditLive.SaveFinal`).
+    // The index is built ONCE and shared across a parallel per-seed loop (read-only traversal over an
+    // immutable graph; the lone mutable cache is concurrent + idempotent). This is the engine behind
+    // `rig impact`'s per-EP behavioral attribution: forward-reach hundreds of EPs over one loaded graph.
+    public static IReadOnlyList<HashSet<string>> ReachesFromEachSeed(
+        FactGraphData graph,
+        IReadOnlyList<string> seedIds,
+        int maxDepth = 20,
+        int maxNodes = 20000,
+        bool narrowDispatch = true,
+        TraversalMode mode = TraversalMode.SyncCut
+    )
+    {
+        var index = BuildIndex(graph, narrowDispatch);
+        var results = new HashSet<string>[seedIds.Count];
+        System.Threading.Tasks.Parallel.For(
+            fromInclusive: 0,
+            toExclusive: seedIds.Count,
+            body: i =>
+            {
+                var seed = seedIds[i];
+                var seeds = index.Nodes.Contains(seed) ? new[] { seed } : System.Array.Empty<string>();
+                var info = ReachesWithFanoutCore(index, seeds, maxDepth, maxNodes, mode);
+                results[i] = new HashSet<string>(info.Keys, StringComparer.Ordinal);
+            }
+        );
+        return results;
+    }
+
+    // The shared BFS body of ReachesWithFanout / ReachesFromEachSeed: one-hop dispatch forward reach over a
+    // PREBUILT index from the given seed nodes. All traversal state below is LOCAL — safe to run concurrently
+    // over one shared (read-only) index (DescendantsCache is concurrent).
+    private static IReadOnlyDictionary<string, ReachInfo> ReachesWithFanoutCore(
+        GraphIndex index,
+        IEnumerable<string> seeds,
+        int maxDepth,
+        int maxNodes,
+        TraversalMode mode
+    )
+    {
         var info = new Dictionary<string, ReachInfo>(StringComparer.Ordinal);
         // The static receiver type of the (BFS-shortest) edge that reached each node, carried so that
         // node's own dispatch fan-out can be narrowed edge-aware when it is expanded.
@@ -202,17 +256,21 @@ public static partial class FactPathFinder
         // capped) so it reaches a fixpoint. Narrowing is recall-safe in DispatchTargets: an empty/unmatched
         // binding leaves the full CHA set, so a hub reached without a matching type arg is never emptied.
         var bindingOf = new Dictionary<string, HashSet<string>?>(StringComparer.Ordinal);
+        // Whether each node was first reached via a dispatch edge — gates one-hop dispatch (no re-dispatch
+        // of a resolved concrete target). BFS-first-reach wins, matching the DispatchVia tagging above.
+        var viaDispatchOf = new Dictionary<string, bool>(StringComparer.Ordinal);
         var queue = new Queue<string>();
-        foreach (var start in index.Nodes.Where(n => Contains(n, fromPattern)))
+        foreach (var start in seeds)
         {
             if (info.ContainsKey(start))
             {
                 continue;
             }
 
-            info[start] = new ReachInfo(0, 0, null, null);
+            info[start] = new ReachInfo(Depth: 0, LoopNesting: 0, NearestLoopKind: null, NearestLoopDetail: null);
             receiverOf[start] = null;
             bindingOf[start] = null;
+            viaDispatchOf[start] = false;
             queue.Enqueue(start);
         }
 
@@ -227,11 +285,12 @@ public static partial class FactPathFinder
 
             foreach (
                 var s in Successors(
-                    current,
-                    index,
-                    receiverOf[current],
-                    bindingOf.TryGetValue(current, out var curBinding) ? curBinding : null,
-                    mode
+                    current: current,
+                    index: index,
+                    incomingReceiver: receiverOf[current],
+                    incomingBinding: bindingOf.TryGetValue(current, out var curBinding) ? curBinding : null,
+                    mode: mode,
+                    fromDispatch: viaDispatchOf.TryGetValue(current, out var vd) && vd
                 )
             )
             {
@@ -268,8 +327,18 @@ public static partial class FactPathFinder
                 // Dispatch-basis inheritance: "heuristic" is STICKY (one guessed hop taints the whole
                 // downstream reach), otherwise this edge's basis or the inherited one.
                 var basis = s.Basis == "heuristic" || cur.DispatchBasis == "heuristic" ? "heuristic" : (s.Basis ?? cur.DispatchBasis);
-                info[s.Node] = new ReachInfo(cur.Depth + 1, nesting, nearKind, nearDetail, via, degree, handoffVia, basis);
+                info[s.Node] = new ReachInfo(
+                    Depth: cur.Depth + 1,
+                    LoopNesting: nesting,
+                    NearestLoopKind: nearKind,
+                    NearestLoopDetail: nearDetail,
+                    DispatchVia: via,
+                    DispatchDegree: degree,
+                    HandoffVia: handoffVia,
+                    DispatchBasis: basis
+                );
                 receiverOf[s.Node] = s.OutReceiver;
+                viaDispatchOf[s.Node] = IsDispatchEdgeKind(s.Kind);
                 queue.Enqueue(s.Node);
             }
         }
@@ -364,10 +433,23 @@ public static partial class FactPathFinder
         // the "↺seen" reading before its expansion.)
         var stack = new Stack<MutableNode>();
 
-        var matched = index.Nodes.Where(n => Contains(n, fromPattern)).ToHashSet(StringComparer.Ordinal);
+        var matched = index.Nodes.Where(n => Contains(value: n, pattern: fromPattern)).ToHashSet(StringComparer.Ordinal);
         foreach (var root in matched.Where(n => !IsContainedLambdaOfMatched(n, matched)).OrderBy(n => n, StringComparer.Ordinal))
         {
-            var node = new MutableNode(root, "entry", null, null, 0, null, null, 0, null, null, null, null);
+            var node = new MutableNode(
+                symbol: root,
+                edgeKind: "entry",
+                loopKind: null,
+                loopDetail: null,
+                depth: 0,
+                handoffVia: null,
+                dispatchBasis: null,
+                fanout: 0,
+                receiver: null,
+                binding: null,
+                declaringTypeArgBinding: null,
+                methodTypeArgBinding: null
+            );
             mutableRoots.Add(node);
         }
         // Push roots reversed so the first root's whole subtree is walked before the next root's.
@@ -399,7 +481,16 @@ public static partial class FactPathFinder
                 continue;
             }
 
-            foreach (var s in Successors(n.Symbol, index, n.Receiver, n.Binding, mode))
+            foreach (
+                var s in Successors(
+                    current: n.Symbol,
+                    index: index,
+                    incomingReceiver: n.Receiver,
+                    incomingBinding: n.Binding,
+                    mode: mode,
+                    fromDispatch: IsDispatchEdgeKind(n.EdgeKind)
+                )
+            )
             {
                 // Collapse identical sibling edges: a generic method or bodied accessor called N times
                 // under one parent resolves to one symbol → N edges that would render byte-identically
@@ -431,18 +522,18 @@ public static partial class FactPathFinder
                     continue;
                 }
                 var kid = new MutableNode(
-                    s.Node,
-                    s.Kind,
-                    s.LoopKind,
-                    s.LoopDetail,
-                    n.Depth + 1,
-                    s.HandoffVia,
-                    s.Basis,
-                    s.Fanout,
-                    s.OutReceiver,
-                    s.OutBinding,
-                    s.OutDeclaringBinding,
-                    s.OutMethodBinding
+                    symbol: s.Node,
+                    edgeKind: s.Kind,
+                    loopKind: s.LoopKind,
+                    loopDetail: s.LoopDetail,
+                    depth: n.Depth + 1,
+                    handoffVia: s.HandoffVia,
+                    dispatchBasis: s.Basis,
+                    fanout: s.Fanout,
+                    receiver: s.OutReceiver,
+                    binding: s.OutBinding,
+                    declaringTypeArgBinding: s.OutDeclaringBinding,
+                    methodTypeArgBinding: s.OutMethodBinding
                 );
                 n.Kids.Add(kid);
             }
@@ -519,11 +610,11 @@ public static partial class FactPathFinder
         if (n.Truncated)
         {
             return new TraceNode(
-                n.Symbol,
-                n.EdgeKind,
-                n.LoopKind,
-                n.LoopDetail,
-                EmptyNodes,
+                SymbolId: n.Symbol,
+                EdgeKind: n.EdgeKind,
+                LoopKind: n.LoopKind,
+                LoopDetail: n.LoopDetail,
+                Children: EmptyNodes,
                 Truncated: true,
                 Fanout: n.Fanout,
                 HandoffVia: n.HandoffVia,
@@ -534,13 +625,14 @@ public static partial class FactPathFinder
             );
         }
 
-        var children = n.Kids.Count == 0 ? EmptyNodes : (IReadOnlyList<TraceNode>)n.Kids.Select(ToTraceNode).ToArray();
+        var children = n.Kids.Count == 0 ? EmptyNodes : n.Kids.Select(ToTraceNode).ToArray();
+
         return new TraceNode(
-            n.Symbol,
-            n.EdgeKind,
-            n.LoopKind,
-            n.LoopDetail,
-            children,
+            SymbolId: n.Symbol,
+            EdgeKind: n.EdgeKind,
+            LoopKind: n.LoopKind,
+            LoopDetail: n.LoopDetail,
+            Children: children,
             Fanout: n.Fanout,
             HandoffVia: n.HandoffVia,
             DispatchBasis: n.DispatchBasis,
@@ -581,7 +673,15 @@ public static partial class FactPathFinder
         while (queue.Count > 0 && seen.Count < maxNodes)
         {
             var current = queue.Dequeue();
-            foreach (var s in Successors(current, index, receiverOf.TryGetValue(current, out var rc) ? rc : null, null, mode))
+            foreach (
+                var s in Successors(
+                    current: current,
+                    index: index,
+                    incomingReceiver: receiverOf.TryGetValue(key: current, value: out var rc) ? rc : null,
+                    incomingBinding: null,
+                    mode: mode
+                )
+            )
             {
                 if (seen.Add(s.Node))
                 {
@@ -613,7 +713,7 @@ public static partial class FactPathFinder
 
         var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
         var queue = new Queue<string>();
-        foreach (var start in index.Nodes.Where(n => Contains(n, toPattern)))
+        foreach (var start in index.Nodes.Where(n => Contains(value: n, pattern: toPattern)))
         {
             if (depthOf.ContainsKey(start))
             {
@@ -622,6 +722,62 @@ public static partial class FactPathFinder
 
             depthOf[start] = 0;
             queue.Enqueue(start);
+        }
+
+        while (queue.Count > 0 && depthOf.Count < maxNodes)
+        {
+            var current = queue.Dequeue();
+            var depth = depthOf[current];
+            if (depth >= maxDepth)
+            {
+                continue;
+            }
+
+            foreach (var pred in Predecessors(current, index, rev))
+            {
+                if (depthOf.ContainsKey(pred))
+                {
+                    continue;
+                }
+
+                depthOf[pred] = depth + 1;
+                queue.Enqueue(pred);
+            }
+        }
+
+        return depthOf;
+    }
+
+    // Multi-source reverse reachability — like ReachedBy, but seeded from a SET of EXACT SymbolIds
+    // (not a substring pattern), returning the union of everything that can reach ANY of them keyed
+    // to its shortest reverse hop count to the nearest seed. Mirrors ReachableFromAll's exact-id
+    // seeding on the reverse maps: unknown seed ids (not graph nodes) are skipped. This is the engine
+    // `rig impact` reverse-reaches from a diff's changed-method set with — one index/reverse-map build
+    // shared across all seeds, instead of calling ReachedBy once per changed method (which rebuilds
+    // both each time). Same Predecessors edge model as ReachedBy, so the closure is identical.
+    public static IReadOnlyDictionary<string, int> ReachedByAny(
+        FactGraphData graph,
+        IEnumerable<string> seeds,
+        int maxDepth = 20,
+        int maxNodes = 20000,
+        bool narrowDispatch = true,
+        TraversalMode mode = TraversalMode.SyncCut
+    )
+    {
+        var index = BuildIndex(graph, narrowDispatch);
+        var rev = BuildReverseMaps(graph, narrowDispatch, mode);
+
+        var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
+        var queue = new Queue<string>();
+        foreach (var seed in seeds)
+        {
+            // Seed by EXACT id (the changed methods are concrete DocIDs). A seed absent from the graph
+            // (e.g. a method with no edges either way) is simply not a traversal node — skip it.
+            if (index.Nodes.Contains(seed) && !depthOf.ContainsKey(seed))
+            {
+                depthOf[seed] = 0;
+                queue.Enqueue(seed);
+            }
         }
 
         while (queue.Count > 0 && depthOf.Count < maxNodes)
@@ -731,12 +887,7 @@ public static partial class FactPathFinder
     private static HashSet<string> Descendants(string typeId, GraphIndex index)
     {
         var key = TypeClosure.StripGeneric(typeId);
-        if (!index.DescendantsCache.TryGetValue(key, out var set))
-        {
-            index.DescendantsCache[key] = set = TypeClosure.ComputeStrictDescendants(index.StrippedBaseEdges, new[] { typeId });
-        }
-
-        return set;
+        return index.DescendantsCache.GetOrAdd(key, _ => TypeClosure.ComputeStrictDescendants(index.StrippedBaseEdges, new[] { typeId }));
     }
 
     private static void Enqueue(
@@ -802,15 +953,15 @@ public static partial class FactPathFinder
             var link = parent[node];
             steps.Add(
                 new PathStep(
-                    node,
-                    link?.Kind ?? "entry",
-                    link?.File,
-                    link?.Line ?? 0,
-                    link?.LoopKind,
-                    link?.LoopDetail,
-                    link?.Fanout ?? 0,
-                    link?.HandoffVia,
-                    link?.Basis
+                    SymbolId: node,
+                    Kind: link?.Kind ?? "entry",
+                    FilePath: link?.File,
+                    Line: link?.Line ?? 0,
+                    LoopKind: link?.LoopKind,
+                    LoopDetail: link?.LoopDetail,
+                    Fanout: link?.Fanout ?? 0,
+                    HandoffVia: link?.HandoffVia,
+                    DispatchBasis: link?.Basis
                 )
             );
             if (link is null)
@@ -836,7 +987,7 @@ public static partial class FactPathFinder
         var paren = body.IndexOf('(');
         if (paren >= 0)
         {
-            body = body.Substring(0, paren);
+            body = body.Substring(startIndex: 0, length: paren);
         }
 
         var lastDot = body.LastIndexOf('.');
@@ -845,7 +996,7 @@ public static partial class FactPathFinder
             return null;
         }
 
-        return ("T:" + body.Substring(0, lastDot), body.Substring(lastDot + 1));
+        return ("T:" + body.Substring(startIndex: 0, length: lastDot), body.Substring(lastDot + 1));
     }
 
     // Parameter ARITY of a method DocID: the number of top-level parameters in its "(...)" list, or 0
@@ -906,7 +1057,7 @@ public static partial class FactPathFinder
         var tick = s.IndexOf('`');
         if (tick >= 0)
         {
-            s = s.Substring(0, tick);
+            s = s.Substring(startIndex: 0, length: tick);
         }
 
         return s;

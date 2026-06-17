@@ -13,4 +13,4 @@ catch
     // No console attached (or it rejects the change) — output still works, just may not render glyphs.
 }
 
-Environment.ExitCode = await CliApplication.RunAsync(args, Console.Out, Console.Error);
+Environment.ExitCode = await CliApplication.RunAsync(args, output: Console.Out, error: Console.Error);

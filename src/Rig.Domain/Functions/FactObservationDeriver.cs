@@ -31,7 +31,14 @@ public static class FactObservationDeriver
         if (loopKind is not null)
         {
             observations.Add(
-                new EffectObservationInfo("looped_effect", loopKind, loopDetail ?? loopKind, "high", "compilation", "effect_inside_loop")
+                new EffectObservationInfo(
+                    Type: "looped_effect",
+                    Context: loopKind,
+                    Detail: loopDetail ?? loopKind,
+                    Confidence: "high",
+                    Basis: "compilation",
+                    Reason: "effect_inside_loop"
+                )
             );
         }
 
@@ -47,7 +54,14 @@ public static class FactObservationDeriver
             {
                 var context = $"{fanout.Receiver}.{enclosing.MethodName}";
                 observations.Add(
-                    new EffectObservationInfo("parallel_fanout", context, context, "high", "compilation", "effect_inside_parallel_fanout")
+                    new EffectObservationInfo(
+                        Type: "parallel_fanout",
+                        Context: context,
+                        Detail: context,
+                        Confidence: "high",
+                        Basis: "compilation",
+                        Reason: "effect_inside_parallel_fanout"
+                    )
                 );
                 break;
             }
@@ -71,12 +85,12 @@ public static class FactObservationDeriver
             {
                 observations.Add(
                     new EffectObservationInfo(
-                        "resilience_retry",
-                        match.Pattern,
-                        match.ReceiverType,
-                        "high",
-                        "compilation",
-                        "effect_inside_resilience_retry"
+                        Type: "resilience_retry",
+                        Context: match.Pattern,
+                        Detail: match.ReceiverType,
+                        Confidence: "high",
+                        Basis: "compilation",
+                        Reason: "effect_inside_resilience_retry"
                     )
                 );
                 break;
@@ -99,12 +113,12 @@ public static class FactObservationDeriver
                 {
                     observations.Add(
                         new EffectObservationInfo(
-                            "concurrency_handled",
-                            matched,
-                            caught,
-                            "high",
-                            "compilation",
-                            "efcore_optimistic_concurrency_catch"
+                            Type: "concurrency_handled",
+                            Context: matched,
+                            Detail: caught,
+                            Confidence: "high",
+                            Basis: "compilation",
+                            Reason: "efcore_optimistic_concurrency_catch"
                         )
                     );
                     break;
@@ -146,12 +160,12 @@ public static class FactObservationDeriver
 
                 observations.Add(
                     new EffectObservationInfo(
-                        rule.ObservationType,
-                        rule.Context,
-                        scope.Type.Length == 0 ? rule.Context : scope.Type,
-                        "high",
-                        "compilation",
-                        "effect_inside_held_resource_scope"
+                        Type: rule.ObservationType,
+                        Context: rule.Context,
+                        Detail: scope.Type.Length == 0 ? rule.Context : scope.Type,
+                        Confidence: "high",
+                        Basis: "compilation",
+                        Reason: "effect_inside_held_resource_scope"
                     )
                 );
             }

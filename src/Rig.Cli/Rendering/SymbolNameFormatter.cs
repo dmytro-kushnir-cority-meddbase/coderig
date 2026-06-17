@@ -20,7 +20,7 @@ internal static class SymbolNameFormatter
         var paren = s.IndexOf('(');
         if (paren >= 0)
         {
-            s = s.Substring(0, paren);
+            s = s.Substring(startIndex: 0, length: paren);
         }
 
         // Take the last two namespace segments, scanning for TOP-LEVEL dots only: a constructed-generic
@@ -80,7 +80,7 @@ internal static class SymbolNameFormatter
             return "";
         }
 
-        var inner = s.Substring(open + 1, close - open - 1);
+        var inner = s.Substring(startIndex: open + 1, length: close - open - 1);
         if (inner.Length == 0)
         {
             return "()";
@@ -190,7 +190,7 @@ internal static class SymbolNameFormatter
     //     reads as `NewType<ChamberId, Int32, …>.New` instead of a wall of fully-qualified braces.
     // Type-arg simple-naming applies only INSIDE the braces (depth>0); the outer name (already shortened
     // by ShortName) and the trailing `.Member` keep their dots.
-    internal static string PrettyGenericName(string name) => PrettyGenericName(name, null, null);
+    internal static string PrettyGenericName(string name) => PrettyGenericName(name, declaringArgs: null, methodArgs: null);
 
     // `declaringArgs` / `methodArgs` (when non-null) are the ordered, namespace-stripped concrete type
     // arguments the node ran under — resolved from the generic monomorphization bindings (see
@@ -278,7 +278,7 @@ internal static class SymbolNameFormatter
                                 .Append(
                                     string.Join(
                                         ", ",
-                                        Enumerable.Range(0, n).Select(k => usable && args![k] is { } v ? v : TypeParamName(k))
+                                        Enumerable.Range(start: 0, count: n).Select(k => usable && args![k] is { } v ? v : TypeParamName(k))
                                     )
                                 )
                                 .Append('>');
@@ -294,7 +294,7 @@ internal static class SymbolNameFormatter
                 case '}':
                     FlushToken();
                     sb.Append('>');
-                    depth = Math.Max(0, depth - 1);
+                    depth = Math.Max(val1: 0, val2: depth - 1);
                     i++;
                     break;
                 case ',':
@@ -399,7 +399,7 @@ internal static class SymbolNameFormatter
                     i++;
                 }
 
-                var token = type.Substring(start, i - start);
+                var token = type.Substring(startIndex: start, length: i - start);
                 var dot = token.LastIndexOf('.');
                 sb.Append(dot >= 0 ? token.Substring(dot + 1) : token);
             }
@@ -422,12 +422,12 @@ internal static class SymbolNameFormatter
         }
 
         var s = string.Join(' ', detail!.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
-        return s.Length <= 60 ? s : s.Substring(0, 57) + "...";
+        return s.Length <= 60 ? s : s.Substring(startIndex: 0, length: 57) + "...";
     }
 
     internal static string ShortenPath(string path)
     {
-        var parts = path.Replace('\\', '/').Split('/');
+        var parts = path.Replace(oldChar: '\\', newChar: '/').Split('/');
         return parts.Length <= 3 ? path : string.Join('/', parts[^3..]);
     }
 }

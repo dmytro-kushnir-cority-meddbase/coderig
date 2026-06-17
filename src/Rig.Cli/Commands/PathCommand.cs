@@ -17,14 +17,15 @@ internal static class PathCommand
 {
     internal static Command Build(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var from = CommonOptions.Pattern("from", "Source method pattern.");
-        var to = CommonOptions.Pattern("to", "Target method pattern.");
+        var from = CommonOptions.Pattern(name: "from", description: "Source method pattern.");
+        var to = CommonOptions.Pattern(name: "to", description: "Target method pattern.");
         var async = CommonOptions.Async();
         var raw = CommonOptions.Raw();
         var rules = CommonOptions.Rules();
         var depth = CommonOptions.Depth();
         var format = CommonOptions.Format();
-        var cmd = new Command("path", "Print the first call path from one method to another.")
+        var store = CommonOptions.Store();
+        var cmd = new Command(name: "path", description: "Print the first call path from one method to another.")
         {
             from,
             to,
@@ -33,6 +34,7 @@ internal static class PathCommand
             rules,
             depth,
             format,
+            store,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -48,7 +50,8 @@ internal static class PathCommand
                         depth: pr.GetValue(depth),
                         format: pr.GetValue(format),
                         output: output,
-                        workingDirectory: workingDirectory
+                        workingDirectory: workingDirectory,
+                        storeRef: pr.GetValue(store)
                     )
             )
         );
@@ -64,14 +67,15 @@ internal static class PathCommand
         int? depth,
         string? format,
         TextWriter output,
-        string workingDirectory
+        string workingDirectory,
+        string? storeRef
     )
     {
         var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
         var mode = CommonOptions.Mode(async);
         var shaping = ShapingRuleSet.Load(workingDirectory, extraRules, raw);
 
-        await using var context = OpenReadContext(workingDirectory);
+        await using var context = OpenReadContext(workingDirectory, storeRef);
         // Any path from a `from` node lies entirely within that node's forward closure, so the BOUNDED
         // forward subgraph (loaded on disk via the derived edge views, sized to the result) finds the
         // same first path as the full graph. Falls back to the full EF graph when `rig graph` hasn't run.
@@ -84,6 +88,16 @@ internal static class PathCommand
             cutRules: shaping.Cut,
             contextRules: shaping.Context
         );
+        // Reclassify event-subscription (`+=`) method-group edges to `handoff` — mirroring reaches/tree
+        // (ReachesCommand/TreeCommand do the same). The handler genuinely runs LATER via the event, not
+        // synchronously at the `+=` site, so it must be sync-cut by default and only crossed under --async.
+        // Without this, `path`/`callers` walked a `+=` handler as a synchronous call (the 2026-06-16
+        // over-reach). `--raw` bypasses all shaping, so it is gated the same way reaches/tree gate it.
+        if (!raw)
+        {
+            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+        }
+
         if (!tsv)
         {
             output.WriteLine(

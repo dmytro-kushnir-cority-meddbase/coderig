@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Rig.Domain.Data;
 
 namespace Rig.Domain.Functions;
@@ -114,7 +115,10 @@ public static partial class FactPathFinder
             var typeId = parsed?.TypeId;
             foreach (var s in sources)
             {
-                if ((!cutting || !index.IsTraversalCut(s)) && (typeId is null || ReverseDispatchReaches(s, typeId, index, rev)))
+                if (
+                    (!cutting || !index.IsTraversalCut(s))
+                    && (typeId is null || ReverseDispatchReaches(baseMethod: s, overrideTypeId: typeId, index: index, rev: rev))
+                )
                 {
                     yield return s;
                 }
@@ -155,12 +159,18 @@ public static partial class FactPathFinder
                 return true;
             }
 
-            if (Descendants(r, index).Contains(overrideTypeId) || DescendantsContainStripped(r, overrideStripped, index))
+            if (
+                Descendants(r, index).Contains(overrideTypeId)
+                || DescendantsContainStripped(declaringTypeId: r, strippedReceiver: overrideStripped, index: index)
+            )
             {
                 return true;
             }
 
-            if (Descendants(overrideTypeId, index).Contains(r) || DescendantsContainStripped(overrideTypeId, r, index))
+            if (
+                Descendants(overrideTypeId, index).Contains(r)
+                || DescendantsContainStripped(declaringTypeId: overrideTypeId, strippedReceiver: r, index: index)
+            )
             {
                 return true;
             }
@@ -203,8 +213,10 @@ public static partial class FactPathFinder
         public ILookup<string, string> StrippedBaseEdges = Enumerable.Empty<string>().ToLookup(x => x, StringComparer.Ordinal);
 
         // Memoised strict-descendant closure per (stripped) base type, so transitive override dispatch
-        // doesn't re-BFS the hierarchy on every visit during the main traversal.
-        public Dictionary<string, HashSet<string>> DescendantsCache = new(StringComparer.Ordinal);
+        // doesn't re-BFS the hierarchy on every visit during the main traversal. Concurrent so ONE index
+        // can be shared across threads (ReachesFromEachSeed's parallel per-seed reach): the cache is pure
+        // idempotent memoization — a racing double-compute yields the same set, harmless.
+        public ConcurrentDictionary<string, HashSet<string>> DescendantsCache = new(StringComparer.Ordinal);
         public HashSet<string> Nodes = new(StringComparer.Ordinal);
 
         // When true (the default for the in-memory traversal), virtual/base/interface dispatch is
@@ -360,10 +372,10 @@ public static partial class FactPathFinder
             }
 
             var controllerKey = NormType(contextArg);
-            Bind(controllerKey, NormType(edge.SubType));
+            Bind(controllerKey: controllerKey, stateTypeId: NormType(edge.SubType));
             foreach (var descendant in Descendants(edge.SubType, index))
             {
-                Bind(controllerKey, NormType(descendant));
+                Bind(controllerKey: controllerKey, stateTypeId: NormType(descendant));
             }
         }
     }
@@ -396,7 +408,7 @@ public static partial class FactPathFinder
             }
             else if (typeId[i] == '}' && --depth == 0)
             {
-                return typeId.Substring(open + 1, i - open - 1).Trim();
+                return typeId.Substring(startIndex: open + 1, length: i - open - 1).Trim();
             }
         }
         return null;

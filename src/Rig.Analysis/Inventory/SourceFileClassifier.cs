@@ -7,7 +7,7 @@ internal static class SourceFileClassifier
 {
     public static SourceFileClassification Classify(string solutionPath, Project project, string filePath, AnalysisRuleSet rules)
     {
-        return Classify(solutionPath, project.Name, filePath, rules);
+        return Classify(solutionPath: solutionPath, projectName: project.Name, filePath: filePath, rules: rules);
     }
 
     public static SourceFileClassification Classify(string solutionPath, string projectName, string filePath, AnalysisRuleSet rules)
@@ -16,26 +16,50 @@ internal static class SourceFileClassifier
         var excludedByRule = rules.FindExcludedFile(relativePath);
         if (excludedByRule is not null)
         {
-            return new SourceFileClassification("skipped", "high", "profile", excludedByRule.Reason, excludedByRule.Id);
+            return new SourceFileClassification(
+                Status: "skipped",
+                Confidence: "high",
+                Basis: "profile",
+                Reason: excludedByRule.Reason,
+                Evidence: excludedByRule.Id
+            );
         }
 
         var includedByRule = rules.FindIncludedFile(relativePath);
         if (includedByRule is not null)
         {
-            return new SourceFileClassification("indexed", "high", "profile", includedByRule.Reason, includedByRule.Id);
+            return new SourceFileClassification(
+                Status: "indexed",
+                Confidence: "high",
+                Basis: "profile",
+                Reason: includedByRule.Reason,
+                Evidence: includedByRule.Id
+            );
         }
 
         if (rules.IsTestProject(projectName))
         {
-            return new SourceFileClassification("skipped", "medium", "convention", "test_source", projectName);
+            return new SourceFileClassification(
+                Status: "skipped",
+                Confidence: "medium",
+                Basis: "convention",
+                Reason: "test_source",
+                Evidence: projectName
+            );
         }
 
-        return new SourceFileClassification("indexed", "high", "compilation", "project_document", relativePath);
+        return new SourceFileClassification(
+            Status: "indexed",
+            Confidence: "high",
+            Basis: "compilation",
+            Reason: "project_document",
+            Evidence: relativePath
+        );
     }
 
     private static string GetRelativePath(string solutionPath, string filePath)
     {
         var solutionDirectory = Path.GetDirectoryName(solutionPath) ?? Directory.GetCurrentDirectory();
-        return Path.GetRelativePath(solutionDirectory, filePath).Replace('\\', '/');
+        return Path.GetRelativePath(relativeTo: solutionDirectory, path: filePath).Replace(oldChar: '\\', newChar: '/');
     }
 }

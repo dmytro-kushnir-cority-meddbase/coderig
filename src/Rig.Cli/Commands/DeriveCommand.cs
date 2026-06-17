@@ -25,6 +25,7 @@ internal static class DeriveCommand
         var only = CommonOptions.Only();
         var exclude = CommonOptions.Exclude();
         var format = CommonOptions.Format();
+        var store = CommonOptions.Store();
         var cmd = new Command(name: "derive", description: "Re-derive effects + entry points from facts (no Roslyn).")
         {
             rules,
@@ -32,6 +33,7 @@ internal static class DeriveCommand
             only,
             exclude,
             format,
+            store,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -46,7 +48,8 @@ internal static class DeriveCommand
                         format: pr.GetValue(format),
                         output: output,
                         error: error,
-                        workingDirectory: workingDirectory
+                        workingDirectory: workingDirectory,
+                        storeRef: pr.GetValue(store)
                     )
             )
         );
@@ -61,11 +64,12 @@ internal static class DeriveCommand
         string? format,
         TextWriter output,
         TextWriter error,
-        string workingDirectory
+        string workingDirectory,
+        string? storeRef
     )
     {
         var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        await using var context = OpenReadContext(workingDirectory);
+        await using var context = OpenReadContext(workingDirectory, storeRef);
 
         // Deployment attribution (opt-in: only when deployments.json sits next to .rig). Empty (no-op) when
         // the config is absent; `error` is the log sink so config problems surface.
@@ -117,7 +121,7 @@ internal static class DeriveCommand
             foreach (var ep in tsvEps.Concat(PromoteHandoffOrigins(classifiedHandoffs, tsvEps)))
             {
                 var loaded = deployments.ServicesForFile(ep.FilePath);
-                var active = deployments.ActiveServices(loaded, ep.Requires);
+                var active = deployments.ActiveServices(loadedServices: loaded, requires: ep.Requires);
                 output.WriteLine(
                     $"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}\t{string.Join(',', loaded)}\t{string.Join(',', active)}"
                 );
@@ -168,10 +172,10 @@ internal static class DeriveCommand
             output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup.Take(perKindSample))
             {
-                WriteEntryPointLine(output, deployments, e.Route, e.FilePath, e.Line, e.Requires);
+                WriteEntryPointLine(output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
             }
 
-            WriteSampleTruncationNote(output, kindGroup.Count(), perKindSample, kindGroup.Key);
+            WriteSampleTruncationNote(output, total: kindGroup.Count(), shown: perKindSample, kind: kindGroup.Key);
         }
 
         // --- Classified handoff entry points (Phase 1/3): dispatcher-consumed delegates, promoted to
@@ -194,7 +198,7 @@ internal static class DeriveCommand
                     $"{Indent.L3}{ShortName(h.Target)}  ⤳ via {h.Dispatcher}{tag}\n{Indent.L5}registered in {ShortName(h.RegisteredIn)}  {ShortenPath(h.FilePath)}:{h.Line}  [async_handoff]"
                 );
             }
-            WriteSampleTruncationNote(output, kindGroup.Count(), perKindSample, kindGroup.Key ?? "");
+            WriteSampleTruncationNote(output, total: kindGroup.Count(), shown: perKindSample, kind: kindGroup.Key ?? "");
         }
 
         // The headline: entry points per deployed service (the summary table). An EP counts in every service

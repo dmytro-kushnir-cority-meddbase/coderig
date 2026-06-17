@@ -27,7 +27,9 @@ internal static class XmlDiMiner
         {
             if (Directory.Exists(path))
             {
-                foreach (var file in Directory.EnumerateFiles(path, "*.xml", SearchOption.AllDirectories))
+                foreach (
+                    var file in Directory.EnumerateFiles(path: path, searchPattern: "*.xml", searchOption: SearchOption.AllDirectories)
+                )
                 {
                     ParseFile(file, results);
                 }

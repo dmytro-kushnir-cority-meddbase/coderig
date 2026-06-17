@@ -16,15 +16,19 @@ internal static class IndexCommands
 {
     internal static Command BuildIndex(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var target = CommonOptions.Pattern("solution", "Solution (.slnx/.sln/.slnf) or project (.csproj) to index.");
+        var target = CommonOptions.Pattern(name: "solution", description: "Solution (.slnx/.sln/.slnf) or project (.csproj) to index.");
         var rules = CommonOptions.Rules();
         var identity = new Option<string?>("--identity") { Description = "Store identity for an append (multi-solution) index." };
         var from = new Option<string?>("--from") { Description = "Index only the entry project's transitive closure (one workspace)." };
         var parallelism = new Option<int?>("--parallelism") { Description = "Max concurrent project analyses." };
         var merge = new Option<bool>("--merge") { Description = "Accumulate into an existing store (multi-solution unified store)." };
         var includeTests = new Option<bool>("--include-tests") { Description = "Keep test projects (excluded by default)." };
+        var noGraph = new Option<bool>("--no-graph")
+        {
+            Description = "Skip building the call-graph views after indexing (run `rig graph` later to enable the fast query path).",
+        };
 
-        var cmd = new Command("index", "Index a solution/project into a .rig store.")
+        var cmd = new Command(name: "index", description: "Index a solution/project into a .rig store.")
         {
             target,
             rules,
@@ -33,6 +37,7 @@ internal static class IndexCommands
             parallelism,
             merge,
             includeTests,
+            noGraph,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -47,6 +52,7 @@ internal static class IndexCommands
                         parallelism: pr.GetValue(parallelism),
                         merge: pr.GetValue(merge),
                         includeTests: pr.GetValue(includeTests),
+                        noGraph: pr.GetValue(noGraph),
                         output: output,
                         error: error,
                         workingDirectory: workingDirectory
@@ -64,6 +70,7 @@ internal static class IndexCommands
         int? parallelism,
         bool merge,
         bool includeTests,
+        bool noGraph,
         TextWriter output,
         TextWriter error,
         string workingDirectory
@@ -76,12 +83,24 @@ internal static class IndexCommands
         IReadOnlySet<string>? scopeProjectPaths = null;
         if (fromProject is not null)
         {
-            scopeProjectPaths = await BuildEntryClosureAsync(target, fromProject, workingDirectory, output, error);
+            scopeProjectPaths = await BuildEntryClosureAsync(
+                solutionPath: target,
+                fromProject: fromProject,
+                workingDirectory: workingDirectory,
+                output: output,
+                error: error
+            );
             if (scopeProjectPaths is null)
             {
                 return 2;
             }
         }
+
+        // Capture provenance + the destination store-id up front, so the store location and commit can be
+        // announced BEFORE the (long) analysis — useful when monitoring a re-index. The commit IS the
+        // store-id (docs/design-impact-behavioral-diff.md §4.4-4.5).
+        var provenance = Rig.Cli.Git.GitProvenanceProbe.Capture(fromProject ?? Path.GetFullPath(target));
+        var storeId = StoreLayout.NewStoreId(provenance);
 
         var totalWatch = System.Diagnostics.Stopwatch.StartNew();
         AnalysisResult result;
@@ -109,6 +128,15 @@ internal static class IndexCommands
                 output.WriteLine($"Parallelism: {parallelism}");
             }
 
+            output.WriteLine($"Store: {Path.Combine(StoreLayout.RigDir(workingDirectory), storeId)}");
+            if (provenance.Commit is { } sourceCommit)
+            {
+                var shortSha = sourceCommit.Length >= 12 ? sourceCommit[..12] : sourceCommit;
+                output.WriteLine(
+                    $"Source commit: {shortSha}{(provenance.Branch is { } b ? $" ({b})" : "")}{(provenance.Dirty ? " +dirty" : "")}"
+                );
+            }
+
             result = await SolutionAnalyzer.AnalyzeAsync(
                 target,
                 progress: message => output.WriteLine($"Progress: {message}"),
@@ -127,7 +155,7 @@ internal static class IndexCommands
             // (a clean "Failed to load" beats an uncaught stack trace). InvalidOperationException: the
             // workspace couldn't load/bind the target.
             error.WriteLine("Failed to load solution/project for analysis.");
-            error.WriteLine(exception.Message);
+            error.WriteLine(exception.ToString());
             error.WriteLine("Ensure the target solution has been restored and builds successfully, then retry.");
             error.WriteLine($"  dotnet restore {target}");
             error.WriteLine($"  dotnet build {target}");
@@ -149,9 +177,16 @@ internal static class IndexCommands
         var fastBulkWrite = !appendMode; // fast pragmas on the standalone atomic-publish path
         var atomicPublish = !appendMode; // replace-via-rename for a standalone index
 
-        var storeDirectory = Path.Combine(workingDirectory, ".rig");
-        Directory.CreateDirectory(storeDirectory);
-        var finalDbPath = Path.Combine(storeDirectory, "rig.db");
+        // Per-commit store layout: write into .rig/<store-id>/ (storeId computed above, from the commit). On
+        // a standalone index, move any pre-layout flat .rig/rig.db aside once, so the per-commit layout owns
+        // .rig going forward. See docs/design-impact-behavioral-diff.md §4.4.
+        if (atomicPublish)
+        {
+            StoreLayout.BackupLegacyFlatStore(workingDirectory);
+        }
+
+        var storeDirectory = StoreLayout.NewStoreDir(workingDirectory, storeId);
+        var finalDbPath = Path.Combine(storeDirectory, StoreLayout.DbFileName);
         var dbPath = atomicPublish ? finalDbPath + ".tmp" : finalDbPath;
         if (atomicPublish)
         {
@@ -189,15 +224,19 @@ internal static class IndexCommands
                 context,
                 result,
                 fastBulkWrite: fastBulkWrite,
-                progress: message => output.WriteLine($"Progress: {message}")
+                progress: message => output.WriteLine($"Progress: {message}"),
+                provenance: provenance
             );
         }
 
         if (atomicPublish)
         {
             DeleteDbFiles(finalDbPath); // drop the old published store + any sidecars
-            File.Move(dbPath, finalDbPath, overwrite: true);
+            File.Move(sourceFileName: dbPath, destFileName: finalDbPath, overwrite: true);
         }
+
+        // Point read commands at this store as the latest-indexed one.
+        StoreLayout.WriteLatestPointer(workingDirectory, storeId);
         saveWatch.Stop();
         totalWatch.Stop();
         output.WriteLine(
@@ -210,18 +249,28 @@ internal static class IndexCommands
         output.WriteLine($"References: {result.References?.Count ?? 0}");
         output.WriteLine($"DiRegistrations: {result.DiRegistrations.Count}");
 
+        // Build the call-graph views now so the store is query-ready on the fast SQL path immediately —
+        // no forgotten `rig graph` follow-up (the reason a "fresh" store kept paying the full in-memory
+        // graph load per query). Idempotent; opt out with --no-graph. Skipped for append/merge — `mine`
+        // builds once after all batches, and a --merge accumulation rebuilds via a final `rig graph`.
+        if (!noGraph && !appendMode)
+        {
+            output.WriteLine("Progress: Building call-graph views");
+            await MaterializeGraphAsync(dbPath: finalDbPath, workingDirectory: workingDirectory, output: output);
+        }
+
         return 0;
     }
 
     internal static Command BuildMine(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var solution = CommonOptions.Pattern("solution", "Solution to mine.");
+        var solution = CommonOptions.Pattern(name: "solution", description: "Solution to mine.");
         var from = new Option<string?>("--from") { Description = "Entry project (.csproj) to BFS from.", Required = true };
         var rules = CommonOptions.Rules();
         var identity = new Option<string?>("--identity") { Description = "Store identity (defaults to a hash of the solution path)." };
         var parallelism = new Option<int?>("--parallelism") { Description = "Max concurrent project analyses." };
 
-        var cmd = new Command("mine", "BFS-index a project dependency closure, level by level, in parallel.")
+        var cmd = new Command(name: "mine", description: "BFS-index a project dependency closure, level by level, in parallel.")
         {
             solution,
             from,
@@ -235,14 +284,14 @@ internal static class IndexCommands
                 error,
                 () =>
                     RunMineAsync(
-                        Path.GetFullPath(pr.GetValue(solution)!),
-                        Path.GetFullPath(pr.GetValue(from)!),
-                        CommonOptions.RulesOf(pr.GetValue(rules)),
-                        pr.GetValue(identity),
-                        pr.GetValue(parallelism),
-                        output,
-                        error,
-                        workingDirectory
+                        solutionPath: Path.GetFullPath(pr.GetValue(solution)!),
+                        fromProject: Path.GetFullPath(pr.GetValue(from)!),
+                        extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                        identity: pr.GetValue(identity),
+                        parallelismOverride: pr.GetValue(parallelism),
+                        output: output,
+                        error: error,
+                        workingDirectory: workingDirectory
                     )
             )
         );
@@ -260,7 +309,7 @@ internal static class IndexCommands
         string workingDirectory
     )
     {
-        var parallelism = parallelismOverride ?? Math.Max(1, Environment.ProcessorCount / 2);
+        var parallelism = parallelismOverride ?? Math.Max(val1: 1, val2: Environment.ProcessorCount / 2);
         identity ??= ComputeIdentity(solutionPath);
         output.WriteLine($"Mine: {solutionPath}");
         output.WriteLine($"From: {fromProject}");
@@ -309,16 +358,17 @@ internal static class IndexCommands
                     output.WriteLine($"  [mine] Indexing: {projName}");
 
                     var exitCode = await RunIndexAsync(
-                        proj,
-                        extraRules,
-                        identity,
+                        target: proj,
+                        extraRules: extraRules,
+                        identity: identity,
                         fromProject: null,
                         parallelism: null,
                         merge: false,
                         includeTests: false,
-                        output,
-                        error,
-                        workingDirectory
+                        noGraph: true, // mine builds the graph ONCE after all batches (see end of RunMineAsync)
+                        output: output,
+                        error: error,
+                        workingDirectory: workingDirectory
                     );
                     if (exitCode == 0)
                     {
@@ -370,30 +420,56 @@ internal static class IndexCommands
         );
         output.WriteLine($"[mine] Reachable projects index written: {indexPath}");
 
+        // Build the call-graph views ONCE over the accumulated store (per-project indexing ran with
+        // --no-graph), so the mined store is query-ready on the fast SQL path without a manual `rig graph`.
+        var minedDbPath = StoreLayout.DbPath(workingDirectory);
+        if (File.Exists(minedDbPath))
+        {
+            output.WriteLine("[mine] Building call-graph views");
+            await MaterializeGraphAsync(dbPath: minedDbPath, workingDirectory: workingDirectory, output: output);
+        }
+
         return totalFailed > 0 ? 1 : 0;
     }
 
     internal static Command BuildGraph(TextWriter output, TextWriter error, string workingDirectory)
     {
         var cmd = new Command(
-            "graph",
-            "Rebuild the derived call-graph views (call_edges + dispatch_edges) from facts; idempotent, no rescan."
+            name: "graph",
+            description: "Rebuild the derived call-graph views (call_edges + dispatch_edges) from facts; idempotent, no rescan."
         );
-        cmd.SetAction(_ => CommandGuard.RunGuardedAsync(workingDirectory, error, () => RunGraphAsync(output, error, workingDirectory)));
+        var store = CommonOptions.Store();
+        cmd.Add(store);
+        cmd.SetAction(pr =>
+            CommandGuard.RunGuardedAsync(
+                workingDirectory,
+                error,
+                () => RunGraphAsync(output: output, error: error, workingDirectory: workingDirectory, storeRef: pr.GetValue(store))
+            )
+        );
         return cmd;
     }
 
     // Rebuilds the derived call-graph views (call_edges + dispatch_edges) from facts already in the
     // store. Decoupled from index/mine and idempotent — no Roslyn, no rescan; rerun any time. These
     // views back the SQL recursive-CTE reachability path (reaches/callers/tree/dead).
-    private static async Task<int> RunGraphAsync(TextWriter output, TextWriter error, string workingDirectory)
+    private static async Task<int> RunGraphAsync(TextWriter output, TextWriter error, string workingDirectory, string? storeRef)
     {
-        var dbPath = Path.Combine(workingDirectory, ".rig", "rig.db");
+        var dbPath = StoreLayout.DbPathForRef(workingDirectory, storeRef);
         if (!File.Exists(dbPath))
         {
             return CommandGuard.NoRunError(error);
         }
 
+        await MaterializeGraphAsync(dbPath: dbPath, workingDirectory: workingDirectory, output: output);
+        return 0;
+    }
+
+    // Build the derived call-graph views (call_edges + dispatch_edges) + the EP-site table into the store at
+    // dbPath. Shared by the standalone `graph` command and the tail of `index` (so a freshly-indexed store is
+    // query-ready on the fast SQL path without a manual follow-up). Idempotent — rerun any time, no rescan.
+    private static async Task MaterializeGraphAsync(string dbPath, string workingDirectory, TextWriter output)
+    {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         await using var context = new RigDbContext(dbPath);
         // Classification rules flow in here so call_edges is written with Kind="handoff" baked in — the
@@ -416,7 +492,6 @@ internal static class IndexCommands
         // Materialize the pattern-independent EP-site set into a table now, so every later query reads it
         // directly instead of re-deriving from the whole-store fact tables. No-op without deployments.json.
         await MaterializeEntryPointSitesAsync(context, workingDirectory);
-        return 0;
     }
 
     // Transitive ProjectReference closure of an entry project, minus test projects — the build scope
@@ -507,7 +582,7 @@ internal static class IndexCommands
     // (reachable-projects.json).
     private static void WriteJsonSidecar(string path, object data) =>
         File.WriteAllText(
-            path,
-            System.Text.Json.JsonSerializer.Serialize(data, new System.Text.Json.JsonSerializerOptions { WriteIndented = true })
+            path: path,
+            contents: System.Text.Json.JsonSerializer.Serialize(data, new System.Text.Json.JsonSerializerOptions { WriteIndented = true })
         );
 }

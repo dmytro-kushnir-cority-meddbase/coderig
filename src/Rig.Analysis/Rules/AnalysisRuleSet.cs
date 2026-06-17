@@ -72,7 +72,11 @@ internal sealed record AnalysisRuleSet
     {
         var rules = LoadBuiltIn();
 
-        var globalRulesPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".rig", "rig.rules.json");
+        var globalRulesPath = Path.Combine(
+            path1: Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            path2: ".rig",
+            path3: "rig.rules.json"
+        );
         rules = rules.MergeWithFile(globalRulesPath);
 
         var solutionDirectory = Path.GetDirectoryName(solutionPath) ?? Directory.GetCurrentDirectory();
@@ -217,12 +221,12 @@ internal sealed record AnalysisRuleSet
 
     public bool IsTestProject(string projectName)
     {
-        return TestProjectPatterns.Any(pattern => GlobMatcher.IsMatch(projectName, pattern));
+        return TestProjectPatterns.Any(pattern => GlobMatcher.IsMatch(value: projectName, glob: pattern));
     }
 
     public bool IsExcludedProject(string projectName)
     {
-        return ProjectExcludePatterns.Any(pattern => GlobMatcher.IsMatch(projectName, pattern));
+        return ProjectExcludePatterns.Any(pattern => GlobMatcher.IsMatch(value: projectName, glob: pattern));
     }
 
     private static AnalysisRuleSet LoadBuiltIn()
@@ -540,10 +544,10 @@ internal sealed class FileRuleDocument
         }
 
         return new FileRule(
-            Id,
-            Glob,
-            string.IsNullOrWhiteSpace(Reason) ? $"{direction}_file_rule" : Reason,
-            new Regex(GlobMatcher.ToRegex(Glob), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+            Id: Id,
+            Glob: Glob,
+            Reason: string.IsNullOrWhiteSpace(Reason) ? $"{direction}_file_rule" : Reason,
+            Regex: new Regex(GlobMatcher.ToRegex(Glob), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
         );
     }
 }

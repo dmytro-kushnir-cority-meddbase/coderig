@@ -25,7 +25,7 @@ internal static class TreeCommand
 {
     internal static Command Build(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var from = CommonOptions.Pattern("from", "Entry-point method pattern.");
+        var from = CommonOptions.Pattern(name: "from", description: "Entry-point method pattern.");
         var full = new Option<bool>("--full") { Description = "Print every reachable method; effects/unresolved calls as leaf nodes." };
         var summary = new Option<bool>("--summary") { Description = "Print only the effect-count rollup." };
         var effects = new Option<bool>("--effects") { Description = "List only effectful methods (one line each, source order)." };
@@ -40,7 +40,8 @@ internal static class TreeCommand
         var noCache = CommonOptions.NoCache();
         var time = CommonOptions.Time();
         var format = CommonOptions.Format();
-        var cmd = new Command("tree", "Print the first-party call tree from an entry point, annotated with effects.")
+        var store = CommonOptions.Store();
+        var cmd = new Command(name: "tree", description: "Print the first-party call tree from an entry point, annotated with effects.")
         {
             from,
             full,
@@ -57,6 +58,7 @@ internal static class TreeCommand
             noCache,
             time,
             format,
+            store,
         };
         // --full / --summary / --effects are three distinct projections of the same tree; only one applies.
         cmd.Validators.Add(result =>
@@ -105,7 +107,8 @@ internal static class TreeCommand
                         format: pr.GetValue(format),
                         output: output,
                         error: error,
-                        workingDirectory: workingDirectory
+                        workingDirectory: workingDirectory,
+                        storeRef: pr.GetValue(store)
                     )
             )
         );
@@ -130,7 +133,8 @@ internal static class TreeCommand
         string? format,
         TextWriter output,
         TextWriter error,
-        string workingDirectory
+        string workingDirectory,
+        string? storeRef
     )
     {
         var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
@@ -141,7 +145,7 @@ internal static class TreeCommand
         // only — never affects reach. `--raw` bypasses them to print the exact unfiltered tree.
         var renderRules = raw ? FactRenderRules.Empty : FactRenderRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
 
-        await using var context = OpenReadContext(workingDirectory);
+        await using var context = OpenReadContext(workingDirectory, storeRef);
         var timer = new PhaseTimer(time, error);
 
         // Query cache (best-effort, opt-out via --no-cache). A `rig tree` query recomputes the call-tree
@@ -149,9 +153,9 @@ internal static class TreeCommand
         // store + effective rules + traversal params. Cache the pair in a separate writable `.rig/cache.db`
         // (rig.db itself is opened read-only); a repeat query skips both and only re-loads the cheaper graph
         // to render. Auto-invalidates on reindex: the key embeds a store identity that index/graph change.
-        var rigDir = Path.Combine(workingDirectory, ".rig");
-        var storeKey = StoreKey(Path.Combine(rigDir, "rig.db"));
-        using var cache = noCache ? null : QueryCache.Open(rigDir, storeKey);
+        var rigDir = CommandLine.StoreLayout.ResolveReadStoreDir(workingDirectory, storeRef);
+        var storeKey = StoreKey(Path.Combine(rigDir, CommandLine.StoreLayout.DbFileName));
+        using var cache = noCache ? null : QueryCache.Open(rigDirectory: rigDir, storeKey: storeKey);
         var cacheKey = cache is null
             ? null
             : TreeCacheKey(
@@ -277,7 +281,11 @@ internal static class TreeCommand
             var tsvEffects = ApplyEffectFilters(effects, only, exclude)
                 .Where(e => e.EnclosingSymbolId is not null)
                 .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
-                .ToDictionary(g => g.Key, g => string.Join(',', g.Select(e => $"{e.Provider}:{e.Operation}")), StringComparer.Ordinal);
+                .ToDictionary(
+                    keySelector: g => g.Key,
+                    elementSelector: g => string.Join(',', g.Select(e => $"{e.Provider}:{e.Operation}")),
+                    comparer: StringComparer.Ordinal
+                );
             foreach (var root in roots)
             {
                 EmitTsvNode(root, 0, tsvEffects, locations, output);
@@ -336,7 +344,7 @@ internal static class TreeCommand
                     .DistinctBy(c => (c.Enclosing, c.Target, c.Line))
             )
             {
-                leafRows.Add((c.Enclosing!, c.Line, FormatUnresolvedLeaf(c.Target, c.FilePath, c.Line)));
+                leafRows.Add((c.Enclosing!, c.Line, FormatUnresolvedLeaf(target: c.Target, filePath: c.FilePath, line: c.Line)));
             }
 
             effectLeavesByMethod = leafRows
@@ -406,7 +414,7 @@ internal static class TreeCommand
                 maxDepth: maxDepth,
                 mode: mode,
                 structuredByMethod: structuredByMethod,
-                emojiFor: (p, o) => FactEffectEmojiProvider.For(emoji, p, o)
+                emojiFor: (p, o) => FactEffectEmojiProvider.For(emoji, provider: p, operation: o)
             );
         }
 
@@ -464,7 +472,7 @@ internal static class TreeCommand
     )
     {
         var (file, line) = locations.TryGetValue(node.SymbolId, out var loc) ? loc : (null, 0);
-        var effects = effectsByMethod.GetValueOrDefault(node.SymbolId, "");
+        var effects = effectsByMethod.GetValueOrDefault(key: node.SymbolId, defaultValue: "");
         output.WriteLine($"{depth}\t{node.SymbolId}\t{node.EdgeKind}\t{node.HandoffVia}\t{node.Fanout}\t{effects}\t{file}\t{line}");
         foreach (var child in node.Children)
         {

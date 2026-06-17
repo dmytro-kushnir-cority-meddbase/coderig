@@ -112,12 +112,12 @@ public static class DeadCodeFinder
             directCallers.TryGetValue(m.SymbolId, out var callers);
             candidates.Add(
                 new Candidate(
-                    m.SymbolId,
-                    m.FilePath,
-                    m.Line,
-                    ClassifyTier(m.Modifiers, callers),
-                    callers == 0 ? "uncalled" : "only reached by dead code",
-                    callers
+                    SymbolId: m.SymbolId,
+                    FilePath: m.FilePath,
+                    Line: m.Line,
+                    Tier: ClassifyTier(m.Modifiers, callers),
+                    Reason: callers == 0 ? "uncalled" : "only reached by dead code",
+                    DirectCallers: callers
                 )
             );
         }
@@ -130,12 +130,12 @@ public static class DeadCodeFinder
     // low (possible external/reflection/serialization use the index can't see).
     private static Tier ClassifyTier(string modifiers, int directCallers)
     {
-        if (HasToken(modifiers, "private"))
+        if (HasToken(modifiers: modifiers, token: "private"))
         {
             return Tier.High;
         }
 
-        if (HasToken(modifiers, "public") || HasToken(modifiers, "protected"))
+        if (HasToken(modifiers: modifiers, token: "public") || HasToken(modifiers: modifiers, token: "protected"))
         {
             return Tier.Low;
         }
@@ -143,11 +143,12 @@ public static class DeadCodeFinder
         return Tier.Medium; // internal / unspecified
     }
 
-    private static bool IsExternallyVisible(string modifiers) => HasToken(modifiers, "public") || HasToken(modifiers, "protected");
+    private static bool IsExternallyVisible(string modifiers) =>
+        HasToken(modifiers: modifiers, token: "public") || HasToken(modifiers: modifiers, token: "protected");
 
-    private static bool IsAbstract(string modifiers) => HasToken(modifiers, "abstract");
+    private static bool IsAbstract(string modifiers) => HasToken(modifiers: modifiers, token: "abstract");
 
-    private static bool IsVirtual(string modifiers) => HasToken(modifiers, "virtual");
+    private static bool IsVirtual(string modifiers) => HasToken(modifiers: modifiers, token: "virtual");
 
     // Constructors/finalizers (instantiation isn't a call edge to the method), property/event
     // accessors and operators (member/operator use isn't an invocation fact) — reached off-graph, so

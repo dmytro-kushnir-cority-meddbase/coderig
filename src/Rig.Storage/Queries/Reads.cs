@@ -23,16 +23,16 @@ public static class Reads
 
         var rows = await context
             .DiRegistrations.Select(x => new DiRegistrationInfo(
-                x.ServiceType,
-                x.ImplementationType,
-                x.Lifetime,
-                x.RegistrationKind,
-                x.FilePath,
-                x.Line,
-                x.Confidence,
-                x.Basis,
-                x.Reason,
-                x.Evidence
+                ServiceType: x.ServiceType,
+                ImplementationType: x.ImplementationType,
+                Lifetime: x.Lifetime,
+                RegistrationKind: x.RegistrationKind,
+                FilePath: x.FilePath,
+                Line: x.Line,
+                Confidence: x.Confidence,
+                Basis: x.Basis,
+                Reason: x.Reason,
+                Evidence: x.Evidence
             ))
             .ToListAsync(cancellationToken);
 
@@ -56,7 +56,15 @@ public static class Reads
 
         var rows = await context
             .SourceFiles.Where(x => x.Status == "skipped")
-            .Select(x => new SourceFileInfo(x.ProjectName, x.FilePath, x.Status, x.Confidence, x.Basis, x.Reason, x.Evidence))
+            .Select(x => new SourceFileInfo(
+                ProjectName: x.ProjectName,
+                FilePath: x.FilePath,
+                Status: x.Status,
+                Confidence: x.Confidence,
+                Basis: x.Basis,
+                Reason: x.Reason,
+                Evidence: x.Evidence
+            ))
             .ToListAsync(cancellationToken);
 
         return rows.GroupBy(f => f.FilePath, StringComparer.Ordinal)
@@ -76,14 +84,17 @@ public static class Reads
             .Runs.OrderByDescending(run => run.CreatedAtUtcText)
             .ThenByDescending(run => run.Id)
             .Select(run => new RunSummary(
-                run.Id,
-                DateTimeOffset.Parse(run.CreatedAtUtcText, System.Globalization.CultureInfo.InvariantCulture),
-                run.SolutionPath,
-                run.SymbolCount,
-                run.ReferenceCount,
-                run.DiRegistrationCount,
-                run.ProjectIdentity,
-                run.SourceProjectPath
+                Id: run.Id,
+                CreatedAtUtc: DateTimeOffset.Parse(run.CreatedAtUtcText, System.Globalization.CultureInfo.InvariantCulture),
+                SolutionPath: run.SolutionPath,
+                SymbolCount: run.SymbolCount,
+                ReferenceCount: run.ReferenceCount,
+                DiRegistrationCount: run.DiRegistrationCount,
+                ProjectIdentity: run.ProjectIdentity,
+                SourceProjectPath: run.SourceProjectPath,
+                SourceCommit: run.SourceCommit,
+                SourceBranch: run.SourceBranch,
+                SourceDirty: run.SourceDirty
             ))
             .ToListAsync(cancellationToken);
     }
@@ -127,12 +138,12 @@ public static class Reads
             {
                 hits.Add(
                     new SymbolSearchHit(
-                        reader.GetString(0),
-                        reader.GetString(1),
-                        reader.IsDBNull(2) ? "" : reader.GetString(2),
-                        reader.IsDBNull(3) ? "" : reader.GetString(3),
-                        ReadInt(reader, 4),
-                        reader.IsDBNull(5) ? "" : reader.GetString(5)
+                        SymbolId: reader.GetString(0),
+                        Kind: reader.GetString(1),
+                        Signature: reader.IsDBNull(2) ? "" : reader.GetString(2),
+                        FilePath: reader.IsDBNull(3) ? "" : reader.GetString(3),
+                        Line: ReadInt(reader, 4),
+                        DefiningAssembly: reader.IsDBNull(5) ? "" : reader.GetString(5)
                     )
                 );
             }
@@ -144,7 +155,11 @@ public static class Reads
         // AsNoTracking is CRITICAL here (NOT a no-op like the projecting reads): this LIKE fallback
         // materializes raw SymbolFact ENTITIES, so without it EF snapshots all 5000 rows into the change
         // tracker — pure overhead on a read-only query, and it grows the working set for nothing.
-        var query = context.SymbolFacts.AsNoTracking().Where(s => EF.Functions.Like(s.Name, like) || EF.Functions.Like(s.SymbolId, like));
+        var query = context
+            .SymbolFacts.AsNoTracking()
+            .Where(s =>
+                EF.Functions.Like(matchExpression: s.Name, pattern: like) || EF.Functions.Like(matchExpression: s.SymbolId, pattern: like)
+            );
         if (kind is not null)
         {
             query = query.Where(s => s.Kind == kind);
@@ -157,7 +172,14 @@ public static class Reads
         return rows.GroupBy(s => s.SymbolId, StringComparer.Ordinal)
             .Take(limit)
             .Select(g => g.First())
-            .Select(s => new SymbolSearchHit(s.SymbolId, s.Kind, s.Signature, s.FilePath, s.Line, s.DefiningAssembly))
+            .Select(s => new SymbolSearchHit(
+                SymbolId: s.SymbolId,
+                Kind: s.Kind,
+                Signature: s.Signature,
+                FilePath: s.FilePath,
+                Line: s.Line,
+                DefiningAssembly: s.DefiningAssembly
+            ))
             .ToList();
     }
 
@@ -198,12 +220,12 @@ public static class Reads
             {
                 hits.Add(
                     new ReferenceHit(
-                        reader.GetString(0),
-                        reader.GetString(1),
-                        reader.IsDBNull(2) ? null : reader.GetString(2),
-                        reader.IsDBNull(3) ? "" : reader.GetString(3),
-                        ReadInt(reader, 4),
-                        !reader.IsDBNull(5) && reader.GetInt64(5) != 0
+                        TargetSymbolId: reader.GetString(0),
+                        RefKind: reader.GetString(1),
+                        EnclosingSymbolId: reader.IsDBNull(2) ? null : reader.GetString(2),
+                        FilePath: reader.IsDBNull(3) ? "" : reader.GetString(3),
+                        Line: ReadInt(reader, 4),
+                        TargetInSource: !reader.IsDBNull(5) && reader.GetInt64(5) != 0
                     )
                 );
             }
@@ -214,7 +236,7 @@ public static class Reads
         var like = $"%{pattern}%";
         // AsNoTracking is CRITICAL: this fallback materializes raw ReferenceFact ENTITIES (no projection),
         // so without it EF change-tracks every one of the `limit` rows — needless work on a read path.
-        var query = context.ReferenceFacts.AsNoTracking().Where(r => EF.Functions.Like(r.TargetSymbolId, like));
+        var query = context.ReferenceFacts.AsNoTracking().Where(r => EF.Functions.Like(matchExpression: r.TargetSymbolId, pattern: like));
         if (firstPartyOnly)
         {
             query = query.Where(r => r.TargetInSource);
@@ -230,7 +252,14 @@ public static class Reads
             .ThenBy(r => r.FilePath)
             .ThenBy(r => r.Line)
             .Take(limit)
-            .Select(r => new ReferenceHit(r.TargetSymbolId, r.RefKind, r.EnclosingSymbolId, r.FilePath, r.Line, r.TargetInSource))
+            .Select(r => new ReferenceHit(
+                TargetSymbolId: r.TargetSymbolId,
+                RefKind: r.RefKind,
+                EnclosingSymbolId: r.EnclosingSymbolId,
+                FilePath: r.FilePath,
+                Line: r.Line,
+                TargetInSource: r.TargetInSource
+            ))
             .ToListAsync(cancellationToken);
         return rows;
     }
@@ -240,7 +269,7 @@ public static class Reads
     // FTS5 query for a literal substring: wrap in double quotes (a string token) and double any embedded
     // quotes, so DocID punctuation (. : ( ) etc.) is treated as content, not FTS query syntax. Trigram
     // then matches the substring's 3-grams.
-    private static string FtsPhrase(string pattern) => "\"" + pattern.Replace("\"", "\"\"") + "\"";
+    private static string FtsPhrase(string pattern) => "\"" + pattern.Replace(oldValue: "\"", newValue: "\"\"") + "\"";
 
     private static void AddParam(DbCommand command, string name, object value)
     {
@@ -326,7 +355,7 @@ public static class Reads
             await context
                 .TypeRelationFacts.AsNoTracking()
                 .Where(t => t.RelationKind == RelationKinds.Interface)
-                .Select(t => new ImplementsEdge(t.TypeSymbolId, t.RelatedSymbolId))
+                .Select(t => new ImplementsEdge(ImplType: t.TypeSymbolId, InterfaceType: t.RelatedSymbolId))
                 .ToListAsync(cancellationToken)
         )
             .Distinct()
@@ -336,7 +365,7 @@ public static class Reads
             await context
                 .TypeRelationFacts.AsNoTracking()
                 .Where(t => t.RelationKind == RelationKinds.Base)
-                .Select(t => new BaseEdge(t.TypeSymbolId, t.RelatedSymbolId))
+                .Select(t => new BaseEdge(SubType: t.TypeSymbolId, BaseType: t.RelatedSymbolId))
                 .ToListAsync(cancellationToken)
         )
             .Distinct()
@@ -345,7 +374,14 @@ public static class Reads
         var methodRows = await context
             .SymbolFacts.AsNoTracking()
             .Where(s => s.Kind == SymbolKinds.Method)
-            .Select(s => new MethodRef(s.SymbolId, s.Name, s.ContainingSymbolId, s.IsOverride, s.FilePath, s.Line))
+            .Select(s => new MethodRef(
+                SymbolId: s.SymbolId,
+                Name: s.Name,
+                ContainingTypeId: s.ContainingSymbolId,
+                IsOverride: s.IsOverride,
+                FilePath: s.FilePath,
+                Line: s.Line
+            ))
             .ToListAsync(cancellationToken);
 
         var methods = methodRows.GroupBy(m => m.SymbolId, StringComparer.Ordinal).Select(g => g.First()).ToList();
@@ -368,7 +404,7 @@ public static class Reads
     {
         var rows = await context
             .ReferenceFacts.Where(r => r.EnclosingSymbolId != null && r.RefKind == RefKinds.Read && r.TargetSymbolId.StartsWith("E:"))
-            .Select(r => new EventSubscriptionSite(r.EnclosingSymbolId!, r.FilePath, r.Line))
+            .Select(r => new EventSubscriptionSite(Caller: r.EnclosingSymbolId!, FilePath: r.FilePath, Line: r.Line))
             .ToListAsync(cancellationToken);
 
         return rows.ToHashSet();
@@ -396,7 +432,7 @@ public static class Reads
         return (
             await context
                 .DispatchFacts.AsNoTracking()
-                .Select(d => new DispatchFact(d.SourceMember, d.TargetMember, d.Kind))
+                .Select(d => new DispatchFact(SourceMember: d.SourceMember, TargetMember: d.TargetMember, Kind: d.Kind))
                 .ToListAsync(cancellationToken)
         )
             .Distinct()
@@ -428,13 +464,13 @@ public static class Reads
         return rows.GroupBy(s => s.SymbolId, StringComparer.Ordinal)
             .Select(g => g.First())
             .Select(s => new DeadCodeFinder.MethodMeta(
-                s.SymbolId,
-                s.Name,
-                s.Modifiers,
-                s.FilePath,
-                s.Line,
-                s.IsOverride,
-                IsGeneratedPath(s.FilePath)
+                SymbolId: s.SymbolId,
+                Name: s.Name,
+                Modifiers: s.Modifiers,
+                FilePath: s.FilePath,
+                Line: s.Line,
+                IsOverride: s.IsOverride,
+                IsGenerated: IsGeneratedPath(s.FilePath)
             ))
             .ToList();
     }
@@ -449,7 +485,7 @@ public static class Reads
             return false;
         }
 
-        var p = filePath.Replace('\\', '/');
+        var p = filePath.Replace(oldChar: '\\', newChar: '/');
         return p.Contains("<generated>", StringComparison.Ordinal)
             || p.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)
             || p.EndsWith(".g.i.cs", StringComparison.OrdinalIgnoreCase)
@@ -482,7 +518,12 @@ public static class Reads
         // rules by HandoffDispatcher id.
         if (
             await StorageProbes.TableExistsAsync(connection, "call_edges", cancellationToken)
-            && await StorageProbes.ColumnExistsAsync(connection, "call_edges", "HandoffDispatcher", cancellationToken)
+            && await StorageProbes.ColumnExistsAsync(
+                connection,
+                table: "call_edges",
+                column: "HandoffDispatcher",
+                cancellationToken: cancellationToken
+            )
         )
         {
             var edges = new List<CallEdge>();
@@ -537,7 +578,15 @@ public static class Reads
         // Projected straight to the MethodSymbol record server-side (every field is a direct column).
         var methodRows = await context
             .SymbolFacts.Where(s => s.Kind == SymbolKinds.Method)
-            .Select(s => new MethodSymbol(s.SymbolId, s.Name, s.ContainingSymbolId, s.Signature, s.FilePath, s.Line, s.IsOverride))
+            .Select(s => new MethodSymbol(
+                SymbolId: s.SymbolId,
+                Name: s.Name,
+                ContainingSymbolId: s.ContainingSymbolId,
+                Signature: s.Signature,
+                FilePath: s.FilePath,
+                Line: s.Line,
+                IsOverride: s.IsOverride
+            ))
             .ToListAsync(cancellationToken);
         // The three dedups below (methods, types, ctorRefs) run CLIENT-side by design. Measured dup ratios
         // are tiny — methods by (file,line) is ~0.02% (43 of 217k rows, essentially defensive), types ~9%,
@@ -563,7 +612,13 @@ public static class Reads
         var types = typeRows
             .GroupBy(t => t.SymbolId, StringComparer.Ordinal)
             .Select(g => g.First())
-            .Select(t => new TypeSymbol(t.SymbolId, t.Namespace, t.FilePath, t.Line, t.Modifiers.Split(' ').Contains("abstract")))
+            .Select(t => new TypeSymbol(
+                SymbolId: t.SymbolId,
+                Namespace: t.Namespace,
+                FilePath: t.FilePath,
+                Line: t.Line,
+                IsAbstract: t.Modifiers.Split(' ').Contains("abstract")
+            ))
             .ToList();
 
         // ctor refs with RefKind="ctor" capture attribute applications (e.g. [ClientAction])
@@ -572,14 +627,20 @@ public static class Reads
         var ctorRefs = (
             await context
                 .ReferenceFacts.Where(r => r.RefKind == RefKinds.Ctor && r.EnclosingSymbolId != null)
-                .Select(r => new SymbolRef(r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line))
+                .Select(r => new SymbolRef(Target: r.TargetSymbolId, Enclosing: r.EnclosingSymbolId, FilePath: r.FilePath, Line: r.Line))
                 .ToListAsync(cancellationToken)
         )
             .GroupBy(r => (r.FilePath, r.Line))
             .Select(g => g.First())
             .ToList();
 
-        return new FactEntryPointDeriver.FactEntryPointData(baseEdges, methods, types, ctorRefs, interfaceEdges);
+        return new FactEntryPointDeriver.FactEntryPointData(
+            BaseEdges: baseEdges,
+            Methods: methods,
+            Types: types,
+            CtorRefs: ctorRefs,
+            InterfaceEdges: interfaceEdges
+        );
     }
 
     // Loads invocation reference facts for fact-based effect + observation derivation.

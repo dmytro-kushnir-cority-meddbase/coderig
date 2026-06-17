@@ -48,7 +48,7 @@ public static class SolutionAnalyzer
             {
                 var result = ExtractSource(source, rules);
                 var current = Interlocked.Increment(ref extracted);
-                if (ShouldReportProgress(current, sources.Count))
+                if (ShouldReportProgress(current: current, total: sources.Count))
                 {
                     progress?.Invoke($"Extracted {current}/{sources.Count} source files");
                 }
@@ -67,16 +67,16 @@ public static class SolutionAnalyzer
         // any inline static mappings, then merge with code-detected DI registrations.
         var xmlRegistrations = XmlDiMiner.Mine(rules);
         var staticRegistrations = rules.StaticDiMappings.Select(m => new DiRegistrationInfo(
-            m.ServiceType,
-            m.ImplementationType,
-            m.Lifetime,
-            m.RegistrationKind,
-            string.Empty,
-            0,
-            "high",
-            "rules",
-            "static_di_mapping",
-            string.Empty
+            ServiceType: m.ServiceType,
+            ImplementationType: m.ImplementationType,
+            Lifetime: m.Lifetime,
+            RegistrationKind: m.RegistrationKind,
+            FilePath: string.Empty,
+            Line: 0,
+            Confidence: "high",
+            Basis: "rules",
+            Reason: "static_di_mapping",
+            Evidence: string.Empty
         ));
         var allDiRegistrations = diRegistrations.Concat(xmlRegistrations).Concat(staticRegistrations).ToArray();
         if (xmlRegistrations.Count > 0)

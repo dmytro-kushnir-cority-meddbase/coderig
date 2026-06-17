@@ -20,7 +20,7 @@ internal static class ReachesCommand
 {
     internal static Command Build(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var from = CommonOptions.Pattern("from", "Entry-point method pattern.");
+        var from = CommonOptions.Pattern(name: "from", description: "Entry-point method pattern.");
         var async = CommonOptions.Async();
         var raw = CommonOptions.Raw();
         var rules = CommonOptions.Rules();
@@ -29,7 +29,8 @@ internal static class ReachesCommand
         var only = CommonOptions.Only();
         var exclude = CommonOptions.Exclude();
         var limit = CommonOptions.Limit();
-        var cmd = new Command("reaches", "Effects reachable from an entry point, by depth.")
+        var store = CommonOptions.Store();
+        var cmd = new Command(name: "reaches", description: "Effects reachable from an entry point, by depth.")
         {
             from,
             async,
@@ -40,6 +41,7 @@ internal static class ReachesCommand
             only,
             exclude,
             limit,
+            store,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -57,7 +59,8 @@ internal static class ReachesCommand
                         exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
                         limit: pr.GetValue(limit),
                         output: output,
-                        workingDirectory: workingDirectory
+                        workingDirectory: workingDirectory,
+                        storeRef: pr.GetValue(store)
                     )
             )
         );
@@ -75,7 +78,8 @@ internal static class ReachesCommand
         HashSet<string> exclude,
         int? limit,
         TextWriter output,
-        string workingDirectory
+        string workingDirectory,
+        string? storeRef
     )
     {
         var maxDepth = CommonOptions.DepthOrUnbounded(depth);
@@ -89,7 +93,7 @@ internal static class ReachesCommand
             Factory = FactGenericFactoryRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules),
         };
 
-        await using var context = OpenReadContext(workingDirectory);
+        await using var context = OpenReadContext(workingDirectory, storeRef);
 
         var inputs = await LoadEffectReachInputsAsync(
             context,
@@ -113,8 +117,8 @@ internal static class ReachesCommand
             extraRules,
             inputs.Invocations,
             BaseEdgeTuples(graph),
-            inputs.CtorRefs,
-            inputs.ThrowRefs
+            ctorRefs: inputs.CtorRefs,
+            throwRefs: inputs.ThrowRefs
         );
         effects = ApplyEffectFilters(effects, only, exclude); // --only / --exclude (e.g. --exclude throw)
 

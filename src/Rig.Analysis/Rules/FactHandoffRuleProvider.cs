@@ -20,5 +20,11 @@ public static class FactHandoffRuleProvider
     }
 
     private static FactHandoffRule Project(HandoffDispatcherRule rule) =>
-        new(rule.Id, rule.Kind, rule.ConsumerPatterns ?? [], rule.Repeating, rule.Requires);
+        new(
+            Id: rule.Id,
+            Kind: rule.Kind,
+            ConsumerPatterns: rule.ConsumerPatterns ?? [],
+            Repeating: rule.Repeating,
+            Requires: rule.Requires
+        );
 }

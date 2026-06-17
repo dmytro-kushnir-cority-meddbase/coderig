@@ -108,14 +108,14 @@ public static class FactEffectDeriver
             }
 
             var methodStart = lastDot + 1;
-            var methodTick = target.IndexOf('`', methodStart, searchEnd - methodStart);
+            var methodTick = target.IndexOf('`', startIndex: methodStart, count: searchEnd - methodStart);
             var methodEnd = methodTick >= 0 ? methodTick : searchEnd;
             if (methodEnd <= methodStart)
             {
                 continue;
             }
 
-            var methodName = target.Substring(methodStart, methodEnd - methodStart);
+            var methodName = target.Substring(startIndex: methodStart, length: methodEnd - methodStart);
             if (!candidateMethodNames.Contains(methodName))
             {
                 continue; // no invocation rule names this method — skip before allocating the declaring type
@@ -149,17 +149,17 @@ public static class FactEffectDeriver
                 // the effect is DROPPED (Roslyn returns null from TryCreateEffect), which is what
                 // aligns the fact effects with the index effects.
                 var resource = ResolveResource(
-                    rule.Resource,
-                    inv.Receiver,
-                    inv.FirstArgTemplate,
-                    inv.FirstArgType,
-                    declaringType,
-                    inv.TypeArguments,
-                    inv.FirstArgName,
-                    rule.TypeArgumentIndex,
-                    inv.ArgumentTemplates,
-                    inv.ArgumentNames,
-                    rule.ArgumentIndex
+                    strategy: rule.Resource,
+                    receiver: inv.Receiver,
+                    firstArgTemplate: inv.FirstArgTemplate,
+                    firstArgType: inv.FirstArgType,
+                    declaringType: declaringType,
+                    typeArguments: inv.TypeArguments,
+                    firstArgName: inv.FirstArgName,
+                    typeArgumentIndex: rule.TypeArgumentIndex,
+                    argumentTemplates: inv.ArgumentTemplates,
+                    argumentNames: inv.ArgumentNames,
+                    argumentIndex: rule.ArgumentIndex
                 );
                 if (string.IsNullOrWhiteSpace(resource))
                 {
@@ -169,18 +169,26 @@ public static class FactEffectDeriver
                 var observations = observationRules is null
                     ? null
                     : FactObservationDeriver.Derive(
-                        methodName,
-                        inv.LoopKind,
-                        inv.LoopDetail,
-                        FactStructuralContext.DecodeInvocations(inv.EnclosingInvocations),
-                        FactStructuralContext.DecodeList(inv.CatchTypes),
-                        observationRules,
-                        rule.Provider,
-                        FactStructuralContext.DecodeScopes(inv.EnclosingScopes)
+                        methodName: methodName,
+                        loopKind: inv.LoopKind,
+                        loopDetail: inv.LoopDetail,
+                        enclosingInvocations: FactStructuralContext.DecodeInvocations(inv.EnclosingInvocations),
+                        catchTypes: FactStructuralContext.DecodeList(inv.CatchTypes),
+                        rules: observationRules,
+                        provider: rule.Provider,
+                        enclosingScopes: FactStructuralContext.DecodeScopes(inv.EnclosingScopes)
                     );
 
                 results.Add(
-                    new DerivedEffect(rule.Provider, rule.Operation, resource!, inv.Enclosing, inv.FilePath, inv.Line, observations)
+                    new DerivedEffect(
+                        Provider: rule.Provider,
+                        Operation: rule.Operation,
+                        ResourceType: resource!,
+                        EnclosingSymbolId: inv.Enclosing,
+                        FilePath: inv.FilePath,
+                        Line: inv.Line,
+                        Observations: observations
+                    )
                 );
                 break; // first matching rule wins
             }
@@ -230,24 +238,33 @@ public static class FactEffectDeriver
 
                     // Wrapper rules resolve from the call-site type args / arg name (not the declaring type).
                     var resource = ResolveResource(
-                        rule.Resource,
-                        inv.Receiver,
-                        inv.FirstArgTemplate,
-                        inv.FirstArgType,
-                        "",
-                        inv.TypeArguments,
-                        inv.FirstArgName,
-                        rule.TypeArgumentIndex,
-                        inv.ArgumentTemplates,
-                        inv.ArgumentNames,
-                        rule.ArgumentIndex
+                        strategy: rule.Resource,
+                        receiver: inv.Receiver,
+                        firstArgTemplate: inv.FirstArgTemplate,
+                        firstArgType: inv.FirstArgType,
+                        declaringType: "",
+                        typeArguments: inv.TypeArguments,
+                        firstArgName: inv.FirstArgName,
+                        typeArgumentIndex: rule.TypeArgumentIndex,
+                        argumentTemplates: inv.ArgumentTemplates,
+                        argumentNames: inv.ArgumentNames,
+                        argumentIndex: rule.ArgumentIndex
                     );
                     if (string.IsNullOrWhiteSpace(resource))
                     {
                         continue;
                     }
 
-                    results.Add(new DerivedEffect(rule.Provider, rule.Operation, resource!, inv.Enclosing, inv.FilePath, inv.Line));
+                    results.Add(
+                        new DerivedEffect(
+                            Provider: rule.Provider,
+                            Operation: rule.Operation,
+                            ResourceType: resource!,
+                            EnclosingSymbolId: inv.Enclosing,
+                            FilePath: inv.FilePath,
+                            Line: inv.Line
+                        )
+                    );
                     break;
                 }
             }
@@ -286,7 +303,14 @@ public static class FactEffectDeriver
                     }
 
                     results.Add(
-                        new DerivedEffect(rule.Provider, rule.Operation, constructedType, ctor.Enclosing, ctor.FilePath, ctor.Line)
+                        new DerivedEffect(
+                            Provider: rule.Provider,
+                            Operation: rule.Operation,
+                            ResourceType: constructedType,
+                            EnclosingSymbolId: ctor.Enclosing,
+                            FilePath: ctor.FilePath,
+                            Line: ctor.Line
+                        )
                     );
                     break;
                 }
@@ -320,7 +344,14 @@ public static class FactEffectDeriver
                     }
 
                     results.Add(
-                        new DerivedEffect(rule.Provider, rule.Operation, exceptionType, thrown.Enclosing, thrown.FilePath, thrown.Line)
+                        new DerivedEffect(
+                            Provider: rule.Provider,
+                            Operation: rule.Operation,
+                            ResourceType: exceptionType,
+                            EnclosingSymbolId: thrown.Enclosing,
+                            FilePath: thrown.FilePath,
+                            Line: thrown.Line
+                        )
                     );
                     break;
                 }
@@ -362,7 +393,7 @@ public static class FactEffectDeriver
             return DeclaringTypeNameSuffixMatches(rule, declaringType);
         }
 
-        if (hasDeclaring && rule.DeclaringTypes.Any(gate => TypeNameMatches(declaringType, gate)))
+        if (hasDeclaring && rule.DeclaringTypes.Any(gate => TypeNameMatches(actual: declaringType, gate: gate)))
         {
             // Namespace/prefix gate passed — apply the optional simple-name suffix gate.
             if (!DeclaringTypeNameSuffixMatches(rule, declaringType))
@@ -387,7 +418,8 @@ public static class FactEffectDeriver
             // receiver types, so the declaring-type proxy is what recovers these.
             if (
                 rule.ReceiverTypes.Any(gate =>
-                    TypeNameMatches(declaringType, gate) || (receiverType is not null && TypeNameMatches(receiverType, gate))
+                    TypeNameMatches(actual: declaringType, gate: gate)
+                    || (receiverType is not null && TypeNameMatches(actual: receiverType, gate: gate))
                 )
             )
             {
@@ -448,7 +480,7 @@ public static class FactEffectDeriver
             return false;
         }
 
-        if (hasType && !rule.ContainingTypes!.Any(gate => TypeNameMatches(containingType, gate)))
+        if (hasType && !rule.ContainingTypes!.Any(gate => TypeNameMatches(actual: containingType, gate: gate)))
         {
             return false;
         }
@@ -475,7 +507,7 @@ public static class FactEffectDeriver
     private static string NamespaceOf(string typeFqn)
     {
         var lastDot = typeFqn.LastIndexOf('.');
-        return lastDot >= 0 ? typeFqn.Substring(0, lastDot) : "";
+        return lastDot >= 0 ? typeFqn.Substring(startIndex: 0, length: lastDot) : "";
     }
 
     // Resolve the effect resource from facts, mirroring EffectExtractor.TryCreateEffect. Returns
@@ -527,11 +559,37 @@ public static class FactEffectDeriver
             // F1a). This deliberately diverges from the Roslyn EffectExtractor's drop-on-fail — the fact
             // path favours recall, and `http`+receiver-type is a true, useful effect even without the host.
             "http_argument" => firstArgTemplate is not null ? NormalizeHttpResource(firstArgTemplate) : receiver ?? declaringType,
-            // ef_dbset_receiver / ef_query_root / ef_context_receiver / ef_database_facade need EF
-            // receiver/DbSet shape facts the stage-1 layer doesn't carry (deferred — not used by the
-            // LLBLGen/MedDBase target). Unknown or empty strategy -> null (effect dropped).
+            // EF Core resource strategies. Stage-1 carries no DbSet/DbContext SHAPE facts (the generic
+            // entity behind a `context.Set<T>()` chain), so the fact path resolves these to the closest
+            // faithful proxy from what IS recorded — recall over the Roslyn path's drop-on-fail (same
+            // stance as http_argument above). These never drop when the call is on a concrete
+            // receiver/typed query, which an EF read/write always is.
+            //  - ef_query_root: the queried entity = the call's generic type argument (ToListAsync<T>),
+            //    else the receiver (FromSqlRaw on a DbSet<T>).
+            //  - ef_context_receiver / ef_dbset_receiver / ef_database_facade: the receiver's static type
+            //    (DbContext / DbSet<T> / DatabaseFacade), else the declaring type.
+            "ef_query_root" => FirstNonBlank(typeArguments, receiver, declaringType),
+            "ef_context_receiver" => FirstNonBlank(receiver, declaringType),
+            "ef_dbset_receiver" => FirstNonBlank(receiver, typeArguments, declaringType),
+            "ef_database_facade" => FirstNonBlank(receiver, declaringType),
+            // Unknown or empty strategy -> null (effect dropped).
             _ => null,
         };
+    }
+
+    // First non-blank candidate, else null — the recall-favoring fallback chain for the EF resource
+    // strategies (resolve to the most specific recorded proxy, drop only when nothing is recorded).
+    private static string? FirstNonBlank(params string?[] candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (!string.IsNullOrWhiteSpace(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     // The Nth (0-based) element of a comma-joined display-type list, split on the TOP-LEVEL comma
@@ -564,7 +622,7 @@ public static class FactEffectDeriver
             {
                 if (position == index)
                 {
-                    return typeArguments.Substring(start, i - start).Trim();
+                    return typeArguments.Substring(startIndex: start, length: i - start).Trim();
                 }
 
                 position++;
@@ -679,10 +737,10 @@ public static class FactEffectDeriver
             return null;
         }
 
-        var declaringRaw = docId.Substring(2, lastDot - 2);
+        var declaringRaw = docId.Substring(startIndex: 2, length: lastDot - 2);
         // Method name = (lastDot+1 .. searchEnd), trimmed at a method-level generic arity marker (``1).
         var methodStart = lastDot + 1;
-        var backtick = docId.IndexOf('`', methodStart, searchEnd - methodStart);
+        var backtick = docId.IndexOf('`', startIndex: methodStart, count: searchEnd - methodStart);
         var methodEnd = backtick >= 0 ? backtick : searchEnd;
         if (methodEnd <= methodStart)
         {
@@ -691,7 +749,7 @@ public static class FactEffectDeriver
 
         // Strip generic arity markers from the declaring type (e.g. Foo`1 -> Foo, Bar`2 -> Bar).
         var declaring = StripTypeArityMarkers(declaringRaw);
-        var methodName = docId.Substring(methodStart, methodEnd - methodStart);
+        var methodName = docId.Substring(startIndex: methodStart, length: methodEnd - methodStart);
         return (declaring, methodName);
     }
 
@@ -708,7 +766,7 @@ public static class FactEffectDeriver
 
         var body = docId.Substring(2);
         var paren = body.IndexOf('(');
-        var head = paren >= 0 ? body.Substring(0, paren) : body;
+        var head = paren >= 0 ? body.Substring(startIndex: 0, length: paren) : body;
         // head ends with ".#ctor" (instance) or ".#cctor" (static) — strip the ctor segment.
         var ctorMarker = head.LastIndexOf(".#", StringComparison.Ordinal);
         if (ctorMarker < 0)
@@ -724,7 +782,7 @@ public static class FactEffectDeriver
             var close = body.LastIndexOf(')');
             if (close > paren)
             {
-                var inner = body.Substring(paren + 1, close - paren - 1);
+                var inner = body.Substring(startIndex: paren + 1, length: close - paren - 1);
                 if (inner.Length > 0)
                 {
                     argCount = 1;
@@ -779,7 +837,7 @@ public static class FactEffectDeriver
             var bt = seg.IndexOf('`');
             if (bt >= 0)
             {
-                segments[i] = seg.Substring(0, bt);
+                segments[i] = seg.Substring(startIndex: 0, length: bt);
             }
         }
         return string.Join('.', segments);

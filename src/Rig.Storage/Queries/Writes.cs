@@ -28,7 +28,8 @@ public static class Writes
         AnalysisResult result,
         CancellationToken cancellationToken = default,
         bool fastBulkWrite = true,
-        Action<string>? progress = null
+        Action<string>? progress = null,
+        GitProvenance? provenance = null
     )
     {
         var runId = Guid.NewGuid().ToString("n");
@@ -70,6 +71,9 @@ public static class Writes
             SymbolCount = result.Symbols?.Count ?? 0,
             ReferenceCount = result.References?.Count ?? 0,
             DiRegistrationCount = result.DiRegistrations.Count,
+            SourceCommit = provenance?.Commit,
+            SourceBranch = provenance?.Branch,
+            SourceDirty = provenance?.Dirty ?? false,
         };
 
         // Header rows first (small) — flushed and detached before the fact batches start clearing
@@ -264,6 +268,19 @@ public static class Writes
     // Inserts the symbol/reference/type-relation facts in fixed-size batches, flushing + clearing the
     // change tracker per batch and reporting cumulative progress. One SaveChanges over millions of
     // tracked entities is both slow and memory-heavy; batching keeps both bounded.
+    //
+    // TODO(perf): speed up the ~2M-row write. WAL is NOT the lever — the standalone fast path already sets
+    // journal_mode=OFF (more aggressive than WAL) + synchronous=OFF + EXCLUSIVE + 64MB cache (SaveAsync).
+    // The real levers, roughly in impact order:
+    //   1. DEFER secondary indexes. EnsureCreated + MigrateAsync build IX_symbol_facts_*/IX_reference_facts_*
+    //      etc. BEFORE this insert, so every one of 2M rows maintains all secondary indexes. Classic
+    //      bulk-load fix: create tables WITHOUT secondary indexes, bulk-insert, then CREATE INDEX once.
+    //   2. Bypass EF for the hot path: a reused prepared INSERT over raw ADO (param.Value reset per row, as
+    //      EntryPointSiteStore.PersistAsync already does) avoids change-tracker + per-entity overhead that
+    //      AddRange/SaveChanges still pays even with AutoDetectChanges off.
+    //   3. One explicit transaction around the whole load (not a SaveChanges per 20k batch).
+    // Ref: Milan Jovanović, "Fast SQL Bulk Inserts With C# and EF Core"
+    //      https://www.milanjovanovic.tech/blog/fast-sql-bulk-inserts-with-csharp-and-ef-core
     private static async Task SaveFactsBatchedAsync(
         RigDbContext context,
         string runId,
@@ -492,6 +509,36 @@ public static class Writes
             .Database.ExecuteSqlRawAsync(
                 """
                 ALTER TABLE runs ADD COLUMN IF NOT EXISTS SourceProjectPath TEXT;
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken);
+
+        // Commit-stamp columns (docs/design-impact-behavioral-diff.md §4.5): the source commit/branch and
+        // a dirty flag, so a store is addressable by the commit it was indexed from. SourceDirty is
+        // INTEGER (SQLite bool) defaulting to 0 — an unstamped legacy row reads as a clean, unknown commit.
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
+                ALTER TABLE runs ADD COLUMN IF NOT EXISTS SourceCommit TEXT;
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken);
+
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
+                ALTER TABLE runs ADD COLUMN IF NOT EXISTS SourceBranch TEXT;
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken);
+
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
+                ALTER TABLE runs ADD COLUMN IF NOT EXISTS SourceDirty INTEGER NOT NULL DEFAULT 0;
                 """,
                 cancellationToken
             )

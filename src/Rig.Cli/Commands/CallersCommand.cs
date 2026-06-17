@@ -22,7 +22,7 @@ internal static class CallersCommand
 {
     internal static Command Build(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var to = CommonOptions.Pattern("to", "Target method pattern (who reaches this?).");
+        var to = CommonOptions.Pattern(name: "to", description: "Target method pattern (who reaches this?).");
         var orphans = new Option<bool>("--orphans", "--roots") { Description = "Only no-predecessor entry-point candidates (heuristic)." };
         var entrypoints = new Option<bool>("--entrypoints")
         {
@@ -34,7 +34,8 @@ internal static class CallersCommand
         var depth = CommonOptions.Depth();
         var format = CommonOptions.Format();
         var limit = CommonOptions.Limit();
-        var cmd = new Command("callers", "Reverse reachability: which methods reach the target.")
+        var store = CommonOptions.Store();
+        var cmd = new Command(name: "callers", description: "Reverse reachability: which methods reach the target.")
         {
             to,
             orphans,
@@ -45,6 +46,7 @@ internal static class CallersCommand
             depth,
             format,
             limit,
+            store,
         };
         // --orphans (the candidate heuristic) and --entrypoints (the precise rule set) are distinct lenses.
         cmd.Validators.Add(result =>
@@ -60,17 +62,18 @@ internal static class CallersCommand
                 error,
                 () =>
                     RunAsync(
-                        pr.GetValue(to)!,
-                        pr.GetValue(orphans),
-                        pr.GetValue(entrypoints),
-                        pr.GetValue(async),
-                        pr.GetValue(raw),
-                        CommonOptions.RulesOf(pr.GetValue(rules)),
-                        pr.GetValue(depth),
-                        pr.GetValue(format),
-                        pr.GetValue(limit),
-                        output,
-                        workingDirectory
+                        toPattern: pr.GetValue(to)!,
+                        rootsOnly: pr.GetValue(orphans),
+                        entrypointsOnly: pr.GetValue(entrypoints),
+                        async: pr.GetValue(async),
+                        raw: pr.GetValue(raw),
+                        extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                        depth: pr.GetValue(depth),
+                        format: pr.GetValue(format),
+                        limit: pr.GetValue(limit),
+                        output: output,
+                        workingDirectory: workingDirectory,
+                        storeRef: pr.GetValue(store)
                     )
             )
         );
@@ -88,7 +91,8 @@ internal static class CallersCommand
         string? format,
         int? limit,
         TextWriter output,
-        string workingDirectory
+        string workingDirectory,
+        string? storeRef
     )
     {
         var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
@@ -101,7 +105,7 @@ internal static class CallersCommand
         // closure, for inspecting the exact plumbing).
         var shaping = ShapingRuleSet.Load(workingDirectory, extraRules, raw);
 
-        await using var context = OpenReadContext(workingDirectory);
+        await using var context = OpenReadContext(workingDirectory, storeRef);
 
         // One shaped reverse subgraph (bounded when `rig graph` has run, else the full EF graph) drives all
         // three callers modes — the set, the no-predecessor roots, and the rule-detected entrypoints.
@@ -114,6 +118,16 @@ internal static class CallersCommand
             shaping.Cut,
             shaping.Context
         );
+        // Reclassify event-subscription (`+=`) method-group edges to `handoff` — mirroring reaches/tree
+        // (and now path). The handler runs LATER via the event, not synchronously at the `+=` site, so it
+        // is sync-cut by default and only crossed under --async. Marks edges by (Caller, FilePath, Line),
+        // which is direction-agnostic, so it applies to this REVERSE subgraph the same way. Consequence
+        // (intended, matches reaches/tree): a `+=` handler is no longer a synchronous reverse caller, so
+        // event handlers surface under --roots/--entrypoints only via --async. `--raw` bypasses shaping.
+        if (!raw)
+        {
+            graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+        }
 
         if (entrypointsOnly)
         {
@@ -246,9 +260,10 @@ internal static class CallersCommand
 
         var deployments = await LoadDeploymentsAsync(context, workingDirectory);
 
-        // (FilePath, Line) of every reverse-reachable method — the join key against derived EP sites.
-        var methods = await Reads.LoadDeadCodeMethodsAsync(context);
-        var reachableSites = methods.Where(m => reachable.Contains(m.SymbolId)).Select(m => (m.FilePath, m.Line)).ToHashSet();
+        // (FilePath, Line) of every reverse-reachable method — the join key against derived EP sites. Sourced
+        // from the already-loaded graph's method nodes (the same Kind==Method set, deduped by SymbolId) rather
+        // than a second whole-method-table EF scan (LoadDeadCodeMethodsAsync) of the identical rows.
+        var reachableSites = graph.Methods.Where(m => reachable.Contains(m.SymbolId)).Select(m => (m.FilePath, m.Line)).ToHashSet();
 
         // The rule-detected entry points (identical derivation to `rig derive`) + promoted handoff origins.
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
@@ -279,7 +294,7 @@ internal static class CallersCommand
             foreach (var e in touching)
             {
                 var loaded = deployments.ServicesForFile(e.FilePath);
-                var active = deployments.ActiveServices(loaded, e.Requires);
+                var active = deployments.ActiveServices(loadedServices: loaded, requires: e.Requires);
                 output.WriteLine(
                     $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}"
                 );
@@ -295,7 +310,7 @@ internal static class CallersCommand
             output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup)
             {
-                WriteEntryPointLine(output, deployments, e.Route, e.FilePath, e.Line, e.Requires);
+                WriteEntryPointLine(output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
             }
         }
         if (!deployments.IsEmpty)
