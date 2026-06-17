@@ -244,7 +244,12 @@ internal static class TreeRenderer
         // EP marker: when this node is itself a rule-detected entry point, wrap its name with "▶ kind"
         // and a trailing service chip — the same custom rendering used by derive/callers.
         var (epPrefix, epSuffix) = epContext?.ChipFor(node.SymbolId) ?? ("", "");
-        var label = $"{epPrefix}{name}{dispatch}{handoff}{loop}{calls}{seen}{opaqueTag}{cutTag}{fx}{loc}{epSuffix}";
+        // --full: the reaching edge's call site (where the PARENT calls this node) — a `new X()` line for a
+        // ctor, the inline-lambda decl line, the call line for a method — so ctors/lambdas and every node get
+        // a source line, not just the effect/library leaves. Trailing so SourceLocDedupWriter dedups it in
+        // print order; the root has no reaching edge (CallFile null).
+        var callLoc = full && !string.IsNullOrEmpty(node.CallFile) ? $"  {ShortenPath(node.CallFile)}:{node.CallLine}" : "";
+        var label = $"{epPrefix}{name}{dispatch}{handoff}{loop}{calls}{seen}{opaqueTag}{cutTag}{fx}{loc}{epSuffix}{callLoc}";
         output.WriteLine(isRoot ? label : $"{prefix}{(isLast ? "└─ " : "├─ ")}{label}");
 
         // Collapse-seam render rule: this node is a fan-out hub (e.g. a reflection service-locator or
