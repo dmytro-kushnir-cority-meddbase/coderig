@@ -834,7 +834,15 @@ internal static class SolutionSourceLoader
                 var generatedPath = string.IsNullOrEmpty(tree.FilePath)
                     ? $"<generated>/{project.Name}/{results.Count}.g.cs"
                     : tree.FilePath;
-                results.Add(new SourceModel(project.Name, generatedPath, tree, root, semanticModel));
+                results.Add(
+                    new SourceModel(
+                        ProjectName: project.Name,
+                        FilePath: generatedPath,
+                        Tree: tree,
+                        Root: root,
+                        SemanticModel: semanticModel
+                    )
+                );
             }
             return results;
         }

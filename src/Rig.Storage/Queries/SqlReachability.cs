@@ -339,19 +339,19 @@ public static class SqlReachability
                     // Positional through FirstArgName (index 12); the new nth-argument lists are
                     // appended as NAMED args because EnclosingScopes (param 13) is skipped on this path.
                     new FactInvocation(
-                        reader.GetString(0),
-                        reader.IsDBNull(1) ? null : reader.GetString(1),
-                        reader.IsDBNull(2) ? "" : reader.GetString(2),
-                        reader.IsDBNull(3) ? 0 : reader.GetInt32(3),
-                        reader.IsDBNull(4) ? null : reader.GetString(4),
-                        reader.IsDBNull(5) ? null : reader.GetString(5),
-                        reader.IsDBNull(6) ? null : reader.GetString(6),
-                        reader.IsDBNull(7) ? null : reader.GetString(7),
-                        reader.IsDBNull(8) ? null : reader.GetString(8),
-                        reader.IsDBNull(9) ? null : reader.GetString(9),
-                        reader.IsDBNull(10) ? null : reader.GetString(10),
-                        reader.IsDBNull(11) ? null : reader.GetString(11),
-                        reader.IsDBNull(12) ? null : reader.GetString(12),
+                        Target: reader.GetString(0),
+                        Enclosing: reader.IsDBNull(1) ? null : reader.GetString(1),
+                        FilePath: reader.IsDBNull(2) ? "" : reader.GetString(2),
+                        Line: reader.IsDBNull(3) ? 0 : reader.GetInt32(3),
+                        Receiver: reader.IsDBNull(4) ? null : reader.GetString(4),
+                        FirstArgTemplate: reader.IsDBNull(5) ? null : reader.GetString(5),
+                        FirstArgType: reader.IsDBNull(6) ? null : reader.GetString(6),
+                        LoopKind: reader.IsDBNull(7) ? null : reader.GetString(7),
+                        LoopDetail: reader.IsDBNull(8) ? null : reader.GetString(8),
+                        EnclosingInvocations: reader.IsDBNull(9) ? null : reader.GetString(9),
+                        CatchTypes: reader.IsDBNull(10) ? null : reader.GetString(10),
+                        TypeArguments: reader.IsDBNull(11) ? null : reader.GetString(11),
+                        FirstArgName: reader.IsDBNull(12) ? null : reader.GetString(12),
                         ArgumentTemplates: reader.IsDBNull(13) ? null : reader.GetString(13),
                         ArgumentNames: reader.IsDBNull(14) ? null : reader.GetString(14)
                     )
@@ -374,7 +374,12 @@ public static class SqlReachability
                 var line = reader.IsDBNull(3) ? 0 : reader.GetInt32(3);
                 ctorByLoc.TryAdd(
                     (file, line),
-                    new SymbolRef(reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1), file, line)
+                    new SymbolRef(
+                        Target: reader.GetString(0),
+                        Enclosing: reader.IsDBNull(1) ? null : reader.GetString(1),
+                        FilePath: file,
+                        Line: line
+                    )
                 );
             },
             cancellationToken
@@ -394,7 +399,10 @@ public static class SqlReachability
                 var target = reader.GetString(0);
                 var file = reader.IsDBNull(2) ? "" : reader.GetString(2);
                 var line = reader.IsDBNull(3) ? 0 : reader.GetInt32(3);
-                throwByKey.TryAdd((file, line, target), new SymbolRef(target, reader.IsDBNull(1) ? null : reader.GetString(1), file, line));
+                throwByKey.TryAdd(
+                    (file, line, target),
+                    new SymbolRef(Target: target, Enclosing: reader.IsDBNull(1) ? null : reader.GetString(1), FilePath: file, Line: line)
+                );
             },
             cancellationToken
         );
@@ -482,16 +490,16 @@ public static class SqlReachability
                 typeArgsByEdge.TryGetValue((from, to, line), out var typeArgs);
                 callEdges.Add(
                     new CallEdge(
-                        from,
-                        to,
-                        reader.GetString(2),
-                        reader.IsDBNull(3) ? "" : reader.GetString(3),
-                        line,
-                        reader.IsDBNull(5) ? null : reader.GetString(5),
-                        reader.IsDBNull(6) ? null : reader.GetString(6),
-                        reader.IsDBNull(7) ? null : reader.GetString(7),
-                        reader.IsDBNull(8) ? null : reader.GetString(8),
-                        typeArgs
+                        Caller: from,
+                        Callee: to,
+                        Kind: reader.GetString(2),
+                        FilePath: reader.IsDBNull(3) ? "" : reader.GetString(3),
+                        Line: line,
+                        LoopKind: reader.IsDBNull(5) ? null : reader.GetString(5),
+                        LoopDetail: reader.IsDBNull(6) ? null : reader.GetString(6),
+                        ReceiverType: reader.IsDBNull(7) ? null : reader.GetString(7),
+                        HandoffDispatcher: reader.IsDBNull(8) ? null : reader.GetString(8),
+                        TypeArguments: typeArgs
                     )
                 );
             },
@@ -532,11 +540,11 @@ public static class SqlReachability
                 var related = reader.GetString(1);
                 if (reader.GetString(2) == "interface")
                 {
-                    implEdges.Add(new ImplementsEdge(type, related));
+                    implEdges.Add(new ImplementsEdge(ImplType: type, InterfaceType: related));
                 }
                 else
                 {
-                    baseEdges.Add(new BaseEdge(type, related));
+                    baseEdges.Add(new BaseEdge(SubType: type, BaseType: related));
                 }
             },
             cancellationToken
@@ -555,7 +563,10 @@ public static class SqlReachability
             await ReadAsync(
                 connection,
                 "SELECT DISTINCT SourceMember, TargetMember, Kind FROM dispatch_facts;",
-                reader => mined.Add(new DispatchFact(reader.GetString(0), reader.GetString(1), reader.GetString(2))),
+                reader =>
+                    mined.Add(
+                        new DispatchFact(SourceMember: reader.GetString(0), TargetMember: reader.GetString(1), Kind: reader.GetString(2))
+                    ),
                 cancellationToken
             );
             minedDispatch = mined.ToArray();

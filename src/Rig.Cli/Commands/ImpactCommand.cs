@@ -240,17 +240,17 @@ internal static class ImpactCommand
             baseRef,
             repoRoot,
             mode,
-            changedFiles.Count,
-            changedMethods,
-            reachedBy.Count,
-            affectedEps,
-            deployments,
-            forward.Count,
-            affectedEffects,
-            observationCounts,
-            throwCount,
-            affectedServices,
-            max
+            changedFileCount: changedFiles.Count,
+            changedMethods: changedMethods,
+            reachedByCount: reachedBy.Count,
+            affectedEps: affectedEps,
+            deployments: deployments,
+            forwardCount: forward.Count,
+            affectedEffects: affectedEffects,
+            observationCounts: observationCounts,
+            throwCount: throwCount,
+            affectedServices: affectedServices,
+            max: max
         );
         WriteEpDiffHuman(output, baseRef, baseDbPath, epDiff, StoreLayout.AvailableStoreIds(workingDirectory), max);
         return 0;
@@ -267,8 +267,8 @@ internal static class ImpactCommand
             return File.Exists(path) ? path : null;
         }
 
-        var baseSha = ResolveRefToSha(repoRoot, baseRef) ?? baseRef;
-        var dir = StoreLayout.ResolveStoreDirByRef(workingDirectory, baseSha);
+        var baseSha = ResolveRefToSha(repoRoot: repoRoot, reference: baseRef) ?? baseRef;
+        var dir = StoreLayout.ResolveStoreDirByRef(workingDirectory: workingDirectory, refOrId: baseSha);
         return dir is null ? null : Path.Combine(dir, StoreLayout.DbFileName);
     }
 
@@ -311,7 +311,7 @@ internal static class ImpactCommand
             .OrderBy(k => k.Kind, StringComparer.Ordinal)
             .ThenBy(k => k.Route, StringComparer.Ordinal)
             .ToList();
-        return new EpDiff(added, removed);
+        return new EpDiff(Added: added, Removed: removed);
     }
 
     private static void EmitEpDiffTsv(TextWriter output, EpDiff? diff)
@@ -379,7 +379,7 @@ internal static class ImpactCommand
         var set = new HashSet<string>(StringComparer.Ordinal);
         foreach (var e in eps)
         {
-            foreach (var s in deployments.ActiveServices(deployments.ServicesForFile(e.FilePath), e.Requires))
+            foreach (var s in deployments.ActiveServices(loadedServices: deployments.ServicesForFile(e.FilePath), requires: e.Requires))
             {
                 set.Add(s);
             }
@@ -409,7 +409,15 @@ internal static class ImpactCommand
         var asyncNote = mode == FactPathFinder.TraversalMode.AsyncInclude ? "  (--async: handoffs included)" : "";
 
         // The risk headline — the one-line takeaway, before the detail.
-        output.WriteLine(RiskHeadline(affectedEps.Count, affectedServices, affectedEffects.Count, observationCounts, throwCount));
+        output.WriteLine(
+            RiskHeadline(
+                epCount: affectedEps.Count,
+                services: affectedServices,
+                effectCount: affectedEffects.Count,
+                observationCounts: observationCounts,
+                throwCount: throwCount
+            )
+        );
         output.WriteLine();
 
         output.WriteLine($"Impact of {baseRef}...working-tree in {ShortenPath(repoRoot)}{asyncNote}");

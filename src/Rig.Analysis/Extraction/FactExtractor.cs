@@ -158,7 +158,7 @@ internal static class FactExtractor
                     && dispatchSeen.Add((slot, boundId, DispatchKinds.DelegateBind))
                 )
                 {
-                    dispatch.Add(new DispatchFact(slot, boundId, DispatchKinds.DelegateBind));
+                    dispatch.Add(new DispatchFact(SourceMember: slot, TargetMember: boundId, Kind: DispatchKinds.DelegateBind));
                 }
             }
 
@@ -413,7 +413,7 @@ internal static class FactExtractor
 
         if (seen.Add((sourceId, targetId, kind)))
         {
-            dispatch.Add(new DispatchFact(sourceId, targetId, kind));
+            dispatch.Add(new DispatchFact(SourceMember: sourceId, TargetMember: targetId, Kind: kind));
         }
     }
 
@@ -447,14 +447,14 @@ internal static class FactExtractor
     {
         if (type.BaseType is { SpecialType: SpecialType.None } baseType && baseType.GetDocumentationCommentId() is { } baseDocId)
         {
-            relations.Add(new TypeRelationFact(typeDocId, baseDocId, "base"));
+            relations.Add(new TypeRelationFact(TypeSymbolId: typeDocId, RelatedSymbolId: baseDocId, RelationKind: "base"));
         }
 
         foreach (var iface in type.Interfaces)
         {
             if (iface.GetDocumentationCommentId() is { } ifaceDocId)
             {
-                relations.Add(new TypeRelationFact(typeDocId, ifaceDocId, "interface"));
+                relations.Add(new TypeRelationFact(TypeSymbolId: typeDocId, RelatedSymbolId: ifaceDocId, RelationKind: "interface"));
             }
         }
     }
@@ -780,7 +780,11 @@ internal static class FactExtractor
             var receiverText = memberAccess.Expression.ToString();
             var receiverType = model.GetTypeInfo(memberAccess.Expression).Type?.OriginalDefinition.ToDisplayString() ?? "";
             enclosing.Add(
-                new FactStructuralContext.EnclosingInvocation(receiverText, receiverType, memberAccess.Name.Identifier.ValueText)
+                new FactStructuralContext.EnclosingInvocation(
+                    ReceiverText: receiverText,
+                    ReceiverType: receiverType,
+                    MethodName: memberAccess.Name.Identifier.ValueText
+                )
             );
         }
 
@@ -805,15 +809,15 @@ internal static class FactExtractor
         {
             if (ancestor is LockStatementSyntax lockStmt)
             {
-                scopes.Add(new FactStructuralContext.EnclosingScope("lock", TypeDisplayOf(lockStmt.Expression, model)));
+                scopes.Add(new FactStructuralContext.EnclosingScope(Kind: "lock", Type: TypeDisplayOf(lockStmt.Expression, model)));
             }
             else if (ancestor is UsingStatementSyntax usingStmt)
             {
-                scopes.Add(new FactStructuralContext.EnclosingScope("using", UsingResourceType(usingStmt, model)));
+                scopes.Add(new FactStructuralContext.EnclosingScope(Kind: "using", Type: UsingResourceType(usingStmt, model)));
             }
             else if (ancestor is LocalDeclarationStatementSyntax local && local.UsingKeyword.IsKind(SyntaxKind.UsingKeyword))
             {
-                scopes.Add(new FactStructuralContext.EnclosingScope("using", DeclarationType(local.Declaration, model)));
+                scopes.Add(new FactStructuralContext.EnclosingScope(Kind: "using", Type: DeclarationType(local.Declaration, model)));
             }
         }
 

@@ -85,7 +85,17 @@ internal static class EntryPointContext
 
             var kind = h.Kind ?? "background";
             var method = kind.ToUpperInvariant();
-            result.Add(new DerivedEntryPoint(kind, method, route, $"{kind} {method} {route}", h.FilePath, h.Line, h.Requires));
+            result.Add(
+                new DerivedEntryPoint(
+                    Kind: kind,
+                    Method: method,
+                    Route: route,
+                    DisplayName: $"{kind} {method} {route}",
+                    FilePath: h.FilePath,
+                    Line: h.Line,
+                    Requires: h.Requires
+                )
+            );
         }
         return result;
     }

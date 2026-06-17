@@ -169,7 +169,15 @@ internal sealed class DeploymentMap
                     continue;
                 }
 
-                result.Add(new ServiceDef(name, host, GetString(e, "kind"), GetString(e, "note"), GetStringArray(e, "provides")));
+                result.Add(
+                    new ServiceDef(
+                        Name: name,
+                        Host: host,
+                        Kind: GetString(e, "kind"),
+                        Note: GetString(e, "note"),
+                        Provides: GetStringArray(e, "provides")
+                    )
+                );
             }
             return result;
         }

@@ -255,7 +255,16 @@ public static class FactEffectDeriver
                         continue;
                     }
 
-                    results.Add(new DerivedEffect(rule.Provider, rule.Operation, resource!, inv.Enclosing, inv.FilePath, inv.Line));
+                    results.Add(
+                        new DerivedEffect(
+                            Provider: rule.Provider,
+                            Operation: rule.Operation,
+                            ResourceType: resource!,
+                            EnclosingSymbolId: inv.Enclosing,
+                            FilePath: inv.FilePath,
+                            Line: inv.Line
+                        )
+                    );
                     break;
                 }
             }

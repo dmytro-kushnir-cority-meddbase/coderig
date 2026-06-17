@@ -42,7 +42,7 @@ public static class FactStructuralContext
             var fields = entry.Split(FieldSeparator);
             if (fields.Length == 3)
             {
-                result.Add(new EnclosingInvocation(fields[0], fields[1], fields[2]));
+                result.Add(new EnclosingInvocation(ReceiverText: fields[0], ReceiverType: fields[1], MethodName: fields[2]));
             }
         }
 
@@ -77,7 +77,7 @@ public static class FactStructuralContext
             var fields = entry.Split(FieldSeparator);
             if (fields.Length == 2)
             {
-                result.Add(new EnclosingScope(fields[0], fields[1]));
+                result.Add(new EnclosingScope(Kind: fields[0], Type: fields[1]));
             }
         }
 

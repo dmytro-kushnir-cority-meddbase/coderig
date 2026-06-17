@@ -340,7 +340,7 @@ internal static class TreeCommand
                     .DistinctBy(c => (c.Enclosing, c.Target, c.Line))
             )
             {
-                leafRows.Add((c.Enclosing!, c.Line, FormatUnresolvedLeaf(c.Target, c.FilePath, c.Line)));
+                leafRows.Add((c.Enclosing!, c.Line, FormatUnresolvedLeaf(target: c.Target, filePath: c.FilePath, line: c.Line)));
             }
 
             effectLeavesByMethod = leafRows

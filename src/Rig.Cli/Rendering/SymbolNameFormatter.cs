@@ -152,7 +152,7 @@ internal static class SymbolNameFormatter
                     i++;
                 }
 
-                var token = param.Substring(startIndex: start, length: i - start);
+                var token = param.Substring(start, i - start);
                 var dot = token.LastIndexOf('.');
                 sb.Append(dot >= 0 ? token.Substring(dot + 1) : token);
             }

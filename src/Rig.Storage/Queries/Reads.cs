@@ -138,12 +138,12 @@ public static class Reads
             {
                 hits.Add(
                     new SymbolSearchHit(
-                        reader.GetString(0),
-                        reader.GetString(1),
-                        reader.IsDBNull(2) ? "" : reader.GetString(2),
-                        reader.IsDBNull(3) ? "" : reader.GetString(3),
-                        ReadInt(reader, 4),
-                        reader.IsDBNull(5) ? "" : reader.GetString(5)
+                        SymbolId: reader.GetString(0),
+                        Kind: reader.GetString(1),
+                        Signature: reader.IsDBNull(2) ? "" : reader.GetString(2),
+                        FilePath: reader.IsDBNull(3) ? "" : reader.GetString(3),
+                        Line: ReadInt(reader, 4),
+                        DefiningAssembly: reader.IsDBNull(5) ? "" : reader.GetString(5)
                     )
                 );
             }
@@ -220,12 +220,12 @@ public static class Reads
             {
                 hits.Add(
                     new ReferenceHit(
-                        reader.GetString(0),
-                        reader.GetString(1),
-                        reader.IsDBNull(2) ? null : reader.GetString(2),
-                        reader.IsDBNull(3) ? "" : reader.GetString(3),
-                        ReadInt(reader, 4),
-                        !reader.IsDBNull(5) && reader.GetInt64(5) != 0
+                        TargetSymbolId: reader.GetString(0),
+                        RefKind: reader.GetString(1),
+                        EnclosingSymbolId: reader.IsDBNull(2) ? null : reader.GetString(2),
+                        FilePath: reader.IsDBNull(3) ? "" : reader.GetString(3),
+                        Line: ReadInt(reader, 4),
+                        TargetInSource: !reader.IsDBNull(5) && reader.GetInt64(5) != 0
                     )
                 );
             }

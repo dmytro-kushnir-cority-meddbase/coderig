@@ -112,12 +112,12 @@ public static class DeadCodeFinder
             directCallers.TryGetValue(m.SymbolId, out var callers);
             candidates.Add(
                 new Candidate(
-                    m.SymbolId,
-                    m.FilePath,
-                    m.Line,
-                    ClassifyTier(m.Modifiers, callers),
-                    callers == 0 ? "uncalled" : "only reached by dead code",
-                    callers
+                    SymbolId: m.SymbolId,
+                    FilePath: m.FilePath,
+                    Line: m.Line,
+                    Tier: ClassifyTier(m.Modifiers, callers),
+                    Reason: callers == 0 ? "uncalled" : "only reached by dead code",
+                    DirectCallers: callers
                 )
             );
         }
