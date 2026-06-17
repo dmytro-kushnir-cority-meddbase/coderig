@@ -1,0 +1,51 @@
+{
+  "entrypoints": {
+    "classInheritance": [
+      {
+        "id": "rig.command-handlers",
+        "kind": "command",
+        "baseTypes": ["*"],
+        "handlerMethods": ["RunAsync", "RunIndexAsync", "RunMineAsync", "RunGraphAsync", "RunEntryPointsAsync"],
+        "requireOverride": false,
+        "defaultMethod": "COMMAND"
+      }
+    ]
+  },
+  "effects": [
+    {
+      "provider": "roslyn",
+      "operation": "compile",
+      "methods": ["GetCompilationAsync"],
+      "receiverTypes": ["Microsoft.CodeAnalysis.Project"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "roslyn_compile: Project.GetCompilationAsync builds the semantic model — the dominant index-time cost. Surfaces where rig forces a full Roslyn compilation per project."
+    },
+    {
+      "provider": "roslyn",
+      "operation": "source_gen",
+      "methods": ["GetSourceGeneratedDocumentsAsync"],
+      "receiverTypes": ["Microsoft.CodeAnalysis.Project"],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation",
+      "reason": "roslyn_source_gen: materializing source-generated documents from a project."
+    },
+    {
+      "provider": "roslyn",
+      "operation": "msbuild",
+      "methods": ["Build"],
+      "receiverTypes": ["Buildalyzer.IProjectAnalyzer"],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "roslyn_msbuild: Buildalyzer IProjectAnalyzer.Build runs a design-time MSBuild build — the per-project evaluation rig does before reading the compilation."
+    }
+  ],
+  "effectEmoji": {
+    "roslyn": "🧩",
+    "roslyn:compile": "🧠",
+    "roslyn:msbuild": "🔨"
+  }
+}

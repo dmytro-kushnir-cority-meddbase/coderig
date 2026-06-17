@@ -1439,6 +1439,36 @@
       "reason": "process_start"
     },
     {
+      "provider": "parallel",
+      "operation": "fanout",
+      "methods": [ "For", "ForEach", "Invoke" ],
+      "declaringTypes": [ "System.Threading.Tasks.Parallel" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "parallel_fanout: Parallel.For/ForEach/Invoke runs the body across threadpool threads — concurrency the linear call graph otherwise hides."
+    },
+    {
+      "provider": "parallel",
+      "operation": "run",
+      "methods": [ "Run" ],
+      "declaringTypes": [ "System.Threading.Tasks.Task" ],
+      "resource": "declaring_type",
+      "confidence": "medium",
+      "basis": "compilation",
+      "reason": "parallel_run: Task.Run queues work to the threadpool, off the calling thread."
+    },
+    {
+      "provider": "parallel",
+      "operation": "await_all",
+      "methods": [ "WhenAll", "WhenAny" ],
+      "declaringTypes": [ "System.Threading.Tasks.Task" ],
+      "resource": "declaring_type",
+      "confidence": "medium",
+      "basis": "compilation",
+      "reason": "parallel_await_all: Task.WhenAll/WhenAny joins concurrently-running tasks."
+    },
+    {
       "provider": "inproc_cache",
       "operation": "write",
       "methods": [ "Set", "SetAsync", "Add", "AddAsync", "AddOrGetExisting", "CreateEntry", "Insert", "GetOrCreate", "GetOrCreateAsync" ],
@@ -1708,6 +1738,7 @@
     "async_lock": "🔐",
     "fhir": "🏥",
     "permission": "🔑",
-    "config": "⚙️"
+    "config": "⚙️",
+    "parallel": "🧵"
   }
 }
