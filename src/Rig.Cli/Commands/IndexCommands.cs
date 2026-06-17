@@ -155,7 +155,7 @@ internal static class IndexCommands
             // (a clean "Failed to load" beats an uncaught stack trace). InvalidOperationException: the
             // workspace couldn't load/bind the target.
             error.WriteLine("Failed to load solution/project for analysis.");
-            error.WriteLine(exception.Message);
+            error.WriteLine(exception.ToString());
             error.WriteLine("Ensure the target solution has been restored and builds successfully, then retry.");
             error.WriteLine($"  dotnet restore {target}");
             error.WriteLine($"  dotnet build {target}");
