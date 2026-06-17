@@ -103,4 +103,67 @@ internal static class StoreLayout
             }
         }
     }
+
+    // --- addressing a specific store (the two-store diff, step 3) ---
+
+    // Resolve a per-commit store dir by an explicit store-id or a commit sha (full or short). Matches the
+    // sub-store whose id (minus any `-dirty` suffix) shares a sha prefix with `refOrId` — so a full HEAD
+    // sha resolves the short-sha store dir, and a short prefix resolves too. Exact id wins outright.
+    // Returns null when nothing matches.
+    internal static string? ResolveStoreDirByRef(string workingDirectory, string refOrId)
+    {
+        if (string.IsNullOrWhiteSpace(refOrId))
+        {
+            return null;
+        }
+
+        var rig = RigDir(workingDirectory);
+        if (!Directory.Exists(rig))
+        {
+            return null;
+        }
+
+        string? match = null;
+        foreach (var dir in Directory.EnumerateDirectories(rig))
+        {
+            if (!File.Exists(Path.Combine(dir, DbFileName)))
+            {
+                continue;
+            }
+
+            var id = Path.GetFileName(dir);
+            if (string.Equals(id, refOrId, StringComparison.OrdinalIgnoreCase))
+            {
+                return dir; // exact store-id wins
+            }
+
+            var stem = id.EndsWith("-dirty", StringComparison.Ordinal) ? id[..^"-dirty".Length] : id;
+            if (
+                stem.StartsWith(refOrId, StringComparison.OrdinalIgnoreCase) || refOrId.StartsWith(stem, StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                match = dir;
+            }
+        }
+
+        return match;
+    }
+
+    // The ids of every per-commit store present (for discovery / "base not indexed" messages).
+    internal static IReadOnlyList<string> AvailableStoreIds(string workingDirectory)
+    {
+        var rig = RigDir(workingDirectory);
+        if (!Directory.Exists(rig))
+        {
+            return [];
+        }
+
+        return Directory
+            .EnumerateDirectories(rig)
+            .Where(d => File.Exists(Path.Combine(d, DbFileName)))
+            .Select(d => Path.GetFileName(d))
+            .OfType<string>()
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
+    }
 }

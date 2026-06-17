@@ -228,9 +228,16 @@ front. Build them switchable; do not hardcode a winner.
    `.rig/rig.db` is moved to `.legacy.bak` on the next index; back-compat intentionally broken). STILL TODO
    in this step: per-command `--commit <ref>` selection + branch→hash resolution (deferred until step 3
    actually needs to address a non-latest store — today every read transparently uses LATEST).
-3. Open-two-stores plumbing (`impact --base-store`/`--base <commit>`), EP add/remove set diff on
-   `(Kind, Route)`.
-4. Per-EP tree/effect/reachability delta over the candidate set; the compact tri-lens output + handle.
+3. **Open-two-stores plumbing + EP add/remove diff** — ✅ **DONE**. `impact` gains `--base-store <path|dir>`;
+   absent that, `--base <ref>` is resolved to a commit sha (`git rev-parse`) and matched to an indexed
+   per-commit store (`StoreLayout.ResolveStoreDirByRef`, full-sha/short-prefix/exact-id/`-dirty`-stem).
+   EPs are derived on both stores (same rules, no query cache → safe on a 2nd store) and set-diffed on
+   `(Kind, Route)`; rendered as `+ <kind> <route>` / `- <kind> <route>` (TSV: `ep_added`/`ep_removed`
+   rows). Skips cleanly with an "index the base commit" hint when no base store resolves. Tests:
+   `StoreLayoutTests` (resolver) + `ImpactEpDiffTests` (identity→empty, different-source→non-empty).
+4. **Per-EP tree/effect/reachability delta over the candidate set + compact tri-lens output + handle** —
+   the actual behavioral diff; NEXT. (Step 3 ships EP add/remove; the per-EP "what changed inside a *common*
+   EP" delta is step 4.)
 5. Drill-down (`--explain <handle>`); canonical-order toggle (D1); start the differ experiments (D2).
 6. Retention/GC; dirty handling; auto-coherence assertion.
 

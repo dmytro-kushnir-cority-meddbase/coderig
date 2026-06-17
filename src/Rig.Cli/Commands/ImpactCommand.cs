@@ -36,6 +36,11 @@ internal static class ImpactCommand
         {
             Description = "Source repo path to run `git diff` in (default: the indexed run's source repo).",
         };
+        var baseStore = new Option<string?>("--base-store")
+        {
+            Description =
+                "Base commit's .rig store (path or dir) for the entry-point diff; default: resolve --base to an indexed commit store.",
+        };
         var async = CommonOptions.Async();
         var rules = CommonOptions.Rules();
         var format = CommonOptions.Format();
@@ -44,6 +49,7 @@ internal static class ImpactCommand
         {
             @base,
             repo,
+            baseStore,
             async,
             rules,
             format,
@@ -57,6 +63,7 @@ internal static class ImpactCommand
                     RunAsync(
                         baseRef: pr.GetValue(@base) ?? "main",
                         repoOverride: pr.GetValue(repo),
+                        baseStoreOverride: pr.GetValue(baseStore),
                         async: pr.GetValue(async),
                         extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                         format: pr.GetValue(format),
@@ -73,6 +80,7 @@ internal static class ImpactCommand
     private static async Task<int> RunAsync(
         string baseRef,
         string? repoOverride,
+        string? baseStoreOverride,
         bool async,
         IReadOnlyList<string> extraRules,
         string? format,
@@ -210,9 +218,20 @@ internal static class ImpactCommand
         var throwCount = affectedEffects.Count(e => string.Equals(e.Provider, "throw", StringComparison.OrdinalIgnoreCase));
         var affectedServices = AffectedServices(affectedEps, deployments);
 
+        // --- Two-store entry-point diff (step 3): EPs added/removed vs the base commit's store, paired on
+        // (Kind, Route) — line/param-free, so formatting + signature edits don't churn the diff. Requires
+        // the base commit to have its own indexed store. Null when no base store resolves (the blast-radius
+        // output above still stands). See docs/design-impact-behavioral-diff.md §3.1-3.2.
+        var branchEps = derivedEps.Concat(promoted).ToList();
+        var baseDbPath = ResolveBaseDbPath(workingDirectory, baseStoreOverride, repoRoot, baseRef);
+        var epDiff = baseDbPath is null
+            ? null
+            : await ComputeEpDiffAsync(baseDbPath, branchEps, workingDirectory, extraRules, handoffRules);
+
         if (tsv)
         {
             EmitTsv(output, changedMethods, affectedEps, deployments, affectedEffects, max);
+            EmitEpDiffTsv(output, epDiff);
             return 0;
         }
 
@@ -233,7 +252,117 @@ internal static class ImpactCommand
             affectedServices,
             max
         );
+        WriteEpDiffHuman(output, baseRef, baseDbPath, epDiff, StoreLayout.AvailableStoreIds(workingDirectory), max);
         return 0;
+    }
+
+    // The db path of the base store to diff entry points against: an explicit --base-store (a db path or a
+    // store dir), else the --base ref resolved to a commit sha and matched to an indexed per-commit store.
+    // Null when none resolves (the EP diff is then skipped — the blast radius still renders).
+    private static string? ResolveBaseDbPath(string workingDirectory, string? baseStoreOverride, string repoRoot, string baseRef)
+    {
+        if (baseStoreOverride is { Length: > 0 } explicitStore)
+        {
+            var path = Directory.Exists(explicitStore) ? Path.Combine(explicitStore, StoreLayout.DbFileName) : explicitStore;
+            return File.Exists(path) ? path : null;
+        }
+
+        var baseSha = ResolveRefToSha(repoRoot, baseRef) ?? baseRef;
+        var dir = StoreLayout.ResolveStoreDirByRef(workingDirectory, baseSha);
+        return dir is null ? null : Path.Combine(dir, StoreLayout.DbFileName);
+    }
+
+    // `git rev-parse --verify <ref>^{commit}` — peel a ref/tag to its commit sha, null when it doesn't resolve.
+    private static string? ResolveRefToSha(string repoRoot, string reference)
+    {
+        var (ok, stdout, _) = RunGit(repoRoot, "rev-parse", "--verify", "--quiet", reference + "^{commit}");
+        var sha = stdout.Trim();
+        return ok && sha.Length > 0 ? sha : null;
+    }
+
+    internal sealed record EpDiff(IReadOnlyList<(string Kind, string Route)> Added, IReadOnlyList<(string Kind, string Route)> Removed);
+
+    // Derive entry points on the base store and set-diff them against the branch's, keyed on (Kind, Route).
+    // DeriveEntryPointsAsync derives straight from the passed context with rules loaded from the (shared)
+    // working dir — no query cache — so running it on a second store is correct. Internal for testing.
+    internal static async Task<EpDiff> ComputeEpDiffAsync(
+        string baseDbPath,
+        IReadOnlyList<DerivedEntryPoint> branchEps,
+        string workingDirectory,
+        IReadOnlyList<string> extraRules,
+        IReadOnlyList<FactHandoffRule> handoffRules
+    )
+    {
+        await using var baseContext = new Rig.Storage.Storage.RigDbContext(baseDbPath, readOnly: true);
+        var baseEpData = await Reads.LoadFactEntryPointDataAsync(baseContext);
+        var baseSet = await DeriveEntryPointsAsync(baseContext, baseEpData, workingDirectory, extraRules, handoffRules);
+        var baseEps = baseSet.Derived.Concat(baseSet.PromotedOrigins).ToList();
+
+        var branchKeys = branchEps.Select(e => (e.Kind, e.Route)).ToHashSet();
+        var baseKeys = baseEps.Select(e => (e.Kind, e.Route)).ToHashSet();
+
+        var added = branchKeys
+            .Where(k => !baseKeys.Contains(k))
+            .OrderBy(k => k.Kind, StringComparer.Ordinal)
+            .ThenBy(k => k.Route, StringComparer.Ordinal)
+            .ToList();
+        var removed = baseKeys
+            .Where(k => !branchKeys.Contains(k))
+            .OrderBy(k => k.Kind, StringComparer.Ordinal)
+            .ThenBy(k => k.Route, StringComparer.Ordinal)
+            .ToList();
+        return new EpDiff(added, removed);
+    }
+
+    private static void EmitEpDiffTsv(TextWriter output, EpDiff? diff)
+    {
+        if (diff is null)
+        {
+            return;
+        }
+
+        foreach (var (kind, route) in diff.Added)
+        {
+            output.WriteLine($"ep_added\t{kind}\t{route}");
+        }
+
+        foreach (var (kind, route) in diff.Removed)
+        {
+            output.WriteLine($"ep_removed\t{kind}\t{route}");
+        }
+    }
+
+    private static void WriteEpDiffHuman(
+        TextWriter output,
+        string baseRef,
+        string? baseDbPath,
+        EpDiff? diff,
+        IReadOnlyList<string> availableStoreIds,
+        int max
+    )
+    {
+        output.WriteLine();
+        if (diff is null || baseDbPath is null)
+        {
+            output.WriteLine($"Entry-point diff vs '{baseRef}': base store not indexed — skipped.");
+            output.WriteLine(
+                availableStoreIds.Count > 0
+                    ? $"{Indent.L1}indexed commits: {string.Join(", ", availableStoreIds)}  (index the base commit, or pass --base-store <path>)"
+                    : $"{Indent.L1}(no per-commit stores yet — index the base commit to enable the entry-point diff)"
+            );
+            return;
+        }
+
+        output.WriteLine($"Entry-point diff vs '{baseRef}': +{diff.Added.Count} added, -{diff.Removed.Count} removed");
+        foreach (var (kind, route) in diff.Added.Take(max))
+        {
+            output.WriteLine($"{Indent.L1}+ {kind} {route}");
+        }
+
+        foreach (var (kind, route) in diff.Removed.Take(max))
+        {
+            output.WriteLine($"{Indent.L1}- {kind} {route}");
+        }
     }
 
     // The hosts that LOAD at least one affected entry point (the redeploy/risk set), via the deployment map.

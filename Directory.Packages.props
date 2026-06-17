@@ -19,7 +19,7 @@
     <PackageVersion Include="System.CommandLine" Version="2.0.8" />
     <PackageVersion Include="TUnit" Version="1.53.0" />
     <PackageVersion Include="Meziantou.Analyzer" Version="3.0.104" />
-    <PackageVersion Include="UseNamedArgs" Version="0.0.2" />
+    <PackageVersion Include="UseNamedArgs" Version="0.0.3" />
     <PackageVersion Include="System.Text.Json" Version="9.0.5" />
     <!-- Versions for the two SECURITY/CONSTRAINT pins. Both arrive TRANSITIVELY via the Roslyn
          workspace stack; they're promoted to these versions by DIRECT PackageReferences in the

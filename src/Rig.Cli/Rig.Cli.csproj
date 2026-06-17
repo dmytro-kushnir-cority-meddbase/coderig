@@ -19,6 +19,9 @@
     <PackageReference Include="System.CommandLine" />
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Rig.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\Rig.Analysis\Rig.Analysis.csproj" />
     <ProjectReference Include="..\Rig.Storage\Rig.Storage.csproj" />
   </ItemGroup>
