@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.RegularExpressions;
 using Rig.Analysis.Rules;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
@@ -224,9 +226,21 @@ internal static class TreeRenderer
                 parentDeclaring: parentDeclaringConcrete,
                 parentMethod: parentMethodConcrete
             );
+        // A lambda renders AS its enclosing method (ShortName drops ~λN — load-bearing for the generic-chain
+        // monomorphization above), so the sibling lambdas of one method look like identical duplicate lines.
+        // Append the lambda discriminator to tell them apart (display-only; the symbol id is unchanged).
+        var lambdaTag = "";
+        var lambdaAt = node.SymbolId.IndexOf("~λ", StringComparison.Ordinal);
+        if (lambdaAt >= 0)
+        {
+            var seg = node.SymbolId[lambdaAt..];
+            var segParen = seg.IndexOf('(');
+            lambdaTag = " " + (segParen >= 0 ? seg[..segParen] : seg).TrimStart('~');
+        }
         var name =
             PrettyGenericName(ShortName(node.SymbolId), declaringArgs: declaringConcrete, methodArgs: methodConcrete)
-            + (signatures ? ShortSignature(node.SymbolId) : "");
+            + (signatures ? ShortSignature(node.SymbolId) : "")
+            + lambdaTag;
         // EP marker: when this node is itself a rule-detected entry point, wrap its name with "▶ kind"
         // and a trailing service chip — the same custom rendering used by derive/callers.
         var (epPrefix, epSuffix) = epContext?.ChipFor(node.SymbolId) ?? ("", "");
@@ -497,5 +511,48 @@ internal static class TreeRenderer
         // Render generic arity the same way resolved tree nodes do (`Seq`1.Iter` -> `Seq<T>.Iter`) so the
         // library leaves don't show raw backtick arity next to the `<T,U>` of resolved siblings.
         return $"· {PrettyGenericName(name)}{loc}";
+    }
+}
+
+// Print-order source-loc dedup for the `--full` tree. A method's effect/library leaves all carry the same
+// `  <relpath>:<line>`, and consecutive leaves usually share a file, so the path is re-printed on nearly
+// every line. This wraps the tree's output and rewrites a trailing `  <path>:<line>` to `  :<line>` when the
+// path is unchanged from the previously written line — the file name appears only when it CHANGES, in print
+// order. Display-only: leaf bodies, line numbers, and the `--files 📄` definition-loc (different separator)
+// are untouched. One instance per forest so the cursor spans every root.
+internal sealed class SourceLocDedupWriter(TextWriter inner) : TextWriter
+{
+    // Trailing "  <relpath>:<line>": the path must contain '/' (ShortenPath emits forward-slash relpaths)
+    // and no ':' before the line number, so resources like "Data.RunSummary" or "<anon>" never match.
+    private static readonly Regex LocSuffix = new(@"  (?<p>[^\s:]+/[^\s:]+):(?<l>\d+)$", RegexOptions.CultureInvariant);
+
+    private string? _lastPath;
+
+    public override Encoding Encoding => inner.Encoding;
+
+    public override void Write(char value) => inner.Write(value);
+
+    public override void Write(string? value) => inner.Write(value);
+
+    public override void Flush() => inner.Flush();
+
+    public override void WriteLine(string? value) => inner.WriteLine(value is null ? null : Dedup(value));
+
+    private string Dedup(string line)
+    {
+        var m = LocSuffix.Match(line);
+        if (!m.Success)
+        {
+            return line;
+        }
+
+        var path = m.Groups["p"].Value;
+        if (string.Equals(path, _lastPath, StringComparison.Ordinal))
+        {
+            return $"{line[..m.Index]}  :{m.Groups["l"].Value}";
+        }
+
+        _lastPath = path;
+        return line;
     }
 }
