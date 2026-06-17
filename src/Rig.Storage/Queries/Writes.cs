@@ -28,7 +28,8 @@ public static class Writes
         AnalysisResult result,
         CancellationToken cancellationToken = default,
         bool fastBulkWrite = true,
-        Action<string>? progress = null
+        Action<string>? progress = null,
+        GitProvenance? provenance = null
     )
     {
         var runId = Guid.NewGuid().ToString("n");
@@ -70,6 +71,9 @@ public static class Writes
             SymbolCount = result.Symbols?.Count ?? 0,
             ReferenceCount = result.References?.Count ?? 0,
             DiRegistrationCount = result.DiRegistrations.Count,
+            SourceCommit = provenance?.Commit,
+            SourceBranch = provenance?.Branch,
+            SourceDirty = provenance?.Dirty ?? false,
         };
 
         // Header rows first (small) — flushed and detached before the fact batches start clearing
@@ -492,6 +496,36 @@ public static class Writes
             .Database.ExecuteSqlRawAsync(
                 """
                 ALTER TABLE runs ADD COLUMN IF NOT EXISTS SourceProjectPath TEXT;
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken);
+
+        // Commit-stamp columns (docs/design-impact-behavioral-diff.md §4.5): the source commit/branch and
+        // a dirty flag, so a store is addressable by the commit it was indexed from. SourceDirty is
+        // INTEGER (SQLite bool) defaulting to 0 — an unstamped legacy row reads as a clean, unknown commit.
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
+                ALTER TABLE runs ADD COLUMN IF NOT EXISTS SourceCommit TEXT;
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken);
+
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
+                ALTER TABLE runs ADD COLUMN IF NOT EXISTS SourceBranch TEXT;
+                """,
+                cancellationToken
+            )
+            .ContinueWith(_ => { }, cancellationToken);
+
+        await context
+            .Database.ExecuteSqlRawAsync(
+                """
+                ALTER TABLE runs ADD COLUMN IF NOT EXISTS SourceDirty INTEGER NOT NULL DEFAULT 0;
                 """,
                 cancellationToken
             )

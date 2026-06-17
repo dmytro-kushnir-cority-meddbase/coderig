@@ -149,8 +149,8 @@ internal static class TreeCommand
         // store + effective rules + traversal params. Cache the pair in a separate writable `.rig/cache.db`
         // (rig.db itself is opened read-only); a repeat query skips both and only re-loads the cheaper graph
         // to render. Auto-invalidates on reindex: the key embeds a store identity that index/graph change.
-        var rigDir = Path.Combine(workingDirectory, ".rig");
-        var storeKey = StoreKey(Path.Combine(rigDir, "rig.db"));
+        var rigDir = CommandLine.StoreLayout.ResolveStoreDir(workingDirectory);
+        var storeKey = StoreKey(Path.Combine(rigDir, CommandLine.StoreLayout.DbFileName));
         using var cache = noCache ? null : QueryCache.Open(rigDirectory: rigDir, storeKey: storeKey);
         var cacheKey = cache is null
             ? null

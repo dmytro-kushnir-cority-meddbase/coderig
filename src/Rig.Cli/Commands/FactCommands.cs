@@ -29,6 +29,14 @@ internal static class FactCommands
                         output.WriteLine($"{Indent.L1}{run.Id}");
                         output.WriteLine($"{Indent.L2}indexed={run.CreatedAtUtc:u}");
                         output.WriteLine($"{Indent.L2}solution={run.SolutionPath}");
+                        if (run.SourceCommit is { } commit)
+                        {
+                            var shortSha = commit.Length >= 12 ? commit[..12] : commit;
+                            var branch = run.SourceBranch is { } b ? $" ({b})" : "";
+                            var dirty = run.SourceDirty ? " +dirty" : "";
+                            output.WriteLine($"{Indent.L2}commit={shortSha}{branch}{dirty}");
+                        }
+
                         output.WriteLine(
                             $"{Indent.L2}symbols={run.SymbolCount} references={run.ReferenceCount} di={run.DiRegistrationCount}"
                         );

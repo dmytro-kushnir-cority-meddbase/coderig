@@ -15,7 +15,7 @@ internal static class TraversalGraphLoader
     // write to the main DB, so a read command can never mutate the index. Writers (index/mine/graph) use
     // the default read-write constructor.
     internal static RigDbContext OpenReadContext(string workingDirectory) =>
-        new(Path.Combine(workingDirectory, ".rig", "rig.db"), readOnly: true);
+        new(CommandLine.StoreLayout.DbPath(workingDirectory), readOnly: true);
 
     // The call graph for a traversal command (reaches/tree/path/callers). When the derived edge views
     // exist (`rig graph` has been run) it returns the BOUNDED subgraph for `pattern` in the given

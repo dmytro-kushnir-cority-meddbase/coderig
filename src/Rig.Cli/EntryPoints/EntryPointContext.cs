@@ -187,8 +187,8 @@ internal static class EntryPointContext
         }
 
         // Tier 2: query cache (handles --rules, which the table doesn't cover).
-        var rigDir = Path.Combine(workingDirectory, ".rig");
-        var storeKey = StoreKey(Path.Combine(rigDir, "rig.db"));
+        var rigDir = CommandLine.StoreLayout.ResolveStoreDir(workingDirectory);
+        var storeKey = StoreKey(Path.Combine(rigDir, CommandLine.StoreLayout.DbFileName));
         using var cache = QueryCache.Open(rigDirectory: rigDir, storeKey: storeKey);
         var key = cache is null ? null : EpCacheKey(storeKey, rulesHash);
         if (key is not null && cache!.Get(key) is { } blob && EpSiteCacheCodec.Decode(blob) is { } hit)

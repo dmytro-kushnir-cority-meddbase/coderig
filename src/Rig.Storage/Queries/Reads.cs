@@ -91,7 +91,10 @@ public static class Reads
                 ReferenceCount: run.ReferenceCount,
                 DiRegistrationCount: run.DiRegistrationCount,
                 ProjectIdentity: run.ProjectIdentity,
-                SourceProjectPath: run.SourceProjectPath
+                SourceProjectPath: run.SourceProjectPath,
+                SourceCommit: run.SourceCommit,
+                SourceBranch: run.SourceBranch,
+                SourceDirty: run.SourceDirty
             ))
             .ToListAsync(cancellationToken);
     }

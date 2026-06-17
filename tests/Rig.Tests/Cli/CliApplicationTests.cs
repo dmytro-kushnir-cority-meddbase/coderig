@@ -163,7 +163,11 @@ public sealed class CliApplicationTests
         output.ToString().ShouldContain("Symbols:");
         output.ToString().ShouldContain("References:");
         output.ToString().ShouldContain("DiRegistrations:");
-        File.Exists(Path.Combine(workingDirectory, ".rig", "rig.db")).ShouldBeTrue();
+        // Per-commit layout: the store lives in .rig/<store-id>/rig.db (store-id = source commit, or a
+        // timestamp for this non-git playground), with a LATEST pointer naming it.
+        var rigDir = Path.Combine(workingDirectory, ".rig");
+        Directory.EnumerateFiles(rigDir, "rig.db", SearchOption.AllDirectories).ShouldNotBeEmpty();
+        File.Exists(Path.Combine(rigDir, "LATEST")).ShouldBeTrue();
 
         output.GetStringBuilder().Clear();
         (await CliApplication.RunAsync(["runs"], output, error, workingDirectory)).ShouldBe(0);

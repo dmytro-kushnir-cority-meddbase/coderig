@@ -26,7 +26,7 @@ internal static class CommandGuard
     // from "older-rig schema mismatch" (re-index needed) from any other read failure.
     internal static int StoreError(string workingDirectory, System.Data.Common.DbException exception, TextWriter error)
     {
-        var dbPath = Path.Combine(workingDirectory, ".rig", "rig.db");
+        var dbPath = StoreLayout.DbPath(workingDirectory);
         if (!File.Exists(dbPath))
         {
             error.WriteLine($"No indexed store at {dbPath}.");
