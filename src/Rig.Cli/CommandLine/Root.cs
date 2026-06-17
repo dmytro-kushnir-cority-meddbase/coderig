@@ -23,6 +23,7 @@ internal static class Root
             CallersCommand.Build(output, error, workingDirectory),
             ReachesCommand.Build(output, error, workingDirectory),
             DeriveCommand.Build(output, error, workingDirectory),
+            EntryPointsCommand.Build(output, error, workingDirectory),
             ImpactCommand.Build(output, error, workingDirectory),
             IndexCommands.BuildGraph(output, error, workingDirectory),
             // `dead` is DISABLED for now: it runs on the receiver-blind SQL reachability superset, which
