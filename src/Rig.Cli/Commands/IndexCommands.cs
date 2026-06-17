@@ -476,13 +476,12 @@ internal static class IndexCommands
         // single place classification persists, read back by every SQL query path. Generic-factory rules
         // flow in too so the factory monomorphization is baked into call_edges (so the SQL bounding walk
         // sees the rewritten edges the in-memory traversal does — no effect-path divergence).
-        var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory).ToArray();
-        var factoryRules = FactGenericFactoryRuleProvider.LoadForWorkingDirectory(workingDirectory);
+        var rules = RuleSet.Load(workingDirectory);
         var stats = await GraphMaterializer.BuildAsync(
             context,
-            handoffRules,
+            rules.Handoff.ToArray(),
             message => output.WriteLine($"Progress: {message}"),
-            factoryRules: factoryRules
+            factoryRules: rules.Factory
         );
         output.WriteLine(
             $"Graph: {stats.CallEdges} call edge(s), {stats.DispatchEdges} dispatch edge(s) "

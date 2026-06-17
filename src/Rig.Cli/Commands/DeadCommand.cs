@@ -86,8 +86,8 @@ internal static class DeadCommand
         // runs ReachableFromAll(roots) in process. This is the last read command doing a full-graph load. It
         // maps directly onto the SQL primitive (SqlReachability.ReachableSetAsync); left as-is intentionally —
         // `dead` is a cold/occasional audit path, not a hot query, so the in-memory load is acceptable for now.
-        var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var graph = await Reads.LoadFactGraphAsync(context, handoffRules);
+        var rules = RuleSet.Load(workingDirectory, extraRules);
+        var graph = await Reads.LoadFactGraphAsync(context, rules.Handoff);
         var methods = await Reads.LoadDeadCodeMethodsAsync(context);
         if (methods.Count == 0)
         {
@@ -97,10 +97,8 @@ internal static class DeadCommand
 
         // --- Roots: derived entry points + handoffs + Main + test methods ---
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
-        var epRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var classRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(workingDirectory, extraRules);
         var roots = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var ep in FactEntryPointDeriver.Derive(epData, epRules, classRules))
+        foreach (var ep in FactEntryPointDeriver.Derive(epData, rules.EntryPoints, rules.ClassInheritance))
         {
             roots.Add(ep.Method);
         }
