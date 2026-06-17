@@ -216,6 +216,22 @@ front. Build them switchable; do not hardcode a winner.
   from-scratch index of B, or the diff layer inherits skew. Likely lands as a `rig index --from-store <A>`
   fast path. Big potential win (turns the per-commit model from minutes to seconds); non-trivial because of
   the ripple/invalidation correctness. Sequence AFTER steps 3–4 prove the diff is worth optimizing for.
+- **TODO(blind spot) — attribute/reflection-driven object-store persistence is invisible to the diff.**
+  Found running MR !10645 (a healthcode "move off object store" change): the diff showed **no** removed
+  object_store reads even though the MR demonstrably removed two. Root cause is NOT the diff — verified by
+  the reverse run (main side also shows zero object_store delta, and main never attributed an object_store
+  read to the property/accessor). The removed reads were object-store-**backed properties**
+  (`Master.HealthcodeSettings`/`IsEnabled`, `{ get; set; }`) that `WorkflowMasterBase` auto-persists by
+  *reflection over `[ObjectStore…]` attributes* — the MR added `[ObjectStoreIgnore]`. rig's effect deriver
+  only models **explicit invocation facts**, so this whole class of persistence is unseen on BOTH sides
+  (nothing to diff). Compounded: the Master is still object-store-persisted for its other state, so the
+  generic `WorkflowMasterBase.Save` object_store calls rig *does* model are identical on both sides. To
+  capture it: derive an object_store read/write effect from the attribute facts — a settable property on an
+  object-store-persisted base type WITHOUT `[ObjectStoreIgnore]` is a persisted field. Needs (1)
+  property-level attribute extraction, (2) a rule listing the persisted base types, (3) attribution to a
+  REAL call-graph node (not the `P:` property — else it orphans per the effect↔reachability invariant).
+  General lesson: convention/reflection-driven effects (object-store property persistence, DI-activated
+  handlers, source-generated I/O) sit outside the explicit-call effect model and need attribute-fact rules.
 
 ---
 
