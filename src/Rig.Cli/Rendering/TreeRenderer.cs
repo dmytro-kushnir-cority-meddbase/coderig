@@ -446,7 +446,7 @@ internal static class TreeRenderer
         // Emit one collapsed "lock" entry per paired resource.
         foreach (var resource in pairedResources.OrderBy(r => r, StringComparer.OrdinalIgnoreCase))
         {
-            var lockEmoji = FactEffectEmojiProvider.For(emoji, provider: "lock", operation: "held");
+            var lockEmoji = EmojiLookup.For(emoji, provider: "lock", operation: "held");
             // Omit resource name when it is always Threading.Monitor — adds no information.
             var resourceLabel = resource.Contains("Threading.Monitor", StringComparison.OrdinalIgnoreCase) ? "" : $" {ShortName(resource)}";
             result.Add($"{lockEmoji} lock{resourceLabel}");
@@ -463,7 +463,7 @@ internal static class TreeRenderer
                 continue;
             }
 
-            var glyph = FactEffectEmojiProvider.For(emoji, provider: e.Provider, operation: e.Operation);
+            var glyph = EmojiLookup.For(emoji, provider: e.Provider, operation: e.Operation);
             result.Add($"{glyph} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}");
         }
 
@@ -477,7 +477,7 @@ internal static class TreeRenderer
     internal static string FormatEffectLeaf(DerivedEffect e, IReadOnlyDictionary<string, string> emoji)
     {
         var loc = string.IsNullOrEmpty(e.FilePath) ? "" : $"  {ShortenPath(e.FilePath)}:{e.Line}";
-        var glyph = FactEffectEmojiProvider.For(emoji, provider: e.Provider, operation: e.Operation);
+        var glyph = EmojiLookup.For(emoji, provider: e.Provider, operation: e.Operation);
         return $"{glyph} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}{loc}";
     }
 

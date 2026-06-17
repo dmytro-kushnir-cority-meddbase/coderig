@@ -53,16 +53,14 @@ public sealed class ImpactBehavioralDeltaTests(AnalyzedPlaygrounds playgrounds)
         string wd
     )
     {
-        var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(wd, []);
+        var rules = RuleSet.Load(wd);
         await using var branchCtx = new RigDbContext(branchDb, pooling: false, readOnly: true);
         var methods = await Reads.LoadDeadCodeMethodsAsync(branchCtx);
         var seed = methods.Select(m => m.SymbolId).ToHashSet(StringComparer.Ordinal);
         var (branchEffects, branchReach) = await ImpactCommand.ReachEffectsAsync(
             branchCtx,
             seed,
-            wd,
-            [],
-            handoffRules,
+            rules,
             FactPathFinder.TraversalMode.SyncCut
         );
         var delta = await ImpactCommand.ComputeBehavioralDeltaAsync(
@@ -70,9 +68,7 @@ public sealed class ImpactBehavioralDeltaTests(AnalyzedPlaygrounds playgrounds)
             branchEffects,
             branchReach,
             methods,
-            wd,
-            [],
-            handoffRules,
+            rules,
             FactPathFinder.TraversalMode.SyncCut
         );
         return (delta, branchEffects);

@@ -409,7 +409,7 @@ internal static class TreeCommand
                 maxDepth: maxDepth,
                 mode: mode,
                 structuredByMethod: structuredByMethod,
-                emojiFor: (p, o) => FactEffectEmojiProvider.For(emoji, provider: p, operation: o)
+                emojiFor: (p, o) => EmojiLookup.For(emoji, provider: p, operation: o)
             );
         }
 

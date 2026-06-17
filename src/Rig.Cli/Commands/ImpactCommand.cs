@@ -101,7 +101,9 @@ internal static class ImpactCommand
         var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
         var max = limit ?? int.MaxValue;
         var mode = CommonOptions.Mode(async); // --async => walk handoff edges (reverse + forward), else sync-cut
-        var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        // One rule load for the whole run — rules are working-dir-scoped, so the SAME set serves the branch
+        // store and the base store; threaded into every helper below.
+        var rules = RuleSet.Load(workingDirectory, extraRules);
 
         await using var context = OpenReadContext(workingDirectory);
 
@@ -171,8 +173,7 @@ internal static class ImpactCommand
         // One whole-store graph drives BOTH directions (the changed set is scattered, so the bounded
         // single-pattern SQL subgraph the other commands use doesn't apply). Same load + ShapeGraph the
         // EF-fallback path of every traversal command uses, so impact walks the IDENTICAL shaped graph.
-        var graph = await Reads.LoadFactGraphAsync(context, handoffRules);
-        var rules = RuleSet.Load(workingDirectory, extraRules);
+        var graph = await Reads.LoadFactGraphAsync(context, rules.Handoff);
         graph = FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context);
         graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
 
@@ -207,8 +208,8 @@ internal static class ImpactCommand
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
         var effects = DeriveEffects(
-            workingDirectory,
-            extraRules,
+            rules.Effects,
+            rules.Observations,
             invocations,
             baseEdges: epData.BaseEdges,
             ctorRefs: epData.CtorRefs,
@@ -232,9 +233,7 @@ internal static class ImpactCommand
         // output above still stands). See docs/design-impact-behavioral-diff.md §3.1-3.2.
         var branchEps = derivedEps.Concat(promoted).ToList();
         var baseDbPath = ResolveBaseDbPath(workingDirectory, baseStoreOverride, repoRoot, baseRef);
-        var epDiff = baseDbPath is null
-            ? null
-            : await ComputeEpDiffAsync(baseDbPath, branchEps, workingDirectory, extraRules, handoffRules);
+        var epDiff = baseDbPath is null ? null : await ComputeEpDiffAsync(baseDbPath, branchEps, rules);
 
         // --- (4) Behavioral delta (the actual two-store diff): the effects/observations reachable FROM the
         // changed methods, branch vs base. Seeding the base by Type.Method (param-free) so a signature-changed
@@ -262,9 +261,7 @@ internal static class ImpactCommand
                 branchEffects: affectedEffects,
                 branchReach: forward.Count,
                 changedMethods: changedMethods,
-                workingDirectory: workingDirectory,
-                extraRules: extraRules,
-                handoffRules: handoffRules,
+                rules: rules,
                 mode: mode
             );
             behavioral = delta;
@@ -277,9 +274,7 @@ internal static class ImpactCommand
                 branchEffects: affectedEffects,
                 branchReach: forward.Count,
                 changedMethods: changedMethods,
-                workingDirectory: workingDirectory,
-                extraRules: extraRules,
-                handoffRules: handoffRules,
+                rules: rules,
                 mode: mode
             );
         }
@@ -345,17 +340,10 @@ internal static class ImpactCommand
     // Derive entry points on the base store and set-diff them against the branch's, keyed on (Kind, Route).
     // DeriveEntryPointsAsync derives straight from the passed context with rules loaded from the (shared)
     // working dir — no query cache — so running it on a second store is correct. Internal for testing.
-    internal static async Task<EpDiff> ComputeEpDiffAsync(
-        string baseDbPath,
-        IReadOnlyList<DerivedEntryPoint> branchEps,
-        string workingDirectory,
-        IReadOnlyList<string> extraRules,
-        IReadOnlyList<FactHandoffRule> handoffRules
-    )
+    internal static async Task<EpDiff> ComputeEpDiffAsync(string baseDbPath, IReadOnlyList<DerivedEntryPoint> branchEps, RuleSet rules)
     {
         await using var baseContext = new Rig.Storage.Storage.RigDbContext(baseDbPath, readOnly: true);
         var baseEpData = await Reads.LoadFactEntryPointDataAsync(baseContext);
-        var rules = RuleSet.Load(workingDirectory, extraRules);
         var baseSet = await DeriveEntryPointsAsync(baseContext, baseEpData, rules);
         var baseEps = baseSet.Derived.Concat(baseSet.PromotedOrigins).ToList();
 
@@ -457,14 +445,11 @@ internal static class ImpactCommand
     internal static async Task<(IReadOnlyList<DerivedEffect> Effects, int ReachCount)> ReachEffectsAsync(
         Rig.Storage.Storage.RigDbContext context,
         IReadOnlySet<string> seedIds,
-        string workingDirectory,
-        IReadOnlyList<string> extraRules,
-        IReadOnlyList<FactHandoffRule> handoffRules,
+        RuleSet rules,
         FactPathFinder.TraversalMode mode
     )
     {
-        var graph = await Reads.LoadFactGraphAsync(context, handoffRules);
-        var rules = RuleSet.Load(workingDirectory, extraRules);
+        var graph = await Reads.LoadFactGraphAsync(context, rules.Handoff);
         graph = FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context);
         graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
 
@@ -473,8 +458,8 @@ internal static class ImpactCommand
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
         var effects = DeriveEffects(
-            workingDirectory,
-            extraRules,
+            rules.Effects,
+            rules.Observations,
             invocations,
             baseEdges: epData.BaseEdges,
             ctorRefs: epData.CtorRefs,
@@ -489,9 +474,7 @@ internal static class ImpactCommand
         IReadOnlyList<DerivedEffect> branchEffects,
         int branchReach,
         IReadOnlyList<DeadCodeFinder.MethodMeta> changedMethods,
-        string workingDirectory,
-        IReadOnlyList<string> extraRules,
-        IReadOnlyList<FactHandoffRule> handoffRules,
+        RuleSet rules,
         FactPathFinder.TraversalMode mode
     )
     {
@@ -506,7 +489,7 @@ internal static class ImpactCommand
             .Select(m => m.SymbolId)
             .ToHashSet(StringComparer.Ordinal);
 
-        var (baseEffects, baseReach) = await ReachEffectsAsync(baseContext, baseSeed, workingDirectory, extraRules, handoffRules, mode);
+        var (baseEffects, baseReach) = await ReachEffectsAsync(baseContext, baseSeed, rules, mode);
         return DiffBehavioral(branchEffects, baseEffects, branchReach, baseReach);
     }
 
@@ -637,15 +620,12 @@ internal static class ImpactCommand
         IReadOnlyList<DerivedEffect> branchEffects,
         int branchReach,
         IReadOnlyList<DeadCodeFinder.MethodMeta> changedMethods,
-        string workingDirectory,
-        IReadOnlyList<string> extraRules,
-        IReadOnlyList<FactHandoffRule> handoffRules,
+        RuleSet rules,
         FactPathFinder.TraversalMode mode
     )
     {
         await using var context = new Rig.Storage.Storage.RigDbContext(baseDbPath, readOnly: true);
-        var graph = await Reads.LoadFactGraphAsync(context, handoffRules);
-        var rules = RuleSet.Load(workingDirectory, extraRules);
+        var graph = await Reads.LoadFactGraphAsync(context, rules.Handoff);
         graph = FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context);
         graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
 
@@ -655,8 +635,8 @@ internal static class ImpactCommand
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
         var effects = DeriveEffects(
-            workingDirectory,
-            extraRules,
+            rules.Effects,
+            rules.Observations,
             invocations,
             baseEdges: epData.BaseEdges,
             ctorRefs: epData.CtorRefs,

@@ -1,34 +1,13 @@
-using Rig.Analysis.Rules;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 
 namespace Rig.Cli.Effects;
 
-// The stage-2 effect derivation + the --only/--exclude filter, shared by reaches/tree/derive. Each loads
-// the effect + observation rules for the working directory and runs FactEffectDeriver.Derive over its
-// (bounded or whole-store) inputs; this collapses that identical rule-load-and-derive block into one call.
+// The stage-2 effect derivation + the --only/--exclude filter, shared by reaches/tree/derive/impact. Runs
+// FactEffectDeriver.Derive over the caller's already-loaded effect + observation rules (from its RuleSet)
+// and its (bounded or whole-store) invocation/ctor/throw inputs.
 internal static class EffectDerivation
 {
-    // Derive effects from the supplied invocation/ctor/throw inputs under the working directory's effect
-    // + observation rules. The inputs differ per caller — reaches/tree pass the bounded closure's rows
-    // (with base edges from the loaded graph), derive passes the whole-store rows (base edges from the
-    // EP fact data) — but the rule load and the Derive call are identical, so they live here.
-    internal static IReadOnlyList<DerivedEffect> DeriveEffects(
-        string workingDirectory,
-        IReadOnlyList<string> extraRules,
-        IReadOnlyList<FactInvocation> invocations,
-        IReadOnlyList<(string, string)> baseEdges,
-        IReadOnlyList<SymbolRef> ctorRefs,
-        IReadOnlyList<SymbolRef> throwRefs
-    )
-    {
-        var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        return DeriveEffects(effectRules, observationRules, invocations, baseEdges, ctorRefs, throwRefs);
-    }
-
-    // Overload over already-loaded rules — a command that obtained a RuleSet once passes its Effects +
-    // Observations in, so derivation re-reads nothing.
     internal static IReadOnlyList<DerivedEffect> DeriveEffects(
         IReadOnlyList<FactEffectRule> effectRules,
         FactObservationRules observationRules,
