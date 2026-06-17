@@ -260,9 +260,10 @@ internal static class CallersCommand
 
         var deployments = await LoadDeploymentsAsync(context, workingDirectory);
 
-        // (FilePath, Line) of every reverse-reachable method — the join key against derived EP sites.
-        var methods = await Reads.LoadDeadCodeMethodsAsync(context);
-        var reachableSites = methods.Where(m => reachable.Contains(m.SymbolId)).Select(m => (m.FilePath, m.Line)).ToHashSet();
+        // (FilePath, Line) of every reverse-reachable method — the join key against derived EP sites. Sourced
+        // from the already-loaded graph's method nodes (the same Kind==Method set, deduped by SymbolId) rather
+        // than a second whole-method-table EF scan (LoadDeadCodeMethodsAsync) of the identical rows.
+        var reachableSites = graph.Methods.Where(m => reachable.Contains(m.SymbolId)).Select(m => (m.FilePath, m.Line)).ToHashSet();
 
         // The rule-detected entry points (identical derivation to `rig derive`) + promoted handoff origins.
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
