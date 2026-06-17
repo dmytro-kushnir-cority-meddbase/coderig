@@ -268,6 +268,19 @@ public static class Writes
     // Inserts the symbol/reference/type-relation facts in fixed-size batches, flushing + clearing the
     // change tracker per batch and reporting cumulative progress. One SaveChanges over millions of
     // tracked entities is both slow and memory-heavy; batching keeps both bounded.
+    //
+    // TODO(perf): speed up the ~2M-row write. WAL is NOT the lever — the standalone fast path already sets
+    // journal_mode=OFF (more aggressive than WAL) + synchronous=OFF + EXCLUSIVE + 64MB cache (SaveAsync).
+    // The real levers, roughly in impact order:
+    //   1. DEFER secondary indexes. EnsureCreated + MigrateAsync build IX_symbol_facts_*/IX_reference_facts_*
+    //      etc. BEFORE this insert, so every one of 2M rows maintains all secondary indexes. Classic
+    //      bulk-load fix: create tables WITHOUT secondary indexes, bulk-insert, then CREATE INDEX once.
+    //   2. Bypass EF for the hot path: a reused prepared INSERT over raw ADO (param.Value reset per row, as
+    //      EntryPointSiteStore.PersistAsync already does) avoids change-tracker + per-entity overhead that
+    //      AddRange/SaveChanges still pays even with AutoDetectChanges off.
+    //   3. One explicit transaction around the whole load (not a SaveChanges per 20k batch).
+    // Ref: Milan Jovanović, "Fast SQL Bulk Inserts With C# and EF Core"
+    //      https://www.milanjovanovic.tech/blog/fast-sql-bulk-inserts-with-csharp-and-ef-core
     private static async Task SaveFactsBatchedAsync(
         RigDbContext context,
         string runId,

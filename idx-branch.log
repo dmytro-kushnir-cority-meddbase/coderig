@@ -1,0 +1,3 @@
+Build DUE: -Force.
+==> MSBuild.exe "C:\Git\meddbase-main-application\MedDBase.slnx" /p:Configuration=Debug /m (incremental)
+    C:\Program Files\Microsoft Visual Studio\18\Professional\MSBuild\Current\Bin\MSBuild.exe
