@@ -133,7 +133,7 @@ internal static class PathCommand
         // Deployment/EP chip on the from-node (path[0]): which service(s) host this entry point.
         // Opt-in via deployments.json; no-op otherwise.
         var pathDeployments = await LoadDeploymentsAsync(context, workingDirectory);
-        var pathEpContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, rules.Handoff, pathDeployments);
+        var pathEpContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, rules, pathDeployments);
 
         output.WriteLine($"Path '{fromPattern}' -> '{toPattern}' ({path.Count} nodes):");
         for (var i = 0; i < path.Count; i++)

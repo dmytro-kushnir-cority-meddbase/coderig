@@ -47,7 +47,7 @@ public sealed class ImpactEpDiffTests(AnalyzedPlaygrounds playgrounds)
         var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(wd, []);
         await using var branchCtx = new RigDbContext(branchDb, pooling: false, readOnly: true);
         var branchEpData = await Reads.LoadFactEntryPointDataAsync(branchCtx);
-        var branchSet = await EntryPointContext.DeriveEntryPointsAsync(branchCtx, branchEpData, wd, [], handoffRules);
+        var branchSet = await EntryPointContext.DeriveEntryPointsAsync(branchCtx, branchEpData, RuleSet.Load(wd));
         var branchEps = branchSet.Derived.Concat(branchSet.PromotedOrigins).ToList();
         return await ImpactCommand.ComputeEpDiffAsync(baseDb, branchEps, wd, [], handoffRules);
     }

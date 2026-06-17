@@ -167,7 +167,7 @@ internal static class ReachesCommand
         // Deployment/EP chip on the From line: which service(s) host this entry point (opt-in via
         // deployments.json; no-op otherwise). The from-root is the depth-0 reachable symbol.
         var reachDeployments = await LoadDeploymentsAsync(context, workingDirectory);
-        var reachEpContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, rules.Handoff, reachDeployments);
+        var reachEpContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, rules, reachDeployments);
         var reachFromRoot = reachable.Where(kv => kv.Value.Depth == 0).Select(kv => kv.Key).FirstOrDefault();
         output.WriteLine(
             $"From: {fromPattern}{(mode == FactPathFinder.TraversalMode.AsyncInclude ? "  (--async: handoffs included)" : "")}"

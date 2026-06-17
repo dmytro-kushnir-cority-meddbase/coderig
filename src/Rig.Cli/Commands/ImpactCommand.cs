@@ -187,7 +187,7 @@ internal static class ImpactCommand
         var reachableSites = methods.Where(m => reachedBy.ContainsKey(m.SymbolId)).Select(m => (m.FilePath, m.Line)).ToHashSet();
 
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
-        var epSet = await DeriveEntryPointsAsync(context, epData, workingDirectory, extraRules, handoffRules);
+        var epSet = await DeriveEntryPointsAsync(context, epData, rules);
         var derivedEps = epSet.Derived;
         var promoted = epSet.PromotedOrigins;
         var affectedEps = derivedEps
@@ -355,7 +355,8 @@ internal static class ImpactCommand
     {
         await using var baseContext = new Rig.Storage.Storage.RigDbContext(baseDbPath, readOnly: true);
         var baseEpData = await Reads.LoadFactEntryPointDataAsync(baseContext);
-        var baseSet = await DeriveEntryPointsAsync(baseContext, baseEpData, workingDirectory, extraRules, handoffRules);
+        var rules = RuleSet.Load(workingDirectory, extraRules);
+        var baseSet = await DeriveEntryPointsAsync(baseContext, baseEpData, rules);
         var baseEps = baseSet.Derived.Concat(baseSet.PromotedOrigins).ToList();
 
         var branchKeys = branchEps.Select(e => (e.Kind, e.Route)).ToHashSet();
@@ -650,7 +651,7 @@ internal static class ImpactCommand
 
         var methods = await Reads.LoadDeadCodeMethodsAsync(context);
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
-        var epSet = await DeriveEntryPointsAsync(context, epData, workingDirectory, extraRules, handoffRules);
+        var epSet = await DeriveEntryPointsAsync(context, epData, rules);
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
         var effects = DeriveEffects(

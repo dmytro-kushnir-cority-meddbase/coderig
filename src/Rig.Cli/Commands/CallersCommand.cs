@@ -125,18 +125,7 @@ internal static class CallersCommand
 
         if (entrypointsOnly)
         {
-            return await RunEntryPointsAsync(
-                context,
-                graph,
-                toPattern,
-                maxDepth,
-                mode,
-                rules.Handoff,
-                extraRules,
-                workingDirectory,
-                tsv,
-                output
-            );
+            return await RunEntryPointsAsync(context, graph, toPattern, maxDepth, mode, rules, workingDirectory, tsv, output);
         }
 
         // Deployment/EP context for the from-symbol annotations (opt-in via deployments.json). Only the
@@ -149,7 +138,7 @@ internal static class CallersCommand
                 graph,
                 workingDirectory,
                 extraRules,
-                rules.Handoff,
+                rules,
                 await LoadDeploymentsAsync(context, workingDirectory)
             );
 
@@ -232,8 +221,7 @@ internal static class CallersCommand
         string toPattern,
         int maxDepth,
         FactPathFinder.TraversalMode mode,
-        IReadOnlyList<FactHandoffRule> handoffRules,
-        IReadOnlyList<string> extraRules,
+        RuleSet rules,
         string workingDirectory,
         bool tsv,
         TextWriter output
@@ -261,7 +249,7 @@ internal static class CallersCommand
 
         // The rule-detected entry points (identical derivation to `rig derive`) + promoted handoff origins.
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
-        var (derivedEps, _, promoted) = await DeriveEntryPointsAsync(context, epData, workingDirectory, extraRules, handoffRules);
+        var (derivedEps, _, promoted) = await DeriveEntryPointsAsync(context, epData, rules);
 
         var touching = derivedEps
             .Concat(promoted)

@@ -298,7 +298,7 @@ internal static class TreeCommand
             : new EpRenderContext(
                 Deployments: deployments,
                 SiteById: locations,
-                EpSiteKind: await LoadOrDeriveEpSiteKindAsync(context, workingDirectory, extraRules, rules.Handoff, !noCache)
+                EpSiteKind: await LoadOrDeriveEpSiteKindAsync(context, workingDirectory, extraRules, rules, !noCache)
             );
         timer.Lap("deployment map + entry-point derivation");
 
