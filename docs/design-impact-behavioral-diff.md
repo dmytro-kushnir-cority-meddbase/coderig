@@ -216,22 +216,24 @@ front. Build them switchable; do not hardcode a winner.
   from-scratch index of B, or the diff layer inherits skew. Likely lands as a `rig index --from-store <A>`
   fast path. Big potential win (turns the per-commit model from minutes to seconds); non-trivial because of
   the ripple/invalidation correctness. Sequence AFTER steps 3–4 prove the diff is worth optimizing for.
-- **TODO(blind spot) — attribute/reflection-driven object-store persistence is invisible to the diff.**
-  Found running MR !10645 (a healthcode "move off object store" change): the diff showed **no** removed
-  object_store reads even though the MR demonstrably removed two. Root cause is NOT the diff — verified by
-  the reverse run (main side also shows zero object_store delta, and main never attributed an object_store
-  read to the property/accessor). The removed reads were object-store-**backed properties**
-  (`Master.HealthcodeSettings`/`IsEnabled`, `{ get; set; }`) that `WorkflowMasterBase` auto-persists by
-  *reflection over `[ObjectStore…]` attributes* — the MR added `[ObjectStoreIgnore]`. rig's effect deriver
-  only models **explicit invocation facts**, so this whole class of persistence is unseen on BOTH sides
-  (nothing to diff). Compounded: the Master is still object-store-persisted for its other state, so the
-  generic `WorkflowMasterBase.Save` object_store calls rig *does* model are identical on both sides. To
-  capture it: derive an object_store read/write effect from the attribute facts — a settable property on an
-  object-store-persisted base type WITHOUT `[ObjectStoreIgnore]` is a persisted field. Needs (1)
-  property-level attribute extraction, (2) a rule listing the persisted base types, (3) attribution to a
-  REAL call-graph node (not the `P:` property — else it orphans per the effect↔reachability invariant).
-  General lesson: convention/reflection-driven effects (object-store property persistence, DI-activated
-  handlers, source-generated I/O) sit outside the explicit-call effect model and need attribute-fact rules.
+- **LIMITATION(verified) — the change-level diff is enclosing-keyed and PATH-INSENSITIVE, so removing one
+  caller's path to a still-reachable shared effect-sink is invisible.** Found on MR !10645 ("move healthcode
+  off object store"): the diff showed **no** removed object_store reads/writes even though the MR removed
+  explicit `srv.SetMedicalPersonSettings(...)` → `Save()` → object_store-write paths (e.g.
+  `Doctor/Personal/EditLive.cs`, `Company/Edit.cs`). The effect IS modeled — but it's attributed to the
+  generic **sink** `WorkflowMasterBase.Save` (and `ListObjectStoreProxy.SaveObject` / `ObjectStore.Upsert`),
+  not to the healthcode method. `effect_removed = base_keys − branch_keys` keyed on
+  `(provider, op, resource, Type.Method-no-params)`; because the branch STILL reaches `WorkflowMasterBase.Save`
+  via other paths (the `Master` still `Save()`s its queue/other state), that key is present on the branch, so
+  it can never be reported removed — even though the healthcode-specific path to it was deleted. (My first
+  pass mis-diagnosed this as a reflection/attribute blind spot; that was wrong — the reverse-run "proof" was
+  degenerate because the source clone was checked out on the branch, making `--base <branch-sha>` an empty
+  diff. The effect is modeled and present on the branch; it's masked, not unmodeled.)
+  **Fix = the deferred per-EP attribution (step 4 refinement):** diff each EP's reachable-effect set
+  individually — `EditLive`'s save EP reaches the object_store write in main and not in the branch, which a
+  per-EP diff surfaces exactly where the global set-diff masks it. (A secondary, smaller gap also exists for
+  truly reflection/attribute-driven persistence — object-store-backed `{ get; set; }` properties without
+  `[ObjectStoreIgnore]` — which is genuinely unmodeled; but it is NOT the cause here.)
 
 ---
 
