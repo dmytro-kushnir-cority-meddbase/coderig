@@ -12,6 +12,10 @@ namespace Rig.Cli.Commands;
 // `rig entrypoints` — list the rule-detected entry points (page/action/class-inheritance + promoted async-
 // handoff origins), the SAME set derive/callers/impact build, grouped by kind and — when a deployments.json
 // is present — attributed to the services that host them. `--format tsv` emits one row per entry point.
+//
+// TODO(test): cover this command — (1) the listed set equals `rig derive`'s entry-point set (Derived +
+// promoted origins, deduped); (2) tsv columns (kind, route, file, line, requires, loaded/active services);
+// (3) deployment attribution when deployments.json is present vs absent; (4) --limit/--store honoured.
 internal static class EntryPointsCommand
 {
     internal static Command Build(TextWriter output, TextWriter error, string workingDirectory)
