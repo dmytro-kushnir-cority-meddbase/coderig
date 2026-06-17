@@ -89,6 +89,12 @@ internal static class IndexCommands
             }
         }
 
+        // Capture provenance + the destination store-id up front, so the store location and commit can be
+        // announced BEFORE the (long) analysis — useful when monitoring a re-index. The commit IS the
+        // store-id (docs/design-impact-behavioral-diff.md §4.4-4.5).
+        var provenance = Rig.Cli.Git.GitProvenanceProbe.Capture(fromProject ?? Path.GetFullPath(target));
+        var storeId = StoreLayout.NewStoreId(provenance);
+
         var totalWatch = System.Diagnostics.Stopwatch.StartNew();
         AnalysisResult result;
         var analyzeWatch = System.Diagnostics.Stopwatch.StartNew();
@@ -113,6 +119,15 @@ internal static class IndexCommands
             if (parallelism is not null)
             {
                 output.WriteLine($"Parallelism: {parallelism}");
+            }
+
+            output.WriteLine($"Store: {Path.Combine(StoreLayout.RigDir(workingDirectory), storeId)}");
+            if (provenance.Commit is { } sourceCommit)
+            {
+                var shortSha = sourceCommit.Length >= 12 ? sourceCommit[..12] : sourceCommit;
+                output.WriteLine(
+                    $"Source commit: {shortSha}{(provenance.Branch is { } b ? $" ({b})" : "")}{(provenance.Dirty ? " +dirty" : "")}"
+                );
             }
 
             result = await SolutionAnalyzer.AnalyzeAsync(
@@ -155,22 +170,9 @@ internal static class IndexCommands
         var fastBulkWrite = !appendMode; // fast pragmas on the standalone atomic-publish path
         var atomicPublish = !appendMode; // replace-via-rename for a standalone index
 
-        // Stamp the store with the source commit it was built from (best-effort; None on a non-git source).
-        // Captured BEFORE the store path is computed because the commit IS the store-id. The enabling
-        // primitive for commit-addressable stores — see docs/design-impact-behavioral-diff.md §4.5.
-        var provenance = Rig.Cli.Git.GitProvenanceProbe.Capture(fromProject ?? Path.GetFullPath(target));
-        if (provenance.Commit is { } sourceCommit)
-        {
-            var shortSha = sourceCommit.Length >= 12 ? sourceCommit[..12] : sourceCommit;
-            output.WriteLine(
-                $"Source commit: {shortSha}{(provenance.Branch is { } b ? $" ({b})" : "")}{(provenance.Dirty ? " +dirty" : "")}"
-            );
-        }
-
-        // Per-commit store layout: write into .rig/<store-id>/ (store-id = the source commit, or a timestamp
-        // for a non-git source). On a standalone index, move any pre-layout flat .rig/rig.db aside once, so
-        // the per-commit layout owns .rig going forward. See docs/design-impact-behavioral-diff.md §4.4.
-        var storeId = StoreLayout.NewStoreId(provenance);
+        // Per-commit store layout: write into .rig/<store-id>/ (storeId computed above, from the commit). On
+        // a standalone index, move any pre-layout flat .rig/rig.db aside once, so the per-commit layout owns
+        // .rig going forward. See docs/design-impact-behavioral-diff.md §4.4.
         if (atomicPublish)
         {
             StoreLayout.BackupLegacyFlatStore(workingDirectory);
