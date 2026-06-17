@@ -342,6 +342,22 @@
       "reason": "xml_document_save_file"
     },
     {
+      "provider": "io",
+      "operation": "read",
+      "methods": [
+        "Load"
+      ],
+      "declaringTypes": [
+        "System.Xml.XmlDocument",
+        "System.Xml.Linq.XDocument",
+        "System.Xml.Linq.XElement"
+      ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "xml_document_load_file: XDocument/XmlDocument.Load reads + parses an XML file from disk (symmetric with xml_document_save_file)."
+    },
+    {
       "provider": "efcore",
       "operation": "read",
       "methods": [
@@ -444,6 +460,21 @@
       "confidence": "medium",
       "basis": "compilation+profile",
       "reason": "raw_sql_operation"
+    },
+    {
+      "provider": "efcore",
+      "operation": "probe",
+      "methods": [
+        "CanConnect",
+        "CanConnectAsync"
+      ],
+      "receiverTypes": [
+        "Microsoft.EntityFrameworkCore.Infrastructure.DatabaseFacade"
+      ],
+      "resource": "ef_database_facade",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "efcore_can_connect_probe: opens the underlying connection and pings the database."
     },
     {
       "provider": "repository",
@@ -1439,6 +1470,36 @@
       "reason": "process_start"
     },
     {
+      "provider": "process",
+      "operation": "wait",
+      "methods": [ "WaitForExit", "WaitForExitAsync" ],
+      "declaringTypes": [ "System.Diagnostics.Process" ],
+      "resource": "declaring_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "process_wait: blocks the calling thread until the spawned process exits."
+    },
+    {
+      "provider": "db_command",
+      "operation": "execute",
+      "methods": [ "ExecuteNonQuery", "ExecuteNonQueryAsync", "ExecuteScalar", "ExecuteScalarAsync" ],
+      "receiverTypes": [ "System.Data.Common.DbCommand" ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "raw_ado_command_execute: a raw-ADO non-query/scalar command round-trip (DDL, PRAGMA, SELECT 1). Completes the ADO triad with db_connection:open and db_reader:row_read."
+    },
+    {
+      "provider": "db_command",
+      "operation": "query",
+      "methods": [ "ExecuteReader", "ExecuteReaderAsync" ],
+      "receiverTypes": [ "System.Data.Common.DbCommand" ],
+      "resource": "receiver_type",
+      "confidence": "medium",
+      "basis": "compilation+profile",
+      "reason": "raw_ado_command_reader: a raw-ADO result-set query (the reader iterated via db_reader:row_read)."
+    },
+    {
       "provider": "parallel",
       "operation": "fanout",
       "methods": [ "For", "ForEach", "Invoke" ],
@@ -1739,6 +1800,7 @@
     "fhir": "🏥",
     "permission": "🔑",
     "config": "⚙️",
-    "parallel": "🧵"
+    "parallel": "🧵",
+    "db_command": "🛢️"
   }
 }
