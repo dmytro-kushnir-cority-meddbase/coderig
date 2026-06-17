@@ -1,7 +1,7 @@
 using System.CommandLine;
+using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
-using Rig.Cli.Rules;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
 using static Rig.Cli.EntryPoints.EntryPointContext;
@@ -73,7 +73,10 @@ internal static class PathCommand
     {
         var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
         var mode = CommonOptions.Mode(async);
-        var shaping = ShapingRuleSet.Load(workingDirectory, extraRules, raw);
+        // --raw bypasses all shaping (the exact unfiltered plumbing); else monomorphize factories + cut +
+        // context-narrow, honoured symmetrically by the reverse/forward traversal.
+        var rules = RuleSet.Load(workingDirectory, extraRules);
+        var shaped = raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
 
         await using var context = OpenReadContext(workingDirectory, storeRef);
         // Any path from a `from` node lies entirely within that node's forward closure, so the BOUNDED
@@ -83,10 +86,7 @@ internal static class PathCommand
             context: context,
             pattern: fromPattern,
             direction: SqlReachability.Direction.Forward,
-            handoffRules: shaping.Handoff,
-            factoryRules: shaping.Factory,
-            cutRules: shaping.Cut,
-            contextRules: shaping.Context
+            shaped
         );
         // Reclassify event-subscription (`+=`) method-group edges to `handoff` — mirroring reaches/tree
         // (ReachesCommand/TreeCommand do the same). The handler genuinely runs LATER via the event, not
@@ -133,7 +133,7 @@ internal static class PathCommand
         // Deployment/EP chip on the from-node (path[0]): which service(s) host this entry point.
         // Opt-in via deployments.json; no-op otherwise.
         var pathDeployments = await LoadDeploymentsAsync(context, workingDirectory);
-        var pathEpContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, shaping.Handoff, pathDeployments);
+        var pathEpContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, rules.Handoff, pathDeployments);
 
         output.WriteLine($"Path '{fromPattern}' -> '{toPattern}' ({path.Count} nodes):");
         for (var i = 0; i < path.Count; i++)

@@ -15,9 +15,11 @@ public static class FactTraversalCutRuleProvider
     )
     {
         var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
-        var ruleSet = AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths);
-        return ruleSet.TraversalCuts.Select(Project).ToArray();
+        return Project(AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths));
     }
+
+    // Project off an already-merged rule set, so RuleSet.Load can project this slice without a second load.
+    internal static IReadOnlyList<FactTraversalCutRule> Project(AnalysisRuleSet ruleSet) => ruleSet.TraversalCuts.Select(Project).ToArray();
 
     private static FactTraversalCutRule Project(TraversalCutRule rule) =>
         new(Pattern: rule.Pattern, Label: rule.Label ?? rule.Reason ?? rule.Pattern);

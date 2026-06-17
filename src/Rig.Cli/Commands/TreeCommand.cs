@@ -2,7 +2,6 @@ using System.CommandLine;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
-using Rig.Cli.Rules;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
@@ -140,10 +139,12 @@ internal static class TreeCommand
         var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
         var maxDepth = CommonOptions.DepthOrUnbounded(depth);
         var mode = CommonOptions.Mode(async);
-        var shaping = ShapingRuleSet.Load(workingDirectory, extraRules, raw);
-        // Codebase-specific render rules (collapse fan-out seams / opaque infra types). Presentation
-        // only — never affects reach. `--raw` bypasses them to print the exact unfiltered tree.
-        var renderRules = raw ? FactRenderRules.Empty : FactRenderRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+
+        // One merged load for the whole command; --raw zeroes the graph-shaping + render rules (the exact
+        // unfiltered tree), else they're applied. Render rules are presentation-only — never affect reach.
+        var rules = RuleSet.Load(workingDirectory, extraRules);
+        var shaped = raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
+        var renderRules = raw ? FactRenderRules.Empty : rules.Render;
 
         await using var context = OpenReadContext(workingDirectory, storeRef);
         var timer = new PhaseTimer(time, error);
@@ -153,7 +154,7 @@ internal static class TreeCommand
         // store + effective rules + traversal params. Cache the pair in a separate writable `.rig/cache.db`
         // (rig.db itself is opened read-only); a repeat query skips both and only re-loads the cheaper graph
         // to render. Auto-invalidates on reindex: the key embeds a store identity that index/graph change.
-        var rigDir = CommandLine.StoreLayout.ResolveReadStoreDir(workingDirectory, storeRef);
+        var rigDir = StoreLayout.ResolveReadStoreDir(workingDirectory, storeRef);
         var storeKey = StoreKey(Path.Combine(rigDir, CommandLine.StoreLayout.DbFileName));
         using var cache = noCache ? null : QueryCache.Open(rigDirectory: rigDir, storeKey: storeKey);
         var cacheKey = cache is null
@@ -197,10 +198,7 @@ internal static class TreeCommand
                 context: context,
                 pattern: fromPattern,
                 direction: SqlReachability.Direction.Forward,
-                handoffRules: shaping.Handoff,
-                factoryRules: shaping.Factory,
-                cutRules: shaping.Cut,
-                contextRules: shaping.Context
+                shaped
             );
             if (!raw)
             {
@@ -215,10 +213,7 @@ internal static class TreeCommand
                 context: context,
                 pattern: fromPattern,
                 direction: SqlReachability.Direction.Forward,
-                handoffRules: shaping.Handoff,
-                factoryRules: shaping.Factory,
-                cutRules: shaping.Cut,
-                contextRules: shaping.Context
+                shaped
             );
             graph = inputs.Graph;
             timer.Lap("graph + invocations load");
@@ -240,8 +235,8 @@ internal static class TreeCommand
                 // Effects per enclosing method — same derivation as `reaches` (incl. throws). Cache them
                 // UNFILTERED; --only/--exclude are applied below so they don't fragment the key.
                 effects = DeriveEffects(
-                    workingDirectory: workingDirectory,
-                    extraRules: extraRules,
+                    effectRules: rules.Effects,
+                    observationRules: rules.Observations,
                     invocations: inputs.Invocations,
                     baseEdges: BaseEdgeTuples(graph),
                     ctorRefs: inputs.CtorRefs,
@@ -303,13 +298,13 @@ internal static class TreeCommand
             : new EpRenderContext(
                 Deployments: deployments,
                 SiteById: locations,
-                EpSiteKind: await LoadOrDeriveEpSiteKindAsync(context, workingDirectory, extraRules, shaping.Handoff, !noCache)
+                EpSiteKind: await LoadOrDeriveEpSiteKindAsync(context, workingDirectory, extraRules, rules.Handoff, !noCache)
             );
         timer.Lap("deployment map + entry-point derivation");
 
         effects = ApplyEffectFilters(effects, only, exclude); // --only / --exclude (e.g. --exclude throw)
 
-        var emoji = FactEffectEmojiProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var emoji = rules.EffectEmoji;
         var effectsByMethod = effects
             .Where(e => e.EnclosingSymbolId is not null)
             .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
@@ -449,7 +444,7 @@ internal static class TreeCommand
                 files: files,
                 locById: locById,
                 signatures: signatures,
-                cutRules: shaping.Cut,
+                cutRules: shaped.Cut,
                 epContext: epContext,
                 full: full,
                 effectLeavesByMethod: effectLeavesByMethod

@@ -15,9 +15,12 @@ public static class FactHandoffRuleProvider
     )
     {
         var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
-        var ruleSet = AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths);
-        return ruleSet.HandoffDispatchers.Select(Project).ToArray();
+        return Project(AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths));
     }
+
+    // Project off an already-merged rule set, so a caller that loaded the cascade once (RuleSet.Load) can
+    // project this slice without a second LoadForSolution.
+    internal static IReadOnlyList<FactHandoffRule> Project(AnalysisRuleSet ruleSet) => ruleSet.HandoffDispatchers.Select(Project).ToArray();
 
     private static FactHandoffRule Project(HandoffDispatcherRule rule) =>
         new(

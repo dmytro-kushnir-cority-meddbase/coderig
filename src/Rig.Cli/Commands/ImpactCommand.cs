@@ -4,7 +4,6 @@ using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Deployments;
 using Rig.Cli.Rendering;
-using Rig.Cli.Rules;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
@@ -173,8 +172,8 @@ internal static class ImpactCommand
         // single-pattern SQL subgraph the other commands use doesn't apply). Same load + ShapeGraph the
         // EF-fallback path of every traversal command uses, so impact walks the IDENTICAL shaped graph.
         var graph = await Reads.LoadFactGraphAsync(context, handoffRules);
-        var shaping = ShapingRuleSet.Load(workingDirectory, extraRules, raw: false);
-        graph = FactPathFinder.ShapeGraph(graph, shaping.Factory, shaping.Cut, shaping.Context);
+        var rules = RuleSet.Load(workingDirectory, extraRules);
+        graph = FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context);
         graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
 
         var deployments = await LoadDeploymentsAsync(context, workingDirectory, error);
@@ -464,8 +463,8 @@ internal static class ImpactCommand
     )
     {
         var graph = await Reads.LoadFactGraphAsync(context, handoffRules);
-        var shaping = ShapingRuleSet.Load(workingDirectory, extraRules, raw: false);
-        graph = FactPathFinder.ShapeGraph(graph, shaping.Factory, shaping.Cut, shaping.Context);
+        var rules = RuleSet.Load(workingDirectory, extraRules);
+        graph = FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context);
         graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
 
         var forward = FactPathFinder.ReachableFromAll(graph, seedIds, mode: mode);
@@ -645,8 +644,8 @@ internal static class ImpactCommand
     {
         await using var context = new Rig.Storage.Storage.RigDbContext(baseDbPath, readOnly: true);
         var graph = await Reads.LoadFactGraphAsync(context, handoffRules);
-        var shaping = ShapingRuleSet.Load(workingDirectory, extraRules, raw: false);
-        graph = FactPathFinder.ShapeGraph(graph, shaping.Factory, shaping.Cut, shaping.Context);
+        var rules = RuleSet.Load(workingDirectory, extraRules);
+        graph = FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context);
         graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
 
         var methods = await Reads.LoadDeadCodeMethodsAsync(context);

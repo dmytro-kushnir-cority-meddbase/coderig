@@ -15,9 +15,12 @@ public static class FactContextDispatchRuleProvider
     )
     {
         var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
-        var ruleSet = AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths);
-        return ruleSet.ContextDispatch.Select(Project).ToArray();
+        return Project(AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths));
     }
+
+    // Project off an already-merged rule set, so RuleSet.Load can project this slice without a second load.
+    internal static IReadOnlyList<FactContextDispatchRule> Project(AnalysisRuleSet ruleSet) =>
+        ruleSet.ContextDispatch.Select(Project).ToArray();
 
     private static FactContextDispatchRule Project(ContextDispatchRule rule) =>
         new(Interface: rule.Interface, BindingBase: rule.BindingBase);

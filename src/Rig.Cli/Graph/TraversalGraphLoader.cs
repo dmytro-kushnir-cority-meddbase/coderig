@@ -1,3 +1,4 @@
+using Rig.Analysis.Rules;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
@@ -45,18 +46,18 @@ internal static class TraversalGraphLoader
     // — forward (path) or reverse (callers) — loads through here so they all walk the identical shaped
     // graph; this is what keeps `callers` consistent with `path`/`reaches`. `dead` deliberately does NOT
     // use this (it needs the sound CHA superset). Pass empty rule sets (the `--raw` path) for no shaping.
+    // Takes the (already `--raw`-gated) RuleSet the command built; it reads only the shaping slices
+    // (Handoff/Factory/Cut/Context). Gating is the command's policy (a `with` on the RuleSet), so this
+    // stays policy-free — it shapes with whatever those slices carry.
     internal static async Task<FactGraphData> LoadShapedTraversalGraphAsync(
         RigDbContext context,
         string pattern,
         SqlReachability.Direction direction,
-        IReadOnlyList<FactHandoffRule> handoffRules,
-        IReadOnlyList<FactGenericFactoryRule> factoryRules,
-        IReadOnlyList<FactTraversalCutRule> cutRules,
-        IReadOnlyList<FactContextDispatchRule> contextRules
+        RuleSet rules
     )
     {
-        var graph = await LoadTraversalGraphAsync(context, pattern, direction, handoffRules);
-        return FactPathFinder.ShapeGraph(graph, factoryRules, cutRules, contextRules);
+        var graph = await LoadTraversalGraphAsync(context, pattern, direction, rules.Handoff);
+        return FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context);
     }
 
     // Like LoadTraversalGraphAsync, but also returns the effect-derivation inputs (invocations / ctor
@@ -67,22 +68,19 @@ internal static class TraversalGraphLoader
         RigDbContext context,
         string pattern,
         SqlReachability.Direction direction,
-        IReadOnlyList<FactHandoffRule> handoffRules,
-        IReadOnlyList<FactGenericFactoryRule>? factoryRules = null,
-        IReadOnlyList<FactTraversalCutRule>? cutRules = null,
-        IReadOnlyList<FactContextDispatchRule>? contextRules = null
+        RuleSet rules
     )
     {
         var inputs = await SqlReachability.HasGraphAsync(context)
             ? await SqlReachability.LoadReachInputsAsync(context, pattern, direction)
-            : await LoadReachInputsFromRowsAsync(context, handoffRules);
+            : await LoadReachInputsFromRowsAsync(context, rules.Handoff);
 
         // The single shaping pass (monomorphize generic factories + carry cut/context rules on the graph)
         // so reaches/tree walk the same shaped graph as path/callers. Edges with no concrete construct
         // keep their plumbing (the in-memory generic-dispatch narrowing covers those).
         inputs = inputs with
         {
-            Graph = FactPathFinder.ShapeGraph(inputs.Graph, factoryRules ?? [], cutRules ?? [], contextRules ?? []),
+            Graph = FactPathFinder.ShapeGraph(inputs.Graph, rules.Factory, rules.Cut, rules.Context),
         };
         return inputs;
     }

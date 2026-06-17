@@ -1,18 +1,10 @@
 namespace Rig.Analysis.Rules;
 
-// Exposes the effect-glyph map from the rules cascade to the CLI rendering layer.
-// Lookup: "provider:operation" key first, then "provider" key, then "⚡" fallback.
+// The effect-glyph lookup over the emoji map (carried on RuleSet.EffectEmoji). There is no loader here —
+// the map comes from the merged rule set; this is purely the 3-tier lookup:
+// "provider:operation" key first, then "provider" key, then "⚡" fallback.
 public static class FactEffectEmojiProvider
 {
-    public static IReadOnlyDictionary<string, string> LoadForWorkingDirectory(
-        string workingDirectory,
-        IReadOnlyList<string>? extraRulesPaths = null
-    )
-    {
-        var anchor = Path.Combine(workingDirectory, "rig.rules.json");
-        return AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths).EffectEmoji;
-    }
-
     public static string For(IReadOnlyDictionary<string, string> map, string provider, string operation)
     {
         if (map.TryGetValue(key: $"{provider}:{operation}", value: out var glyph))

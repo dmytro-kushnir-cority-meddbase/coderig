@@ -19,9 +19,11 @@ public static class FactEffectRuleProvider
     )
     {
         var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
-        var rules = AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths);
-        return rules.Effects.Select(Project).ToArray();
+        return Project(AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths));
     }
+
+    // Project off an already-merged rule set, so RuleSet.Load can project this slice without a second load.
+    internal static IReadOnlyList<FactEffectRule> Project(AnalysisRuleSet ruleSet) => ruleSet.Effects.Select(Project).ToArray();
 
     private static FactEffectRule Project(EffectRule rule)
     {

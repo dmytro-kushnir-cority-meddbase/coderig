@@ -2,7 +2,6 @@ using System.CommandLine;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
-using Rig.Cli.Rules;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
 using static Rig.Cli.Effects.EffectDerivation;
@@ -86,24 +85,15 @@ internal static class ReachesCommand
         var max = limit ?? int.MaxValue; // --limit absent => unbounded
         var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
         var mode = CommonOptions.Mode(async);
-        // reaches monomorphizes generic factories even under --raw (a long-standing asymmetry vs
-        // path/tree/callers), so Factory is loaded UNGATED here; cut/context still bypass under --raw.
-        var shaping = ShapingRuleSet.Load(workingDirectory, extraRules, raw) with
-        {
-            Factory = FactGenericFactoryRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules),
-        };
+
+        var rules = RuleSet.Load(workingDirectory, extraRules);
+        // --raw zeroes cut/context; reaches keeps Factory (it monomorphizes generic factories even under
+        // --raw, a long-standing asymmetry vs path/tree/callers).
+        var shaped = raw ? rules with { Cut = [], Context = [] } : rules;
 
         await using var context = OpenReadContext(workingDirectory, storeRef);
 
-        var inputs = await LoadEffectReachInputsAsync(
-            context,
-            fromPattern,
-            SqlReachability.Direction.Forward,
-            shaping.Handoff,
-            shaping.Factory,
-            shaping.Cut,
-            shaping.Context
-        );
+        var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, shaped);
         var graph = inputs.Graph;
         if (!raw)
         {
@@ -113,8 +103,8 @@ internal static class ReachesCommand
         var reachable = FactPathFinder.ReachesWithFanout(graph, fromPattern, maxDepth, mode: mode);
 
         var effects = DeriveEffects(
-            workingDirectory,
-            extraRules,
+            rules.Effects,
+            rules.Observations,
             inputs.Invocations,
             BaseEdgeTuples(graph),
             ctorRefs: inputs.CtorRefs,
@@ -177,7 +167,7 @@ internal static class ReachesCommand
         // Deployment/EP chip on the From line: which service(s) host this entry point (opt-in via
         // deployments.json; no-op otherwise). The from-root is the depth-0 reachable symbol.
         var reachDeployments = await LoadDeploymentsAsync(context, workingDirectory);
-        var reachEpContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, shaping.Handoff, reachDeployments);
+        var reachEpContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, rules.Handoff, reachDeployments);
         var reachFromRoot = reachable.Where(kv => kv.Value.Depth == 0).Select(kv => kv.Key).FirstOrDefault();
         output.WriteLine(
             $"From: {fromPattern}{(mode == FactPathFinder.TraversalMode.AsyncInclude ? "  (--async: handoffs included)" : "")}"

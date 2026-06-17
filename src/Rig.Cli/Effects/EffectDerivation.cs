@@ -24,7 +24,20 @@ internal static class EffectDerivation
     {
         var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
         var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        return FactEffectDeriver.Derive(
+        return DeriveEffects(effectRules, observationRules, invocations, baseEdges, ctorRefs, throwRefs);
+    }
+
+    // Overload over already-loaded rules — a command that obtained a RuleSet once passes its Effects +
+    // Observations in, so derivation re-reads nothing.
+    internal static IReadOnlyList<DerivedEffect> DeriveEffects(
+        IReadOnlyList<FactEffectRule> effectRules,
+        FactObservationRules observationRules,
+        IReadOnlyList<FactInvocation> invocations,
+        IReadOnlyList<(string, string)> baseEdges,
+        IReadOnlyList<SymbolRef> ctorRefs,
+        IReadOnlyList<SymbolRef> throwRefs
+    ) =>
+        FactEffectDeriver.Derive(
             invocations,
             effectRules,
             providerFilter: null,
@@ -33,7 +46,6 @@ internal static class EffectDerivation
             observationRules: observationRules,
             throwRefs: throwRefs
         );
-    }
 
     // Effect selection for reaches/tree/derive: --only keeps just the listed effects, --exclude drops
     // them (exclude wins on overlap). Tokens match an effect's `provider` (e.g. "throw") or the precise
