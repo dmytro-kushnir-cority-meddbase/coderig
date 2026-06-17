@@ -201,6 +201,21 @@ front. Build them switchable; do not hardcode a winner.
   the policy before a disk fills, not after.
 - **Dirty working tree.** A WIP-branch index is not at a clean commit — stamp `<hash>-dirty` (or a
   worktree content hash) so it is addressable and never silently aliases the clean commit.
+- **TODO(investigate) — incremental indexing to avoid a full rebuild per commit.** A per-commit immutable
+  store costs a full re-index per commit (~12–40 min on MedDBase) — the dominant cost of the whole model.
+  Investigate building commit B's store *incrementally* from an existing parent/merge-base store A: take
+  `git diff A..B` (the same changed-file set `impact` already computes), re-extract Roslyn facts **only for
+  changed files**, and copy A's facts verbatim for everything else into the new immutable B store. Facts
+  are file-attributed (`SymbolFact.FilePath`, reference `FilePath`), so a file→facts partition is feasible.
+  Open questions to resolve before committing: (1) cross-file invalidation — a changed file's *callers/
+  overriders/DI registrations* in unchanged files may need re-derivation (signature changes ripple), so
+  "only changed files" likely under-extracts; scope the true invalidation set. (2) The assembly registry is
+  already content-addressed by fact digest (re-mine of an unchanged assembly is a no-op) — lean on that:
+  maybe the unit of reuse is the **assembly**, not the file (re-extract only assemblies whose digest
+  changed). (3) Determinism — the incrementally-built store must be byte-identical (or fact-identical) to a
+  from-scratch index of B, or the diff layer inherits skew. Likely lands as a `rig index --from-store <A>`
+  fast path. Big potential win (turns the per-commit model from minutes to seconds); non-trivial because of
+  the ripple/invalidation correctness. Sequence AFTER steps 3–4 prove the diff is worth optimizing for.
 
 ---
 
