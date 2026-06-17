@@ -235,9 +235,18 @@ front. Build them switchable; do not hardcode a winner.
    `(Kind, Route)`; rendered as `+ <kind> <route>` / `- <kind> <route>` (TSV: `ep_added`/`ep_removed`
    rows). Skips cleanly with an "index the base commit" hint when no base store resolves. Tests:
    `StoreLayoutTests` (resolver) + `ImpactEpDiffTests` (identity→empty, different-source→non-empty).
-4. **Per-EP tree/effect/reachability delta over the candidate set + compact tri-lens output + handle** —
-   the actual behavioral diff; NEXT. (Step 3 ships EP add/remove; the per-EP "what changed inside a *common*
-   EP" delta is step 4.)
+4. **Behavioral delta — the effects/observations reachable from the changed methods, branch vs base** —
+   ✅ **DONE** (change-level). `impact` now also reports what the change *does*: it forward-reaches from the
+   changed methods on BOTH stores and diffs the reachable effect set + observation set. Base is seeded by
+   *param-free* method identity (so a signature-changed method seeds its pre-change self); effects are keyed
+   `(provider, op, resource, Type.Method-no-params)` — line/param-free, so formatting and signature edits
+   don't churn, only genuine behavior moves. Output: `reach: N methods (±Δ)`, `effects: +X/-Y` (e.g. a new
+   DB write / the retired object_store read), `observations: +A/-B` (e.g. **became an n+1**). Human + TSV
+   (`effect_added`/`effect_removed`/`obs_added`/`obs_removed`). Tests: `ImpactBehavioralDeltaTests`
+   (identical→empty delta; base-lacking-the-methods→effects surface as added).
+   *Refinement still open:* per-INDIVIDUAL-EP attribution (which specific common EP sees which part of the
+   delta) — the delta is currently change-level (shared across the affected EPs, since they all funnel
+   through the changed methods). Per-EP attribution + the tree-shape diff are the measurement-driven tail.
 5. Drill-down (`--explain <handle>`); canonical-order toggle (D1); start the differ experiments (D2).
 6. Retention/GC; dirty handling; auto-coherence assertion.
 

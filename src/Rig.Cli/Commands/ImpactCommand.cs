@@ -228,10 +228,30 @@ internal static class ImpactCommand
             ? null
             : await ComputeEpDiffAsync(baseDbPath, branchEps, workingDirectory, extraRules, handoffRules);
 
+        // --- (4) Behavioral delta (the actual two-store diff): the effects/observations reachable FROM the
+        // changed methods, branch vs base. Seeding the base by Type.Method (param-free) so a signature-changed
+        // method still matches its pre-change self; effect identity drops file/line/params, so formatting and
+        // signature edits don't churn — only genuine behavior moves. This is "what did the change DO":
+        // +effect = newly reachable (e.g. a new DB write), -effect = no longer reachable (e.g. the retired
+        // object_store read), +observation = newly introduced risk (e.g. became an n+1). See §3.3.
+        var behavioral = baseDbPath is null
+            ? null
+            : await ComputeBehavioralDeltaAsync(
+                baseDbPath,
+                branchEffects: affectedEffects,
+                branchReach: forward.Count,
+                changedMethods: changedMethods,
+                workingDirectory: workingDirectory,
+                extraRules: extraRules,
+                handoffRules: handoffRules,
+                mode: mode
+            );
+
         if (tsv)
         {
             EmitTsv(output, changedMethods, affectedEps, deployments, affectedEffects, max);
             EmitEpDiffTsv(output, epDiff);
+            EmitBehavioralDeltaTsv(output, behavioral);
             return 0;
         }
 
@@ -253,6 +273,7 @@ internal static class ImpactCommand
             max: max
         );
         WriteEpDiffHuman(output, baseRef, baseDbPath, epDiff, StoreLayout.AvailableStoreIds(workingDirectory), max);
+        WriteBehavioralDeltaHuman(output, baseRef, behavioral, max);
         return 0;
     }
 
@@ -363,6 +384,184 @@ internal static class ImpactCommand
         {
             output.WriteLine($"{Indent.L1}- {kind} {route}");
         }
+    }
+
+    // An effect identity that survives formatting AND signature edits: provider/op/resource + the enclosing
+    // method WITHOUT its parameter list. So `SetCompanySettings(int,X)` and `SetCompanySettings(int,X,ITxn)`
+    // collapse to the same site, and a reformatted body doesn't move anything — only a genuine change to
+    // which effects are reachable shows up in the diff.
+    internal sealed record BehavioralDelta(
+        int ReachBranch,
+        int ReachBase,
+        IReadOnlyList<(string Provider, string Operation, string Resource, string Enclosing)> AddedEffects,
+        IReadOnlyList<(string Provider, string Operation, string Resource, string Enclosing)> RemovedEffects,
+        IReadOnlyList<(string Type, string Provider, string Operation, string Enclosing)> AddedObservations,
+        IReadOnlyList<(string Type, string Provider, string Operation, string Enclosing)> RemovedObservations
+    );
+
+    // Strip a DocID's parameter list (and leading `M:`) to a param-free `Namespace.Type.Method` key.
+    private static string StripParams(string? docId)
+    {
+        if (string.IsNullOrEmpty(docId))
+        {
+            return "";
+        }
+
+        var body = docId.StartsWith("M:", StringComparison.Ordinal) ? docId[2..] : docId;
+        var paren = body.IndexOf('(', StringComparison.Ordinal);
+        return paren >= 0 ? body[..paren] : body;
+    }
+
+    // The reachable-from-seeds effect set + reach size for a single store — the same load/shape/forward-reach/
+    // derive the branch path runs inline, so both stores are measured identically.
+    internal static async Task<(IReadOnlyList<DerivedEffect> Effects, int ReachCount)> ReachEffectsAsync(
+        Rig.Storage.Storage.RigDbContext context,
+        IReadOnlySet<string> seedIds,
+        string workingDirectory,
+        IReadOnlyList<string> extraRules,
+        IReadOnlyList<FactHandoffRule> handoffRules,
+        FactPathFinder.TraversalMode mode
+    )
+    {
+        var graph = await Reads.LoadFactGraphAsync(context, handoffRules);
+        var shaping = ShapingRuleSet.Load(workingDirectory, extraRules, raw: false);
+        graph = FactPathFinder.ShapeGraph(graph, shaping.Factory, shaping.Cut, shaping.Context);
+        graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+
+        var forward = FactPathFinder.ReachableFromAll(graph, seedIds, mode: mode);
+        var invocations = await Reads.LoadInvocationRefsAsync(context);
+        var throwRefs = await Reads.LoadThrowRefsAsync(context);
+        var epData = await Reads.LoadFactEntryPointDataAsync(context);
+        var effects = DeriveEffects(
+            workingDirectory,
+            extraRules,
+            invocations,
+            baseEdges: epData.BaseEdges,
+            ctorRefs: epData.CtorRefs,
+            throwRefs: throwRefs
+        );
+        var reached = effects.Where(e => e.EnclosingSymbolId is not null && forward.Contains(e.EnclosingSymbolId)).ToList();
+        return (reached, forward.Count);
+    }
+
+    internal static async Task<BehavioralDelta> ComputeBehavioralDeltaAsync(
+        string baseDbPath,
+        IReadOnlyList<DerivedEffect> branchEffects,
+        int branchReach,
+        IReadOnlyList<DeadCodeFinder.MethodMeta> changedMethods,
+        string workingDirectory,
+        IReadOnlyList<string> extraRules,
+        IReadOnlyList<FactHandoffRule> handoffRules,
+        FactPathFinder.TraversalMode mode
+    )
+    {
+        await using var baseContext = new Rig.Storage.Storage.RigDbContext(baseDbPath, readOnly: true);
+
+        // Seed the base by param-free method identity, so a signature-changed method seeds its PRE-change
+        // self in the base (whose DocID differs) — else its downstream effects would falsely read as "added".
+        var changedStems = changedMethods.Select(m => StripParams(m.SymbolId)).ToHashSet(StringComparer.Ordinal);
+        var baseMethods = await Reads.LoadDeadCodeMethodsAsync(baseContext);
+        var baseSeed = baseMethods
+            .Where(m => changedStems.Contains(StripParams(m.SymbolId)))
+            .Select(m => m.SymbolId)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var (baseEffects, baseReach) = await ReachEffectsAsync(baseContext, baseSeed, workingDirectory, extraRules, handoffRules, mode);
+
+        (string, string, string, string) EffectKey(DerivedEffect e) =>
+            (e.Provider, e.Operation, e.ResourceType, StripParams(e.EnclosingSymbolId));
+        var branchEffectKeys = branchEffects.Select(EffectKey).ToHashSet();
+        var baseEffectKeys = baseEffects.Select(EffectKey).ToHashSet();
+
+        var addedEffects = branchEffectKeys.Where(k => !baseEffectKeys.Contains(k)).OrderBy(k => k).ToList();
+        var removedEffects = baseEffectKeys.Where(k => !branchEffectKeys.Contains(k)).OrderBy(k => k).ToList();
+
+        IEnumerable<(string Type, string Provider, string Operation, string Enclosing)> Observations(IEnumerable<DerivedEffect> effects) =>
+            effects.SelectMany(e =>
+                (e.Observations ?? []).Select(o => (o.Type, e.Provider, e.Operation, StripParams(e.EnclosingSymbolId)))
+            );
+        var branchObs = Observations(branchEffects).ToHashSet();
+        var baseObs = Observations(baseEffects).ToHashSet();
+
+        var addedObs = branchObs.Where(k => !baseObs.Contains(k)).OrderBy(k => k).ToList();
+        var removedObs = baseObs.Where(k => !branchObs.Contains(k)).OrderBy(k => k).ToList();
+
+        return new BehavioralDelta(
+            ReachBranch: branchReach,
+            ReachBase: baseReach,
+            AddedEffects: addedEffects,
+            RemovedEffects: removedEffects,
+            AddedObservations: addedObs,
+            RemovedObservations: removedObs
+        );
+    }
+
+    private static void EmitBehavioralDeltaTsv(TextWriter output, BehavioralDelta? delta)
+    {
+        if (delta is null)
+        {
+            return;
+        }
+
+        foreach (var (provider, operation, resource, enclosing) in delta.AddedEffects)
+        {
+            output.WriteLine($"effect_added\t{provider}\t{operation}\t{resource}\t{enclosing}");
+        }
+
+        foreach (var (provider, operation, resource, enclosing) in delta.RemovedEffects)
+        {
+            output.WriteLine($"effect_removed\t{provider}\t{operation}\t{resource}\t{enclosing}");
+        }
+
+        foreach (var (type, provider, operation, enclosing) in delta.AddedObservations)
+        {
+            output.WriteLine($"obs_added\t{type}\t{provider}\t{operation}\t{enclosing}");
+        }
+
+        foreach (var (type, provider, operation, enclosing) in delta.RemovedObservations)
+        {
+            output.WriteLine($"obs_removed\t{type}\t{provider}\t{operation}\t{enclosing}");
+        }
+    }
+
+    private static void WriteBehavioralDeltaHuman(TextWriter output, string baseRef, BehavioralDelta? delta, int max)
+    {
+        if (delta is null)
+        {
+            return; // no base store — already reported by the entry-point-diff section
+        }
+
+        var reachDelta = delta.ReachBranch - delta.ReachBase;
+        var reachSign = reachDelta >= 0 ? "+" : "";
+        output.WriteLine();
+        output.WriteLine($"Behavioral delta vs '{baseRef}' (effects reachable from the changed methods):");
+        output.WriteLine($"{Indent.L1}reach: {delta.ReachBranch} methods ({reachSign}{reachDelta} vs base)");
+        output.WriteLine($"{Indent.L1}effects: +{delta.AddedEffects.Count} / -{delta.RemovedEffects.Count}");
+        foreach (var (provider, operation, resource, enclosing) in delta.AddedEffects.Take(max))
+        {
+            output.WriteLine($"{Indent.L3}+ {provider} {operation}{Resource(resource)}  ({enclosing})");
+        }
+
+        foreach (var (provider, operation, resource, enclosing) in delta.RemovedEffects.Take(max))
+        {
+            output.WriteLine($"{Indent.L3}- {provider} {operation}{Resource(resource)}  ({enclosing})");
+        }
+
+        if (delta.AddedObservations.Count > 0 || delta.RemovedObservations.Count > 0)
+        {
+            output.WriteLine($"{Indent.L1}observations: +{delta.AddedObservations.Count} / -{delta.RemovedObservations.Count}");
+            foreach (var (type, provider, operation, enclosing) in delta.AddedObservations.Take(max))
+            {
+                output.WriteLine($"{Indent.L3}+ {type} on {provider} {operation} ({enclosing})");
+            }
+
+            foreach (var (type, provider, operation, enclosing) in delta.RemovedObservations.Take(max))
+            {
+                output.WriteLine($"{Indent.L3}- {type} on {provider} {operation} ({enclosing})");
+            }
+        }
+
+        static string Resource(string resource) => string.IsNullOrEmpty(resource) ? "" : $" {resource}";
     }
 
     // The hosts that LOAD at least one affected entry point (the redeploy/risk set), via the deployment map.
