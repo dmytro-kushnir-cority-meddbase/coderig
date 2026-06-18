@@ -669,8 +669,33 @@ internal static class ImpactCommand
         );
     }
 
+    // The reach MULTIPLICITY + loop context of one effect key from one EP (Feature 1). Count is the number
+    // of distinct reachable effect-bearing enclosing nodes that produce this key (a derivable proxy for "how
+    // many times" — a higher count means the effect is produced from more reachable sites). InLoop is true
+    // when ANY of those producing nodes is reached under an enclosing loop somewhere on its call path (the
+    // BFS-shortest-path NearestLoopKind, the same loop context the tree's 🔁 uses). This is the per-key
+    // cardinality + loop flag the bare reachable-SET dedup throws away.
+    internal sealed record EffectReach(int Count, bool InLoop);
+
+    // One effect that is AMPLIFIED on an EP (Feature 1): its key is present on BOTH stores (so the set-diff
+    // says "unchanged"), but it is now produced MORE (BranchCount > BaseCount) and/or has MOVED INTO A LOOP
+    // (BranchInLoop && !BaseInLoop). A FLAG FOR REVIEW, not a verdict — the static signal can't distinguish a
+    // harmless hot-cache 2nd read from a real extra cold DB call, so the rendering says "review".
+    internal sealed record EpEffectAmplified(
+        string Provider,
+        string Operation,
+        string Resource,
+        string Enclosing,
+        int BaseCount,
+        int BranchCount,
+        bool BaseInLoop,
+        bool BranchInLoop
+    );
+
     // One entry point whose reachable-effect FOOTPRINT differs between the two stores, with the per-EP
-    // added/removed effects. EffectKey = (provider, operation, resource, param-free enclosing method).
+    // added/removed effects (set membership) AND the amplified effects (Feature 1 — same key, produced more
+    // or now in a loop). EffectKey = (provider, operation, resource, param-free enclosing method). An EP is
+    // listed when Added/Removed OR Amplified is non-empty (the behavioral set = set-changed ∪ amplified).
     internal sealed record EpFootprintDelta(
         string Kind,
         string Route,
@@ -681,7 +706,8 @@ internal static class ImpactCommand
         int BranchEffects,
         int BaseEffects,
         IReadOnlyList<(string Provider, string Operation, string Resource, string Enclosing)> Added,
-        IReadOnlyList<(string Provider, string Operation, string Resource, string Enclosing)> Removed
+        IReadOnlyList<(string Provider, string Operation, string Resource, string Enclosing)> Removed,
+        IReadOnlyList<EpEffectAmplified> Amplified
     );
 
     // enclosing-method-id -> the distinct effect keys (provider, op, resource, param-free enclosing) declared
@@ -714,9 +740,16 @@ internal static class ImpactCommand
 
     // The reachable-effect footprint of each entry point, keyed on (Kind, Route), over an ALREADY-LOADED graph
     // + effects (no store I/O — the caller loaded the store once). Forward-reaches every EP in parallel
-    // (ReachesFromEachSeed: one shared index, all cores). An EP whose (FilePath, Line) maps to no method node
-    // seeds empty; duplicate (Kind, Route) sites union their footprints.
-    private static Dictionary<(string Kind, string Route), HashSet<(string, string, string, string)>> ComputeFootprints(
+    // (ReachesInfoFromEachSeed: one shared index, all cores). An EP whose (FilePath, Line) maps to no method
+    // node seeds empty; duplicate (Kind, Route) sites union their footprints.
+    //
+    // Feature 1 (amplification): the inner value is no longer a bare effect-key SET but a per-key EffectReach
+    // carrying CARDINALITY + a LOOP flag. Count = number of distinct reachable effect-bearing enclosing nodes
+    // that produce the key (a derivable multiplicity — produced from more sites ⇒ higher count). InLoop ORs
+    // the NearestLoopKind of each producing node over the EP's forward reach (the same BFS loop context the
+    // tree's 🔁 marker uses; available identically on both stores). The set-diff over the key SET is recovered
+    // by DiffFootprints reading the dictionary keys, so Added/Removed semantics are unchanged.
+    private static Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>> ComputeFootprints(
         FactGraphData graph,
         IReadOnlyList<DerivedEntryPoint> eps,
         Dictionary<(string, int), string> idBySite,
@@ -726,22 +759,31 @@ internal static class ImpactCommand
     {
         var distinct = eps.GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line)).Select(g => g.Key).ToList();
         var seedIds = distinct.Select(e => idBySite.TryGetValue((e.FilePath, e.Line), out var id) ? id : "").ToList();
-        var reached = FactPathFinder.ReachesFromEachSeed(graph, seedIds, mode: mode);
+        var reached = FactPathFinder.ReachesInfoFromEachSeed(graph, seedIds, mode: mode);
 
-        var footprints = new Dictionary<(string, string), HashSet<(string, string, string, string)>>();
+        var footprints = new Dictionary<(string, string), Dictionary<(string, string, string, string), EffectReach>>();
         for (var i = 0; i < distinct.Count; i++)
         {
             var key = (distinct[i].Kind, distinct[i].Route);
-            if (!footprints.TryGetValue(key, out var set))
+            if (!footprints.TryGetValue(key, out var perKey))
             {
-                footprints[key] = set = new HashSet<(string, string, string, string)>();
+                footprints[key] = perKey = new Dictionary<(string, string, string, string), EffectReach>();
             }
 
-            foreach (var node in reached[i])
+            // Walk the EP's reachable nodes; for each effect-bearing one, accumulate its effect keys' count
+            // (one per distinct producing node) and OR-in whether that node is reached under a loop.
+            foreach (var (node, info) in reached[i])
             {
-                if (effectsByEnclosing.TryGetValue(node, out var keys))
+                if (!effectsByEnclosing.TryGetValue(node, out var keys))
                 {
-                    set.UnionWith(keys);
+                    continue;
+                }
+
+                var nodeInLoop = info.NearestLoopKind is not null;
+                foreach (var ek in keys)
+                {
+                    var prev = perKey.TryGetValue(ek, out var r) ? r : new EffectReach(Count: 0, InLoop: false);
+                    perKey[ek] = new EffectReach(Count: prev.Count + 1, InLoop: prev.InLoop || nodeInLoop);
                 }
             }
         }
@@ -1016,7 +1058,7 @@ internal static class ImpactCommand
     private static async Task<(
         BehavioralDelta Delta,
         Dictionary<(string Kind, string Route), HashSet<string>> ReachSets,
-        Dictionary<(string Kind, string Route), HashSet<(string, string, string, string)>>? Footprints,
+        Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>>? Footprints,
         IReadOnlyDictionary<string, string> BodyHashes
     )> ComputeBaseSideAsync(
         string baseDbPath,
@@ -1079,27 +1121,60 @@ internal static class ImpactCommand
     }
 
     // Diff two stores' per-EP footprints: for every EP present in BOTH (paired on Kind+Route), the effects its
-    // reach gained/lost. Returns only EPs whose footprint changed, busiest-delta first. EPs added/removed
-    // wholesale are the EP-diff section's job, not this.
-    private static IReadOnlyList<EpFootprintDelta> DiffFootprints(
-        Dictionary<(string Kind, string Route), HashSet<(string, string, string, string)>> branch,
-        Dictionary<(string Kind, string Route), HashSet<(string, string, string, string)>> baseStore,
+    // reach gained/lost (set membership) AND the effects that are AMPLIFIED — same key on both sides but now
+    // produced MORE (higher reach multiplicity) or MOVED INTO A LOOP (Feature 1). Returns only EPs whose
+    // footprint changed in EITHER way, busiest-delta first. EPs added/removed wholesale are the EP-diff
+    // section's job, not this. Internal for unit-testing the pure diff (ImpactAmplificationTests).
+    internal static IReadOnlyList<EpFootprintDelta> DiffFootprints(
+        Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>> branch,
+        Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>> baseStore,
         // (Kind, Route) -> the EP's site, so each delta carries FilePath/Line for FQN rendering. An EP missing
         // here (shouldn't happen — branch footprints are keyed off the same EPs) falls back to empty site.
         IReadOnlyDictionary<(string Kind, string Route), EntryPointRef> epByKey
     )
     {
         var deltas = new List<EpFootprintDelta>();
-        foreach (var (key, branchSet) in branch)
+        foreach (var (key, branchReach) in branch)
         {
-            if (!baseStore.TryGetValue(key, out var baseSet))
+            if (!baseStore.TryGetValue(key, out var baseReach))
             {
                 continue;
             }
 
-            var added = branchSet.Where(k => !baseSet.Contains(k)).OrderBy(k => k).ToList();
-            var removed = baseSet.Where(k => !branchSet.Contains(k)).OrderBy(k => k).ToList();
-            if (added.Count > 0 || removed.Count > 0)
+            var added = branchReach.Keys.Where(k => !baseReach.ContainsKey(k)).OrderBy(k => k).ToList();
+            var removed = baseReach.Keys.Where(k => !branchReach.ContainsKey(k)).OrderBy(k => k).ToList();
+
+            // Amplification is a THIRD category over the INTERSECTION: a key present on BOTH sides whose
+            // branch reach is produced MORE (BranchCount > BaseCount) and/or has newly entered a loop
+            // (BranchInLoop && !BaseInLoop). A count DECREASE or LEAVING a loop is not flagged.
+            var amplified = new List<EpEffectAmplified>();
+            foreach (var (ek, br) in branchReach)
+            {
+                if (!baseReach.TryGetValue(ek, out var ba))
+                {
+                    continue; // added key — handled by the set-diff above, not amplification
+                }
+
+                var countUp = br.Count > ba.Count;
+                var loopEntry = br.InLoop && !ba.InLoop;
+                if (countUp || loopEntry)
+                {
+                    amplified.Add(
+                        new EpEffectAmplified(
+                            Provider: ek.Item1,
+                            Operation: ek.Item2,
+                            Resource: ek.Item3,
+                            Enclosing: ek.Item4,
+                            BaseCount: ba.Count,
+                            BranchCount: br.Count,
+                            BaseInLoop: ba.InLoop,
+                            BranchInLoop: br.InLoop
+                        )
+                    );
+                }
+            }
+
+            if (added.Count > 0 || removed.Count > 0 || amplified.Count > 0)
             {
                 var site = epByKey.GetValueOrDefault(key);
                 deltas.Add(
@@ -1108,16 +1183,25 @@ internal static class ImpactCommand
                         Route: key.Item2,
                         FilePath: site?.FilePath ?? "",
                         Line: site?.Line ?? 0,
-                        BranchEffects: branchSet.Count,
-                        BaseEffects: baseSet.Count,
+                        BranchEffects: branchReach.Count,
+                        BaseEffects: baseReach.Count,
                         Added: added,
-                        Removed: removed
+                        Removed: removed,
+                        Amplified: amplified
+                            .OrderBy(a => a.Provider, StringComparer.Ordinal)
+                            .ThenBy(a => a.Operation, StringComparer.Ordinal)
+                            .ThenBy(a => a.Resource, StringComparer.Ordinal)
+                            .ThenBy(a => a.Enclosing, StringComparer.Ordinal)
+                            .ToList()
                     )
                 );
             }
         }
 
-        return deltas.OrderByDescending(d => d.Added.Count + d.Removed.Count).ThenBy(d => d.Route, StringComparer.Ordinal).ToList();
+        return deltas
+            .OrderByDescending(d => d.Added.Count + d.Removed.Count + d.Amplified.Count)
+            .ThenBy(d => d.Route, StringComparer.Ordinal)
+            .ToList();
     }
 
     private static void EmitPerEpTsv(TextWriter output, IReadOnlyList<EpFootprintDelta>? deltas, Dictionary<(string, int), string> fqnSites)
@@ -1130,7 +1214,9 @@ internal static class ImpactCommand
         foreach (var d in deltas)
         {
             var fqn = FqnForCard(route: d.Route, filePath: d.FilePath, line: d.Line, idBySite: fqnSites);
-            output.WriteLine($"ep_delta\t{d.Kind}\t{d.Route}\t{fqn}\t{d.BranchEffects}\t{d.BaseEffects}\t+{d.Added.Count}\t-{d.Removed.Count}");
+            output.WriteLine(
+                $"ep_delta\t{d.Kind}\t{d.Route}\t{fqn}\t{d.BranchEffects}\t{d.BaseEffects}\t+{d.Added.Count}\t-{d.Removed.Count}\t~{d.Amplified.Count}"
+            );
             foreach (var (provider, operation, resource, enclosing) in d.Added)
             {
                 output.WriteLine($"ep_effect_added\t{d.Kind}\t{d.Route}\t{provider}\t{operation}\t{resource}\t{enclosing}");
@@ -1139,6 +1225,13 @@ internal static class ImpactCommand
             foreach (var (provider, operation, resource, enclosing) in d.Removed)
             {
                 output.WriteLine($"ep_effect_removed\t{d.Kind}\t{d.Route}\t{provider}\t{operation}\t{resource}\t{enclosing}");
+            }
+
+            foreach (var a in d.Amplified)
+            {
+                output.WriteLine(
+                    $"ep_effect_amplified\t{d.Kind}\t{d.Route}\t{a.Provider}\t{a.Operation}\t{a.Resource}\t{a.Enclosing}\t{a.BaseCount}\t{a.BranchCount}\t{a.BaseInLoop}\t{a.BranchInLoop}"
+                );
             }
         }
     }
@@ -1168,13 +1261,18 @@ internal static class ImpactCommand
             return;
         }
 
-        output.WriteLine($"Behavioral changes per entry point vs '{baseRef}' (reachable-effect set changed): {deltas.Count}");
+        // The behavioral set = (effect-set changed) ∪ (amplified) — an EP whose set is stable but has an
+        // amplified effect (now produced more / in a loop) is in `deltas` too (DiffFootprints lists it).
+        output.WriteLine(
+            $"Behavioral changes per entry point vs '{baseRef}' (reachable-effect set changed or effect amplified): {deltas.Count}"
+        );
         foreach (var d in deltas.Take(max))
         {
             // Render the FQN (round-trips into `rig tree`), same as the structural list; falls back to the route.
             var label = FqnForCard(route: d.Route, filePath: d.FilePath, line: d.Line, idBySite: fqnSites);
+            var ampPart = d.Amplified.Count > 0 ? $", ~{d.Amplified.Count} amplified" : "";
             output.WriteLine(
-                $"{Indent.L2}{d.Kind} {label}  (effects {d.BaseEffects}→{d.BranchEffects}, +{d.Added.Count}/-{d.Removed.Count})"
+                $"{Indent.L2}{d.Kind} {label}  (effects {d.BaseEffects}→{d.BranchEffects}, +{d.Added.Count}/-{d.Removed.Count}{ampPart})"
             );
             foreach (var (provider, operation, resource, enclosing) in d.Added.Take(max))
             {
@@ -1185,9 +1283,35 @@ internal static class ImpactCommand
             {
                 output.WriteLine($"{Indent.L3}- {provider} {operation}{Resource(resource)}  ({enclosing})");
             }
+
+            // Amplified effects: same key on both sides, but produced MORE or now in a loop. Marked `~` and
+            // worded for REVIEW (not "regression") — the static signal can't tell a hot-cache re-read from a
+            // real extra cold call. Note: a harmless ×1->×2 will show; that's the chosen tradeoff.
+            foreach (var a in d.Amplified.Take(max))
+            {
+                output.WriteLine($"{Indent.L3}~ {a.Provider} {a.Operation}{Resource(a.Resource)}  ({AmplifyNote(a)})  ({a.Enclosing})  [review]");
+            }
         }
 
         static string Resource(string resource) => string.IsNullOrEmpty(resource) ? "" : $" {resource}";
+    }
+
+    // The amplification annotation: the count move (×base -> ×branch) and/or a loop-entry note, both when
+    // both fired. Worded as an observation, not a verdict — it pairs with the `[review]` tag in the line.
+    private static string AmplifyNote(EpEffectAmplified a)
+    {
+        var parts = new List<string>();
+        if (a.BranchCount > a.BaseCount)
+        {
+            parts.Add($"×{a.BaseCount} -> ×{a.BranchCount}");
+        }
+
+        if (a.BranchInLoop && !a.BaseInLoop)
+        {
+            parts.Add("now in loop");
+        }
+
+        return parts.Count > 0 ? string.Join(", ", parts) : "amplified";
     }
 
     private static void EmitBehavioralDeltaTsv(TextWriter output, BehavioralDelta? delta)
@@ -1616,6 +1740,10 @@ internal static class ImpactCommand
         //  ep_reach_-   <kind>  <route>  <symbolId>                            (dropped from the EP's reach — raw method DocID, or an `R:`-prefixed field/property-access target, Phase 3)
         //  ep_reach_~   <kind>  <route>  <stem>                                (a reachable method whose SIGNATURE changed — param-free stem)
         //  ep_reach_inplace  <kind>  <route>  <symbolId>                       (a reachable method whose BODY changed in place — raw DocID, Phase 2)
+        //  ep_delta     <kind>  <route>  <fqn>  <branchEffects>  <baseEffects>  <+added>  <-removed>  <~amplified>   (one per EP whose reachable-effect footprint changed: set membership and/or amplification; counts are effect KEYS)
+        //  ep_effect_added    <kind>  <route>  <provider>  <operation>  <resource>  <enclosing>   (an effect KEY newly in the EP's footprint)
+        //  ep_effect_removed  <kind>  <route>  <provider>  <operation>  <resource>  <enclosing>   (an effect KEY dropped from the EP's footprint)
+        //  ep_effect_amplified  <kind>  <route>  <provider>  <operation>  <resource>  <enclosing>  <baseCount>  <branchCount>  <baseInLoop>  <branchInLoop>   (Feature 1: SAME key on both stores but produced MORE — branchCount>baseCount — and/or MOVED INTO A LOOP — branchInLoop && !baseInLoop. count = # distinct reachable effect-bearing producing nodes. A REVIEW flag, not a verdict: can't tell a hot-cache re-read from a real extra cold call.)
         //  entrypoint   <kind>  <route>  <file>  <line>  <requires>  <loaded>  <active>   (reverse-reach — speculative)
         //  effect       <provider>  <operation>  <resource>  <enclosing>  <file>  <line>  <observations>   (forward reach)
         foreach (var m in changedMethods.Take(max))
