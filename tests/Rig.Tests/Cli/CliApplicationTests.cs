@@ -30,6 +30,7 @@ public sealed class CliApplicationTests
         help.ShouldContain("impact");
         // `dead` is intentionally NOT registered (disabled until moved onto the one-hop engine — see Root.cs).
         help.ShouldContain("profile");
+        help.ShouldContain("entrypoints");
     }
 
     // An unrecognized command is a framework parse error (exit 1); it names the bad token and suggests the

@@ -36,7 +36,7 @@ public sealed class ReachedByAnyTests
             new MethodRef("M:N.Root3.Y", "Y", "T:N.Root3"),
             new MethodRef("M:N.Other.Z", "Z", "T:N.Other"),
         };
-        return new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, null, null);
+        return new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, null, null);
     }
 
     [Test]
@@ -110,7 +110,7 @@ public sealed class ReachedByAnyTests
         var any = FactPathFinder.ReachedByAny(graph, new[] { "M:N.Leaf.C" });
         var single = FactPathFinder.ReachedBy(graph, "M:N.Leaf.C");
 
-        any.Keys.OrderBy(k => k, System.StringComparer.Ordinal).ShouldBe(single.Keys.OrderBy(k => k, System.StringComparer.Ordinal));
+        any.Keys.OrderBy(k => k, StringComparer.Ordinal).ShouldBe(single.Keys.OrderBy(k => k, StringComparer.Ordinal));
     }
 
     [Test]
@@ -128,7 +128,7 @@ public sealed class ReachedByAnyTests
             new MethodRef("M:N.Impl.V", "V", "T:N.Impl", IsOverride: true),
         };
         var mined = new[] { new DispatchFact("M:N.Base.V", "M:N.Impl.V", "override") };
-        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases, mined);
+        var graph = new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases, mined);
 
         var reached = FactPathFinder.ReachedByAny(graph, new[] { "M:N.Impl.V" });
 

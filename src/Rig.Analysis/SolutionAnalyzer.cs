@@ -19,31 +19,48 @@ public static class SolutionAnalyzer
         // Max concurrent design-time builds / compilations (null = conservative default).
         int? parallelism = null,
         // Drop test projects (by name convention) from the indexed set (the index default).
-        bool excludeTests = false
+        bool excludeTests = false,
+        // Optional per-phase timing collector (rig index --time). Records rules-load, extract, and
+        // projections here; the loader records workspace-build / wire-generators / compile+read.
+        PhaseTimings? timings = null,
+        // Directory for the design-time-build cache (rig index --reuse-build-cache). Null = disabled.
+        string? buildCacheDir = null
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
+        var phase = timings is null ? null : System.Diagnostics.Stopwatch.StartNew();
         progress?.Invoke("Loading rules");
         var rules = AnalysisRuleSet.LoadForSolution(solutionFullPath, extraRulesPaths);
+        if (phase is not null)
+        {
+            timings!.Record("rules-load", phase.Elapsed);
+        }
+
         progress?.Invoke("Loading solution");
         var sourceSet = await SolutionSourceLoader.LoadAsync(
-            solutionFullPath,
-            rules,
-            cancellationToken,
-            progress,
-            scopeProjectPaths,
-            parallelism,
-            excludeTests
+            solutionPath: solutionFullPath,
+            rules: rules,
+            cancellationToken: cancellationToken,
+            progress: progress,
+            scopeProjectPaths: scopeProjectPaths,
+            parallelism: parallelism,
+            excludeTests: excludeTests,
+            timings: timings,
+            buildCacheDir: buildCacheDir
         );
+        // Start the extraction clock fresh after the loader's phases so it isn't double-counted.
+        phase?.Restart();
         progress?.Invoke("Merging project rules");
         rules = rules.MergeWithProjectDirectories(sourceSet.ProjectDirectories);
         var sources = sourceSet.IndexedSources;
 
         progress?.Invoke($"Extracting observations from {sources.Count} indexed source files");
+
         var extracted = 0;
         var extractionResults = sources
             .AsParallel()
             .AsOrdered()
+            .WithDegreeOfParallelism(parallelism ?? Environment.ProcessorCount)
             .Select(source =>
             {
                 var result = ExtractSource(source, rules);
@@ -55,6 +72,12 @@ public static class SolutionAnalyzer
                 return result;
             })
             .ToArray();
+
+        if (phase is not null)
+        {
+            timings!.Record("extract", phase.Elapsed);
+            phase.Restart();
+        }
 
         progress?.Invoke("Building projections");
         var diRegistrations = extractionResults.SelectMany(result => result.DiRegistrations).ToArray();
@@ -79,6 +102,11 @@ public static class SolutionAnalyzer
             Evidence: string.Empty
         ));
         var allDiRegistrations = diRegistrations.Concat(xmlRegistrations).Concat(staticRegistrations).ToArray();
+        if (phase is not null)
+        {
+            timings!.Record("projections+xml-di", phase.Elapsed);
+        }
+
         if (xmlRegistrations.Count > 0)
         {
             progress?.Invoke($"XML DI miner: {xmlRegistrations.Count} mappings from {rules.XmlDiFiles.Count} path(s)");

@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Diagnostics;
 using Rig.Analysis;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
@@ -27,6 +28,15 @@ internal static class IndexCommands
         {
             Description = "Skip building the call-graph views after indexing (run `rig graph` later to enable the fast query path).",
         };
+        var time = new Option<bool>("--time")
+        {
+            Description = "Print a per-phase timing breakdown (workspace build, compile+read, extract, save, graph).",
+        };
+        var reuseBuildCache = new Option<bool>("--reuse-build-cache")
+        {
+            Description =
+                "Reuse cached design-time build results for projects whose inputs are unchanged (skips the dominant build phase).",
+        };
 
         var cmd = new Command(name: "index", description: "Index a solution/project into a .rig store.")
         {
@@ -38,7 +48,10 @@ internal static class IndexCommands
             merge,
             includeTests,
             noGraph,
+            time,
+            reuseBuildCache,
         };
+
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
@@ -53,6 +66,8 @@ internal static class IndexCommands
                         merge: pr.GetValue(merge),
                         includeTests: pr.GetValue(includeTests),
                         noGraph: pr.GetValue(noGraph),
+                        time: pr.GetValue(time),
+                        reuseBuildCache: pr.GetValue(reuseBuildCache),
                         output: output,
                         error: error,
                         workingDirectory: workingDirectory
@@ -71,11 +86,16 @@ internal static class IndexCommands
         bool merge,
         bool includeTests,
         bool noGraph,
+        bool time,
+        bool reuseBuildCache,
         TextWriter output,
         TextWriter error,
         string workingDirectory
     )
     {
+        var timings = time ? new PhaseTimings() : null;
+        // Design-time-build cache lives outside the per-commit store dir so it's shared across indexes.
+        var buildCacheDir = reuseBuildCache ? Path.Combine(StoreLayout.RigDir(workingDirectory), "dtb-cache") : null;
         // --from <csproj>: index only the transitive ProjectReference closure of the entry project
         // (minus test projects) in ONE cross-project Roslyn workspace — skips every out-of-closure
         // test/tool project before its design-time build runs. The closure is written to
@@ -99,12 +119,12 @@ internal static class IndexCommands
         // Capture provenance + the destination store-id up front, so the store location and commit can be
         // announced BEFORE the (long) analysis — useful when monitoring a re-index. The commit IS the
         // store-id (docs/design-impact-behavioral-diff.md §4.4-4.5).
-        var provenance = Rig.Cli.Git.GitProvenanceProbe.Capture(fromProject ?? Path.GetFullPath(target));
+        var provenance = Git.GitProvenanceProbe.Capture(fromProject ?? Path.GetFullPath(target));
         var storeId = StoreLayout.NewStoreId(provenance);
 
-        var totalWatch = System.Diagnostics.Stopwatch.StartNew();
+        var totalWatch = Stopwatch.StartNew();
         AnalysisResult result;
-        var analyzeWatch = System.Diagnostics.Stopwatch.StartNew();
+        var analyzeWatch = Stopwatch.StartNew();
         try
         {
             output.WriteLine($"Indexing: {Path.GetFullPath(target)}");
@@ -146,7 +166,9 @@ internal static class IndexCommands
                 parallelism: parallelism,
                 // Tests are EXCLUDED by default (they add graph width, not reach); `--include-tests` opts
                 // them back in.
-                excludeTests: !includeTests
+                excludeTests: !includeTests,
+                timings: timings,
+                buildCacheDir: buildCacheDir
             );
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException)
@@ -188,6 +210,7 @@ internal static class IndexCommands
         var storeDirectory = StoreLayout.NewStoreDir(workingDirectory, storeId);
         var finalDbPath = Path.Combine(storeDirectory, StoreLayout.DbFileName);
         var dbPath = atomicPublish ? finalDbPath + ".tmp" : finalDbPath;
+
         if (atomicPublish)
         {
             DeleteDbFiles(dbPath); // clear any leftover temp from a previous aborted run
@@ -215,7 +238,7 @@ internal static class IndexCommands
         output.WriteLine(
             $"Progress: Saving run ({(fastBulkWrite ? "fast" : "durable")}{(atomicPublish ? ", atomic-publish" : ", in-place")})"
         );
-        var saveWatch = System.Diagnostics.Stopwatch.StartNew();
+        var saveWatch = Stopwatch.StartNew();
         string runId;
         await using (var context = new RigDbContext(dbPath, pooling: !atomicPublish))
         {
@@ -239,6 +262,7 @@ internal static class IndexCommands
         StoreLayout.WriteLatestPointer(workingDirectory, storeId);
         saveWatch.Stop();
         totalWatch.Stop();
+        timings?.Record("save", saveWatch.Elapsed);
         output.WriteLine(
             $"Progress: Save phase done in {FormatElapsed(saveWatch.Elapsed)}  (analysis {FormatElapsed(analyzeWatch.Elapsed)}, total {FormatElapsed(totalWatch.Elapsed)})"
         );
@@ -256,10 +280,35 @@ internal static class IndexCommands
         if (!noGraph && !appendMode)
         {
             output.WriteLine("Progress: Building call-graph views");
+            var graphWatch = Stopwatch.StartNew();
             await MaterializeGraphAsync(dbPath: finalDbPath, workingDirectory: workingDirectory, output: output);
+            graphWatch.Stop();
+            timings?.Record("graph", graphWatch.Elapsed);
+        }
+
+        if (timings is not null)
+        {
+            WriteTimingBreakdown(output, timings);
         }
 
         return 0;
+    }
+
+    // Per-phase timing table for `rig index --time`: each recorded phase with its share of the summed
+    // total. Phases are emitted in execution order (rules-load, workspace-build, wire-generators,
+    // compile+read, extract, projections+xml-di, save, graph) so the analysis sub-phases group first.
+    private static void WriteTimingBreakdown(TextWriter output, PhaseTimings timings)
+    {
+        var entries = timings.Entries;
+        var total = entries.Sum(e => e.Value.TotalSeconds);
+        output.WriteLine("Timing breakdown:");
+        foreach (var (name, elapsed) in entries)
+        {
+            var pct = total > 0 ? elapsed.TotalSeconds / total * 100 : 0;
+            output.WriteLine($"  {name, -20} {FormatElapsed(elapsed), 8}  {pct, 5:0.0}%");
+        }
+
+        output.WriteLine($"  {"total", -20} {FormatElapsed(TimeSpan.FromSeconds(total)), 8}  100.0%");
     }
 
     internal static Command BuildMine(TextWriter output, TextWriter error, string workingDirectory)
@@ -347,12 +396,10 @@ internal static class IndexCommands
 
             output.WriteLine($"\n[mine] Batch: {batch.Count} project(s)");
 
-            // Index this batch in parallel
-            var semaphore = new SemaphoreSlim(parallelism);
-            var batchTasks = batch.Select(async proj =>
-            {
-                await semaphore.WaitAsync();
-                try
+            await Parallel.ForEachAsync(
+                batch,
+                new ParallelOptions { MaxDegreeOfParallelism = parallelism },
+                async (proj, ct) =>
                 {
                     var projName = Path.GetFileNameWithoutExtension(proj);
                     output.WriteLine($"  [mine] Indexing: {projName}");
@@ -366,10 +413,13 @@ internal static class IndexCommands
                         merge: false,
                         includeTests: false,
                         noGraph: true, // mine builds the graph ONCE after all batches (see end of RunMineAsync)
+                        time: false,
+                        reuseBuildCache: false,
                         output: output,
                         error: error,
                         workingDirectory: workingDirectory
                     );
+
                     if (exitCode == 0)
                     {
                         Interlocked.Increment(ref totalIndexed);
@@ -381,13 +431,7 @@ internal static class IndexCommands
                         output.WriteLine($"  [mine] Failed: {projName} (exit {exitCode})");
                     }
                 }
-                finally
-                {
-                    semaphore.Release();
-                }
-            });
-
-            await Task.WhenAll(batchTasks);
+            );
 
             // Enqueue the next level: direct dependencies of this batch that haven't been visited
             foreach (var proj in batch)
@@ -407,6 +451,7 @@ internal static class IndexCommands
         // Write a reachable-projects index alongside the .rig database so subsequent
         // queries can filter to only runs that belong to this dependency closure.
         var indexPath = Path.Combine(workingDirectory, "reachable-projects.json");
+
         WriteJsonSidecar(
             indexPath,
             new
@@ -470,7 +515,7 @@ internal static class IndexCommands
     // query-ready on the fast SQL path without a manual follow-up). Idempotent — rerun any time, no rescan.
     private static async Task MaterializeGraphAsync(string dbPath, string workingDirectory, TextWriter output)
     {
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var stopwatch = Stopwatch.StartNew();
         await using var context = new RigDbContext(dbPath);
         // Classification rules flow in here so call_edges is written with Kind="handoff" baked in — the
         // single place classification persists, read back by every SQL query path. Generic-factory rules

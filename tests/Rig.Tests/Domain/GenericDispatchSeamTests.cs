@@ -62,7 +62,7 @@ public sealed class GenericDispatchSeamTests
             new CallEdge("M:N.CacheBase.Provide(System.Int32)", "M:N.CacheBase.GetResults(System.Int32)", "invocation", "f.cs", 40),
             new CallEdge(CacheGetResults, CacheGetResult, "invocation", "f.cs", 50),
         };
-        return new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases, dispatch);
+        return new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases, dispatch);
     }
 
     [Test]

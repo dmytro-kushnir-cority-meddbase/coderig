@@ -11,7 +11,7 @@ namespace Rig.Tests.Domain;
 public sealed class ConcreteReceiverPropagationTests
 {
     private static FactGraphData Graph(params CallEdge[] edges) =>
-        new(edges, System.Array.Empty<ImplementsEdge>(), System.Array.Empty<MethodRef>(), System.Array.Empty<BaseEdge>());
+        new(edges, Array.Empty<ImplementsEdge>(), Array.Empty<MethodRef>(), Array.Empty<BaseEdge>());
 
     private static TraceNode Child(TraceNode root, string id) => root.Children.Single(c => c.SymbolId == id);
 

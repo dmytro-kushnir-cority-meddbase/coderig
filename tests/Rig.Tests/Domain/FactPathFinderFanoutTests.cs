@@ -12,7 +12,7 @@ public sealed class FactPathFinderFanoutTests
     private static FactGraphData Graph(params CallEdge[] edges)
     {
         var nodes = edges.SelectMany(e => new[] { e.Caller, e.Callee }).Distinct(StringComparer.Ordinal).Select(M).ToArray();
-        return new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), nodes);
+        return new FactGraphData(edges, Array.Empty<ImplementsEdge>(), nodes);
     }
 
     [Test]
@@ -153,7 +153,7 @@ public sealed class FactPathFinderFanoutTests
             new MethodRef("M:Ns.Base`1.M", "M", "T:Ns.Base`1"),
             new MethodRef("M:Ns.Sub.M", "M", "T:Ns.Sub", IsOverride: true),
         };
-        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+        var graph = new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases);
 
         FactPathFinder.Reaches(graph, "EP.Run").Keys.ShouldContain("M:Ns.Sub.M");
         FactPathFinder.EntryRootsReaching(graph, "Sub.M").ShouldContain("M:EP.Run");
@@ -175,7 +175,7 @@ public sealed class FactPathFinderFanoutTests
             new MethodRef("M:N.CompanyEntity.Save", "Save", "T:N.CompanyEntity", IsOverride: true),
             new MethodRef("M:N.CompanyHelper.Touch", "Touch", "T:N.CompanyHelper"),
         };
-        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+        var graph = new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases);
 
         var info = FactPathFinder.ReachesWithFanout(graph, "M:N.SiteEntity.Save");
 
@@ -197,7 +197,7 @@ public sealed class FactPathFinderFanoutTests
             new MethodRef("M:N.Base.M", "M", "T:N.Base"),
             new MethodRef("M:N.Sub.M", "M", "T:N.Sub", IsOverride: true),
         };
-        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+        var graph = new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases);
 
         var info = FactPathFinder.ReachesWithFanout(graph, "M:N.Caller.Go");
 
@@ -217,7 +217,7 @@ public sealed class FactPathFinderFanoutTests
             new MethodRef("M:N.SiteEntity.Save", "Save", "T:N.SiteEntity", IsOverride: true),
             new MethodRef("M:N.CompanyEntity.Save", "Save", "T:N.CompanyEntity", IsOverride: true),
         };
-        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+        var graph = new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases);
 
         var root = FactPathFinder.BuildTree(graph, "M:N.SiteEntity.Save").Single();
         var entityBase = root.Children.Single(c => c.SymbolId == "M:N.EntityBase.Save");
@@ -243,7 +243,7 @@ public sealed class FactPathFinderFanoutTests
             new MethodRef("M:N.SiteEntity.Save", "Save", "T:N.SiteEntity", IsOverride: true),
             new MethodRef("M:N.CompanyEntity.Save", "Save", "T:N.CompanyEntity", IsOverride: true),
         };
-        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+        var graph = new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases);
 
         var reach = FactPathFinder.Reaches(graph, "M:N.Caller.Go");
 
@@ -273,7 +273,7 @@ public sealed class FactPathFinderFanoutTests
             new MethodRef("M:N.CompanyEntity.Save", "Save", "T:N.CompanyEntity", IsOverride: true),
             new MethodRef("M:N.SubCompanyEntity.Save", "Save", "T:N.SubCompanyEntity", IsOverride: true),
         };
-        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+        var graph = new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases);
 
         var reach = FactPathFinder.Reaches(graph, "M:N.Caller.Go");
 
@@ -294,7 +294,7 @@ public sealed class FactPathFinderFanoutTests
             new MethodRef("M:N.SiteEntity.Save", "Save", "T:N.SiteEntity", IsOverride: true),
             new MethodRef("M:N.CompanyEntity.Save", "Save", "T:N.CompanyEntity", IsOverride: true),
         };
-        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+        var graph = new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases);
 
         var reach = FactPathFinder.Reaches(graph, "M:N.Caller.Go");
 
@@ -314,7 +314,7 @@ public sealed class FactPathFinderFanoutTests
             new MethodRef("M:N.SiteEntity.Save", "Save", "T:N.SiteEntity", IsOverride: true),
             new MethodRef("M:N.CompanyEntity.Save", "Save", "T:N.CompanyEntity", IsOverride: true),
         };
-        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+        var graph = new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases);
 
         var reach = FactPathFinder.Reaches(graph, "M:N.Caller.Go");
 
@@ -337,7 +337,7 @@ public sealed class FactPathFinderFanoutTests
             new MethodRef("M:N.SiteEntity.Save", "Save", "T:N.SiteEntity", IsOverride: true),
             new MethodRef("M:N.CompanyEntity.Save", "Save", "T:N.CompanyEntity", IsOverride: true),
         };
-        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+        var graph = new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases);
 
         var reach = FactPathFinder.Reaches(graph, "M:N.Caller.Go");
 
@@ -400,7 +400,7 @@ public sealed class FactPathFinderFanoutTests
             new MethodRef("M:N.SiteEntity.Save", "Save", "T:N.SiteEntity", IsOverride: true),
             new MethodRef("M:N.CompanyEntity.Save", "Save", "T:N.CompanyEntity", IsOverride: true),
         };
-        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+        var graph = new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases);
 
         var fwd = FactPathFinder.Reaches(graph, "M:N.CompanyCaller.Go");
         fwd.Keys.ShouldContain("M:N.CompanyEntity.Save");

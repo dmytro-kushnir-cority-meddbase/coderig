@@ -219,13 +219,13 @@ public static partial class FactPathFinder
     {
         var index = BuildIndex(graph, narrowDispatch);
         var results = new HashSet<string>[seedIds.Count];
-        System.Threading.Tasks.Parallel.For(
+        Parallel.For(
             fromInclusive: 0,
             toExclusive: seedIds.Count,
             body: i =>
             {
                 var seed = seedIds[i];
-                var seeds = index.Nodes.Contains(seed) ? new[] { seed } : System.Array.Empty<string>();
+                var seeds = index.Nodes.Contains(seed) ? new[] { seed } : Array.Empty<string>();
                 var info = ReachesWithFanoutCore(index, seeds, maxDepth, maxNodes, mode);
                 results[i] = new HashSet<string>(info.Keys, StringComparer.Ordinal);
             }

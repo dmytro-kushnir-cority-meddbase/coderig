@@ -140,10 +140,7 @@ public sealed class InterfaceReceiverNarrowingTests
             new DispatchFact("M:N.Base.V", "M:N.Mid.V", "override"),
             new DispatchFact("M:N.Mid.V", "M:N.Leaf.V", "override"),
         };
-        var reach = FactPathFinder.Reaches(
-            new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases, mined),
-            "M:N.Caller.Go"
-        );
+        var reach = FactPathFinder.Reaches(new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases, mined), "M:N.Caller.Go");
 
         reach.Keys.ShouldContain("M:N.Leaf.V");
         reach.Keys.ShouldNotContain("M:N.Mid.V");

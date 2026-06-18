@@ -25,14 +25,18 @@ internal static class FactExtractor
         var dispatch = new List<DispatchFact>();
         var dispatchSeen = new HashSet<(string, string, string)>();
 
+        // --- Lambda identity (18b): synthesize a symbol + handoff edge for each argument-passed lambda
+        //     BEFORE the reference pass, so EnclosingSymbolId can re-root the lambda body's facts. ---
+        var lambdaIds = CollectLambdaSymbols(root, model, tree, symbols, references);
+
         // --- Declarations -> SymbolFact (+ TypeRelation for type base/interface edges, DispatchFact
         //     for exact member-level dispatch) ---
-        foreach (var decl in root.DescendantNodes().OfType<MemberDeclarationSyntax>())
+        void OnDeclaration(MemberDeclarationSyntax decl)
         {
             var symbol = model.GetDeclaredSymbol(decl);
             if (symbol is null)
             {
-                continue;
+                return;
             }
 
             // Field/event declarations declare one symbol per variable; handle below.
@@ -45,13 +49,13 @@ internal static class FactExtractor
                         AddSymbol(symbols, fieldSymbol, tree, variable);
                     }
                 }
-                continue;
+                return;
             }
 
             var docId = symbol.GetDocumentationCommentId();
             if (docId is null)
             {
-                continue;
+                return;
             }
 
             AddSymbol(symbols, symbol, tree, decl);
@@ -93,12 +97,8 @@ internal static class FactExtractor
             }
         }
 
-        // --- Lambda identity (18b): synthesize a symbol + handoff edge for each argument-passed lambda
-        //     BEFORE the reference pass, so EnclosingSymbolId can re-root the lambda body's facts. ---
-        var lambdaIds = CollectLambdaSymbols(root, model, tree, symbols, references);
-
         // --- References -> ReferenceFact (one pass over every simple name) ---
-        foreach (var name in root.DescendantNodes().OfType<SimpleNameSyntax>())
+        void OnName(SimpleNameSyntax name)
         {
             // Fall back to a candidate symbol when Roslyn can't fully bind. Under net48 cross-assembly
             // partial binding (`!:` DocIDs) a real, in-source call often resolves only to a CandidateSymbol
@@ -110,13 +110,13 @@ internal static class FactExtractor
             var target = symbolInfo.Symbol ?? symbolInfo.CandidateSymbols.FirstOrDefault();
             if (target is null || target is INamespaceSymbol)
             {
-                continue;
+                return;
             }
 
             var refKind = ClassifyReference(name, target);
             if (refKind is null)
             {
-                continue;
+                return;
             }
 
             var invocation = refKind == RefKinds.Invocation ? InvocationOf(name) : null;
@@ -177,7 +177,7 @@ internal static class FactExtractor
         // constructor — so `new XxxEntity(pk)` would otherwise carry no constructor/argument fact.
         // Resolve the invoked constructor here so ctor-matched effect rules (the llblgen entity-ctor
         // fetch, gap G5) can see the constructed type and its argument count from the ctor DocID.
-        foreach (var creation in root.DescendantNodes().OfType<BaseObjectCreationExpressionSyntax>())
+        void OnCreation(BaseObjectCreationExpressionSyntax creation)
         {
             if (model.GetSymbolInfo(creation).Symbol is IMethodSymbol { MethodKind: MethodKind.Constructor } ctor)
             {
@@ -197,11 +197,11 @@ internal static class FactExtractor
         // SimpleName pass only records a field READ, so the call target is otherwise invisible. Emit an
         // invocation edge enclosing -> slot so the seam resolver can dispatch the slot to its bound
         // target(s) via the delegate_bind facts (the delegate-as-degenerate-interface hop).
-        foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        void OnInvocation(InvocationExpressionSyntax invocation)
         {
             if (DelegateSlotDocId(model.GetSymbolInfo(invocation.Expression).Symbol) is not { } slot)
             {
-                continue;
+                return;
             }
 
             references.Add(
@@ -223,12 +223,12 @@ internal static class FactExtractor
         // assembly filter. The target is the exception TYPE (not its ctor) so error/permission effect
         // rules can gate on the type name / base type. Bare `throw;` rethrows have no operand and are
         // skipped. Structural context (enclosing try/catch + loop) rides along like invocation refs.
-        foreach (var thrown in ThrownExpressions(root))
+        void OnThrow(ExpressionSyntax thrown)
         {
             var type = model.GetTypeInfo(thrown).Type;
             if (type is null or IErrorTypeSymbol)
             {
-                continue;
+                return;
             }
 
             AddReference(
@@ -241,6 +241,35 @@ internal static class FactExtractor
                 structural: StructuralContextOf(thrown, model),
                 allowRuntime: true
             );
+        }
+
+        foreach (var node in root.DescendantNodes())
+        {
+            switch (node)
+            {
+                case BaseObjectCreationExpressionSyntax creation:
+                    OnCreation(creation);
+                    break;
+                case InvocationExpressionSyntax invocation:
+                    OnInvocation(invocation);
+                    break;
+                case MemberDeclarationSyntax decl:
+                    OnDeclaration(decl);
+                    break;
+                case SimpleNameSyntax name:
+                    OnName(name);
+                    break;
+
+                case ThrowStatementSyntax { Expression: { } stmtOperand }:
+                    OnThrow(stmtOperand);
+                    break;
+                case ThisExpressionSyntax exprThrow:
+                    OnThrow(exprThrow);
+                    break;
+
+                default:
+                    continue;
+            }
         }
 
         // --- lock(x){} statements -> synthetic Monitor.Enter/Exit invocation refs ---
@@ -652,7 +681,7 @@ internal static class FactExtractor
                 _ => "?",
             };
         }
-        return System.Text.Json.JsonSerializer.Serialize(tokens);
+        return JsonSerializer.Serialize(tokens);
     }
 
     // True when `type` is a type PARAMETER, or a constructed generic / array that contains one at any depth
@@ -871,23 +900,6 @@ internal static class FactExtractor
         string? CatchTypes,
         string? EnclosingScopes = null
     );
-
-    // Operands of throw statements and throw expressions (the thrown value). `throw;` rethrows carry
-    // no operand and are skipped — there is no static type to record.
-    private static IEnumerable<ExpressionSyntax> ThrownExpressions(SyntaxNode root)
-    {
-        foreach (var node in root.DescendantNodes())
-        {
-            if (node is ThrowStatementSyntax { Expression: { } stmtOperand })
-            {
-                yield return stmtOperand;
-            }
-            else if (node is ThrowExpressionSyntax exprThrow)
-            {
-                yield return exprThrow.Expression;
-            }
-        }
-    }
 
     // The InvocationExpressionSyntax this name is the invoked method of: `Foo(..)`, `a.Foo(..)`, or
     // `a?.Foo(..)`. Null otherwise (mirrors IsInvoked's shapes, plus the conditional-access form).
