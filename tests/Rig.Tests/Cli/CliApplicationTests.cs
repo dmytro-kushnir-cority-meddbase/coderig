@@ -238,9 +238,26 @@ public sealed class CliApplicationTests
         var fixture = Path.Combine(sourceDir, "EntryPointEffects.Api", "Services", "PaymentGatewayFixture.cs");
         File.AppendAllText(fixture, "\n// impact-test edit\n");
 
+        // Default output is the PROVEN diff only — the speculative blast radius is hidden behind --reach.
+        output.GetStringBuilder().Clear();
+        (
+            await CliApplication.RunAsync(
+                ["impact", "--repo", sourceDir, "--base", "HEAD", "--rules", Path.Combine(sourceDir, "rig.rules.json")],
+                output,
+                error,
+                workingDirectory
+            )
+        ).ShouldBe(0);
+        var defaultOut = output.ToString();
+        defaultOut.ShouldContain("Impact of"); // the diff header
+        defaultOut.ShouldContain("Blast radius (speculative) hidden"); // reach is opt-in
+        defaultOut.ShouldNotContain("reverse-reach over"); // the speculative EP list is gated behind --reach
+        defaultOut.ShouldNotContain("Effects in the forward reach"); // gated behind --reach
+
+        // --reach surfaces the blast radius: reverse-reach entry points + forward-reach effects.
         output.GetStringBuilder().Clear();
         var exit = await CliApplication.RunAsync(
-            ["impact", "--repo", sourceDir, "--base", "HEAD", "--rules", Path.Combine(sourceDir, "rig.rules.json")],
+            ["impact", "--repo", sourceDir, "--base", "HEAD", "--reach", "--rules", Path.Combine(sourceDir, "rig.rules.json")],
             output,
             error,
             workingDirectory
@@ -248,9 +265,7 @@ public sealed class CliApplicationTests
 
         exit.ShouldBe(0);
         var impact = output.ToString();
-        impact.ShouldContain("RISK:");
-        impact.ShouldContain("Changed:"); // the changed-method summary
-        impact.ShouldContain("Affected entry points");
+        impact.ShouldContain("reverse-reach over"); // the speculative EP list
         impact.ShouldContain("Effects in the forward reach");
         // The edited fixture declares PaymentGatewayCaller.Dispatch, which calls the gateway tell/ask. Those
         // effects are in the forward reach of the changed set, so a gateway effect must be reported. (This
@@ -271,7 +286,7 @@ public sealed class CliApplicationTests
         var tsv = output.ToString();
         tsv.ShouldContain("\t");
         tsv.ShouldContain("changed\t");
-        tsv.ShouldNotContain("RISK:");
+        tsv.ShouldNotContain("Diff vs"); // no human summary chrome in tsv mode
     }
 
     // Runs `git <args>` in dir, throwing on non-zero so a broken setup fails the test loudly (not silently

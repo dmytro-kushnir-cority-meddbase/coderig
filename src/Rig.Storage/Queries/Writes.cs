@@ -322,9 +322,26 @@ public static class Writes
                 connection,
                 transaction,
                 "INSERT INTO symbol_facts (RunId, SymbolFactIndex, SymbolId, Kind, Name, Namespace, ContainingSymbolId, "
-                    + "Modifiers, TypeKind, Signature, FilePath, Line, DefiningAssembly, IsOverride) "
-                    + "VALUES ($run,$idx,$sid,$kind,$name,$ns,$containing,$mods,$tk,$sig,$file,$line,$asm,$ovr);",
-                ["$run", "$idx", "$sid", "$kind", "$name", "$ns", "$containing", "$mods", "$tk", "$sig", "$file", "$line", "$asm", "$ovr"],
+                    + "Modifiers, TypeKind, Signature, FilePath, Line, EndLine, DefiningAssembly, IsOverride, BodyHash) "
+                    + "VALUES ($run,$idx,$sid,$kind,$name,$ns,$containing,$mods,$tk,$sig,$file,$line,$endline,$asm,$ovr,$bh);",
+                [
+                    "$run",
+                    "$idx",
+                    "$sid",
+                    "$kind",
+                    "$name",
+                    "$ns",
+                    "$containing",
+                    "$mods",
+                    "$tk",
+                    "$sig",
+                    "$file",
+                    "$line",
+                    "$endline",
+                    "$asm",
+                    "$ovr",
+                    "$bh",
+                ],
                 symbols,
                 (p, s, i) =>
                 {
@@ -340,8 +357,10 @@ public static class Writes
                     p[9].Value = s.Signature;
                     p[10].Value = s.FilePath;
                     p[11].Value = s.Line;
-                    p[12].Value = s.DefiningAssembly;
-                    p[13].Value = s.IsOverride ? 1 : 0;
+                    p[12].Value = s.EndLine;
+                    p[13].Value = s.DefiningAssembly;
+                    p[14].Value = s.IsOverride ? 1 : 0;
+                    p[15].Value = s.BodyHash;
                 },
                 alreadySaved: saved,
                 total: total,

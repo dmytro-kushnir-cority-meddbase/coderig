@@ -32,6 +32,7 @@ internal static class TreeCommand
         var raw = CommonOptions.Raw();
         var files = CommonOptions.Files();
         var signatures = CommonOptions.Signatures();
+        var plain = new Option<bool>("--plain") { Description = "Drop box-drawing connectors (├─ └─ │) for pure indentation — diff-friendly." };
         var rules = CommonOptions.Rules();
         var depth = CommonOptions.Depth();
         var only = CommonOptions.Only();
@@ -50,6 +51,7 @@ internal static class TreeCommand
             raw,
             files,
             signatures,
+            plain,
             rules,
             depth,
             only,
@@ -97,6 +99,7 @@ internal static class TreeCommand
                         raw: pr.GetValue(raw),
                         files: pr.GetValue(files),
                         signatures: pr.GetValue(signatures),
+                        plain: pr.GetValue(plain),
                         extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                         depth: pr.GetValue(depth),
                         only: CommonOptions.FilterSet(pr.GetValue(only)),
@@ -123,6 +126,7 @@ internal static class TreeCommand
         bool raw,
         bool files,
         bool signatures,
+        bool plain,
         IReadOnlyList<string> extraRules,
         int? depth,
         HashSet<string> only,
@@ -448,6 +452,7 @@ internal static class TreeCommand
                 files: files,
                 locById: locById,
                 signatures: signatures,
+                plain: plain,
                 cutRules: shaped.Cut,
                 epContext: epContext,
                 full: full,

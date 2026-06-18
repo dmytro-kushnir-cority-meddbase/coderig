@@ -466,10 +466,30 @@ internal static class FactExtractor
                 Signature: symbol.ToDisplayString(),
                 FilePath: tree.FilePath,
                 Line: tree.GetLineSpan(node.Span).StartLinePosition.Line + 1,
+                EndLine: tree.GetLineSpan(node.Span).EndLinePosition.Line + 1,
                 DefiningAssembly: symbol.ContainingAssembly?.Name ?? "",
-                IsOverride: symbol.IsOverride
+                IsOverride: symbol.IsOverride,
+                // The declaration's normalized text — so `rig impact` detects an IN-PLACE body edit (a changed
+                // constant/literal that leaves call structure, and thus the reachable-set diff, untouched).
+                BodyHash: BodyHashOf(node)
             )
         );
+    }
+
+    // A deterministic content hash of a declaration node's text — node.ToString() is the verbatim source span
+    // (whitespace/comments included), stable across runs of the same source. A SHA-256 hex PREFIX (16 hex
+    // chars = 64 bits) is cheap and collision-safe for diffing two stores of the same codebase. "" when there
+    // is no node text to hash.
+    private static string BodyHashOf(SyntaxNode node)
+    {
+        var text = node.ToString();
+        if (string.IsNullOrEmpty(text))
+        {
+            return "";
+        }
+
+        var bytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text));
+        return Convert.ToHexStringLower(inArray: bytes, offset: 0, length: 8);
     }
 
     private static void AddTypeRelations(List<TypeRelationFact> relations, INamedTypeSymbol type, string typeDocId)
@@ -1301,7 +1321,8 @@ internal static class FactExtractor
             var id = $"{memberId}~λ{ordinal}"; // λ marker: clearly synthetic, never collides with a real DocID
             ids[lambda] = id;
 
-            var line = tree.GetLineSpan(lambda.Span).StartLinePosition.Line + 1;
+            var lineSpan = tree.GetLineSpan(lambda.Span);
+            var line = lineSpan.StartLinePosition.Line + 1;
             symbols.Add(
                 new SymbolFact(
                     SymbolId: id,
@@ -1314,8 +1335,10 @@ internal static class FactExtractor
                     Signature: "lambda",
                     FilePath: tree.FilePath,
                     Line: line,
+                    EndLine: lineSpan.EndLinePosition.Line + 1,
                     DefiningAssembly: assembly,
-                    IsOverride: false
+                    IsOverride: false,
+                    BodyHash: BodyHashOf(lambda)
                 )
             );
             references.Add(

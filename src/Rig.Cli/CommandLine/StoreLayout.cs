@@ -171,6 +171,21 @@ internal static class StoreLayout
         return match;
     }
 
+    // The store-id read commands default to: the LATEST pointer's target (else the newest store by write
+    // time). Null when nothing is indexed or only a legacy flat store exists. Lets `rig runs` mark which of
+    // the per-commit stores is the default the other read commands resolve to.
+    internal static string? LatestStoreId(string workingDirectory)
+    {
+        var rig = RigDir(workingDirectory);
+        if (!Directory.Exists(rig))
+        {
+            return null;
+        }
+
+        var dir = LatestStoreDir(rig);
+        return dir is null ? null : Path.GetFileName(dir);
+    }
+
     // The ids of every per-commit store present (for discovery / "base not indexed" messages).
     internal static IReadOnlyList<string> AvailableStoreIds(string workingDirectory)
     {

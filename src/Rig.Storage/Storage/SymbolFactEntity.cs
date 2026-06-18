@@ -14,6 +14,11 @@ public sealed class SymbolFactEntity
     public string Signature { get; set; } = "";
     public string FilePath { get; set; } = "";
     public int Line { get; set; }
+    public int EndLine { get; set; }
     public string DefiningAssembly { get; set; } = "";
     public bool IsOverride { get; set; }
+
+    // Deterministic hash of the symbol's declaration text — see SymbolFact.BodyHash. "" when no body / on a
+    // pre-fact store. Lets `rig impact` detect an in-place body edit that the reachable-set diff misses.
+    public string BodyHash { get; set; } = "";
 }

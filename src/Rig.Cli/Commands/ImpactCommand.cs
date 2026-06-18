@@ -1,5 +1,6 @@
 using System.CommandLine;
 using System.Diagnostics;
+using System.Globalization;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Deployments;
@@ -40,26 +41,51 @@ internal static class ImpactCommand
             Description =
                 "Base commit's .rig store (path or dir) for the entry-point diff; default: resolve --base to an indexed commit store.",
         };
+        // --head-store is an alias for symmetry with --base-store: on the HEAD side there's no git-ref step
+        // (the head is just "which indexed store is primary"), so one option serves both names. Pass a sha /
+        // short-sha / store-id; default (omitted) = the LATEST-indexed store, as before.
+        var head = new Option<string?>("--head", "--head-store")
+        {
+            Description =
+                "Head (after) side of the diff: an indexed commit sha / store-id whose store is the PRIMARY "
+                + "(alias --head-store, mirroring --base-store). Default (omitted): the LATEST-indexed store, as "
+                + "before. Pass this to diff two explicit commits (`--head <shaA> --base <shaB>`) and avoid "
+                + "depending on which commit was mined last.",
+        };
         var async = CommonOptions.Async();
         var rules = CommonOptions.Rules();
         var format = CommonOptions.Format();
         var limit = CommonOptions.Limit();
-        var perEp = new Option<bool>("--per-ep")
+        var structural = new Option<bool>("--structural")
         {
             Description =
-                "Per-entry-point behavioral attribution: diff each shared EP's reachable-effect set across the two stores "
-                + "(surfaces deltas the change-level set-diff masks when a shared sink stays reachable). Requires a base store.",
+                "Also list every entry point whose reachable TREE changed — including the (usually large) set affected "
+                + "only by a data-shape ripple (a record gaining a field changes every reaching EP's reach without "
+                + "changing its behavior). Off by default: the default output lists EPs whose EFFECT set changed (the "
+                + "behavioral signal) plus a one-line structural-only summary. This expands that summary to the full list.",
         };
-        var cmd = new Command(name: "impact", description: "Blast radius of a git diff: affected entry points, services, effects.")
+        var reach = new Option<bool>("--reach")
+        {
+            Description =
+                "Also show the SPECULATIVE blast radius: every entry point that reverse-reaches the change and every "
+                + "effect in its forward reach. Off by default — in a large codebase this reach is pessimistic (a few "
+                + "changed methods touch most of the graph); the default output is the PROVEN diff vs the base store.",
+        };
+        var cmd = new Command(
+            name: "impact",
+            description: "What a git diff changes: entry-point + effect diff vs the base commit (--reach adds the speculative blast radius)."
+        )
         {
             @base,
             repo,
             baseStore,
+            head,
             async,
             rules,
             format,
             limit,
-            perEp,
+            structural,
+            reach,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -70,11 +96,13 @@ internal static class ImpactCommand
                         baseRef: pr.GetValue(@base) ?? "main",
                         repoOverride: pr.GetValue(repo),
                         baseStoreOverride: pr.GetValue(baseStore),
+                        headOverride: pr.GetValue(head),
                         async: pr.GetValue(async),
                         extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                         format: pr.GetValue(format),
                         limit: pr.GetValue(limit),
-                        perEp: pr.GetValue(perEp),
+                        structural: pr.GetValue(structural),
+                        reach: pr.GetValue(reach),
                         output: output,
                         error: error,
                         workingDirectory: workingDirectory
@@ -88,11 +116,13 @@ internal static class ImpactCommand
         string baseRef,
         string? repoOverride,
         string? baseStoreOverride,
+        string? headOverride,
         bool async,
         IReadOnlyList<string> extraRules,
         string? format,
         int? limit,
-        bool perEp,
+        bool structural,
+        bool reach,
         TextWriter output,
         TextWriter error,
         string workingDirectory
@@ -105,7 +135,10 @@ internal static class ImpactCommand
         // store and the base store; threaded into every helper below.
         var rules = RuleSet.Load(workingDirectory, extraRules);
 
-        await using var context = OpenReadContext(workingDirectory);
+        // The PRIMARY (head/after) store: an explicit --head sha/store-id, else the LATEST-indexed store
+        // (the historical default). OpenReadContext resolves null => LATEST, a ref => that per-commit store
+        // (throws StoreRefNotFoundException → CommandGuard lists what's indexed if --head doesn't match).
+        await using var context = OpenReadContext(workingDirectory: workingDirectory, storeRef: headOverride);
 
         // The source repo to run `git diff` in: the indexed run's source repo (a SEPARATE tree from the
         // store/cwd — e.g. cwd is meddbase-analysis, source is meddbase-main-application), overridable via
@@ -129,8 +162,10 @@ internal static class ImpactCommand
         // The changed `.cs` files: committed-vs-base (base...HEAD) UNIONED with the working-tree changes
         // (staged + unstaged), so an in-progress branch is covered before commit. Paths are repo-root-
         // relative POSIX paths (git's default); resolved to absolute below to join the indexed FilePath.
-        var changedFiles = ChangedCsFiles(repoRoot, baseRef, error);
-        if (changedFiles.Count == 0)
+        // CommittedRanges additionally carries each committed file's changed NEW-side line ranges (from
+        // `git diff --unified=0`) so the blast radius can narrow from file- to symbol-granular below.
+        var diff = ChangedCsFileDiff(repoRoot, baseRef, error);
+        if (diff.Files.Count == 0)
         {
             if (!tsv)
             {
@@ -141,28 +176,47 @@ internal static class ImpactCommand
         }
 
         // File -> declared method symbols. LoadDeadCodeMethodsAsync is every method symbol with its
-        // absolute definition FilePath — the file->symbol map the task calls for, no new query needed.
-        // v1 is FILE-GRANULAR: EVERY method declared in a changed file is treated as changed (cheap,
-        // facts-only). Line-range precision (map a +hunk line to its enclosing method) needs a method
-        // END-line fact => a FactExtractor change + re-index; deferred (noted in the report).
+        // absolute definition FilePath; LoadMethodEndLinesAsync adds each method's END line, so a method's
+        // source extent [Line, EndLine] can be overlapped against the diff's changed line ranges. The
+        // blast radius is now SYMBOL-GRANULAR where we can prove it (committed hunks confined to method
+        // bodies), and falls back to FILE-GRANULAR otherwise — see SelectChangedMethods for the gates.
+        // (EndLines is empty on a store indexed before the EndLine fact existed => fully file-granular.)
         var methods = await Reads.LoadDeadCodeMethodsAsync(context);
+        var endLineById = await Reads.LoadMethodEndLinesAsync(context);
+        // Phase 2: the branch's per-symbol declaration body hashes (guarded — empty on a pre-fact store). Diffed
+        // against the base's (loaded once in ComputeBaseSideAsync) to find in-place body edits the reach-set
+        // diff misses. Loaded here so the branch context is read once.
+        var branchBodyHashes = await Reads.LoadSymbolBodyHashesAsync(context);
 
         // Normalize both sides to compare paths: indexed FilePath is absolute with OS separators; the diff
         // files are repo-root-relative POSIX. Build the absolute form of each changed file, normalized.
-        var changedAbs = changedFiles
-            .Select(f =>
-                Norm(Path.GetFullPath(Path.Combine(path1: repoRoot, path2: f.Replace(oldChar: '/', newChar: Path.DirectorySeparatorChar))))
-            )
+        var changedAbs = diff
+            .Files.Select(f => NormalizeRepoRelative(repoRoot: repoRoot, repoRelativePosix: f))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var changedMethods = methods.Where(m => !string.IsNullOrEmpty(m.FilePath) && changedAbs.Contains(Norm(m.FilePath))).ToList();
+        // Precise line ranges are trusted ONLY for committed-and-clean files: the index reflects the source
+        // on disk at index time, the committed `base...HEAD` new-side line numbers match HEAD, and the
+        // canonical `impact` flow (CI: clean checkout of the PR tip, then index) makes those line up. A file
+        // with WORKING-TREE edits is dropped from the precise set (its uncommitted lines have shifted vs the
+        // indexed coordinates) and falls back to file-granular — pessimistic, never under-reports.
+        var preciseRangesByFileNorm = new Dictionary<string, IReadOnlyList<(int Start, int End)>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (relPath, ranges) in diff.CommittedRanges)
+        {
+            if (!diff.DirtyFiles.Contains(relPath))
+            {
+                preciseRangesByFileNorm[NormalizeRepoRelative(repoRoot: repoRoot, repoRelativePosix: relPath)] = ranges;
+            }
+        }
+
+        var changedSet = SelectChangedMethods(methods, endLineById, changedAbs, preciseRangesByFileNorm);
+        var changedMethods = changedSet.Methods;
         var changedIds = changedMethods.Select(m => m.SymbolId).ToHashSet(StringComparer.Ordinal);
         if (changedIds.Count == 0)
         {
             if (!tsv)
             {
                 output.WriteLine(
-                    $"{changedFiles.Count} changed .cs file(s), but none map to an indexed method symbol "
+                    $"{diff.Files.Count} changed .cs file(s), but none map to an indexed method symbol "
                         + "(file outside the indexed solution, or no methods declared). Nothing to trace."
                 );
             }
@@ -191,14 +245,7 @@ internal static class ImpactCommand
         var epSet = await DeriveEntryPointsAsync(context, epData, rules);
         var derivedEps = epSet.Derived;
         var promoted = epSet.PromotedOrigins;
-        var affectedEps = derivedEps
-            .Concat(promoted)
-            .Where(e => reachableSites.Contains((e.FilePath, e.Line)))
-            .GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line))
-            .Select(g => (g.Key.Kind, g.Key.Route, g.Key.FilePath, g.Key.Line, g.First().Requires))
-            .OrderBy(e => e.Kind, StringComparer.Ordinal)
-            .ThenBy(e => e.Route, StringComparer.Ordinal)
-            .ToList();
+        var affectedEps = EntryPointsAtSites(derived: derivedEps, promoted: promoted, sites: reachableSites);
 
         // --- (3) Effects in the forward reach: everything reachable FROM the changed set (multi-source,
         // exact ids — ReachableFromAll is the engine's multi-source forward traversal), intersected with
@@ -224,7 +271,6 @@ internal static class ImpactCommand
             .SelectMany(e => e.Observations ?? [])
             .GroupBy(o => o.Type, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
-        var throwCount = affectedEffects.Count(e => string.Equals(e.Provider, "throw", StringComparison.OrdinalIgnoreCase));
         var affectedServices = AffectedServices(affectedEps, deployments);
 
         // --- Two-store entry-point diff (step 3): EPs added/removed vs the base commit's store, paired on
@@ -241,75 +287,156 @@ internal static class ImpactCommand
         // signature edits don't churn — only genuine behavior moves. This is "what did the change DO":
         // +effect = newly reachable (e.g. a new DB write), -effect = no longer reachable (e.g. the retired
         // object_store read), +observation = newly introduced risk (e.g. became an n+1). See §3.3.
-        // --- Per-EP behavioral attribution (--per-ep): diff EACH shared EP's reachable-effect set across the
-        // two stores. The change-level delta is path-INSENSITIVE — a removed path to a sink that stays
-        // reachable from OTHER callers is invisible there. Per-EP forward-reach makes it visible exactly where
-        // it changed (e.g. EditLive.Save no longer reaching object_store write). In-process: the BRANCH graph
-        // + effects loaded above are reused as-is, and the base store is loaded ONCE for BOTH the behavioral
-        // delta and the base footprints (ComputeBehavioralAndFootprintsAsync) — 2 store loads, not 4.
-        BehavioralDelta? behavioral;
+        // --- (4) The two-store diff. The behavioral delta is the change-level effect/observation move (what
+        // the change DOES). The AFFECTED ENTRY POINTS are computed STRUCTURALLY: per EP, diff its full
+        // reachable symbol set branch vs base ("two trees, diffed") — an EP is affected iff WHAT IT REACHES
+        // changed, regardless of whether an effect rule fired. This catches the obj→sql kind of migration the
+        // effect-set diff collapses (same key, different symbols), and excludes false positives like a
+        // file-granular sibling edit that doesn't change an EP's reach. The effect-level per-EP footprint diff
+        // (now the primary view) rides along. The base store is loaded ONCE for all; the branch reuses the graph.
+        BehavioralDelta? behavioral = null;
+        IReadOnlyList<EpReachDelta> affectedEntryPoints = [];
         IReadOnlyList<EpFootprintDelta>? perEpDeltas = null;
-        if (baseDbPath is null)
+        if (baseDbPath is not null)
         {
-            behavioral = null;
-        }
-        else if (perEp)
-        {
-            var branchFootprints = ComputeFootprints(graph, branchEps, MethodIdBySite(methods), EffectKeysByEnclosing(effects), mode);
-            var (delta, baseFootprints) = await ComputeBehavioralAndFootprintsAsync(
+            var idBySite = MethodIdBySite(methods);
+            // Phase 3: the branch's enclosing→field/property-access-targets lookup, built ONCE so ComputeReachSets
+            // can union each reachable method's read/write targets as degenerate `R:` nodes at O(reach) cost.
+            var branchRefTargets = RefTargetsByEnclosing(await Reads.LoadFieldAccessRefsAsync(context));
+            var branchReachSets = ComputeReachSets(graph, branchEps, idBySite, mode, refsByEnclosing: branchRefTargets);
+            var epByKey = branchEps
+                .GroupBy(e => (e.Kind, e.Route))
+                .ToDictionary(
+                    g => g.Key,
+                    g => new EntryPointRef(
+                        Kind: g.Key.Kind,
+                        Route: g.Key.Route,
+                        FilePath: g.First().FilePath,
+                        Line: g.First().Line,
+                        Requires: g.First().Requires
+                    )
+                );
+
+            var baseSide = await ComputeBaseSideAsync(
                 baseDbPath: baseDbPath,
                 branchEffects: affectedEffects,
                 branchReach: forward.Count,
                 changedMethods: changedMethods,
                 rules: rules,
-                mode: mode
+                mode: mode,
+                // Footprints (per-EP effect-set deltas) are now the PRIMARY signal — the handful of EPs whose
+                // BEHAVIOR changed, as opposed to the thousands whose reachable tree shifted only because a
+                // record gained a field. Always computed; it's the same forward-reach pass ComputeReachSets
+                // already runs, just unioning effect keys instead of symbol ids, so the extra cost is marginal.
+                needFootprints: true
             );
-            behavioral = delta;
-            perEpDeltas = DiffFootprints(branch: branchFootprints, baseStore: baseFootprints);
-        }
-        else
-        {
-            behavioral = await ComputeBehavioralDeltaAsync(
-                baseDbPath,
-                branchEffects: affectedEffects,
-                branchReach: forward.Count,
-                changedMethods: changedMethods,
-                rules: rules,
-                mode: mode
+            behavioral = baseSide.Delta;
+
+            // Phase 2: the symbols whose declaration BODY changed base↔branch (differing/one-sided hash). An EP
+            // whose reach intersects this set is affected IN-PLACE even when its structural reach-set diff is
+            // empty. Both maps empty (pre-fact store on either side) => BodyChangedSymbols returns empty and the
+            // signal degrades silently. branchBodyHashes is loaded once from the branch context above.
+            var bodyChanged = BodyChangedSymbols(branchHashes: branchBodyHashes, baseHashes: baseSide.BodyHashes);
+            affectedEntryPoints = DiffReachSets(
+                branch: branchReachSets,
+                baseStore: baseSide.ReachSets,
+                epByKey: epByKey,
+                bodyChanged: bodyChanged
             );
+
+            var branchFootprints = ComputeFootprints(graph, branchEps, idBySite, EffectKeysByEnclosing(effects), mode);
+            perEpDeltas = DiffFootprints(branch: branchFootprints, baseStore: baseSide.Footprints!, epByKey: epByKey);
         }
+
+        var change = new ChangeSummary(
+            Methods: changedMethods.Count,
+            Files: diff.Files.Count,
+            PreciseFiles: changedSet.PreciseFileCount,
+            FileGranularFiles: changedSet.FileGranularFileCount
+        );
+        var impactDiff = new ImpactDiff(Ep: epDiff, Behavioral: behavioral, AffectedEps: affectedEntryPoints, PerEp: perEpDeltas);
+        var blast = new BlastRadius(
+            ReachedByCount: reachedBy.Count,
+            AffectedEps: affectedEps,
+            ForwardCount: forward.Count,
+            Effects: affectedEffects,
+            Observations: observationCounts,
+            Services: affectedServices
+        );
+
+        // (FilePath, Line) -> method DocID, in-RAM (no store I/O) — lets the affected-EP card render each EP's
+        // fully-qualified dotted name (FqnForCard), which round-trips into `rig tree`, instead of the path route.
+        var fqnSites = MethodIdBySite(methods);
 
         if (tsv)
         {
-            EmitTsv(output, changedMethods, affectedEps, deployments, affectedEffects, max);
-            EmitEpDiffTsv(output, epDiff);
-            EmitBehavioralDeltaTsv(output, behavioral);
-            EmitPerEpTsv(output, perEpDeltas);
+            EmitTsv(output, changedMethods, impactDiff, blast, deployments, fqnSites, max);
             return 0;
         }
 
-        WriteHuman(
-            output,
-            baseRef,
-            repoRoot,
-            mode,
-            changedFileCount: changedFiles.Count,
-            changedMethods: changedMethods,
-            reachedByCount: reachedBy.Count,
-            affectedEps: affectedEps,
-            deployments: deployments,
-            forwardCount: forward.Count,
-            affectedEffects: affectedEffects,
-            observationCounts: observationCounts,
-            throwCount: throwCount,
-            affectedServices: affectedServices,
-            max: max
-        );
+        WriteHeader(output, baseRef, repoRoot, mode, change, impactDiff);
         WriteEpDiffHuman(output, baseRef, baseDbPath, epDiff, StoreLayout.AvailableStoreIds(workingDirectory), max);
         WriteBehavioralDeltaHuman(output, baseRef, behavioral, max);
-        WritePerEpHuman(output, baseRef, perEp, baseDbPath, perEpDeltas, max);
+        // PRIMARY signal: the entry points whose reachable EFFECT set changed (the behavioral handful). Always
+        // shown — this is the "what actually does something different" answer.
+        WritePerEpHuman(output, baseRef, baseDbPath, perEpDeltas, fqnSites, max);
+        // The structural reachable-tree diff is mostly data-shape ripple (a record field add lights up every
+        // reaching EP). By default we DEMOTE it to a one-line, cause-classified breadcrumb so a no-net-new-effect
+        // migration still can't hide; --structural expands it to the full per-EP list (the old default).
+        if (structural)
+        {
+            WriteAffected(output, baseRef, impactDiff, deployments, fqnSites, max);
+        }
+        else
+        {
+            WriteStructuralBreadcrumb(output, baseRef, impactDiff, perEpDeltas);
+        }
+
+        // The SPECULATIVE blast radius — every entry point reverse-reachable from the change, every effect in
+        // its forward reach — is opt-in (--reach). In a large codebase a handful of changed methods reverse-
+        // reach most of the entry-point set, so it's pessimistic; the diff above is what actually CHANGED.
+        if (reach)
+        {
+            WriteReach(output, blast, deployments, max);
+        }
+        else
+        {
+            output.WriteLine();
+            output.WriteLine(
+                $"Blast radius (speculative) hidden: {blast.AffectedEps.Count} entry point(s) reverse-reach the change, "
+                    + $"{blast.Effects.Count} effect(s) in forward reach. Re-run with --reach to list them (or --format tsv)."
+            );
+        }
         return 0;
     }
+
+    // A derived entry point at a source site, with its deployment requirements — the unit the impact output
+    // lists and groups. Kind = action/http/page/…; Route = display route; Requires = deployment gates.
+    internal sealed record EntryPointRef(string Kind, string Route, string FilePath, int Line, IReadOnlyList<string>? Requires);
+
+    // The change set + how precisely each changed file mapped to methods (the header's "Changed:" line).
+    internal sealed record ChangeSummary(int Methods, int Files, int PreciseFiles, int FileGranularFiles);
+
+    // The PROVEN diff vs the base store: the entry-point set diff, the behavioral effect/observation delta,
+    // the entry points that actually reach a changed effect, and the per-EP footprint deltas (computed by
+    // default — the primary view). Ep and Behavioral are null when no base store resolved (nothing to show).
+    internal sealed record ImpactDiff(
+        EpDiff? Ep,
+        BehavioralDelta? Behavioral,
+        IReadOnlyList<EpReachDelta> AffectedEps,
+        IReadOnlyList<EpFootprintDelta>? PerEp
+    );
+
+    // The SPECULATIVE blast radius (--reach): the reverse-reach entry points + the forward-reach effects of
+    // the WHOLE changed set. Pessimistic in a large codebase, so it's opt-in.
+    internal sealed record BlastRadius(
+        int ReachedByCount,
+        IReadOnlyList<EntryPointRef> AffectedEps,
+        int ForwardCount,
+        IReadOnlyList<DerivedEffect> Effects,
+        IReadOnlyDictionary<string, int> Observations,
+        IReadOnlyList<string> Services
+    );
 
     // The db path of the base store to diff entry points against: an explicit --base-store (a db path or a
     // store dir), else the --base ref resolved to a commit sha and matched to an indexed per-commit store.
@@ -428,7 +555,7 @@ internal static class ImpactCommand
     );
 
     // Strip a DocID's parameter list (and leading `M:`) to a param-free `Namespace.Type.Method` key.
-    private static string StripParams(string? docId)
+    internal static string StripParams(string? docId)
     {
         if (string.IsNullOrEmpty(docId))
         {
@@ -439,6 +566,16 @@ internal static class ImpactCommand
         var paren = body.IndexOf('(', StringComparison.Ordinal);
         return paren >= 0 ? body[..paren] : body;
     }
+
+    // The copy-pasteable label for an EP card: the method's fully-qualified dotted name (namespace.Type.Member),
+    // resolved from the EP's (FilePath, Line) against the in-RAM method index (no extra store I/O — idBySite is
+    // already built for reach computation). This is the exact suffix `rig tree <from>` matches on, so a card
+    // label round-trips straight into a tree query. Falls back to the path-style Route when the site maps to no
+    // indexed method symbol (synthesized/promoted handoff EPs, lambdas) — those keep their derived route.
+    // Internal for testing — the route↔FQN resolution is the contract behind "the card always shows a dotted
+    // name when the site resolves, else the route".
+    internal static string FqnForCard(string route, string filePath, int line, Dictionary<(string, int), string> idBySite) =>
+        !string.IsNullOrEmpty(filePath) && idBySite.TryGetValue((filePath, line), out var docId) ? StripParams(docId) : route;
 
     // The reachable-from-seeds effect set + reach size for a single store — the same load/shape/forward-reach/
     // derive the branch path runs inline, so both stores are measured identically.
@@ -537,6 +674,10 @@ internal static class ImpactCommand
     internal sealed record EpFootprintDelta(
         string Kind,
         string Route,
+        // The EP's source site — carried so the card can render the FQN (FqnForCard), same as the structural
+        // list. Empty/0 when the EP's site is unknown (then the card shows the route).
+        string FilePath,
+        int Line,
         int BranchEffects,
         int BaseEffects,
         IReadOnlyList<(string Provider, string Operation, string Resource, string Enclosing)> Added,
@@ -608,20 +749,283 @@ internal static class ImpactCommand
         return footprints;
     }
 
-    // Load the BASE store ONCE and produce BOTH the change-level behavioral delta AND the base per-EP
-    // footprints from the single load — so a `--per-ep` run loads base once, not twice (once here for the
-    // delta, once more for footprints). The branch side reuses the graph/effects `RunAsync` already built,
-    // so a `--per-ep` run is 2 store loads total, down from 4.
+    // One entry point whose REACHABLE SYMBOL SET (its full forward-reach tree, structural — not effects)
+    // differs between the two stores. This is the line-number-insensitive "two trees, diffed" signal: an EP
+    // is affected iff what it reaches changed — a new/removed/renamed method anywhere in its reach (incl. the
+    // obj→sql kind of migration the effect-set diff collapses).
+    //
+    // The symbol moves are bucketed by PARAM-FREE STEM (StripParams), so a signature/overload change reads as
+    // ONE change, not an add+remove pair: AddedStems = stems only in the added set, RemovedStems = stems only
+    // in the removed set, ChangedStems = stems present on BOTH sides (a signature change — e.g. a ctor whose
+    // params moved). Added/Removed keep the RAW first-party method DocIDs that belong to a genuinely added /
+    // removed stem (NOT the signature-changed ones) so tooling (tsv) still has the exact ids; ChangedStems
+    // carries the param-free stems for the `~` rows. DistinctStemDelta is the dedup'd magnitude (added ∪
+    // removed ∪ changed stems) that ranks the list (Task 2) — a 30-overload swap counts as 1, not 30.
+    //
+    // InPlace (Phase 2) is the orthogonal IN-PLACE signal: reachable method DocIDs whose declaration BODY hash
+    // differs base↔branch even though they stayed in the reach set (a changed constant/literal — no call-
+    // structure move). An EP can be affected by ONLY this (empty stem buckets, non-empty InPlace) — e.g. a
+    // reachable method's body changed but nothing was added/removed/re-signed. InPlaceCount is the full count;
+    // InPlace carries a few sample DocIDs for display.
+    internal sealed record EpReachDelta(
+        string Kind,
+        string Route,
+        string FilePath,
+        int Line,
+        IReadOnlyList<string>? Requires,
+        IReadOnlyList<string> Added,
+        IReadOnlyList<string> Removed,
+        IReadOnlyList<string> AddedStems,
+        IReadOnlyList<string> RemovedStems,
+        IReadOnlyList<string> ChangedStems,
+        int DistinctStemDelta,
+        int InPlaceCount = 0,
+        IReadOnlyList<string>? InPlace = null
+    );
+
+    // The stem-bucketed partition of one EP's added/removed reachable DocID sets: a symbol present in BOTH
+    // sets under the same param-free stem is a SIGNATURE CHANGE (Changed), not an add+remove. Added/Removed
+    // keep only the raw DocIDs whose stem is genuinely one-sided; AddedStems/RemovedStems/ChangedStems are the
+    // param-free stems for display + counting. Pure + internal so the bucketing is unit-testable in isolation.
+    internal sealed record StemBuckets(
+        IReadOnlyList<string> Added,
+        IReadOnlyList<string> Removed,
+        IReadOnlyList<string> AddedStems,
+        IReadOnlyList<string> RemovedStems,
+        IReadOnlyList<string> ChangedStems
+    );
+
+    // Partition an EP's added/removed reachable DocIDs by param-free stem (StripParams). A stem present on
+    // BOTH sides is a signature change (ChangedStems) and its raw ids drop out of Added/Removed — collapsing
+    // the `- #ctor(old)` / `+ #ctor(new)` churn to one `~` line. A stem on one side only stays a genuine
+    // add/remove; its raw ids are preserved (ordered) for tsv tooling. All three stem lists are ordered.
+    internal static StemBuckets BucketStems(IReadOnlyList<string> added, IReadOnlyList<string> removed)
+    {
+        var addedStems = added.Select(StripParams).ToHashSet(StringComparer.Ordinal);
+        var removedStems = removed.Select(StripParams).ToHashSet(StringComparer.Ordinal);
+        var changedStems = addedStems.Where(removedStems.Contains).ToHashSet(StringComparer.Ordinal);
+
+        var rawAdded = added.Where(id => !changedStems.Contains(StripParams(id))).OrderBy(s => s, StringComparer.Ordinal).ToList();
+        var rawRemoved = removed.Where(id => !changedStems.Contains(StripParams(id))).OrderBy(s => s, StringComparer.Ordinal).ToList();
+        return new StemBuckets(
+            Added: rawAdded,
+            Removed: rawRemoved,
+            AddedStems: addedStems.Where(s => !changedStems.Contains(s)).OrderBy(s => s, StringComparer.Ordinal).ToList(),
+            RemovedStems: removedStems.Where(s => !changedStems.Contains(s)).OrderBy(s => s, StringComparer.Ordinal).ToList(),
+            ChangedStems: changedStems.OrderBy(s => s, StringComparer.Ordinal).ToList()
+        );
+    }
+
+    // The `R:` prefix marks a DEGENERATE reach node: a field/property access TARGET (Phase 3), not a callable
+    // method node. It keeps these distinct from method DocIDs in the reach set so the structural diff sees a
+    // changed access, and StripParams leaves it intact (no `(`), so it reads as its own stem.
+    private const string RefNodePrefix = "R:";
+
+    // Display label for a reach node: a `R:`-prefixed degenerate field/property-access node (Phase 3) renders
+    // as its short member name tagged `(field/prop access)`; an ordinary method DocID renders via ShortName.
+    private static string ReachNodeLabel(string node) =>
+        node.StartsWith(RefNodePrefix, StringComparison.Ordinal)
+            ? $"{ShortName(node[RefNodePrefix.Length..])} (field/prop access)"
+            : ShortName(node);
+
+    // Phase 3: the degenerate field/property-access nodes contributed by a set of reachable methods. For each
+    // reachable enclosing method, union in its first-party read/write reference TARGETS, `R:`-prefixed. Pure +
+    // internal so the union step is unit-testable WITHOUT a store. The caller passes a PREBUILT
+    // enclosing→targets lookup (built once per store), so this is O(reachable) lookups, not a per-EP ref scan.
+    internal static IReadOnlyCollection<string> RefTargetsFor(
+        IReadOnlySet<string> reachableMethods,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> refsByEnclosing
+    )
+    {
+        var union = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var method in reachableMethods)
+        {
+            if (refsByEnclosing.TryGetValue(method, out var targets))
+            {
+                foreach (var t in targets)
+                {
+                    union.Add(RefNodePrefix + t);
+                }
+            }
+        }
+
+        return union;
+    }
+
+    // Per-EP REACHABLE SYMBOL SET over an already-loaded graph (no store I/O). Mirrors ComputeFootprints but
+    // collects the raw reachable method DocIDs instead of mapping them to effect keys — so a structural diff
+    // sees every reachable-set change, not just effect-classified ones. Duplicate (Kind, Route) sites union.
+    // refsByEnclosing (Phase 3, optional) unions each reachable method's first-party field/property read/write
+    // TARGETS into the set as `R:`-prefixed degenerate leaf nodes, so a changed access surfaces in the diff.
+    private static Dictionary<(string Kind, string Route), HashSet<string>> ComputeReachSets(
+        FactGraphData graph,
+        IReadOnlyList<DerivedEntryPoint> eps,
+        Dictionary<(string, int), string> idBySite,
+        FactPathFinder.TraversalMode mode,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? refsByEnclosing = null
+    )
+    {
+        var distinct = eps.GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line)).Select(g => g.Key).ToList();
+        var seedIds = distinct.Select(e => idBySite.TryGetValue((e.FilePath, e.Line), out var id) ? id : "").ToList();
+        var reached = FactPathFinder.ReachesFromEachSeed(graph, seedIds, mode: mode);
+
+        var sets = new Dictionary<(string, string), HashSet<string>>();
+        for (var i = 0; i < distinct.Count; i++)
+        {
+            var key = (distinct[i].Kind, distinct[i].Route);
+            if (!sets.TryGetValue(key, out var set))
+            {
+                sets[key] = set = new HashSet<string>(StringComparer.Ordinal);
+            }
+
+            set.UnionWith(reached[i]);
+            if (refsByEnclosing is not null)
+            {
+                set.UnionWith(RefTargetsFor(reached[i], refsByEnclosing));
+            }
+        }
+
+        return sets;
+    }
+
+    // Build the enclosing-method → first-party field/property read/write TARGET-DocIDs lookup ONCE per store
+    // (Phase 3). Looked up per reachable method in ComputeReachSets, so the per-EP cost stays O(reach); without
+    // this prebuild it would be an O(EPs × all-refs) re-scan. Distinct targets per enclosing method.
+    private static Dictionary<string, IReadOnlyList<string>> RefTargetsByEnclosing(IReadOnlyList<SymbolRef> fieldAccessRefs) =>
+        fieldAccessRefs
+            .Where(r => r.Enclosing is not null)
+            .GroupBy(r => r.Enclosing!, StringComparer.Ordinal)
+            .ToDictionary(
+                g => g.Key,
+                g => (IReadOnlyList<string>)g.Select(r => r.Target).Distinct(StringComparer.Ordinal).ToList(),
+                StringComparer.Ordinal
+            );
+
+    // Diff two stores' per-EP reachable symbol sets: for every EP present in BOTH (paired on Kind+Route), the
+    // methods its reach gained/lost. Returns only EPs whose reach changed, busiest-delta first. EPs added/
+    // removed wholesale are the entry-point-diff section's job. epByKey supplies the EP's site for rendering.
+    internal static IReadOnlyList<EpReachDelta> DiffReachSets(
+        Dictionary<(string Kind, string Route), HashSet<string>> branch,
+        Dictionary<(string Kind, string Route), HashSet<string>> baseStore,
+        Dictionary<(string Kind, string Route), EntryPointRef> epByKey,
+        IReadOnlySet<string>? bodyChanged = null
+    )
+    {
+        bodyChanged ??= new HashSet<string>(StringComparer.Ordinal);
+        var deltas = new List<EpReachDelta>();
+        foreach (var (key, branchSet) in branch)
+        {
+            if (!baseStore.TryGetValue(key, out var baseSet))
+            {
+                continue;
+            }
+
+            var added = branchSet.Where(s => !baseSet.Contains(s)).ToList();
+            var removed = baseSet.Where(s => !branchSet.Contains(s)).ToList();
+
+            // Phase 2 (in-place): reachable methods PRESENT IN BOTH stores whose body hash differs — a changed
+            // constant/literal the structural set-diff can't see (the method stayed in the reach). Intersect
+            // the body-changed set with the SHARED reach (branch ∩ base) so a genuinely added/removed method is
+            // attributed by the structural diff above, not double-counted here.
+            var inPlace =
+                bodyChanged.Count == 0
+                    ? []
+                    : branchSet.Where(s => baseSet.Contains(s) && bodyChanged.Contains(s)).OrderBy(s => s, StringComparer.Ordinal).ToList();
+
+            // An EP is affected if its reach STRUCTURE changed (added/removed) OR a reachable body changed in
+            // place. With none of those, it's untouched.
+            if (added.Count == 0 && removed.Count == 0 && inPlace.Count == 0)
+            {
+                continue;
+            }
+
+            // Collapse signature/overload churn: bucket by param-free stem so a ctor whose params moved reads
+            // as ONE `~` change, not an add+remove pair. The magnitude that RANKS the list is the count of
+            // DISTINCT meaningful stems (added ∪ removed ∪ changed) PLUS the in-place body-changed methods, so
+            // a 30-overload swap counts as 1 (Task 2) and a pure in-place edit still has a non-zero magnitude.
+            var b = BucketStems(added, removed);
+            var distinctStemDelta = b.AddedStems.Count + b.RemovedStems.Count + b.ChangedStems.Count + inPlace.Count;
+            var ep = epByKey.TryGetValue(key, out var r)
+                ? r
+                : new EntryPointRef(Kind: key.Kind, Route: key.Route, FilePath: "", Line: 0, Requires: null);
+            deltas.Add(
+                new EpReachDelta(
+                    Kind: key.Kind,
+                    Route: key.Route,
+                    FilePath: ep.FilePath,
+                    Line: ep.Line,
+                    Requires: ep.Requires,
+                    Added: b.Added,
+                    Removed: b.Removed,
+                    AddedStems: b.AddedStems,
+                    RemovedStems: b.RemovedStems,
+                    ChangedStems: b.ChangedStems,
+                    DistinctStemDelta: distinctStemDelta,
+                    InPlaceCount: inPlace.Count,
+                    InPlace: inPlace
+                )
+            );
+        }
+
+        // Stable order: by distinct meaningful (stem) delta desc, then Kind, then Route (Task 2).
+        return deltas
+            .OrderByDescending(d => d.DistinctStemDelta)
+            .ThenBy(d => d.Kind, StringComparer.Ordinal)
+            .ThenBy(d => d.Route, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    // The set of symbol DocIDs whose declaration BODY changed base↔branch: a DocID whose hash differs between
+    // the two hash maps, OR is present on exactly one side (added/removed declarations also count). Empty when
+    // either store lacks the BodyHash fact (pre-fact store) — the in-place signal degrades silently then.
+    internal static IReadOnlySet<string> BodyChangedSymbols(
+        IReadOnlyDictionary<string, string> branchHashes,
+        IReadOnlyDictionary<string, string> baseHashes
+    )
+    {
+        // Either side empty => the fact is absent on at least one store; no reliable signal, skip silently.
+        if (branchHashes.Count == 0 || baseHashes.Count == 0)
+        {
+            return new HashSet<string>(StringComparer.Ordinal);
+        }
+
+        var changed = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (id, hash) in branchHashes)
+        {
+            if (!baseHashes.TryGetValue(id, out var baseHash) || !string.Equals(hash, baseHash, StringComparison.Ordinal))
+            {
+                changed.Add(id);
+            }
+        }
+
+        foreach (var id in baseHashes.Keys)
+        {
+            if (!branchHashes.ContainsKey(id))
+            {
+                changed.Add(id);
+            }
+        }
+
+        return changed;
+    }
+
+    // Load the BASE store ONCE and produce, from that single load: the change-level behavioral delta, the base
+    // per-EP REACHABLE SYMBOL SETS (for the structural affected-EP diff — always), and the base per-EP effect
+    // footprints (only when --per-ep needs them). The branch side reuses the graph/effects RunAsync already
+    // built, so the whole impact run is 2 store loads total.
     private static async Task<(
         BehavioralDelta Delta,
-        Dictionary<(string Kind, string Route), HashSet<(string, string, string, string)>> BaseFootprints
-    )> ComputeBehavioralAndFootprintsAsync(
+        Dictionary<(string Kind, string Route), HashSet<string>> ReachSets,
+        Dictionary<(string Kind, string Route), HashSet<(string, string, string, string)>>? Footprints,
+        IReadOnlyDictionary<string, string> BodyHashes
+    )> ComputeBaseSideAsync(
         string baseDbPath,
         IReadOnlyList<DerivedEffect> branchEffects,
         int branchReach,
         IReadOnlyList<DeadCodeFinder.MethodMeta> changedMethods,
         RuleSet rules,
-        FactPathFinder.TraversalMode mode
+        FactPathFinder.TraversalMode mode,
+        bool needFootprints
     )
     {
         await using var context = new Rig.Storage.Storage.RigDbContext(baseDbPath, readOnly: true);
@@ -632,6 +1036,8 @@ internal static class ImpactCommand
         var methods = await Reads.LoadDeadCodeMethodsAsync(context);
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
         var epSet = await DeriveEntryPointsAsync(context, epData, rules);
+        var baseEps = epSet.Derived.Concat(epSet.PromotedOrigins).ToList();
+        var idBySite = MethodIdBySite(methods);
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
         var effects = DeriveEffects(
@@ -659,16 +1065,17 @@ internal static class ImpactCommand
             baseReach: forward.Count
         );
 
-        // Per-EP footprints over the SAME loaded graph + effects.
-        var footprints = ComputeFootprints(
-            graph,
-            epSet.Derived.Concat(epSet.PromotedOrigins).ToList(),
-            MethodIdBySite(methods),
-            EffectKeysByEnclosing(effects),
-            mode
-        );
+        // Phase 3: union the base's field/property-access targets into its reach sets too, so the per-EP
+        // structural diff compares like-for-like (degenerate `R:` nodes on BOTH sides). Built once per store.
+        var baseRefTargets = RefTargetsByEnclosing(await Reads.LoadFieldAccessRefsAsync(context));
+        var reachSets = ComputeReachSets(graph, baseEps, idBySite, mode, refsByEnclosing: baseRefTargets);
+        var footprints = needFootprints ? ComputeFootprints(graph, baseEps, idBySite, EffectKeysByEnclosing(effects), mode) : null;
 
-        return (delta, footprints);
+        // Phase 2: the base body-hash map (guarded — empty on a pre-fact store), so RunAsync can diff it
+        // against the branch's WITHOUT a second base load.
+        var bodyHashes = await Reads.LoadSymbolBodyHashesAsync(context);
+
+        return (delta, reachSets, footprints, bodyHashes);
     }
 
     // Diff two stores' per-EP footprints: for every EP present in BOTH (paired on Kind+Route), the effects its
@@ -676,7 +1083,10 @@ internal static class ImpactCommand
     // wholesale are the EP-diff section's job, not this.
     private static IReadOnlyList<EpFootprintDelta> DiffFootprints(
         Dictionary<(string Kind, string Route), HashSet<(string, string, string, string)>> branch,
-        Dictionary<(string Kind, string Route), HashSet<(string, string, string, string)>> baseStore
+        Dictionary<(string Kind, string Route), HashSet<(string, string, string, string)>> baseStore,
+        // (Kind, Route) -> the EP's site, so each delta carries FilePath/Line for FQN rendering. An EP missing
+        // here (shouldn't happen — branch footprints are keyed off the same EPs) falls back to empty site.
+        IReadOnlyDictionary<(string Kind, string Route), EntryPointRef> epByKey
     )
     {
         var deltas = new List<EpFootprintDelta>();
@@ -691,10 +1101,13 @@ internal static class ImpactCommand
             var removed = baseSet.Where(k => !branchSet.Contains(k)).OrderBy(k => k).ToList();
             if (added.Count > 0 || removed.Count > 0)
             {
+                var site = epByKey.GetValueOrDefault(key);
                 deltas.Add(
                     new EpFootprintDelta(
                         Kind: key.Item1,
                         Route: key.Item2,
+                        FilePath: site?.FilePath ?? "",
+                        Line: site?.Line ?? 0,
                         BranchEffects: branchSet.Count,
                         BaseEffects: baseSet.Count,
                         Added: added,
@@ -707,7 +1120,7 @@ internal static class ImpactCommand
         return deltas.OrderByDescending(d => d.Added.Count + d.Removed.Count).ThenBy(d => d.Route, StringComparer.Ordinal).ToList();
     }
 
-    private static void EmitPerEpTsv(TextWriter output, IReadOnlyList<EpFootprintDelta>? deltas)
+    private static void EmitPerEpTsv(TextWriter output, IReadOnlyList<EpFootprintDelta>? deltas, Dictionary<(string, int), string> fqnSites)
     {
         if (deltas is null)
         {
@@ -716,7 +1129,8 @@ internal static class ImpactCommand
 
         foreach (var d in deltas)
         {
-            output.WriteLine($"ep_delta\t{d.Kind}\t{d.Route}\t{d.BranchEffects}\t{d.BaseEffects}\t+{d.Added.Count}\t-{d.Removed.Count}");
+            var fqn = FqnForCard(route: d.Route, filePath: d.FilePath, line: d.Line, idBySite: fqnSites);
+            output.WriteLine($"ep_delta\t{d.Kind}\t{d.Route}\t{fqn}\t{d.BranchEffects}\t{d.BaseEffects}\t+{d.Added.Count}\t-{d.Removed.Count}");
             foreach (var (provider, operation, resource, enclosing) in d.Added)
             {
                 output.WriteLine($"ep_effect_added\t{d.Kind}\t{d.Route}\t{provider}\t{operation}\t{resource}\t{enclosing}");
@@ -729,39 +1143,38 @@ internal static class ImpactCommand
         }
     }
 
+    // PRIMARY section: the entry points whose reachable EFFECT set changed — the behavioral signal. This is the
+    // small, high-information set (a handful), as opposed to the structural reachable-tree diff which is mostly
+    // data-shape ripple. Always shown (no longer gated behind --per-ep — footprints are computed by default).
     private static void WritePerEpHuman(
         TextWriter output,
         string baseRef,
-        bool perEp,
         string? baseDbPath,
         IReadOnlyList<EpFootprintDelta>? deltas,
+        Dictionary<(string, int), string> fqnSites,
         int max
     )
     {
-        if (!perEp)
-        {
-            return;
-        }
-
         output.WriteLine();
         if (baseDbPath is null)
         {
-            output.WriteLine("Per-EP attribution: skipped (no base store resolved — see the entry-point-diff note above).");
+            output.WriteLine("Behavioral changes per entry point: skipped (no base store resolved — see the entry-point-diff note above).");
             return;
         }
 
-        output.WriteLine($"Per-EP behavioral attribution vs '{baseRef}' (entry points whose reachable-effect set changed):");
         if (deltas is null || deltas.Count == 0)
         {
-            output.WriteLine($"{Indent.L1}none — no shared entry point's effect footprint changed.");
+            output.WriteLine($"Behavioral changes per entry point vs '{baseRef}': none — no entry point's reachable-effect set changed.");
             return;
         }
 
-        output.WriteLine($"{Indent.L1}{deltas.Count} entry point(s) changed:");
+        output.WriteLine($"Behavioral changes per entry point vs '{baseRef}' (reachable-effect set changed): {deltas.Count}");
         foreach (var d in deltas.Take(max))
         {
+            // Render the FQN (round-trips into `rig tree`), same as the structural list; falls back to the route.
+            var label = FqnForCard(route: d.Route, filePath: d.FilePath, line: d.Line, idBySite: fqnSites);
             output.WriteLine(
-                $"{Indent.L2}{d.Kind} {d.Route}  (effects {d.BaseEffects}→{d.BranchEffects}, +{d.Added.Count}/-{d.Removed.Count})"
+                $"{Indent.L2}{d.Kind} {label}  (effects {d.BaseEffects}→{d.BranchEffects}, +{d.Added.Count}/-{d.Removed.Count})"
             );
             foreach (var (provider, operation, resource, enclosing) in d.Added.Take(max))
             {
@@ -846,10 +1259,7 @@ internal static class ImpactCommand
     }
 
     // The hosts that LOAD at least one affected entry point (the redeploy/risk set), via the deployment map.
-    private static IReadOnlyList<string> AffectedServices(
-        IReadOnlyList<(string Kind, string Route, string FilePath, int Line, IReadOnlyList<string>? Requires)> eps,
-        DeploymentMap deployments
-    )
+    private static IReadOnlyList<string> AffectedServices(IReadOnlyList<EntryPointRef> eps, DeploymentMap deployments)
     {
         if (deployments.IsEmpty)
         {
@@ -868,45 +1278,270 @@ internal static class ImpactCommand
         return set.OrderBy(s => s, StringComparer.Ordinal).ToList();
     }
 
-    private static void WriteHuman(
+    // Project the derived + promoted entry points whose declaration SITE (FilePath, Line) is in `sites` into
+    // deduped EntryPointRefs, ordered by kind then route. The (FilePath, Line) join is the same one `callers
+    // --entrypoints` uses: an EP "touches" a method set when its site is reachable from it.
+    private static IReadOnlyList<EntryPointRef> EntryPointsAtSites(
+        IReadOnlyList<DerivedEntryPoint> derived,
+        IReadOnlyList<DerivedEntryPoint> promoted,
+        IReadOnlySet<(string FilePath, int Line)> sites
+    ) =>
+        derived
+            .Concat(promoted)
+            .Where(e => sites.Contains((e.FilePath, e.Line)))
+            .GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line))
+            .Select(g => new EntryPointRef(
+                Kind: g.Key.Kind,
+                Route: g.Key.Route,
+                FilePath: g.Key.FilePath,
+                Line: g.Key.Line,
+                Requires: g.First().Requires
+            ))
+            .OrderBy(e => e.Kind, StringComparer.Ordinal)
+            .ThenBy(e => e.Route, StringComparer.Ordinal)
+            .ToList();
+
+    // The header: the one-line PROVEN-diff takeaway, then the change provenance + size. No speculative
+    // reach here — that's the opt-in --reach section (WriteReach).
+    private static void WriteHeader(
         TextWriter output,
         string baseRef,
         string repoRoot,
         FactPathFinder.TraversalMode mode,
-        int changedFileCount,
-        IReadOnlyList<DeadCodeFinder.MethodMeta> changedMethods,
-        int reachedByCount,
-        IReadOnlyList<(string Kind, string Route, string FilePath, int Line, IReadOnlyList<string>? Requires)> affectedEps,
-        DeploymentMap deployments,
-        int forwardCount,
-        IReadOnlyList<DerivedEffect> affectedEffects,
-        IReadOnlyDictionary<string, int> observationCounts,
-        int throwCount,
-        IReadOnlyList<string> affectedServices,
-        int max
+        ChangeSummary change,
+        ImpactDiff diff
     )
     {
         var asyncNote = mode == FactPathFinder.TraversalMode.AsyncInclude ? "  (--async: handoffs included)" : "";
 
-        // The risk headline — the one-line takeaway, before the detail.
-        output.WriteLine(
-            RiskHeadline(
-                epCount: affectedEps.Count,
-                services: affectedServices,
-                effectCount: affectedEffects.Count,
-                observationCounts: observationCounts,
-                throwCount: throwCount
-            )
-        );
+        output.WriteLine(DiffSummary(baseRef, change, diff));
         output.WriteLine();
-
         output.WriteLine($"Impact of {baseRef}...working-tree in {ShortenPath(repoRoot)}{asyncNote}");
-        output.WriteLine($"  Changed: {changedMethods.Count} method(s) across {changedFileCount} file(s) (file-granular)");
+    }
 
-        // (2) Affected entry points, grouped by deployed service.
+    // The one-line takeaway: the PROVEN change vs the base store — entry-point and effect/observation deltas
+    // plus the count of entry points whose reachable tree structurally changed. A null base store (no diff
+    // possible) reports the change size only.
+    private static string DiffSummary(string baseRef, ChangeSummary change, ImpactDiff diff)
+    {
+        if (diff.Ep is null || diff.Behavioral is null)
+        {
+            return $"{change.Methods} changed method(s); base '{baseRef}' not indexed — no diff "
+                + "(index the base commit, or pass --base-store).";
+        }
+
+        var behavioral = diff.Behavioral;
+        var obs = behavioral.AddedObservations.Count + behavioral.RemovedObservations.Count;
+        var obsPart =
+            obs > 0
+                ? $", {PlusMinus(added: behavioral.AddedObservations.Count, removed: behavioral.RemovedObservations.Count)} risk observation(s)"
+                : "";
+        // Lead with the BEHAVIORAL count (EPs whose effect set changed) — the high-signal number — then the
+        // structural-tree count as the broader, mostly data-shape figure. The two answer different questions:
+        // "how many EPs do something different" vs "how many EPs reach changed code at all".
+        var behavioralEps = (diff.PerEp ?? []).Count;
+        return $"Diff vs '{baseRef}': {PlusMinus(added: diff.Ep.Added.Count, removed: diff.Ep.Removed.Count)} entry point(s), "
+            + $"{PlusMinus(added: behavioral.AddedEffects.Count, removed: behavioral.RemovedEffects.Count)} effect(s){obsPart}"
+            + $"; {behavioralEps} entry point(s) with a changed behavior, {diff.AffectedEps.Count} with a changed reachable tree.";
+    }
+
+    private static string PlusMinus(int added, int removed) => $"+{added}/-{removed}";
+
+    // Why an entry point's reachable TREE changed, when its EFFECT set did NOT — the cause buckets for the
+    // structural-only breadcrumb. RecordShape: the moved members are DOMINATED by data-shape changes — a record
+    // gained/lost a field, so every reaching EP sees the new field accessors + the ctor signature move. This is
+    // the dominant noise, and it dominates even when a handful of real methods moved alongside (e.g. a deleted
+    // settings type's deserializer), because the CAUSE is still the one data-shape change. CtorSig: the move is
+    // purely constructor signatures (the data-shape change seen only at the ctor). InPlace: a reachable body
+    // changed with no structural move. Other: real method-level reach churn is a MEANINGFUL fraction — these are
+    // the genuine migration/refactor sites a reviewer should look at (a migration can move reach with no net-new
+    // effect kind, so it lands here, not in the noise).
+    internal enum StructuralCause
+    {
+        RecordShape,
+        CtorSig,
+        InPlace,
+        Other,
+    }
+
+    // Data-shape dominance threshold: an EP whose moved+changed members are at least this fraction data-shape
+    // (fields/properties/accessors/ctors) is RecordShape — the few non-data-shape moves are incidental to the
+    // same record change. Below it, real method churn is significant enough to warrant review (Other). 0.8 keeps
+    // pure field-ripple and field-ripple-plus-a-moved-type in RecordShape while routing genuine refactors to
+    // Other; validated against the live MR (see the migration's Master workflow EPs landing in Other).
+    private const double DataShapeDominance = 0.8;
+
+    // Classify ONE structural-only EP delta (effect set unchanged) into a cause bucket — pure + internal so the
+    // bucketing is unit-testable without a store. "Data-shape" = a field/property-access node (`R:` prefix), a
+    // property accessor (`.get_`/`.set_`), or a constructor (`.#ctor`) — all three are how a record's field
+    // add/remove shows up in the reach graph. Classification is PROPORTIONAL (not all-or-nothing): record-shape
+    // when data-shape dominates the moved+changed set, so a migration's field ripple isn't mislabeled "other"
+    // just because one real method moved alongside it.
+    internal static StructuralCause ClassifyStructuralCause(EpReachDelta d)
+    {
+        static bool IsDataShape(string stem) =>
+            stem.StartsWith(RefNodePrefix, StringComparison.Ordinal)
+            || stem.Contains(".get_", StringComparison.Ordinal)
+            || stem.Contains(".set_", StringComparison.Ordinal)
+            || stem.EndsWith(".#ctor", StringComparison.Ordinal);
+        static bool IsCtor(string stem) => stem.EndsWith(".#ctor", StringComparison.Ordinal);
+
+        // Every member that moved or changed signature — the population we classify over.
+        var members = d.AddedStems.Concat(d.RemovedStems).Concat(d.ChangedStems).ToList();
+        if (members.Count == 0)
+        {
+            // No structural move at all — the EP is affected only by an in-place body change (Phase 2).
+            return d.InPlaceCount > 0 ? StructuralCause.InPlace : StructuralCause.Other;
+        }
+
+        // Purely constructor signatures (no fields/methods moved) — a record's ctor params changed and nothing
+        // else. Called out separately from the field-add case since there's no new accessor, just a re-signing.
+        if (members.All(IsCtor))
+        {
+            return StructuralCause.CtorSig;
+        }
+
+        var dataShape = members.Count(IsDataShape);
+        return dataShape >= members.Count * DataShapeDominance ? StructuralCause.RecordShape : StructuralCause.Other;
+    }
+
+    // The DEMOTED structural view (default): one line stating how many EPs have a changed reachable tree but NO
+    // behavioral (effect-set) change, broken down by cause so a data-shape ripple reads as exactly that — and a
+    // no-net-new-effect migration still surfaces as a non-zero `other` count that can't hide. `--structural`
+    // expands this to the full per-EP list (WriteAffected). EPs whose effect set DID change are already shown by
+    // WritePerEpHuman, so they're excluded here (the two sections partition the affected set, no double-count).
+    private static void WriteStructuralBreadcrumb(
+        TextWriter output,
+        string baseRef,
+        ImpactDiff diff,
+        IReadOnlyList<EpFootprintDelta>? behavioralDeltas
+    )
+    {
         output.WriteLine();
-        output.WriteLine($"Affected entry points (reverse-reach over {reachedByCount} caller method(s)): {affectedEps.Count}");
-        foreach (var kindGroup in affectedEps.GroupBy(e => e.Kind, StringComparer.Ordinal).OrderByDescending(g => g.Count()))
+        var behavioralKeys = (behavioralDeltas ?? []).Select(d => (d.Kind, d.Route)).ToHashSet();
+        var structuralOnly = diff.AffectedEps.Where(d => !behavioralKeys.Contains((d.Kind, d.Route))).ToList();
+        if (structuralOnly.Count == 0)
+        {
+            output.WriteLine($"Structural-only reachable-tree changes vs '{baseRef}': none.");
+            return;
+        }
+
+        var byCause = structuralOnly.GroupBy(ClassifyStructuralCause).ToDictionary(g => g.Key, g => g.Count());
+        int N(StructuralCause c) => byCause.GetValueOrDefault(c);
+        var parts = new List<string>();
+        if (N(StructuralCause.RecordShape) > 0)
+        {
+            parts.Add($"{N(StructuralCause.RecordShape)} record-shape (reach a changed field/property)");
+        }
+
+        if (N(StructuralCause.CtorSig) > 0)
+        {
+            parts.Add($"{N(StructuralCause.CtorSig)} ctor-signature");
+        }
+
+        if (N(StructuralCause.InPlace) > 0)
+        {
+            parts.Add($"{N(StructuralCause.InPlace)} in-place body change");
+        }
+
+        if (N(StructuralCause.Other) > 0)
+        {
+            parts.Add($"{N(StructuralCause.Other)} other method-level churn");
+        }
+
+        output.WriteLine(
+            $"Structural-only reachable-tree changes vs '{baseRef}' (no behavioral effect change): {structuralOnly.Count} entry point(s)"
+        );
+        output.WriteLine($"{Indent.L1}{string.Join(", ", parts)}");
+        // The `other` bucket is the one that can hide a real migration (method churn with no NET-new effect kind),
+        // so call it out explicitly when present — that's the line a reviewer should not skip.
+        if (N(StructuralCause.Other) > 0)
+        {
+            output.WriteLine(
+                $"{Indent.L1}↳ {N(StructuralCause.Other)} are method-level churn — review these (a migration can change reach without a net-new effect kind)."
+            );
+        }
+
+        output.WriteLine($"{Indent.L1}--structural to list them all (or --format tsv).");
+    }
+
+    // The affected entry points, computed STRUCTURALLY: each EP whose full reachable symbol set differs
+    // base↔branch ("two trees, diffed"), grouped by kind with deployment chips and the per-EP +added/-removed
+    // reachable methods. Independent of effect classification — catches the obj→sql kind of migration the
+    // effect-set diff collapses, and excludes false positives whose reach didn't actually move. Needs a base
+    // store (it's a two-store diff).
+    private static void WriteAffected(
+        TextWriter output,
+        string baseRef,
+        ImpactDiff diff,
+        DeploymentMap deployments,
+        Dictionary<(string, int), string> fqnSites,
+        int max
+    )
+    {
+        if (diff.Behavioral is null)
+        {
+            return; // no base store — the EP-diff section already explained it
+        }
+
+        output.WriteLine();
+        output.WriteLine($"Affected entry points (reachable tree changed) vs '{baseRef}': {diff.AffectedEps.Count}");
+        if (diff.AffectedEps.Count == 0)
+        {
+            output.WriteLine($"{Indent.L1}none — no entry point's reachable structure changed.");
+            return;
+        }
+
+        foreach (var kindGroup in diff.AffectedEps.GroupBy(d => d.Kind, StringComparer.Ordinal).OrderByDescending(g => g.Count()))
+        {
+            output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
+            foreach (var d in kindGroup.Take(max / 4 + 1))
+            {
+                // +added/-removed/~changed counted by DISTINCT STEM, so a 30-overload ctor swap reads as ~1,
+                // not +30/-30. The `~` lines are signature changes (same stem on both sides); the +/- lines
+                // are genuine reach gains/losses, labelled by ShortName (added/removed raw DocIDs, deduped to
+                // their stem for display so an overload set doesn't print N near-identical lines).
+                // The in-place suffix (Phase 2) flags an EP affected by a reachable method's BODY change with no
+                // structural reach move — so an EP with empty +/-/~ but a changed constant still reads as why.
+                var inPlaceNote = d.InPlaceCount > 0 ? $", in-place: {d.InPlaceCount} reached method body(ies) changed" : "";
+                // Label the card with the FQN (round-trips into `rig tree`); fall back to the path route when the
+                // EP site maps to no indexed method symbol. The diff still keys on (Kind, Route) internally.
+                var label = FqnForCard(route: d.Route, filePath: d.FilePath, line: d.Line, idBySite: fqnSites);
+                var route = $"{label}  (+{d.AddedStems.Count}/-{d.RemovedStems.Count}/~{d.ChangedStems.Count} reachable{inPlaceNote})";
+                WriteEntryPointLine(output, deployments, route: route, filePath: d.FilePath, line: d.Line, requires: d.Requires);
+                foreach (var s in d.AddedStems.Take(3))
+                {
+                    output.WriteLine($"{Indent.L3}+ {ReachNodeLabel(s)}");
+                }
+
+                foreach (var s in d.RemovedStems.Take(3))
+                {
+                    output.WriteLine($"{Indent.L3}- {ReachNodeLabel(s)}");
+                }
+
+                foreach (var s in d.ChangedStems.Take(3))
+                {
+                    output.WriteLine($"{Indent.L3}~ {ShortName(s)} (signature changed)");
+                }
+
+                foreach (var s in (d.InPlace ?? []).Take(3))
+                {
+                    output.WriteLine($"{Indent.L3}≈ {ShortName(s)} (body changed in place)");
+                }
+            }
+
+            if (kindGroup.Count() > max / 4 + 1)
+            {
+                output.WriteLine($"{Indent.L3}… +{kindGroup.Count() - (max / 4 + 1)} more (raise --limit, or --format tsv for all)");
+            }
+        }
+    }
+
+    // Print a list of entry points grouped by kind (busiest first), each line with its deployment chip, then
+    // the per-service rollup. Shared by the proven affected-EP list and the speculative --reach list.
+    private static void WriteEntryPointGroups(TextWriter output, IReadOnlyList<EntryPointRef> eps, DeploymentMap deployments, int max)
+    {
+        foreach (var kindGroup in eps.GroupBy(e => e.Kind, StringComparer.Ordinal).OrderByDescending(g => g.Count()))
         {
             output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup.Take(max / 4 + 1))
@@ -919,93 +1554,124 @@ internal static class ImpactCommand
                 output.WriteLine($"{Indent.L3}… +{kindGroup.Count() - (max / 4 + 1)} more (raise --limit, or --format tsv for all)");
             }
         }
+
         if (!deployments.IsEmpty)
         {
-            WriteServiceSummary(affectedEps.Select(e => (e.Kind, (string?)e.FilePath, e.Requires)), deployments, output);
+            WriteServiceSummary(eps.Select(e => (e.Kind, (string?)e.FilePath, e.Requires)), deployments, output);
         }
-        else if (affectedEps.Count > 0)
+        else if (eps.Count > 0)
         {
             output.WriteLine($"{Indent.L1}(no deployments.json — entry points listed without service attribution)");
         }
+    }
+
+    // The SPECULATIVE blast radius (opt-in --reach): every entry point that reverse-reaches the change,
+    // grouped by deployed service, and every effect in the change's forward reach. Pessimistic by nature in
+    // a large codebase — kept out of the default output, which is the proven diff.
+    private static void WriteReach(TextWriter output, BlastRadius blast, DeploymentMap deployments, int max)
+    {
+        var svcNote = blast.Services.Count > 0 ? $"  [{blast.Services.Count} service(s): {string.Join(", ", blast.Services)}]" : "";
+
+        // (2) Affected entry points, grouped by deployed service.
+        output.WriteLine();
+        output.WriteLine(
+            $"Affected entry points (reverse-reach over {blast.ReachedByCount} caller method(s)): {blast.AffectedEps.Count}{svcNote}"
+        );
+        WriteEntryPointGroups(output, blast.AffectedEps, deployments, max);
 
         // (3) Effects in the forward reach.
         output.WriteLine();
-        output.WriteLine($"Effects in the forward reach (over {forwardCount} reachable method(s)): {affectedEffects.Count}");
-        foreach (var g in affectedEffects.GroupBy(e => (e.Provider, e.Operation)).OrderByDescending(g => g.Count()).Take(max))
+        output.WriteLine($"Effects in the forward reach (over {blast.ForwardCount} reachable method(s)): {blast.Effects.Count}");
+        foreach (var g in blast.Effects.GroupBy(e => (e.Provider, e.Operation)).OrderByDescending(g => g.Count()).Take(max))
         {
             output.WriteLine($"{Indent.L1}{g.Count(), 4}  {g.Key.Provider} {g.Key.Operation}");
         }
-        if (observationCounts.Count > 0)
+        if (blast.Observations.Count > 0)
         {
             output.WriteLine($"{Indent.L1}risky observations:");
-            foreach (var o in observationCounts.OrderByDescending(o => o.Value))
+            foreach (var o in blast.Observations.OrderByDescending(o => o.Value))
             {
                 output.WriteLine($"{Indent.L3}{o.Key}: {o.Value}");
             }
         }
     }
 
-    // The one-line takeaway. Orders by severity: nothing reachable → safe; else lead with EPs/services,
-    // then the highest-signal risk observation present.
-    private static string RiskHeadline(
-        int epCount,
-        IReadOnlyList<string> services,
-        int effectCount,
-        IReadOnlyDictionary<string, int> observationCounts,
-        int throwCount
-    )
-    {
-        if (epCount == 0 && effectCount == 0)
-        {
-            return "RISK: low — the change reaches no entry points and no effects (isolated / dead-ish code).";
-        }
-
-        var risks = new List<string>();
-        if (observationCounts.TryGetValue("looped_effect", out var loop) && loop > 0)
-        {
-            risks.Add($"{loop} looped effect(s) (n+1)");
-        }
-
-        if (observationCounts.TryGetValue("read_before_commit", out var rbc) && rbc > 0)
-        {
-            risks.Add($"{rbc} read-before-commit (lost-update/TOCTOU)");
-        }
-
-        if (observationCounts.TryGetValue("parallel_fanout", out var pf) && pf > 0)
-        {
-            risks.Add($"{pf} parallel fan-out");
-        }
-
-        if (throwCount > 0)
-        {
-            risks.Add($"{throwCount} throw(s)");
-        }
-
-        var svcPart = services.Count > 0 ? $" across {services.Count} service(s) [{string.Join(", ", services)}]" : "";
-        var riskPart = risks.Count > 0 ? $"; risk signals: {string.Join(", ", risks)}" : "";
-        var level = risks.Count > 0 || services.Count > 1 ? "HIGH" : (epCount > 0 ? "MEDIUM" : "LOW");
-        return $"RISK: {level} — change reaches {epCount} entry point(s){svcPart}, {effectCount} effect(s){riskPart}.";
-    }
-
     private static void EmitTsv(
         TextWriter output,
         IReadOnlyList<DeadCodeFinder.MethodMeta> changedMethods,
-        IReadOnlyList<(string Kind, string Route, string FilePath, int Line, IReadOnlyList<string>? Requires)> affectedEps,
+        ImpactDiff diff,
+        BlastRadius blast,
         DeploymentMap deployments,
-        IReadOnlyList<DerivedEffect> affectedEffects,
+        Dictionary<(string, int), string> fqnSites,
         int max
     )
     {
-        // One stream of typed rows for CI/tooling. First column is the row kind.
-        //  changed     <symbolId>  <file>  <line>
-        //  entrypoint  <kind>  <route>  <file>  <line>  <requires>  <loadedServices>  <activeServices>
-        //  effect      <provider>  <operation>  <resource>  <enclosing>  <file>  <line>  <observations>
+        // One stream of typed rows for CI/tooling. First column is the row kind. The PROVEN diff
+        // (changed/affected_ep/+ ep_*/effect_*/obs_* rows, emitted by the Emit*Tsv helpers) AND the
+        // speculative blast radius (entrypoint/effect rows) are both included — tooling picks what it needs.
+        //  changed      <symbolId>  <file>  <line>
+        //  affected_ep  <kind>  <route>  <fqn>  <cause>  <file>  <line>  <+addedStems>  <-removedStems>  <~changedStems>  <inplace>   (proven; <route> is the path-style diff key, <fqn> the dotted name `rig tree` matches — equals <route> when unresolved; <cause> is behavioral|record-shape|ctor-sig|in-place|other — behavioral = effect set changed, the rest are structural-only; counts are DISTINCT param-free stems; inplace = reachable bodies changed)
+        //  structural_summary  <total>  <behavioral>  <record-shape>  <ctor-sig>  <in-place>  <other>   (one row: the cause breakdown of the affected-EP set — behavioral counts the EPs whose effect set changed, the rest are structural-only)
+        //  ep_reach_+   <kind>  <route>  <symbolId>                            (newly in the EP's reach — raw method DocID, or an `R:`-prefixed field/property-access target, Phase 3)
+        //  ep_reach_-   <kind>  <route>  <symbolId>                            (dropped from the EP's reach — raw method DocID, or an `R:`-prefixed field/property-access target, Phase 3)
+        //  ep_reach_~   <kind>  <route>  <stem>                                (a reachable method whose SIGNATURE changed — param-free stem)
+        //  ep_reach_inplace  <kind>  <route>  <symbolId>                       (a reachable method whose BODY changed in place — raw DocID, Phase 2)
+        //  entrypoint   <kind>  <route>  <file>  <line>  <requires>  <loaded>  <active>   (reverse-reach — speculative)
+        //  effect       <provider>  <operation>  <resource>  <enclosing>  <file>  <line>  <observations>   (forward reach)
         foreach (var m in changedMethods.Take(max))
         {
             output.WriteLine($"changed\t{m.SymbolId}\t{m.FilePath}\t{m.Line}");
         }
 
-        foreach (var e in affectedEps.Take(max))
+        // Cause per EP: behavioral when its effect set changed (it's in PerEp), else the structural sub-cause.
+        var behavioralKeys = (diff.PerEp ?? []).Select(d => (d.Kind, d.Route)).ToHashSet();
+        string CauseTag(EpReachDelta e) =>
+            behavioralKeys.Contains((e.Kind, e.Route))
+                ? "behavioral"
+                : ClassifyStructuralCause(e) switch
+                {
+                    StructuralCause.RecordShape => "record-shape",
+                    StructuralCause.CtorSig => "ctor-sig",
+                    StructuralCause.InPlace => "in-place",
+                    _ => "other",
+                };
+
+        // structural_summary: the cause breakdown of the WHOLE affected set (not capped by --limit) so tooling
+        // gets the true totals even when the per-EP rows below are truncated.
+        var causeCounts = diff.AffectedEps.GroupBy(CauseTag, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+        int CC(string k) => causeCounts.GetValueOrDefault(k);
+        output.WriteLine(
+            $"structural_summary\t{diff.AffectedEps.Count}\t{CC("behavioral")}\t{CC("record-shape")}\t{CC("ctor-sig")}\t{CC("in-place")}\t{CC("other")}"
+        );
+
+        foreach (var e in diff.AffectedEps.Take(max))
+        {
+            var fqn = FqnForCard(route: e.Route, filePath: e.FilePath, line: e.Line, idBySite: fqnSites);
+            output.WriteLine(
+                $"affected_ep\t{e.Kind}\t{e.Route}\t{fqn}\t{CauseTag(e)}\t{e.FilePath}\t{e.Line}\t+{e.AddedStems.Count}\t-{e.RemovedStems.Count}\t~{e.ChangedStems.Count}\t{e.InPlaceCount}"
+            );
+            foreach (var s in e.Added)
+            {
+                output.WriteLine($"ep_reach_+\t{e.Kind}\t{e.Route}\t{s}");
+            }
+
+            foreach (var s in e.Removed)
+            {
+                output.WriteLine($"ep_reach_-\t{e.Kind}\t{e.Route}\t{s}");
+            }
+
+            foreach (var s in e.ChangedStems)
+            {
+                output.WriteLine($"ep_reach_~\t{e.Kind}\t{e.Route}\t{s}");
+            }
+
+            foreach (var s in e.InPlace ?? [])
+            {
+                output.WriteLine($"ep_reach_inplace\t{e.Kind}\t{e.Route}\t{s}");
+            }
+        }
+
+        foreach (var e in blast.AffectedEps.Take(max))
         {
             var loaded = deployments.ServicesForFile(e.FilePath);
             var active = deployments.ActiveServices(loadedServices: loaded, requires: e.Requires);
@@ -1014,13 +1680,17 @@ internal static class ImpactCommand
             );
         }
 
-        foreach (var e in affectedEffects.Take(max))
+        foreach (var e in blast.Effects.Take(max))
         {
             var observations = string.Join(',', (e.Observations ?? []).Select(o => o.Type));
             output.WriteLine(
                 $"effect\t{e.Provider}\t{e.Operation}\t{e.ResourceType}\t{e.EnclosingSymbolId}\t{e.FilePath}\t{e.Line}\t{observations}"
             );
         }
+
+        EmitEpDiffTsv(output, diff.Ep);
+        EmitBehavioralDeltaTsv(output, diff.Behavioral);
+        EmitPerEpTsv(output, diff.PerEp, fqnSites);
     }
 
     // Normalize a path for cross-source comparison: forward slashes, no trailing separator. The indexed
@@ -1061,15 +1731,27 @@ internal static class ImpactCommand
         return string.IsNullOrEmpty(top) ? null : Path.GetFullPath(top);
     }
 
-    // The union of changed `.cs` files: committed (base...HEAD) + working tree (tracked changes vs HEAD).
-    // `base...HEAD` (three-dot) diffs from the merge-base, so a stale base only shows what THIS branch
-    // added, not unrelated upstream churn — the right "what did I change" set. The working-tree diff
-    // (`git diff HEAD`) folds in staged + unstaged edits so an uncommitted WIP branch is covered.
-    private static IReadOnlyList<string> ChangedCsFiles(string repoRoot, string baseRef, TextWriter error)
+    // The changed-file set with the line-level detail the blast-radius gate needs.
+    //  Files          — union of committed (base...HEAD) + working-tree (.cs) paths, repo-root-relative POSIX.
+    //  CommittedRanges — each committed file's changed NEW-side line ranges (from `git diff --unified=0`).
+    //  DirtyFiles      — files with working-tree changes; their committed ranges are NOT trusted for line
+    //                    precision (uncommitted edits shift line numbers vs the indexed coordinates).
+    internal sealed record CsDiff(
+        IReadOnlyList<string> Files,
+        IReadOnlyDictionary<string, IReadOnlyList<(int Start, int End)>> CommittedRanges,
+        IReadOnlySet<string> DirtyFiles
+    );
+
+    // `base...HEAD` (three-dot) diffs from the merge-base, so a stale base only shows what THIS branch added,
+    // not unrelated upstream churn — the right "what did I change" set. The working-tree diff (`git diff
+    // HEAD`) folds in staged + unstaged edits so an uncommitted WIP branch is still covered.
+    private static CsDiff ChangedCsFileDiff(string repoRoot, string baseRef, TextWriter error)
     {
         var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var committedRanges = new Dictionary<string, IReadOnlyList<(int Start, int End)>>(StringComparer.OrdinalIgnoreCase);
 
-        var (ok, committed, err) = RunGit(repoRoot, "diff", "--name-only", $"{baseRef}...HEAD");
+        // --unified=0: zero context lines, so each hunk header's new-side range is exactly the changed lines.
+        var (ok, committed, err) = RunGit(repoRoot, "diff", "--unified=0", $"{baseRef}...HEAD");
         if (!ok)
         {
             // A bad/absent base ref shouldn't abort — fall back to the working-tree diff alone and warn.
@@ -1077,28 +1759,216 @@ internal static class ImpactCommand
         }
         else
         {
-            AddCsLines(files, committed);
+            foreach (var (file, ranges) in ParseUnifiedDiff(committed))
+            {
+                files.Add(file);
+                committedRanges[file] = ranges;
+            }
         }
 
+        var dirty = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var (okWt, worktree, _) = RunGit(repoRoot, "diff", "--name-only", "HEAD");
         if (okWt)
         {
-            AddCsLines(files, worktree);
-        }
-
-        return files.ToList();
-
-        static void AddCsLines(HashSet<string> set, string output)
-        {
-            foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            foreach (var line in worktree.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
                 if (line.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
                 {
-                    set.Add(line);
+                    files.Add(line);
+                    dirty.Add(line);
                 }
             }
         }
+
+        return new CsDiff(files.ToList(), committedRanges, dirty);
     }
+
+    // Parse `git diff --unified=0` output into per-`.cs`-file NEW-side changed line ranges. A hunk header is
+    //   @@ -<oldStart>[,<oldLen>] +<newStart>[,<newLen>] @@
+    // and with --unified=0 the new-side span [newStart, newStart+newLen-1] is exactly the added/modified
+    // lines. A pure DELETION carries +newStart,0 (no new lines): it sits in the seam between new lines
+    // newStart and newStart+1, so we record [newStart, newStart+1] (clamped ≥1) — enough for the overlap
+    // test to attribute it to an enclosing method, or trip the structural fallback if it straddles a gap.
+    internal static IReadOnlyDictionary<string, IReadOnlyList<(int Start, int End)>> ParseUnifiedDiff(string diffOutput)
+    {
+        var result = new Dictionary<string, List<(int Start, int End)>>(StringComparer.OrdinalIgnoreCase);
+        string? current = null;
+        var isCs = false;
+
+        foreach (var raw in diffOutput.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            // `+++ b/<path>` names the new-side file for the hunks that follow. `/dev/null` => file deleted
+            // wholesale: nothing in the new tree to attribute, so leave `current` null and skip its hunks.
+            if (line.StartsWith("+++ ", StringComparison.Ordinal))
+            {
+                var path = line[4..].Trim();
+                path = path.StartsWith("b/", StringComparison.Ordinal) ? path[2..] : path;
+                current = path == "/dev/null" ? null : path;
+                isCs = current is not null && current.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
+                continue;
+            }
+
+            if (!isCs || current is null || !line.StartsWith("@@", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (TryParseHunkNewSide(line, start: out var start, len: out var len))
+            {
+                var range = len == 0 ? (Math.Max(val1: 1, val2: start), Math.Max(val1: 1, val2: start) + 1) : (start, start + len - 1);
+                if (!result.TryGetValue(current, out var list))
+                {
+                    result[current] = list = [];
+                }
+
+                list.Add(range);
+            }
+        }
+
+        return result.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<(int, int)>)kv.Value, StringComparer.OrdinalIgnoreCase);
+    }
+
+    // Extract the new-side (start, len) from a `@@ -a,b +c,d @@` header. len defaults to 1 when omitted
+    // (a single-line hunk: `+c`). Returns false for a header we can't parse (left untrusted, not crashed).
+    private static bool TryParseHunkNewSide(string hunkHeader, out int start, out int len)
+    {
+        start = 0;
+        len = 0;
+        var plus = hunkHeader.IndexOf('+', StringComparison.Ordinal);
+        if (plus < 0)
+        {
+            return false;
+        }
+
+        var end = plus + 1;
+        while (end < hunkHeader.Length && (char.IsDigit(hunkHeader[end]) || hunkHeader[end] == ','))
+        {
+            end++;
+        }
+
+        var token = hunkHeader[(plus + 1)..end];
+        var comma = token.IndexOf(',');
+        if (comma < 0)
+        {
+            len = 1;
+            return int.TryParse(token, CultureInfo.InvariantCulture, out start);
+        }
+
+        return int.TryParse(token[..comma], CultureInfo.InvariantCulture, out start)
+            && int.TryParse(token[(comma + 1)..], CultureInfo.InvariantCulture, out len);
+    }
+
+    // Resolve a repo-root-relative POSIX diff path to the normalized absolute form used to join the indexed
+    // FilePath (absolute, OS separators). Norm makes the comparison separator-agnostic.
+    private static string NormalizeRepoRelative(string repoRoot, string repoRelativePosix) =>
+        Norm(Path.GetFullPath(Path.Combine(repoRoot, repoRelativePosix.Replace(oldChar: '/', newChar: Path.DirectorySeparatorChar))));
+
+    // The changed method set + how it was derived: PreciseFileCount files were narrowed to the methods whose
+    // source extent overlaps a changed line range; FileGranularFileCount files were taken whole.
+    internal sealed record ChangedSet(IReadOnlyList<DeadCodeFinder.MethodMeta> Methods, int PreciseFileCount, int FileGranularFileCount);
+
+    // Map the changed files to changed methods, narrowing to symbol granularity where we can PROVE it and
+    // falling back to file granularity (every method in the file) everywhere else. A file goes symbol-
+    // granular only when ALL of these hold; otherwise it is taken whole — pessimistic, never under-reports:
+    //   * we have trusted committed line ranges for it (committed + clean; see preciseRangesByFileNorm),
+    //   * every indexed method in it has a known span [Line, EndLine] (EndLine > 0 — a pre-EndLine store
+    //     yields none, so the file stays whole), and
+    //   * every changed range overlaps SOME method span (a range hitting none is an edit outside any method
+    //     body — a field/attribute/using/type-declaration change, or a deletion straddling a method gap —
+    //     which can affect any member of the file, so we conservatively take the whole file).
+    // changedFilesNorm and the keys of preciseRangesByFileNorm are normalized-absolute (NormalizeRepoRelative);
+    // method FilePaths are normalized here so the join is separator/case-agnostic.
+    internal static ChangedSet SelectChangedMethods(
+        IReadOnlyList<DeadCodeFinder.MethodMeta> methods,
+        IReadOnlyDictionary<string, int> endLineById,
+        IReadOnlySet<string> changedFilesNorm,
+        IReadOnlyDictionary<string, IReadOnlyList<(int Start, int End)>> preciseRangesByFileNorm
+    )
+    {
+        var byFile = methods
+            .Where(m => !string.IsNullOrEmpty(m.FilePath))
+            .GroupBy(m => Norm(m.FilePath), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        var selected = new List<DeadCodeFinder.MethodMeta>();
+        var preciseFiles = 0;
+        var fileGranularFiles = 0;
+        foreach (var file in changedFilesNorm)
+        {
+            if (!byFile.TryGetValue(file, out var fileMethods) || fileMethods.Count == 0)
+            {
+                continue; // no indexed method declared in this changed file — nothing to seed
+            }
+
+            if (
+                TryPreciseSelect(
+                    fileMethods: fileMethods,
+                    endLineById: endLineById,
+                    preciseRangesByFileNorm: preciseRangesByFileNorm,
+                    fileNorm: file,
+                    narrowed: out var narrowed
+                )
+            )
+            {
+                selected.AddRange(narrowed);
+                preciseFiles++;
+            }
+            else
+            {
+                selected.AddRange(fileMethods);
+                fileGranularFiles++;
+            }
+        }
+
+        return new ChangedSet(selected, PreciseFileCount: preciseFiles, FileGranularFileCount: fileGranularFiles);
+    }
+
+    // True (with `narrowed` = the overlapping methods) when this file qualifies for symbol-granular
+    // selection; false when any gate fails (caller then takes the whole file). See SelectChangedMethods.
+    private static bool TryPreciseSelect(
+        List<DeadCodeFinder.MethodMeta> fileMethods,
+        IReadOnlyDictionary<string, int> endLineById,
+        IReadOnlyDictionary<string, IReadOnlyList<(int Start, int End)>> preciseRangesByFileNorm,
+        string fileNorm,
+        out List<DeadCodeFinder.MethodMeta> narrowed
+    )
+    {
+        narrowed = [];
+        if (!preciseRangesByFileNorm.TryGetValue(fileNorm, out var ranges))
+        {
+            return false; // no trusted committed ranges (dirty file, or only working-tree changes) → whole file
+        }
+
+        var spans = new List<(DeadCodeFinder.MethodMeta Method, int Start, int End)>(fileMethods.Count);
+        foreach (var m in fileMethods)
+        {
+            if (m.Line <= 0 || !endLineById.TryGetValue(m.SymbolId, out var end) || end <= 0)
+            {
+                return false; // an unknown span could hide a changed range → can't prove precision → whole file
+            }
+
+            spans.Add((m, m.Line, Math.Max(val1: end, val2: m.Line)));
+        }
+
+        // Structural guard: a changed range overlapping no method span is an out-of-method edit → whole file.
+        foreach (var r in ranges)
+        {
+            if (!spans.Any(sp => Overlaps(aStart: sp.Start, aEnd: sp.End, bStart: r.Start, bEnd: r.End)))
+            {
+                return false;
+            }
+        }
+
+        narrowed = spans
+            .Where(sp => ranges.Any(r => Overlaps(aStart: sp.Start, aEnd: sp.End, bStart: r.Start, bEnd: r.End)))
+            .Select(sp => sp.Method)
+            .ToList();
+        return true;
+    }
+
+    // Inclusive 1-D interval overlap.
+    private static bool Overlaps(int aStart, int aEnd, int bStart, int bEnd) => aStart <= bEnd && bStart <= aEnd;
 
     private static (bool Ok, string StdOut, string StdErr) RunGit(string workingDir, params string[] args)
     {
