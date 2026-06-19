@@ -11,6 +11,10 @@
     <File Path="dotnet-tools.json" />
     <File Path="global.json" />
   </Folder>
+  <Folder Name="/files/scripts/">
+    <File Path="scripts/format.ps1" />
+    <File Path="scripts/mini-ci.ps1" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/Rig.Analysis/Rig.Analysis.csproj" />
     <Project Path="src/Rig.Domain/Rig.Domain.csproj" />
