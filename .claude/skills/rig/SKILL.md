@@ -1,6 +1,6 @@
 ---
 name: rig
-description: Drive the `rig` fact-based .NET code-intelligence CLI to trace entry-point→effect call graphs, do reverse reachability ("which entry points reach X"), inventory effects (DB/cache/object-store/throw/messaging/HTTP/EF Core/parallel), diff a branch's blast radius + behavioral delta against another commit (`rig impact`, per-entry-point), find unreachable/dead code, and ground-truth-validate static-analysis findings across multi-project solutions. Use when analysing a .NET/C# codebase's call graph or side effects, answering "what does this reach / who reaches this", auditing a PR/migration's blast radius or per-EP effect changes, finding dead code, or when the user mentions rig, coderig, the `.rig` index, `rig derive/reaches/tree/callers/dead/impact`, commit-scoped stores (`--store`/`--commit`), or effect/entry-point detectors.
+description: Drive the `rig` fact-based .NET code-intelligence CLI to trace entry-point→effect call graphs, do reverse reachability ("which entry points reach X"), inventory effects (DB/cache/object-store/throw/messaging/HTTP/EF Core/parallel), diff a branch's blast radius + behavioral delta against another commit (`rig impact`, per-entry-point), find unreachable/dead code, and ground-truth-validate static-analysis findings across multi-project solutions. Use when analysing a .NET/C# codebase's call graph or side effects, answering "what does this reach / who reaches this", auditing a PR/migration's blast radius or per-EP effect changes, finding dead code, or when the user mentions rig, coderig, the `.rig` index, `rig derive/reaches/tree/callers/dead/impact/entrypoints`, commit-scoped stores (`--store`/`--commit`), or effect/entry-point detectors.
 ---
 
 # rig — fact-based .NET code intelligence
@@ -40,10 +40,12 @@ rig tree "Type.Method" --effects --maxdepth 3     # COMPACT: only effectful meth
 rig tree "Type.Method" --exclude throw            # drop a noisy effect class (see Effect filtering)
 rig tree "Type.Method" --raw                      # bypass codebase render rules (see Tree render rules)
 rig tree "Type.Method" --no-cache                 # bypass the .rig/cache.db forest+effects cache (see below)
+rig tree "Type.Method" --full                      # every node + effect leaf shows its call site (file printed once per change); --files adds definition lines; lambdas labelled λN
 rig callers "Type.Method" --roots                # reverse: no-predecessor candidates that reach it (heuristic; a background callback shows as its OWN root)
 rig callers "Type.Method" --entrypoints           # reverse: the RULE-DETECTED entry points (the `derive` set) that reach it — precise, no unbound-interface noise
 rig path "From.Method" "To.Method" [--async]     # one concrete path between two symbols (synchronous; --async renders the ⤳ handoff hop)
 rig derive                                       # re-derive ALL effects + entry points from facts
+rig entrypoints                                  # JUST the rule-detected entry points, grouped by kind (+ service attribution); --format tsv
 rig dead --root "App.Main"                       # unreachable first-party methods (report-only)
 rig refs "IFoo" / rig symbols "Foo" --kind method
 rig reaches "Type.Method" --store 1a2b3c4d        # query a SPECIFIC commit's store (id / sha-prefix; --commit/--at aliases)

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using static System.Globalization.CultureInfo;
 
 namespace Rig.Cli.Rendering;
@@ -17,6 +18,14 @@ internal static class SymbolNameFormatter
         }
 
         var s = symbolId;
+        // EF projections surface as Roslyn's full anonymous-type display ("<anonymous type: T1 M1, ...>").
+        // Collapse the member list — the enclosing method already identifies the projection. Display-only;
+        // the facts keep the full string (so --format tsv and effect-identity stay verbatim).
+        if (s.StartsWith("<anonymous type:", StringComparison.Ordinal))
+        {
+            return "<anon>";
+        }
+
         var paren = s.IndexOf('(');
         if (paren >= 0)
         {
@@ -348,9 +357,9 @@ internal static class SymbolNameFormatter
         string[]? tokens;
         try
         {
-            tokens = System.Text.Json.JsonSerializer.Deserialize<string[]>(bindingJson!);
+            tokens = JsonSerializer.Deserialize<string[]>(bindingJson!);
         }
-        catch (System.Text.Json.JsonException)
+        catch (JsonException)
         {
             return null;
         }

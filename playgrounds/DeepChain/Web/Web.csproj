@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- net48 leaf over netstandard2.0 libraries — the MedDBase shape (net48 Pages over a netstandard
+       data tier) that exercises the loader's net452/netstandard sibling-reference handling. -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ApiGateway/ApiGateway.csproj" />
+  </ItemGroup>
+</Project>

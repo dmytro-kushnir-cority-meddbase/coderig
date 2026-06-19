@@ -1,4 +1,6 @@
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Rig.Domain.Functions;
 
 namespace Rig.Cli.Caching;
@@ -30,7 +32,7 @@ internal static class QueryCacheKeys
     internal static string EpCacheKey(string storeKey, string rulesHash)
     {
         var material = $"ep|v1|{storeKey}|{rulesHash}";
-        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 
     // The cache key for a `rig tree` forest+effects artifact: everything the artifact is a function of —
@@ -48,7 +50,7 @@ internal static class QueryCacheKeys
     )
     {
         var material = $"tree|v1|{storeKey}|{rulesHash}|{fromPattern}|{maxDepth}|{mode}|{raw}";
-        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 
     // A stable signature of the effect filters (--only/--exclude) for the render-sidecar key: sorted +
@@ -72,7 +74,7 @@ internal static class QueryCacheKeys
             put();
         }
         catch (Exception ex)
-            when (ex is System.Text.Json.JsonException or NotSupportedException or InvalidOperationException or IOException)
+            when (ex is JsonException or NotSupportedException or InvalidOperationException or IOException)
         {
             // skip caching this result
         }

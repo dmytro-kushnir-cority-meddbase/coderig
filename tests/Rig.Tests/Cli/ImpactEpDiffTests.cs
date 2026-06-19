@@ -6,7 +6,6 @@ using Rig.Storage.Queries;
 using Rig.Storage.Storage;
 using Rig.Tests.Fixtures;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Cli;
 
@@ -44,12 +43,12 @@ public sealed class ImpactEpDiffTests(AnalyzedPlaygrounds playgrounds)
 
     private static async Task<ImpactCommand.EpDiff> DiffAsync(string branchDb, string baseDb, string wd)
     {
-        var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(wd, []);
+        var rules = RuleSet.Load(wd);
         await using var branchCtx = new RigDbContext(branchDb, pooling: false, readOnly: true);
         var branchEpData = await Reads.LoadFactEntryPointDataAsync(branchCtx);
-        var branchSet = await EntryPointContext.DeriveEntryPointsAsync(branchCtx, branchEpData, wd, [], handoffRules);
+        var branchSet = await EntryPointContext.DeriveEntryPointsAsync(branchCtx, branchEpData, rules);
         var branchEps = branchSet.Derived.Concat(branchSet.PromotedOrigins).ToList();
-        return await ImpactCommand.ComputeEpDiffAsync(baseDb, branchEps, wd, [], handoffRules);
+        return await ImpactCommand.ComputeEpDiffAsync(baseDb, branchEps, rules);
     }
 
     private static async Task<(string BranchDb, string BaseDb, string Wd)> TwoStoresAsync(AnalysisResult branch, AnalysisResult @base)

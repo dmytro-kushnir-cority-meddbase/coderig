@@ -1,7 +1,6 @@
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Domain;
 
@@ -25,12 +24,12 @@ public sealed class ReceiverContextNarrowingTests
             new MethodRef("M:N.Lab.OnInit", "OnInit", "T:N.Lab", IsOverride: true),
             new MethodRef("M:N.Pacs.OnInit", "OnInit", "T:N.Pacs", IsOverride: true),
         };
-        return new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+        return new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases);
     }
 
     private static HashSet<string> Ids(TraceNode node)
     {
-        var set = new HashSet<string>(System.StringComparer.Ordinal);
+        var set = new HashSet<string>(StringComparer.Ordinal);
         void Walk(TraceNode n)
         {
             set.Add(n.SymbolId);
@@ -132,7 +131,7 @@ public sealed class ReceiverContextNarrowingTests
             new CallEdge("M:N.Caller.Go", "M:N.WCB.Step", "invocation", "f.cs", 10, ReceiverType: "N.WCB"),
             new CallEdge("M:N.Controller.Step", "M:N.WCB.Deep", "invocation", "f.cs", 20, ReceiverType: "N.WCB"),
         };
-        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+        var graph = new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases);
 
         var ids = Ids(FactPathFinder.BuildTree(graph, "M:N.Caller.Go").Single());
 

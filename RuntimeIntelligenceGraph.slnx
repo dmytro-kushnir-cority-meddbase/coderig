@@ -2,6 +2,19 @@
   <Folder Name="/bench/">
     <Project Path="bench/Rig.Benchmarks/Rig.Benchmarks.csproj" />
   </Folder>
+  <Folder Name="/files/">
+    <File Path=".csharpierrc.json" />
+    <File Path=".editorconfig" />
+    <File Path="CLAUDE.md" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="dotnet-tools.json" />
+    <File Path="global.json" />
+  </Folder>
+  <Folder Name="/files/scripts/">
+    <File Path="scripts/format.ps1" />
+    <File Path="scripts/mini-ci.ps1" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/Rig.Analysis/Rig.Analysis.csproj" />
     <Project Path="src/Rig.Domain/Rig.Domain.csproj" />

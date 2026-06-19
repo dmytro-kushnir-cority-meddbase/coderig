@@ -1,7 +1,6 @@
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Domain;
 
@@ -167,7 +166,7 @@ public sealed class OneHopDispatchTests
             new DispatchFact("M:N.Base.V", "M:N.Mid.V", "override"),
             new DispatchFact("M:N.Mid.V", "M:N.Leaf.V", "override"),
         };
-        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases, mined);
+        var graph = new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases, mined);
 
         var reach = FactPathFinder.Reaches(graph, "M:N.Caller.Go");
 
@@ -253,7 +252,7 @@ public sealed class OneHopDispatchTests
             new DispatchFact("M:N.Base.V", "M:N.Mid.V", "override"),
             new DispatchFact("M:N.Mid.V", "M:N.Leaf.V", "override"),
         };
-        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases, mined);
+        var graph = new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases, mined);
 
         var reach = FactPathFinder.Reaches(graph, "M:N.Caller.Go");
 

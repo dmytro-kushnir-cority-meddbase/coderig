@@ -52,7 +52,6 @@ public class TreeComputeBenchmarks
 
         await using var context = new RigDbContext(dbPath, readOnly: true);
 
-        var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(dir);
         _factoryRules = FactGenericFactoryRuleProvider.LoadForWorkingDirectory(dir);
         _cutRules = FactTraversalCutRuleProvider.LoadForWorkingDirectory(dir);
         _contextRules = FactContextDispatchRuleProvider.LoadForWorkingDirectory(dir);
@@ -82,7 +81,7 @@ public class TreeComputeBenchmarks
     public FactGraphData MarkEventHandoffs() => FactPathFinder.MarkEventSubscriptionHandoffs(_shapedGraph, _eventSites);
 
     [Benchmark]
-    public IReadOnlyList<TraceNode> BuildTree() => FactPathFinder.BuildTree(_markedGraph, _pattern, MaxDepth);
+    public IReadOnlyList<TraceNode> BuildTree() => FactPathFinder.BuildTree(_markedGraph, _pattern);
 
     [Benchmark]
     public IReadOnlyList<DerivedEffect> DeriveEffects() =>

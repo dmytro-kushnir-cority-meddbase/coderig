@@ -1,4 +1,5 @@
 ﻿using System.Data.Common;
+using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
@@ -85,7 +86,7 @@ public static class Reads
             .ThenByDescending(run => run.Id)
             .Select(run => new RunSummary(
                 Id: run.Id,
-                CreatedAtUtc: DateTimeOffset.Parse(run.CreatedAtUtcText, System.Globalization.CultureInfo.InvariantCulture),
+                CreatedAtUtc: DateTimeOffset.Parse(run.CreatedAtUtcText, CultureInfo.InvariantCulture),
                 SolutionPath: run.SolutionPath,
                 SymbolCount: run.SymbolCount,
                 ReferenceCount: run.ReferenceCount,
@@ -293,7 +294,7 @@ public static class Reads
         }
         catch (InvalidCastException)
         {
-            return int.TryParse(reader.GetString(ordinal), System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0;
+            return int.TryParse(reader.GetString(ordinal), CultureInfo.InvariantCulture, out var v) ? v : 0;
         }
     }
 
@@ -473,6 +474,95 @@ public static class Reads
                 IsGenerated: IsGeneratedPath(s.FilePath)
             ))
             .ToList();
+    }
+
+    // SymbolId -> the declaration's END line, for the method symbols only. Used by `rig impact` to overlap
+    // each changed method's source extent [Line, EndLine] against a git diff's changed line ranges. Read
+    // via raw ADO and GUARDED by ColumnExists: the EndLine column was added after the original schema, so a
+    // store indexed by an older rig won't have it — there we return an EMPTY map and `impact` degrades to
+    // its file-granular gate (correct, just less precise). Method symbols only, deduped by SymbolId (the
+    // same universe LoadDeadCodeMethodsAsync ranges over).
+    public static async Task<IReadOnlyDictionary<string, int>> LoadMethodEndLinesAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        if (
+            !await StorageProbes.ColumnExistsAsync(
+                connection,
+                table: "symbol_facts",
+                column: "EndLine",
+                cancellationToken: cancellationToken
+            )
+        )
+        {
+            return new Dictionary<string, int>(StringComparer.Ordinal);
+        }
+
+        var endLines = new Dictionary<string, int>(StringComparer.Ordinal);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT SymbolId, EndLine FROM symbol_facts WHERE Kind = $kind;";
+        var p = command.CreateParameter();
+        p.ParameterName = "$kind";
+        p.Value = SymbolKinds.Method;
+        command.Parameters.Add(p);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var id = reader.GetString(0);
+            var end = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
+            // First write wins, mirroring LoadDeadCodeMethodsAsync's GroupBy(SymbolId).First().
+            endLines.TryAdd(id, end);
+        }
+
+        return endLines;
+    }
+
+    // SymbolId -> the symbol's declaration BODY HASH (SymbolFact.BodyHash). Used by `rig impact` to detect an
+    // IN-PLACE body edit — a reachable method whose text changed but whose call structure (and thus the
+    // reachable-set diff) did not. Read via raw ADO and GUARDED by ColumnExists: the BodyHash column was added
+    // after the original schema, so a store indexed by an older rig won't have it — there we return an EMPTY
+    // map and `impact` silently skips the in-place signal (the structural diff still works). Mirrors
+    // LoadMethodEndLinesAsync's backward-compat pattern. ALL symbol kinds (not just methods) so reachable
+    // lambdas/accessors are covered; rows with an empty hash (no body) are skipped. First write wins.
+    public static async Task<IReadOnlyDictionary<string, string>> LoadSymbolBodyHashesAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        if (
+            !await StorageProbes.ColumnExistsAsync(
+                connection,
+                table: "symbol_facts",
+                column: "BodyHash",
+                cancellationToken: cancellationToken
+            )
+        )
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+
+        var hashes = new Dictionary<string, string>(StringComparer.Ordinal);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT SymbolId, BodyHash FROM symbol_facts;";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (reader.IsDBNull(1))
+            {
+                continue;
+            }
+
+            var hash = reader.GetString(1);
+            if (hash.Length > 0)
+            {
+                hashes.TryAdd(reader.GetString(0), hash);
+            }
+        }
+
+        return hashes;
     }
 
     // Heuristic: a file is generated when it carries the conventional generated-source markers or the
@@ -715,5 +805,24 @@ public static class Reads
             .ToListAsync(cancellationToken);
 
         return rows.GroupBy(r => (r.FilePath, r.Line, r.Target)).Select(g => g.First()).ToList();
+    }
+
+    // First-party field/property ACCESS references (RefKind read|write) — the data the call graph omits (it
+    // carries method→method call edges only). `rig impact` (Phase 3) unions these targets into each reachable
+    // method's reach as degenerate leaf nodes, so a changed field/property access inside a reachable method
+    // shows in the per-EP reach-set diff. First-party only (TargetInSource) — a write to a BCL field is not a
+    // first-party behavioral surface — and EnclosingSymbolId not null so it can be keyed to its method.
+    public static async Task<IReadOnlyList<SymbolRef>> LoadFieldAccessRefsAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var rows = await context
+            .ReferenceFacts.AsNoTracking()
+            .Where(r => (r.RefKind == RefKinds.Read || r.RefKind == RefKinds.Write) && r.TargetInSource && r.EnclosingSymbolId != null)
+            .Select(r => new SymbolRef(Target: r.TargetSymbolId, Enclosing: r.EnclosingSymbolId, FilePath: r.FilePath, Line: r.Line))
+            .ToListAsync(cancellationToken);
+
+        return rows;
     }
 }

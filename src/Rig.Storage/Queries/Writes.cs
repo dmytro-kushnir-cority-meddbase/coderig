@@ -1,4 +1,6 @@
-﻿using System.Security.Cryptography;
+﻿using System.Data;
+using System.Data.Common;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Rig.Domain.Data;
@@ -35,7 +37,20 @@ public static class Writes
         var runId = Guid.NewGuid().ToString("n");
 
         await context.Database.EnsureCreatedAsync(cancellationToken);
-        await MigrateAsync(context, cancellationToken);
+
+        // Hold the connection open for the whole save. The fast-path PRAGMAs below are PER-CONNECTION
+        // (synchronous / cache_size / locking_mode / journal_mode) and are lost the moment EF closes and
+        // reopens the connection between commands — so we open it once here and keep it open through the
+        // header write, the raw-ADO bulk insert (which reuses this same connection), and the registry
+        // upsert. No MigrateAsync: a store is immutable. EnsureCreated builds the full current schema on a
+        // fresh DB (the standalone atomic-publish path always writes a fresh temp); an old store is
+        // re-indexed/re-mined, never altered in place (declare + require — see the --merge guard and
+        // docs/multi-solution-storage.md).
+        var connection = context.Database.GetDbConnection();
+        if (connection.State != ConnectionState.Open)
+        {
+            await connection.OpenAsync(cancellationToken);
+        }
 
         if (fastBulkWrite)
         {
@@ -84,7 +99,7 @@ public static class Writes
         await context.SaveChangesAsync(cancellationToken);
         context.ChangeTracker.Clear();
 
-        await SaveFactsBatchedAsync(context, runId, result, progress, cancellationToken);
+        await SaveFactsBatchedAsync(context, runId, result, fastBulkWrite, progress, cancellationToken);
         try
         {
             await WriteAssemblyRegistryAsync(context, result, progress, cancellationToken);
@@ -263,28 +278,25 @@ public static class Writes
         }
     }
 
-    private const int FactBatchSize = 20_000;
+    private const int FactProgressInterval = 50_000;
 
-    // Inserts the symbol/reference/type-relation facts in fixed-size batches, flushing + clearing the
-    // change tracker per batch and reporting cumulative progress. One SaveChanges over millions of
-    // tracked entities is both slow and memory-heavy; batching keeps both bounded.
+    private static readonly string[] FactTableNames = ["symbol_facts", "reference_facts", "type_relation_facts", "dispatch_facts"];
+
+    // Bulk-inserts the symbol/reference/type-relation/dispatch facts over RAW ADO — a single reused
+    // prepared INSERT per table (param.Value reset per row, as GraphMaterializer/EntryPointSiteStore do),
+    // inside ONE transaction. This bypasses the EF change tracker + per-entity allocation that
+    // Add/SaveChanges pay even with AutoDetectChanges off, and Microsoft.Data.Sqlite's "async" is
+    // synchronous under the hood, so the hot loop calls ExecuteNonQuery() directly (no per-row Task).
     //
-    // TODO(perf): speed up the ~2M-row write. WAL is NOT the lever — the standalone fast path already sets
-    // journal_mode=OFF (more aggressive than WAL) + synchronous=OFF + EXCLUSIVE + 64MB cache (SaveAsync).
-    // The real levers, roughly in impact order:
-    //   1. DEFER secondary indexes. EnsureCreated + MigrateAsync build IX_symbol_facts_*/IX_reference_facts_*
-    //      etc. BEFORE this insert, so every one of 2M rows maintains all secondary indexes. Classic
-    //      bulk-load fix: create tables WITHOUT secondary indexes, bulk-insert, then CREATE INDEX once.
-    //   2. Bypass EF for the hot path: a reused prepared INSERT over raw ADO (param.Value reset per row, as
-    //      EntryPointSiteStore.PersistAsync already does) avoids change-tracker + per-entity overhead that
-    //      AddRange/SaveChanges still pays even with AutoDetectChanges off.
-    //   3. One explicit transaction around the whole load (not a SaveChanges per 20k batch).
-    // Ref: Milan Jovanović, "Fast SQL Bulk Inserts With C# and EF Core"
-    //      https://www.milanjovanovic.tech/blog/fast-sql-bulk-inserts-with-csharp-and-ef-core
+    // On the fresh standalone path (fastBulkWrite) the secondary indexes are DROPPED first and rebuilt
+    // once at the end — otherwise every one of ~2M rows maintains every secondary index as it lands.
+    // The in-place append path (--merge / mine) keeps its indexes: the table already holds prior writers'
+    // rows, so a drop + global rebuild would be slower and is unsafe under concurrent writers.
     private static async Task SaveFactsBatchedAsync(
         RigDbContext context,
         string runId,
         AnalysisResult result,
+        bool fastBulkWrite,
         Action<string>? progress,
         CancellationToken cancellationToken
     )
@@ -295,118 +307,286 @@ public static class Writes
         var dispatch = result.DispatchFacts ?? [];
         long total = symbols.Count + references.Count + relations.Count + dispatch.Count;
         long saved = 0;
-        var pending = 0;
 
-        async Task FlushAsync()
+        var connection = (DbConnection)context.Database.GetDbConnection();
+        if (connection.State != ConnectionState.Open)
         {
-            await context.SaveChangesAsync(cancellationToken);
-            context.ChangeTracker.Clear();
-            pending = 0;
-            progress?.Invoke($"Saved {saved}/{total} fact rows");
+            await connection.OpenAsync(cancellationToken);
         }
 
-        // The four fact tables share one batching policy (fixed-size flush + tracker clear, cumulative
-        // progress); only the per-row entity mapping differs. This local function captures the shared
-        // `saved`/`pending`/`total` counters so the control flow lives in exactly one place — the call
-        // sites supply just the (item, index) -> entity projection.
-        async Task AddAllAsync<TSource, TEntity>(IReadOnlyList<TSource> items, Func<TSource, int, TEntity> map)
-            where TEntity : class
+        var deferredIndexes = fastBulkWrite ? await DropSecondaryIndexesAsync(connection, FactTableNames, cancellationToken) : [];
+
+        await using (var transaction = await connection.BeginTransactionAsync(cancellationToken))
         {
-            for (var i = 0; i < items.Count; i++)
-            {
-                context.Add(map(items[i], i));
-                saved++;
-                if (++pending >= FactBatchSize)
+            saved += InsertRows(
+                connection,
+                transaction,
+                "INSERT INTO symbol_facts (RunId, SymbolFactIndex, SymbolId, Kind, Name, Namespace, ContainingSymbolId, "
+                    + "Modifiers, TypeKind, Signature, FilePath, Line, EndLine, DefiningAssembly, IsOverride, BodyHash) "
+                    + "VALUES ($run,$idx,$sid,$kind,$name,$ns,$containing,$mods,$tk,$sig,$file,$line,$endline,$asm,$ovr,$bh);",
+                [
+                    "$run",
+                    "$idx",
+                    "$sid",
+                    "$kind",
+                    "$name",
+                    "$ns",
+                    "$containing",
+                    "$mods",
+                    "$tk",
+                    "$sig",
+                    "$file",
+                    "$line",
+                    "$endline",
+                    "$asm",
+                    "$ovr",
+                    "$bh",
+                ],
+                symbols,
+                (p, s, i) =>
                 {
-                    await FlushAsync();
-                }
+                    p[0].Value = runId;
+                    p[1].Value = i;
+                    p[2].Value = s.SymbolId;
+                    p[3].Value = s.Kind;
+                    p[4].Value = s.Name;
+                    p[5].Value = s.Namespace;
+                    p[6].Value = (object?)s.ContainingSymbolId ?? DBNull.Value;
+                    p[7].Value = s.Modifiers;
+                    p[8].Value = s.TypeKind;
+                    p[9].Value = s.Signature;
+                    p[10].Value = s.FilePath;
+                    p[11].Value = s.Line;
+                    p[12].Value = s.EndLine;
+                    p[13].Value = s.DefiningAssembly;
+                    p[14].Value = s.IsOverride ? 1 : 0;
+                    p[15].Value = s.BodyHash;
+                },
+                alreadySaved: saved,
+                total: total,
+                progress,
+                cancellationToken
+            );
+
+            saved += InsertRows(
+                connection,
+                transaction,
+                "INSERT INTO reference_facts (RunId, ReferenceFactIndex, TargetSymbolId, RefKind, EnclosingSymbolId, TargetAssembly, "
+                    + "TargetInSource, FilePath, Line, ReceiverType, FirstArgumentTemplate, FirstArgumentType, EnclosingLoopKind, "
+                    + "EnclosingLoopDetail, EnclosingInvocations, EnclosingCatchTypes, TypeArguments, FirstArgumentName, DelegateConsumer, "
+                    + "EnclosingScopes, ArgumentTemplates, ArgumentNames, DeclaringTypeArgBinding, MethodTypeArgBinding) "
+                    + "VALUES ($run,$idx,$target,$kind,$enc,$tasm,$insrc,$file,$line,$recv,$fat,$fatype,$elk,$eld,$einv,$ect,$ta,$fan,$dc,"
+                    + "$es,$at,$an,$dtab,$mtab);",
+                [
+                    "$run",
+                    "$idx",
+                    "$target",
+                    "$kind",
+                    "$enc",
+                    "$tasm",
+                    "$insrc",
+                    "$file",
+                    "$line",
+                    "$recv",
+                    "$fat",
+                    "$fatype",
+                    "$elk",
+                    "$eld",
+                    "$einv",
+                    "$ect",
+                    "$ta",
+                    "$fan",
+                    "$dc",
+                    "$es",
+                    "$at",
+                    "$an",
+                    "$dtab",
+                    "$mtab",
+                ],
+                references,
+                (p, r, i) =>
+                {
+                    p[0].Value = runId;
+                    p[1].Value = i;
+                    p[2].Value = r.TargetSymbolId;
+                    p[3].Value = r.RefKind;
+                    p[4].Value = (object?)r.EnclosingSymbolId ?? DBNull.Value;
+                    p[5].Value = r.TargetAssembly;
+                    p[6].Value = r.TargetInSource ? 1 : 0;
+                    p[7].Value = r.FilePath;
+                    p[8].Value = r.Line;
+                    p[9].Value = (object?)r.ReceiverType ?? DBNull.Value;
+                    p[10].Value = (object?)r.FirstArgumentTemplate ?? DBNull.Value;
+                    p[11].Value = (object?)r.FirstArgumentType ?? DBNull.Value;
+                    p[12].Value = (object?)r.EnclosingLoopKind ?? DBNull.Value;
+                    p[13].Value = (object?)r.EnclosingLoopDetail ?? DBNull.Value;
+                    p[14].Value = (object?)r.EnclosingInvocations ?? DBNull.Value;
+                    p[15].Value = (object?)r.EnclosingCatchTypes ?? DBNull.Value;
+                    p[16].Value = (object?)r.TypeArguments ?? DBNull.Value;
+                    p[17].Value = (object?)r.FirstArgumentName ?? DBNull.Value;
+                    p[18].Value = (object?)r.DelegateConsumer ?? DBNull.Value;
+                    p[19].Value = (object?)r.EnclosingScopes ?? DBNull.Value;
+                    p[20].Value = (object?)r.ArgumentTemplates ?? DBNull.Value;
+                    p[21].Value = (object?)r.ArgumentNames ?? DBNull.Value;
+                    p[22].Value = (object?)r.DeclaringTypeArgBinding ?? DBNull.Value;
+                    p[23].Value = (object?)r.MethodTypeArgBinding ?? DBNull.Value;
+                },
+                alreadySaved: saved,
+                total: total,
+                progress,
+                cancellationToken
+            );
+
+            saved += InsertRows(
+                connection,
+                transaction,
+                "INSERT INTO type_relation_facts (RunId, TypeRelationFactIndex, TypeSymbolId, RelatedSymbolId, RelationKind) "
+                    + "VALUES ($run,$idx,$type,$related,$kind);",
+                ["$run", "$idx", "$type", "$related", "$kind"],
+                relations,
+                (p, t, i) =>
+                {
+                    p[0].Value = runId;
+                    p[1].Value = i;
+                    p[2].Value = t.TypeSymbolId;
+                    p[3].Value = t.RelatedSymbolId;
+                    p[4].Value = t.RelationKind;
+                },
+                alreadySaved: saved,
+                total: total,
+                progress,
+                cancellationToken
+            );
+
+            saved += InsertRows(
+                connection,
+                transaction,
+                "INSERT INTO dispatch_facts (RunId, DispatchFactIndex, SourceMember, TargetMember, Kind) "
+                    + "VALUES ($run,$idx,$src,$tgt,$kind);",
+                ["$run", "$idx", "$src", "$tgt", "$kind"],
+                dispatch,
+                (p, d, i) =>
+                {
+                    p[0].Value = runId;
+                    p[1].Value = i;
+                    p[2].Value = d.SourceMember;
+                    p[3].Value = d.TargetMember;
+                    p[4].Value = d.Kind;
+                },
+                alreadySaved: saved,
+                total: total,
+                progress,
+                cancellationToken
+            );
+
+            await transaction.CommitAsync(cancellationToken);
+        }
+
+        progress?.Invoke($"Saved {saved}/{total} fact rows");
+
+        if (deferredIndexes.Count > 0)
+        {
+            progress?.Invoke($"Rebuilding {deferredIndexes.Count} fact index(es)");
+            foreach (var sql in deferredIndexes)
+            {
+                await ExecuteAsync(connection, sql, cancellationToken);
+            }
+        }
+    }
+
+    // One reused prepared INSERT, stepped once per row with param values reset in place. Synchronous
+    // ExecuteNonQuery — Microsoft.Data.Sqlite runs the "async" variant synchronously anyway, so awaiting
+    // per row would only add a Task allocation. Returns the rows written; reports cumulative progress.
+    private static long InsertRows<T>(
+        DbConnection connection,
+        DbTransaction transaction,
+        string insertSql,
+        string[] parameterNames,
+        IReadOnlyList<T> items,
+        Action<DbParameter[], T, int> bind,
+        long alreadySaved,
+        long total,
+        Action<string>? progress,
+        CancellationToken cancellationToken
+    )
+    {
+        if (items.Count == 0)
+        {
+            return 0;
+        }
+
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = insertSql;
+        var parameters = new DbParameter[parameterNames.Length];
+        for (var i = 0; i < parameterNames.Length; i++)
+        {
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = parameterNames[i];
+            command.Parameters.Add(parameter);
+            parameters[i] = parameter;
+        }
+
+        command.Prepare();
+
+        for (var i = 0; i < items.Count; i++)
+        {
+            if ((i & 0xFFF) == 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            bind(parameters, items[i], i);
+            command.ExecuteNonQuery();
+
+            var cumulative = alreadySaved + i + 1;
+            if (cumulative % FactProgressInterval == 0)
+            {
+                progress?.Invoke($"Saved {cumulative}/{total} fact rows");
             }
         }
 
-        await AddAllAsync(
-            symbols,
-            (s, i) =>
-                new SymbolFactEntity
-                {
-                    RunId = runId,
-                    SymbolFactIndex = i,
-                    SymbolId = s.SymbolId,
-                    Kind = s.Kind,
-                    Name = s.Name,
-                    Namespace = s.Namespace,
-                    ContainingSymbolId = s.ContainingSymbolId,
-                    Modifiers = s.Modifiers,
-                    TypeKind = s.TypeKind,
-                    Signature = s.Signature,
-                    FilePath = s.FilePath,
-                    Line = s.Line,
-                    DefiningAssembly = s.DefiningAssembly,
-                    IsOverride = s.IsOverride,
-                }
-        );
+        return items.Count;
+    }
 
-        await AddAllAsync(
-            references,
-            (r, i) =>
-                new ReferenceFactEntity
-                {
-                    RunId = runId,
-                    ReferenceFactIndex = i,
-                    TargetSymbolId = r.TargetSymbolId,
-                    RefKind = r.RefKind,
-                    EnclosingSymbolId = r.EnclosingSymbolId,
-                    TargetAssembly = r.TargetAssembly,
-                    TargetInSource = r.TargetInSource,
-                    FilePath = r.FilePath,
-                    Line = r.Line,
-                    ReceiverType = r.ReceiverType,
-                    FirstArgumentTemplate = r.FirstArgumentTemplate,
-                    FirstArgumentType = r.FirstArgumentType,
-                    EnclosingLoopKind = r.EnclosingLoopKind,
-                    EnclosingLoopDetail = r.EnclosingLoopDetail,
-                    EnclosingInvocations = r.EnclosingInvocations,
-                    EnclosingCatchTypes = r.EnclosingCatchTypes,
-                    TypeArguments = r.TypeArguments,
-                    FirstArgumentName = r.FirstArgumentName,
-                    DelegateConsumer = r.DelegateConsumer,
-                    EnclosingScopes = r.EnclosingScopes,
-                    ArgumentTemplates = r.ArgumentTemplates,
-                    ArgumentNames = r.ArgumentNames,
-                    DeclaringTypeArgBinding = r.DeclaringTypeArgBinding,
-                    MethodTypeArgBinding = r.MethodTypeArgBinding,
-                }
-        );
+    // Drops (and returns the CREATE statements of) every secondary index on the given tables, so a bulk
+    // load doesn't maintain them per row; the caller rebuilds each once afterwards by re-running the
+    // returned SQL. PRIMARY-KEY auto-indexes have a NULL `sql` in sqlite_master and are excluded, so the
+    // (RunId, *Index) uniqueness stays enforced throughout the load. `tables` are fixed constants.
+    private static async Task<List<string>> DropSecondaryIndexesAsync(
+        DbConnection connection,
+        string[] tables,
+        CancellationToken cancellationToken
+    )
+    {
+        var recreateSql = new List<string>();
+        var indexNames = new List<string>();
+        var inList = string.Join(", ", tables.Select(t => $"'{t}'"));
 
-        await AddAllAsync(
-            relations,
-            (t, i) =>
-                new TypeRelationFactEntity
-                {
-                    RunId = runId,
-                    TypeRelationFactIndex = i,
-                    TypeSymbolId = t.TypeSymbolId,
-                    RelatedSymbolId = t.RelatedSymbolId,
-                    RelationKind = t.RelationKind,
-                }
-        );
-
-        await AddAllAsync(
-            dispatch,
-            (d, i) =>
-                new DispatchFactEntity
-                {
-                    RunId = runId,
-                    DispatchFactIndex = i,
-                    SourceMember = d.SourceMember,
-                    TargetMember = d.TargetMember,
-                    Kind = d.Kind,
-                }
-        );
-
-        if (pending > 0)
+        await using (var query = connection.CreateCommand())
         {
-            await FlushAsync();
+            query.CommandText = $"SELECT name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL AND tbl_name IN ({inList});";
+            await using var reader = await query.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                indexNames.Add(reader.GetString(0));
+                recreateSql.Add(reader.GetString(1));
+            }
         }
+
+        foreach (var name in indexNames)
+        {
+            await ExecuteAsync(connection, $"DROP INDEX IF EXISTS \"{name}\";", cancellationToken);
+        }
+
+        return recreateSql;
+    }
+
+    private static async Task ExecuteAsync(DbConnection connection, string sql, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static void AddSourceFiles(RigDbContext context, string runId, AnalysisResult result)
@@ -454,215 +634,5 @@ public static class Writes
                 }
             );
         }
-    }
-
-    // Additive migrations for databases created before new columns/tables were introduced.
-    // EnsureCreatedAsync only creates tables in a brand-new DB — it never alters existing ones.
-    private static async Task MigrateAsync(RigDbContext context, CancellationToken cancellationToken)
-    {
-        await context
-            .Database.ExecuteSqlRawAsync(
-                """
-                ALTER TABLE reference_facts ADD COLUMN IF NOT EXISTS TypeArguments TEXT;
-                """,
-                cancellationToken
-            )
-            .ContinueWith(_ => { }, cancellationToken); // ignore if already exists
-
-        await context
-            .Database.ExecuteSqlRawAsync(
-                """
-                ALTER TABLE reference_facts ADD COLUMN IF NOT EXISTS FirstArgumentName TEXT;
-                """,
-                cancellationToken
-            )
-            .ContinueWith(_ => { }, cancellationToken);
-
-        await context
-            .Database.ExecuteSqlRawAsync(
-                """
-                ALTER TABLE reference_facts ADD COLUMN IF NOT EXISTS DelegateConsumer TEXT;
-                """,
-                cancellationToken
-            )
-            .ContinueWith(_ => { }, cancellationToken);
-
-        await context
-            .Database.ExecuteSqlRawAsync(
-                """
-                ALTER TABLE reference_facts ADD COLUMN IF NOT EXISTS EnclosingScopes TEXT;
-                """,
-                cancellationToken
-            )
-            .ContinueWith(_ => { }, cancellationToken);
-
-        await context
-            .Database.ExecuteSqlRawAsync(
-                """
-                ALTER TABLE runs ADD COLUMN IF NOT EXISTS ProjectIdentity TEXT;
-                """,
-                cancellationToken
-            )
-            .ContinueWith(_ => { }, cancellationToken); // ignore if already exists
-
-        await context
-            .Database.ExecuteSqlRawAsync(
-                """
-                ALTER TABLE runs ADD COLUMN IF NOT EXISTS SourceProjectPath TEXT;
-                """,
-                cancellationToken
-            )
-            .ContinueWith(_ => { }, cancellationToken);
-
-        // Commit-stamp columns (docs/design-impact-behavioral-diff.md §4.5): the source commit/branch and
-        // a dirty flag, so a store is addressable by the commit it was indexed from. SourceDirty is
-        // INTEGER (SQLite bool) defaulting to 0 — an unstamped legacy row reads as a clean, unknown commit.
-        await context
-            .Database.ExecuteSqlRawAsync(
-                """
-                ALTER TABLE runs ADD COLUMN IF NOT EXISTS SourceCommit TEXT;
-                """,
-                cancellationToken
-            )
-            .ContinueWith(_ => { }, cancellationToken);
-
-        await context
-            .Database.ExecuteSqlRawAsync(
-                """
-                ALTER TABLE runs ADD COLUMN IF NOT EXISTS SourceBranch TEXT;
-                """,
-                cancellationToken
-            )
-            .ContinueWith(_ => { }, cancellationToken);
-
-        await context
-            .Database.ExecuteSqlRawAsync(
-                """
-                ALTER TABLE runs ADD COLUMN IF NOT EXISTS SourceDirty INTEGER NOT NULL DEFAULT 0;
-                """,
-                cancellationToken
-            )
-            .ContinueWith(_ => { }, cancellationToken);
-
-        await context
-            .Database.ExecuteSqlRawAsync(
-                """
-                CREATE INDEX IF NOT EXISTS IX_runs_ProjectIdentity ON runs(ProjectIdentity);
-                """,
-                cancellationToken
-            )
-            .ContinueWith(_ => { }, cancellationToken);
-
-        await context.Database.ExecuteSqlRawAsync(
-            """
-            CREATE TABLE IF NOT EXISTS symbol_facts (
-                RunId              TEXT NOT NULL,
-                SymbolFactIndex    INTEGER NOT NULL,
-                SymbolId           TEXT NOT NULL,
-                Kind               TEXT NOT NULL,
-                Name               TEXT NOT NULL,
-                Namespace          TEXT NOT NULL,
-                ContainingSymbolId TEXT,
-                Modifiers          TEXT NOT NULL,
-                TypeKind           TEXT NOT NULL,
-                Signature          TEXT NOT NULL,
-                FilePath           TEXT NOT NULL,
-                Line               INTEGER NOT NULL,
-                DefiningAssembly   TEXT NOT NULL,
-                IsOverride         INTEGER NOT NULL,
-                PRIMARY KEY (RunId, SymbolFactIndex)
-            );
-            """,
-            cancellationToken
-        );
-        await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_symbol_facts_SymbolId ON symbol_facts(SymbolId);",
-            cancellationToken
-        );
-        await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_symbol_facts_Name ON symbol_facts(Name);",
-            cancellationToken
-        );
-
-        await context.Database.ExecuteSqlRawAsync(
-            """
-            CREATE TABLE IF NOT EXISTS reference_facts (
-                RunId              TEXT NOT NULL,
-                ReferenceFactIndex INTEGER NOT NULL,
-                TargetSymbolId     TEXT NOT NULL,
-                RefKind            TEXT NOT NULL,
-                EnclosingSymbolId  TEXT,
-                TargetAssembly     TEXT NOT NULL,
-                TargetInSource     INTEGER NOT NULL,
-                FilePath           TEXT NOT NULL,
-                Line               INTEGER NOT NULL,
-                ReceiverType       TEXT,
-                FirstArgumentTemplate TEXT,
-                FirstArgumentType  TEXT,
-                EnclosingLoopKind  TEXT,
-                EnclosingLoopDetail TEXT,
-                EnclosingInvocations TEXT,
-                EnclosingCatchTypes TEXT,
-                TypeArguments      TEXT,
-                FirstArgumentName  TEXT,
-                DelegateConsumer   TEXT,
-                EnclosingScopes    TEXT,
-                ArgumentTemplates  TEXT,
-                ArgumentNames      TEXT,
-                DeclaringTypeArgBinding TEXT,
-                MethodTypeArgBinding TEXT,
-                PRIMARY KEY (RunId, ReferenceFactIndex)
-            );
-            """,
-            cancellationToken
-        );
-        await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_reference_facts_TargetSymbolId ON reference_facts(TargetSymbolId);",
-            cancellationToken
-        );
-        await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_reference_facts_EnclosingSymbolId ON reference_facts(EnclosingSymbolId);",
-            cancellationToken
-        );
-
-        await context.Database.ExecuteSqlRawAsync(
-            """
-            CREATE TABLE IF NOT EXISTS type_relation_facts (
-                RunId                 TEXT NOT NULL,
-                TypeRelationFactIndex INTEGER NOT NULL,
-                TypeSymbolId          TEXT NOT NULL,
-                RelatedSymbolId       TEXT NOT NULL,
-                RelationKind          TEXT NOT NULL,
-                PRIMARY KEY (RunId, TypeRelationFactIndex)
-            );
-            """,
-            cancellationToken
-        );
-        await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_type_relation_facts_TypeSymbolId ON type_relation_facts(TypeSymbolId);",
-            cancellationToken
-        );
-        await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_type_relation_facts_RelatedSymbolId ON type_relation_facts(RelatedSymbolId);",
-            cancellationToken
-        );
-
-        await context.Database.ExecuteSqlRawAsync(
-            """
-            CREATE TABLE IF NOT EXISTS dispatch_facts (
-                RunId             TEXT NOT NULL,
-                DispatchFactIndex INTEGER NOT NULL,
-                SourceMember      TEXT NOT NULL,
-                TargetMember      TEXT NOT NULL,
-                Kind              TEXT NOT NULL,
-                PRIMARY KEY (RunId, DispatchFactIndex)
-            );
-            """,
-            cancellationToken
-        );
-        await context.Database.ExecuteSqlRawAsync(
-            "CREATE INDEX IF NOT EXISTS IX_dispatch_facts_SourceMember ON dispatch_facts(SourceMember);",
-            cancellationToken
-        );
     }
 }

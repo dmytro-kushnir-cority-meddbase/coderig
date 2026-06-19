@@ -1,7 +1,6 @@
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Domain;
 
@@ -18,7 +17,7 @@ public sealed class GenericFactoryRewriteTests
             new MethodRef("M:N.Account.New(System.Int32,N.ITxn)", "New", "T:N.Account"),
             new MethodRef("M:N.Company.New(System.Int32)", "New", "T:N.Company"),
         };
-        return new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods);
+        return new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods);
     }
 
     private static readonly FactGenericFactoryRule Rule = new("N.Entity.New", ConstructArgIndex: 0, TargetMethod: "New");
@@ -161,12 +160,12 @@ public sealed class GenericFactoryRewriteTests
             ),
             new CallEdge("M:N.Entity.New``3(``1)", "M:N.Construct.New", "invocation", "f.cs", 2),
         };
-        var g = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods);
+        var g = new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods);
 
         var rewritten = FactPathFinder.RewriteGenericFactories(g, [Rule]);
         var root = FactPathFinder.BuildTree(rewritten, "M:N.Caller.Go").Single();
 
-        var ids = new HashSet<string>(System.StringComparer.Ordinal);
+        var ids = new HashSet<string>(StringComparer.Ordinal);
         void Walk(TraceNode n)
         {
             ids.Add(n.SymbolId);

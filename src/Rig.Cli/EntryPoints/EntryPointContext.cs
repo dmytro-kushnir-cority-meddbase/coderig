@@ -1,4 +1,6 @@
+using System.Text;
 using Rig.Analysis.Rules;
+using Rig.Cli.CommandLine;
 using Rig.Cli.Deployments;
 using Rig.Cli.Rendering;
 using Rig.Domain.Data;
@@ -56,18 +58,10 @@ internal static class EntryPointContext
         IReadOnlyList<DerivedEntryPoint> Derived,
         IReadOnlyList<HandoffEntryPoint> ClassifiedHandoffs,
         IReadOnlyList<DerivedEntryPoint> PromotedOrigins
-    )> DeriveEntryPointsAsync(
-        RigDbContext context,
-        FactEntryPointDeriver.FactEntryPointData epData,
-        string workingDirectory,
-        IReadOnlyList<string> extraRules,
-        IReadOnlyList<FactHandoffRule> handoffRules
-    )
+    )> DeriveEntryPointsAsync(RigDbContext context, FactEntryPointDeriver.FactEntryPointData epData, RuleSet rules)
     {
-        var epRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var classRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(workingDirectory, extraRules);
-        var derived = FactEntryPointDeriver.Derive(epData, epRules, classRules);
-        var classifiedHandoffs = (await Reads.DeriveHandoffEntryPointsAsync(context, int.MaxValue, handoffRules))
+        var derived = FactEntryPointDeriver.Derive(epData, rules.EntryPoints, rules.ClassInheritance);
+        var classifiedHandoffs = (await Reads.DeriveHandoffEntryPointsAsync(context, int.MaxValue, rules.Handoff))
             .Where(h => h.Dispatcher is not null)
             .ToList();
         var promoted = PromoteHandoffOrigins(classifiedHandoffs, derived);
@@ -128,7 +122,7 @@ internal static class EntryPointContext
             body = body.Substring(startIndex: 0, length: paren);
         }
 
-        var sb = new System.Text.StringBuilder(body.Length);
+        var sb = new StringBuilder(body.Length);
         for (var i = 0; i < body.Length; i++)
         {
             if (body[i] == '`')
@@ -155,7 +149,7 @@ internal static class EntryPointContext
         FactGraphData graph,
         string workingDirectory,
         IReadOnlyList<string> extraRules,
-        IReadOnlyList<FactHandoffRule> handoffRules,
+        RuleSet rules,
         DeploymentMap deployments,
         bool useCache = true
     )
@@ -167,11 +161,11 @@ internal static class EntryPointContext
 
         // The site->kind map is the expensive, PATTERN-INDEPENDENT half — derive-or-cache it once per
         // (store + rules). The symbol->site map below is cheap and rebuilt fresh from THIS query's graph.
-        var epSiteKind = await LoadOrDeriveEpSiteKindAsync(context, workingDirectory, extraRules, handoffRules, useCache);
+        var epSiteKind = await LoadOrDeriveEpSiteKindAsync(context, workingDirectory, extraRules, rules, useCache);
 
         var siteById = graph
             .Methods.GroupBy(m => m.SymbolId, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => ((string?)g.First().FilePath, g.First().Line), StringComparer.Ordinal);
+            .ToDictionary(g => g.Key, g => (g.First().FilePath, g.First().Line), StringComparer.Ordinal);
 
         return new EpRenderContext(deployments, siteById, epSiteKind);
     }
@@ -191,7 +185,7 @@ internal static class EntryPointContext
         RigDbContext context,
         string workingDirectory,
         IReadOnlyList<string> extraRules,
-        IReadOnlyList<FactHandoffRule> handoffRules,
+        RuleSet rules,
         bool useCache
     )
     {
@@ -205,12 +199,12 @@ internal static class EntryPointContext
 
         if (!useCache)
         {
-            return await DeriveEpSiteKindAsync(context, workingDirectory, extraRules, handoffRules);
+            return await DeriveEpSiteKindAsync(context, rules);
         }
 
         // Tier 2: query cache (handles --rules, which the table doesn't cover).
-        var rigDir = CommandLine.StoreLayout.ResolveStoreDir(workingDirectory);
-        var storeKey = StoreKey(Path.Combine(rigDir, CommandLine.StoreLayout.DbFileName));
+        var rigDir = StoreLayout.ResolveStoreDir(workingDirectory);
+        var storeKey = StoreKey(Path.Combine(rigDir, StoreLayout.DbFileName));
         using var cache = QueryCache.Open(rigDirectory: rigDir, storeKey: storeKey);
         var key = cache is null ? null : EpCacheKey(storeKey, rulesHash);
         if (key is not null && cache!.Get(key) is { } blob && EpSiteCacheCodec.Decode(blob) is { } hit)
@@ -218,7 +212,7 @@ internal static class EntryPointContext
             return hit;
         }
 
-        var derived = await DeriveEpSiteKindAsync(context, workingDirectory, extraRules, handoffRules);
+        var derived = await DeriveEpSiteKindAsync(context, rules);
         if (key is not null)
         {
             TryCache(() => cache!.Put(key, EpSiteCacheCodec.Encode(derived)));
@@ -232,13 +226,11 @@ internal static class EntryPointContext
     // eager `rig graph` warm-up.
     internal static async Task<Dictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>> DeriveEpSiteKindAsync(
         RigDbContext context,
-        string workingDirectory,
-        IReadOnlyList<string> extraRules,
-        IReadOnlyList<FactHandoffRule> handoffRules
+        RuleSet rules
     )
     {
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
-        var (derivedEps, _, promoted) = await DeriveEntryPointsAsync(context, epData, workingDirectory, extraRules, handoffRules);
+        var (derivedEps, _, promoted) = await DeriveEntryPointsAsync(context, epData, rules);
 
         var epSiteKind = new Dictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>();
         foreach (var e in derivedEps.Concat(promoted))
@@ -261,8 +253,7 @@ internal static class EntryPointContext
             return;
         }
 
-        var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory).ToArray();
-        var sites = await DeriveEpSiteKindAsync(context, workingDirectory, [], handoffRules);
+        var sites = await DeriveEpSiteKindAsync(context, RuleSet.Load(workingDirectory));
         await EntryPointSiteStore.PersistAsync(context, sites, RulesFingerprint.Compute(workingDirectory, []));
     }
 

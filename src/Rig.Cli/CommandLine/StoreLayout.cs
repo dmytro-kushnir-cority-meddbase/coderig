@@ -1,3 +1,4 @@
+using System.Globalization;
 using Rig.Domain.Data;
 
 namespace Rig.Cli.CommandLine;
@@ -93,7 +94,7 @@ internal static class StoreLayout
             return provenance.Dirty ? shortSha + "-dirty" : shortSha;
         }
 
-        return "ts-" + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss", System.Globalization.CultureInfo.InvariantCulture);
+        return "ts-" + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
     }
 
     // The per-commit store directory for a new index (created if absent).
@@ -171,6 +172,21 @@ internal static class StoreLayout
         return match;
     }
 
+    // The store-id read commands default to: the LATEST pointer's target (else the newest store by write
+    // time). Null when nothing is indexed or only a legacy flat store exists. Lets `rig runs` mark which of
+    // the per-commit stores is the default the other read commands resolve to.
+    internal static string? LatestStoreId(string workingDirectory)
+    {
+        var rig = RigDir(workingDirectory);
+        if (!Directory.Exists(rig))
+        {
+            return null;
+        }
+
+        var dir = LatestStoreDir(rig);
+        return dir is null ? null : Path.GetFileName(dir);
+    }
+
     // The ids of every per-commit store present (for discovery / "base not indexed" messages).
     internal static IReadOnlyList<string> AvailableStoreIds(string workingDirectory)
     {
@@ -184,7 +200,6 @@ internal static class StoreLayout
             .EnumerateDirectories(rig)
             .Where(d => File.Exists(Path.Combine(d, DbFileName)))
             .Select(d => Path.GetFileName(d))
-            .OfType<string>()
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToList();
     }

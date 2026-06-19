@@ -72,19 +72,15 @@ internal sealed record AnalysisRuleSet
     {
         var rules = LoadBuiltIn();
 
-        var globalRulesPath = Path.Combine(
-            path1: Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            path2: ".rig",
-            path3: "rig.rules.json"
-        );
+        var globalRulesPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".rig", "rig.rules.json");
         rules = rules.MergeWithFile(globalRulesPath);
 
         var solutionDirectory = Path.GetDirectoryName(solutionPath) ?? Directory.GetCurrentDirectory();
-        // For project files (.csproj/.fsproj), walk up to find rig.rules.json at repo/solution root.
-        // For solution files (.sln/.slnx), the rules file is expected right next to the solution.
+
         var isProjectFile =
             solutionPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
             || solutionPath.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase);
+
         if (isProjectFile)
         {
             var dir = solutionDirectory;

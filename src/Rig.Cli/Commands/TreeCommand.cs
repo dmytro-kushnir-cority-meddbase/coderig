@@ -2,7 +2,6 @@ using System.CommandLine;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
-using Rig.Cli.Rules;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
@@ -33,6 +32,10 @@ internal static class TreeCommand
         var raw = CommonOptions.Raw();
         var files = CommonOptions.Files();
         var signatures = CommonOptions.Signatures();
+        var plain = new Option<bool>("--plain")
+        {
+            Description = "Drop box-drawing connectors (├─ └─ │) for pure indentation — diff-friendly.",
+        };
         var rules = CommonOptions.Rules();
         var depth = CommonOptions.Depth();
         var only = CommonOptions.Only();
@@ -51,6 +54,7 @@ internal static class TreeCommand
             raw,
             files,
             signatures,
+            plain,
             rules,
             depth,
             only,
@@ -98,6 +102,7 @@ internal static class TreeCommand
                         raw: pr.GetValue(raw),
                         files: pr.GetValue(files),
                         signatures: pr.GetValue(signatures),
+                        plain: pr.GetValue(plain),
                         extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                         depth: pr.GetValue(depth),
                         only: CommonOptions.FilterSet(pr.GetValue(only)),
@@ -124,6 +129,7 @@ internal static class TreeCommand
         bool raw,
         bool files,
         bool signatures,
+        bool plain,
         IReadOnlyList<string> extraRules,
         int? depth,
         HashSet<string> only,
@@ -140,10 +146,12 @@ internal static class TreeCommand
         var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
         var maxDepth = CommonOptions.DepthOrUnbounded(depth);
         var mode = CommonOptions.Mode(async);
-        var shaping = ShapingRuleSet.Load(workingDirectory, extraRules, raw);
-        // Codebase-specific render rules (collapse fan-out seams / opaque infra types). Presentation
-        // only — never affects reach. `--raw` bypasses them to print the exact unfiltered tree.
-        var renderRules = raw ? FactRenderRules.Empty : FactRenderRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+
+        // One merged load for the whole command; --raw zeroes the graph-shaping + render rules (the exact
+        // unfiltered tree), else they're applied. Render rules are presentation-only — never affect reach.
+        var rules = RuleSet.Load(workingDirectory, extraRules);
+        var shaped = raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
+        var renderRules = raw ? FactRenderRules.Empty : rules.Render;
 
         await using var context = OpenReadContext(workingDirectory, storeRef);
         var timer = new PhaseTimer(time, error);
@@ -153,8 +161,8 @@ internal static class TreeCommand
         // store + effective rules + traversal params. Cache the pair in a separate writable `.rig/cache.db`
         // (rig.db itself is opened read-only); a repeat query skips both and only re-loads the cheaper graph
         // to render. Auto-invalidates on reindex: the key embeds a store identity that index/graph change.
-        var rigDir = CommandLine.StoreLayout.ResolveReadStoreDir(workingDirectory, storeRef);
-        var storeKey = StoreKey(Path.Combine(rigDir, CommandLine.StoreLayout.DbFileName));
+        var rigDir = StoreLayout.ResolveReadStoreDir(workingDirectory, storeRef);
+        var storeKey = StoreKey(Path.Combine(rigDir, StoreLayout.DbFileName));
         using var cache = noCache ? null : QueryCache.Open(rigDirectory: rigDir, storeKey: storeKey);
         var cacheKey = cache is null
             ? null
@@ -197,10 +205,7 @@ internal static class TreeCommand
                 context: context,
                 pattern: fromPattern,
                 direction: SqlReachability.Direction.Forward,
-                handoffRules: shaping.Handoff,
-                factoryRules: shaping.Factory,
-                cutRules: shaping.Cut,
-                contextRules: shaping.Context
+                shaped
             );
             if (!raw)
             {
@@ -215,10 +220,7 @@ internal static class TreeCommand
                 context: context,
                 pattern: fromPattern,
                 direction: SqlReachability.Direction.Forward,
-                handoffRules: shaping.Handoff,
-                factoryRules: shaping.Factory,
-                cutRules: shaping.Cut,
-                contextRules: shaping.Context
+                shaped
             );
             graph = inputs.Graph;
             timer.Lap("graph + invocations load");
@@ -240,8 +242,8 @@ internal static class TreeCommand
                 // Effects per enclosing method — same derivation as `reaches` (incl. throws). Cache them
                 // UNFILTERED; --only/--exclude are applied below so they don't fragment the key.
                 effects = DeriveEffects(
-                    workingDirectory: workingDirectory,
-                    extraRules: extraRules,
+                    effectRules: rules.Effects,
+                    observationRules: rules.Observations,
                     invocations: inputs.Invocations,
                     baseEdges: BaseEdgeTuples(graph),
                     ctorRefs: inputs.CtorRefs,
@@ -303,13 +305,13 @@ internal static class TreeCommand
             : new EpRenderContext(
                 Deployments: deployments,
                 SiteById: locations,
-                EpSiteKind: await LoadOrDeriveEpSiteKindAsync(context, workingDirectory, extraRules, shaping.Handoff, !noCache)
+                EpSiteKind: await LoadOrDeriveEpSiteKindAsync(context, workingDirectory, extraRules, rules, !noCache)
             );
         timer.Lap("deployment map + entry-point derivation");
 
         effects = ApplyEffectFilters(effects, only, exclude); // --only / --exclude (e.g. --exclude throw)
 
-        var emoji = FactEffectEmojiProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var emoji = rules.EffectEmoji;
         var effectsByMethod = effects
             .Where(e => e.EnclosingSymbolId is not null)
             .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
@@ -414,7 +416,7 @@ internal static class TreeCommand
                 maxDepth: maxDepth,
                 mode: mode,
                 structuredByMethod: structuredByMethod,
-                emojiFor: (p, o) => FactEffectEmojiProvider.For(emoji, provider: p, operation: o)
+                emojiFor: (p, o) => EmojiLookup.For(emoji, provider: p, operation: o)
             );
         }
 
@@ -427,6 +429,10 @@ internal static class TreeCommand
             TryCache(() => cache!.Put(sidecarKey, RenderSidecarCodec.Encode(seamEffects, locations)));
         }
 
+        // Print-order source-loc dedup: collapse a repeated trailing path (the --full call-site/leaf locs AND
+        // the --files 📄 definition-loc) so the file name shows only when it changes down the tree. Mode-
+        // agnostic — always on; it's a no-op when no loc is rendered (default mode). One writer per forest.
+        var renderOut = new SourceLocDedupWriter(output);
         foreach (var root in roots)
         {
             if (!full && !SubtreeHasEffect(root, effectsByMethod))
@@ -445,11 +451,12 @@ internal static class TreeCommand
                 prune: !full,
                 renderRules: renderRules,
                 seamEffects: seamEffects,
-                output: output,
+                output: renderOut,
                 files: files,
                 locById: locById,
                 signatures: signatures,
-                cutRules: shaping.Cut,
+                plain: plain,
+                cutRules: shaped.Cut,
                 epContext: epContext,
                 full: full,
                 effectLeavesByMethod: effectLeavesByMethod

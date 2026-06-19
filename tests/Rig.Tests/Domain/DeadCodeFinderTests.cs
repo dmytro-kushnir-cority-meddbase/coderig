@@ -1,7 +1,6 @@
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Domain;
 
@@ -15,8 +14,7 @@ public sealed class DeadCodeFinderTests
         bool generated = false
     ) => new(id, name, modifiers, "f.cs", 1, isOverride, generated);
 
-    private static FactGraphData Graph(MethodRef[] methods, params CallEdge[] edges) =>
-        new(edges, System.Array.Empty<ImplementsEdge>(), methods);
+    private static FactGraphData Graph(MethodRef[] methods, params CallEdge[] edges) => new(edges, Array.Empty<ImplementsEdge>(), methods);
 
     private static MethodRef M(string id, string name) => new(id, name, null);
 
@@ -73,10 +71,10 @@ public sealed class DeadCodeFinderTests
         var graph = Graph(methods);
         var meta = new[] { Meta("M:Api.Exported", "Exported", "public") };
 
-        var asApp = DeadCodeFinder.Find(graph, System.Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: false);
+        var asApp = DeadCodeFinder.Find(graph, Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: false);
         asApp.Single().Tier.ShouldBe(DeadCodeFinder.Tier.Low);
 
-        var asLib = DeadCodeFinder.Find(graph, System.Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: true);
+        var asLib = DeadCodeFinder.Find(graph, Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: true);
         asLib.ShouldBeEmpty();
     }
 
@@ -87,7 +85,7 @@ public sealed class DeadCodeFinderTests
         var graph = Graph(methods);
         var meta = new[] { Meta("M:A.Helper", "Helper", "internal") };
 
-        var dead = DeadCodeFinder.Find(graph, System.Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: false);
+        var dead = DeadCodeFinder.Find(graph, Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: false);
 
         dead.Single().Tier.ShouldBe(DeadCodeFinder.Tier.Medium);
     }
@@ -115,7 +113,7 @@ public sealed class DeadCodeFinderTests
             Meta("M:T.Gen", "Gen", "private", generated: true),
         };
 
-        var dead = DeadCodeFinder.Find(graph, System.Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: false);
+        var dead = DeadCodeFinder.Find(graph, Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: false);
 
         dead.ShouldBeEmpty();
     }
@@ -127,9 +125,9 @@ public sealed class DeadCodeFinderTests
         var graph = Graph(methods);
         var meta = new[] { Meta("M:T.OnSave", "OnSave", "private", isOverride: true) };
 
-        DeadCodeFinder.Find(graph, System.Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: false).ShouldBeEmpty();
+        DeadCodeFinder.Find(graph, Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: false).ShouldBeEmpty();
         DeadCodeFinder
-            .Find(graph, System.Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: false, includeDispatchMembers: true)
+            .Find(graph, Array.Empty<string>(), meta, treatExternallyVisibleAsRoots: false, includeDispatchMembers: true)
             .Select(d => d.SymbolId)
             .ShouldBe(new[] { "M:T.OnSave" });
     }

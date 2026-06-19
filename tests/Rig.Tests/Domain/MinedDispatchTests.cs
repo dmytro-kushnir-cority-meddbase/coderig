@@ -1,7 +1,6 @@
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Domain;
 
@@ -19,7 +18,7 @@ public sealed class MinedDispatchTests
             new MethodRef("M:N.Base.V", "V", "T:N.Base"),
             new MethodRef("M:N.Sub.V", "V", "T:N.Sub", IsOverride: true),
         };
-        var graph = new FactGraphData(System.Array.Empty<CallEdge>(), impls, methods, bases);
+        var graph = new FactGraphData(Array.Empty<CallEdge>(), impls, methods, bases);
 
         var edges = FactPathFinder.AllDispatchEdges(graph).ToList();
 
@@ -38,7 +37,7 @@ public sealed class MinedDispatchTests
             new MethodRef("M:N.Other.M", "M", "T:N.Other"),
         };
         var mined = new[] { new DispatchFact("M:N.IFoo.M", "M:N.Impl.M", "impl") };
-        var graph = new FactGraphData(System.Array.Empty<CallEdge>(), impls, methods, null, mined);
+        var graph = new FactGraphData(Array.Empty<CallEdge>(), impls, methods, null, mined);
 
         var fromIFoo = FactPathFinder.AllDispatchEdges(graph).Where(e => e.From == "M:N.IFoo.M").ToList();
 
@@ -58,7 +57,7 @@ public sealed class MinedDispatchTests
             new MethodRef("M:N.Broken.M", "M", "T:N.Broken"),
         };
         var mined = new[] { new DispatchFact("M:N.IFoo.M", "M:N.Impl.M", "impl") };
-        var graph = new FactGraphData(System.Array.Empty<CallEdge>(), impls, methods, null, mined);
+        var graph = new FactGraphData(Array.Empty<CallEdge>(), impls, methods, null, mined);
 
         var fromIFoo = FactPathFinder.AllDispatchEdges(graph).Where(e => e.From == "M:N.IFoo.M").ToList();
 
@@ -84,7 +83,7 @@ public sealed class MinedDispatchTests
             new DispatchFact("M:N.Base.V", "M:N.Mid.V", "override"),
             new DispatchFact("M:N.Mid.V", "M:N.Leaf.V", "override"),
         };
-        var graph = new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases, mined);
+        var graph = new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases, mined);
 
         var reach = FactPathFinder.Reaches(graph, "M:N.Caller.Go");
 
@@ -121,7 +120,7 @@ public sealed class MinedDispatchTests
             new DispatchFact("M:N.ServiceBase.Startup", "M:N.SvcA.Startup", "override"),
             new DispatchFact("M:N.ServiceBase.Startup", "M:N.SvcB.Startup", "override"),
         };
-        var graph = new FactGraphData(System.Array.Empty<CallEdge>(), impls, methods, bases, mined);
+        var graph = new FactGraphData(Array.Empty<CallEdge>(), impls, methods, bases, mined);
 
         var fromLogger = FactPathFinder.AllDispatchEdges(graph).Where(e => e.From == "M:N.ILogger.Startup").Select(e => e.To).ToList();
         // Resolves to the inherited impl...

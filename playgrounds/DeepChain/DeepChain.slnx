@@ -1,0 +1,9 @@
+<Solution>
+  <Project Path="Foundation/Foundation.csproj" />
+  <Project Path="Contracts/Contracts.csproj" />
+  <Project Path="DataAccess/DataAccess.csproj" />
+  <Project Path="Domain/Domain.csproj" />
+  <Project Path="Business/Business.csproj" />
+  <Project Path="ApiGateway/ApiGateway.csproj" />
+  <Project Path="Web/Web.csproj" />
+</Solution>

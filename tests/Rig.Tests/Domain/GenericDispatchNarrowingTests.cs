@@ -1,7 +1,6 @@
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Domain;
 
@@ -25,12 +24,12 @@ public sealed class GenericDispatchNarrowingTests
             new MethodRef("M:N.Company.New", "New", "T:N.Company", IsOverride: true),
             new MethodRef("M:N.Profile.New", "New", "T:N.Profile", IsOverride: true),
         };
-        return new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), methods, bases);
+        return new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, bases);
     }
 
     private static HashSet<string> Ids(TraceNode node)
     {
-        var set = new HashSet<string>(System.StringComparer.Ordinal);
+        var set = new HashSet<string>(StringComparer.Ordinal);
         void Walk(TraceNode n)
         {
             set.Add(n.SymbolId);

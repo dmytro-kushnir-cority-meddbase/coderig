@@ -1,7 +1,7 @@
 using System.CommandLine;
+using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
-using Rig.Cli.Rules;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
@@ -99,25 +99,19 @@ internal static class CallersCommand
         var max = limit ?? int.MaxValue; // --limit absent => unbounded
         var maxDepth = CommonOptions.DepthOrUnbounded(depth);
         var mode = CommonOptions.Mode(async);
-        // callers walks the SAME shaped graph as path/reaches/tree — monomorphized generic factories + cut +
-        // context rules, honoured SYMMETRICALLY by the reverse traversal (a cut node yields no successors
-        // forward, so it is never a predecessor in reverse). `--raw` bypasses shaping (the unfiltered reverse
-        // closure, for inspecting the exact plumbing).
-        var shaping = ShapingRuleSet.Load(workingDirectory, extraRules, raw);
+
+        // --raw bypasses shaping (the exact unfiltered reverse closure); else monomorphize factories + cut +
+        // context, honoured symmetrically by the reverse traversal (a cut node yields no successors forward,
+        // so it is never a predecessor in reverse).
+        var rules = RuleSet.Load(workingDirectory, extraRules);
+        var shaped = raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
 
         await using var context = OpenReadContext(workingDirectory, storeRef);
 
         // One shaped reverse subgraph (bounded when `rig graph` has run, else the full EF graph) drives all
         // three callers modes — the set, the no-predecessor roots, and the rule-detected entrypoints.
-        var graph = await LoadShapedTraversalGraphAsync(
-            context,
-            toPattern,
-            SqlReachability.Direction.Reverse,
-            shaping.Handoff,
-            shaping.Factory,
-            shaping.Cut,
-            shaping.Context
-        );
+        var graph = await LoadShapedTraversalGraphAsync(context, toPattern, SqlReachability.Direction.Reverse, shaped);
+
         // Reclassify event-subscription (`+=`) method-group edges to `handoff` — mirroring reaches/tree
         // (and now path). The handler runs LATER via the event, not synchronously at the `+=` site, so it
         // is sync-cut by default and only crossed under --async. Marks edges by (Caller, FilePath, Line),
@@ -131,18 +125,7 @@ internal static class CallersCommand
 
         if (entrypointsOnly)
         {
-            return await RunEntryPointsAsync(
-                context,
-                graph,
-                toPattern,
-                maxDepth,
-                mode,
-                shaping.Handoff,
-                extraRules,
-                workingDirectory,
-                tsv,
-                output
-            );
+            return await RunEntryPointsAsync(context, graph, toPattern, maxDepth, mode, rules, workingDirectory, tsv, output);
         }
 
         // Deployment/EP context for the from-symbol annotations (opt-in via deployments.json). Only the
@@ -155,7 +138,7 @@ internal static class CallersCommand
                 graph,
                 workingDirectory,
                 extraRules,
-                shaping.Handoff,
+                rules,
                 await LoadDeploymentsAsync(context, workingDirectory)
             );
 
@@ -238,8 +221,7 @@ internal static class CallersCommand
         string toPattern,
         int maxDepth,
         FactPathFinder.TraversalMode mode,
-        IReadOnlyList<FactHandoffRule> handoffRules,
-        IReadOnlyList<string> extraRules,
+        RuleSet rules,
         string workingDirectory,
         bool tsv,
         TextWriter output
@@ -267,7 +249,7 @@ internal static class CallersCommand
 
         // The rule-detected entry points (identical derivation to `rig derive`) + promoted handoff origins.
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
-        var (derivedEps, _, promoted) = await DeriveEntryPointsAsync(context, epData, workingDirectory, extraRules, handoffRules);
+        var (derivedEps, _, promoted) = await DeriveEntryPointsAsync(context, epData, rules);
 
         var touching = derivedEps
             .Concat(promoted)

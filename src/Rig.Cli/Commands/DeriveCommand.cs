@@ -68,7 +68,7 @@ internal static class DeriveCommand
         string? storeRef
     )
     {
-        var handoffRules = FactHandoffRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
+        var rules = RuleSet.Load(workingDirectory, extraRules);
         await using var context = OpenReadContext(workingDirectory, storeRef);
 
         // Deployment attribution (opt-in: only when deployments.json sits next to .rig). Empty (no-op) when
@@ -78,7 +78,7 @@ internal static class DeriveCommand
         // Classified handoffs (background/timer/actor/event) shared by the listing, the origin-EP promotion,
         // and the TSV output — derived once. The total count yields the unclassified residual (a count, not a
         // listing), which is why this is loaded here rather than via DeriveEntryPointsAsync (which drops it).
-        var handoffs = await Reads.DeriveHandoffEntryPointsAsync(context, int.MaxValue, handoffRules);
+        var handoffs = await Reads.DeriveHandoffEntryPointsAsync(context, int.MaxValue, rules.Handoff);
         var classifiedHandoffs = handoffs.Where(h => h.Dispatcher is not null).ToList();
         var unclassifiedHandoffCount = handoffs.Count - classifiedHandoffs.Count;
 
@@ -90,8 +90,8 @@ internal static class DeriveCommand
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
         var effects = DeriveEffects(
-            workingDirectory: workingDirectory,
-            extraRules: extraRules,
+            effectRules: rules.Effects,
+            observationRules: rules.Observations,
             invocations: invocations,
             baseEdges: epData.BaseEdges,
             ctorRefs: epData.CtorRefs,
@@ -111,9 +111,7 @@ internal static class DeriveCommand
                 );
             }
 
-            var tsvEpRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-            var tsvClassRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(workingDirectory, extraRules);
-            var tsvEps = FactEntryPointDeriver.Derive(epData, tsvEpRules, tsvClassRules);
+            var tsvEps = FactEntryPointDeriver.Derive(epData, rules.EntryPoints, rules.ClassInheritance);
             // Trailing columns (comma-joined, empty when no deployments.json): `service` = the hosts that
             // LOAD the EP (link its code); `activeService` = the subset it is ACTIVE-IN after the capability
             // gate (== service when the EP is ungated). `service` is kept for back-compat; tooling that wants
@@ -160,9 +158,7 @@ internal static class DeriveCommand
 
         // --- Page + action entry points (fact-based BFS + attribute-ref detection) ---
         // epData was loaded above (shared with the effect deriver's base-type gates).
-        var epRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(workingDirectory, extraRules);
-        var classRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(workingDirectory, extraRules);
-        var derivedEps = FactEntryPointDeriver.Derive(epData, epRules, classRules);
+        var derivedEps = FactEntryPointDeriver.Derive(epData, rules.EntryPoints, rules.ClassInheritance);
 
         output.WriteLine();
         output.WriteLine($"Entry points re-derived from facts: {derivedEps.Count}");

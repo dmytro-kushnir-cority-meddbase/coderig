@@ -14,9 +14,12 @@ public static class FactGenericFactoryRuleProvider
     )
     {
         var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
-        var ruleSet = AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths);
-        return ruleSet.GenericFactories.Select(Project).ToArray();
+        return Project(AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths));
     }
+
+    // Project off an already-merged rule set, so RuleSet.Load can project this slice without a second load.
+    internal static IReadOnlyList<FactGenericFactoryRule> Project(AnalysisRuleSet ruleSet) =>
+        ruleSet.GenericFactories.Select(Project).ToArray();
 
     private static FactGenericFactoryRule Project(GenericFactoryRule rule) =>
         new(Method: rule.Method, ConstructArgIndex: rule.ConstructArgIndex, TargetMethod: rule.TargetMethod);

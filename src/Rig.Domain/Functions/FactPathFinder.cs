@@ -219,15 +219,44 @@ public static partial class FactPathFinder
     {
         var index = BuildIndex(graph, narrowDispatch);
         var results = new HashSet<string>[seedIds.Count];
-        System.Threading.Tasks.Parallel.For(
+        Parallel.For(
             fromInclusive: 0,
             toExclusive: seedIds.Count,
             body: i =>
             {
                 var seed = seedIds[i];
-                var seeds = index.Nodes.Contains(seed) ? new[] { seed } : System.Array.Empty<string>();
+                var seeds = index.Nodes.Contains(seed) ? new[] { seed } : Array.Empty<string>();
                 var info = ReachesWithFanoutCore(index, seeds, maxDepth, maxNodes, mode);
                 results[i] = new HashSet<string>(info.Keys, StringComparer.Ordinal);
+            }
+        );
+        return results;
+    }
+
+    // Exact-id forward reach from EACH seed independently, returning the FULL per-node ReachInfo per seed
+    // (NOT just the reachable-node set, as ReachesFromEachSeed does). Same index/dispatch semantics; the
+    // extra payload is the loop context (NearestLoopKind) and depth/dispatch tags already computed by the
+    // BFS — `rig impact`'s effect-AMPLIFICATION pass needs the loop flag per reachable effect-bearing node,
+    // which the set-only twin discards. Built once, run in parallel over the shared read-only index.
+    public static IReadOnlyList<IReadOnlyDictionary<string, ReachInfo>> ReachesInfoFromEachSeed(
+        FactGraphData graph,
+        IReadOnlyList<string> seedIds,
+        int maxDepth = 20,
+        int maxNodes = 20000,
+        bool narrowDispatch = true,
+        TraversalMode mode = TraversalMode.SyncCut
+    )
+    {
+        var index = BuildIndex(graph, narrowDispatch);
+        var results = new IReadOnlyDictionary<string, ReachInfo>[seedIds.Count];
+        Parallel.For(
+            fromInclusive: 0,
+            toExclusive: seedIds.Count,
+            body: i =>
+            {
+                var seed = seedIds[i];
+                var seeds = index.Nodes.Contains(seed) ? new[] { seed } : Array.Empty<string>();
+                results[i] = ReachesWithFanoutCore(index, seeds, maxDepth, maxNodes, mode);
             }
         );
         return results;
@@ -448,7 +477,9 @@ public static partial class FactPathFinder
                 receiver: null,
                 binding: null,
                 declaringTypeArgBinding: null,
-                methodTypeArgBinding: null
+                methodTypeArgBinding: null,
+                callFile: null,
+                callLine: 0
             );
             mutableRoots.Add(node);
         }
@@ -533,7 +564,9 @@ public static partial class FactPathFinder
                     receiver: s.OutReceiver,
                     binding: s.OutBinding,
                     declaringTypeArgBinding: s.OutDeclaringBinding,
-                    methodTypeArgBinding: s.OutMethodBinding
+                    methodTypeArgBinding: s.OutMethodBinding,
+                    callFile: s.File,
+                    callLine: s.Line
                 );
                 n.Kids.Add(kid);
             }
@@ -568,6 +601,10 @@ public static partial class FactPathFinder
         // Generic monomorphization bindings of the reaching edge — RENDERING only (-> TraceNode).
         public readonly string? DeclaringTypeArgBinding;
         public readonly string? MethodTypeArgBinding;
+
+        // The reaching edge's call site (File/Line) — RENDERING only (-> TraceNode.CallFile/CallLine).
+        public readonly string? CallFile;
+        public readonly int CallLine;
         public bool Truncated;
 
         // Distinct call sites under this node's parent that produced an identical edge (collapsed
@@ -587,7 +624,9 @@ public static partial class FactPathFinder
             string? receiver,
             IReadOnlyCollection<string>? binding,
             string? declaringTypeArgBinding,
-            string? methodTypeArgBinding
+            string? methodTypeArgBinding,
+            string? callFile,
+            int callLine
         )
         {
             Symbol = symbol;
@@ -602,6 +641,8 @@ public static partial class FactPathFinder
             Binding = binding;
             DeclaringTypeArgBinding = declaringTypeArgBinding;
             MethodTypeArgBinding = methodTypeArgBinding;
+            CallFile = callFile;
+            CallLine = callLine;
         }
     }
 
@@ -621,7 +662,9 @@ public static partial class FactPathFinder
                 DispatchBasis: n.DispatchBasis,
                 CallSites: n.CallSites,
                 DeclaringTypeArgBinding: n.DeclaringTypeArgBinding,
-                MethodTypeArgBinding: n.MethodTypeArgBinding
+                MethodTypeArgBinding: n.MethodTypeArgBinding,
+                CallFile: n.CallFile,
+                CallLine: n.CallLine
             );
         }
 
@@ -638,7 +681,9 @@ public static partial class FactPathFinder
             DispatchBasis: n.DispatchBasis,
             CallSites: n.CallSites,
             DeclaringTypeArgBinding: n.DeclaringTypeArgBinding,
-            MethodTypeArgBinding: n.MethodTypeArgBinding
+            MethodTypeArgBinding: n.MethodTypeArgBinding,
+            CallFile: n.CallFile,
+            CallLine: n.CallLine
         );
     }
 

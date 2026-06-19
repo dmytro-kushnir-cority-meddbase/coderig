@@ -11,12 +11,15 @@ public static class FactRenderRuleProvider
     public static FactRenderRules LoadForWorkingDirectory(string workingDirectory, IReadOnlyList<string>? extraRulesPaths = null)
     {
         var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
-        var ruleSet = AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths);
-        return new FactRenderRules(
+        return Project(AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths));
+    }
+
+    // Project off an already-merged rule set, so RuleSet.Load can project this slice without a second load.
+    internal static FactRenderRules Project(AnalysisRuleSet ruleSet) =>
+        new(
             CollapseSeams: ruleSet.RenderCollapseSeams.Select(Project).ToArray(),
             OpaqueTypes: ruleSet.RenderOpaqueTypes.Select(Project).ToArray()
         );
-    }
 
     private static FactRenderRule Project(RenderRule rule) => new(Pattern: rule.Pattern, Label: rule.Label ?? rule.Reason ?? rule.Pattern);
 }

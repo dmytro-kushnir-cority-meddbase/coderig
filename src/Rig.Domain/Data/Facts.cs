@@ -17,8 +17,10 @@ public sealed record SymbolFact(
     string Signature, // human display signature
     string FilePath,
     int Line,
+    int EndLine,
     string DefiningAssembly,
-    bool IsOverride
+    bool IsOverride,
+    string BodyHash = ""
 );
 
 /// <summary>A resolved reference to a symbol at a usage site.</summary>
@@ -343,7 +345,12 @@ public sealed record TraceNode(
     // ONLY: the renderer resolves T:/M: tokens against the PARENT node's resolved instantiation and
     // substitutes both arity groups of this node's label. Null for dispatch hops / non-generic callees.
     string? DeclaringTypeArgBinding = null,
-    string? MethodTypeArgBinding = null
+    string? MethodTypeArgBinding = null,
+    // The call SITE that reached this node from its parent (the reaching edge's File/Line): the `new X()`
+    // line for a ctor, the inline-lambda decl line, the call line for a method. Surfaced by `tree --full`
+    // (deduped in print order) — gives ctors/lambdas and every node a source line. Null/0 at a root.
+    string? CallFile = null,
+    int CallLine = 0
 );
 
 // A method handed off as a delegate (method-group) — a deferred/background entry point the

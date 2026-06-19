@@ -3,7 +3,6 @@ using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Tests.Fixtures;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Analysis;
 

@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.RegularExpressions;
 using Rig.Analysis.Rules;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
@@ -126,6 +128,10 @@ internal static class TreeRenderer
         IReadOnlyDictionary<string, (string? File, int Line)>? locById = null,
         // `--signatures`: show each method's compact parameter signature so same-named overloads differ.
         bool signatures = false,
+        // `--plain`: drop the box-drawing connectors (├─ └─ │) for pure 2-space-per-depth indentation. The
+        // hierarchy stays legible but the lines carry no positional glyphs, so a diff of two plain trees shows
+        // only real structure changes — the connectors otherwise churn whenever a sibling is added/removed.
+        bool plain = false,
         // Traversal-cut rules for the «cut» marker: a node matching a cut rule gets a visible marker
         // indicating that its subtree was cut during traversal (not just render). Null = no markers.
         IReadOnlyList<FactTraversalCutRule>? cutRules = null,
@@ -148,7 +154,18 @@ internal static class TreeRenderer
         // actually rendered (pruning may drop effectless children, making ×2 fan-out misleading
         // when only 1 child survives).
         var children = prune ? node.Children.Where(c => SubtreeHasEffect(c, effectsByMethod)).ToList() : node.Children.ToList();
-        var childPrefix = isRoot ? "" : prefix + (isLast ? "   " : "│  ");
+        // Plain mode: pure indentation, no vertical guides — children indent 2 spaces per level (the root prints
+        // flush-left, but ITS children still indent). Box-drawing mode: the standard ├─/└─ guides with the │
+        // continuation lane, and the root contributes no prefix (its children align under it).
+        var childPrefix =
+            plain ? prefix + "  "
+            : isRoot ? ""
+            : prefix + (isLast ? "   " : "│  ");
+        // The branch connector for a NON-root line at this prefix, given whether it is the last visible child.
+        string Connector(bool last) =>
+            plain ? ""
+            : last ? "└─ "
+            : "├─ ";
 
         var dispatchTag = node.DispatchBasis == "heuristic" ? $"{node.EdgeKind} ~heuristic" : node.EdgeKind;
         // A folded single-impl hop shows «via IFoo» (the collapsed interface) in place of the dispatch tag.
@@ -224,14 +241,39 @@ internal static class TreeRenderer
                 parentDeclaring: parentDeclaringConcrete,
                 parentMethod: parentMethodConcrete
             );
+        // A lambda renders AS its enclosing method when ShortName drops `~λN` (it does so only for a
+        // PARAMETERFUL method — load-bearing for the generic-chain monomorphization above), so sibling
+        // lambdas of one method look like identical duplicate lines. Append ONE `λN` discriminator. ShortName
+        // KEEPS `~λN` for a PARAMETERLESS enclosing method, so strip that first or we'd double it
+        // (`LoadBuiltIn~λ0 λ0`).
+        var shortName = ShortName(node.SymbolId);
+        var lambdaTag = "";
+        var lambdaAt = node.SymbolId.IndexOf("~λ", StringComparison.Ordinal);
+        if (lambdaAt >= 0)
+        {
+            var seg = node.SymbolId[lambdaAt..];
+            var segParen = seg.IndexOf('(');
+            lambdaTag = " " + (segParen >= 0 ? seg[..segParen] : seg).TrimStart('~');
+            var keptAt = shortName.IndexOf("~λ", StringComparison.Ordinal);
+            if (keptAt >= 0)
+            {
+                shortName = shortName[..keptAt];
+            }
+        }
         var name =
-            PrettyGenericName(ShortName(node.SymbolId), declaringArgs: declaringConcrete, methodArgs: methodConcrete)
-            + (signatures ? ShortSignature(node.SymbolId) : "");
+            PrettyGenericName(shortName, declaringArgs: declaringConcrete, methodArgs: methodConcrete)
+            + (signatures ? ShortSignature(node.SymbolId) : "")
+            + lambdaTag;
         // EP marker: when this node is itself a rule-detected entry point, wrap its name with "▶ kind"
         // and a trailing service chip — the same custom rendering used by derive/callers.
         var (epPrefix, epSuffix) = epContext?.ChipFor(node.SymbolId) ?? ("", "");
-        var label = $"{epPrefix}{name}{dispatch}{handoff}{loop}{calls}{seen}{opaqueTag}{cutTag}{fx}{loc}{epSuffix}";
-        output.WriteLine(isRoot ? label : $"{prefix}{(isLast ? "└─ " : "├─ ")}{label}");
+        // --full: the reaching edge's call site (where the PARENT calls this node) — a `new X()` line for a
+        // ctor, the inline-lambda decl line, the call line for a method — so ctors/lambdas and every node get
+        // a source line, not just the effect/library leaves. Trailing so SourceLocDedupWriter dedups it in
+        // print order; the root has no reaching edge (CallFile null).
+        var callLoc = full && !string.IsNullOrEmpty(node.CallFile) ? $"  {ShortenPath(node.CallFile)}:{node.CallLine}" : "";
+        var label = $"{epPrefix}{name}{dispatch}{handoff}{loop}{calls}{seen}{opaqueTag}{cutTag}{fx}{loc}{epSuffix}{callLoc}";
+        output.WriteLine(isRoot ? label : $"{prefix}{Connector(isLast)}{label}");
 
         // Collapse-seam render rule: this node is a fan-out hub (e.g. a reflection service-locator or
         // an ORM entity-constructor factory). Fold its candidate children into ONE summary leaf —
@@ -255,7 +297,7 @@ internal static class TreeRenderer
             for (var i = 0; i < fxLeaves.Count; i++)
             {
                 var lastLeaf = trailing == 0 && i == fxLeaves.Count - 1;
-                output.WriteLine($"{childPrefix}{(lastLeaf ? "└─ " : "├─ ")}{fxLeaves[i]}");
+                output.WriteLine($"{childPrefix}{Connector(lastLeaf)}{fxLeaves[i]}");
             }
         }
 
@@ -276,7 +318,7 @@ internal static class TreeRenderer
             var overflow = effects.Count > cap ? $" …+{effects.Count - cap} more" : "";
             var fxUnion = effects.Count == 0 ? "" : "  " + string.Join(' ', shown) + overflow;
             output.WriteLine(
-                $"{childPrefix}└─ ⋯ {children.Count} dispatch targets collapsed [seam: {seam.Label}]{fxUnion}  (+{hidden} lines hidden — `tree --raw` to expand)"
+                $"{childPrefix}{Connector(last: true)}⋯ {children.Count} dispatch targets collapsed [seam: {seam.Label}]{fxUnion}  (+{hidden} lines hidden — `tree --raw` to expand)"
             );
             return;
         }
@@ -296,6 +338,7 @@ internal static class TreeRenderer
                 files: files,
                 locById: locById,
                 signatures: signatures,
+                plain: plain,
                 cutRules: cutRules,
                 epContext: epContext,
                 full: full,
@@ -446,7 +489,7 @@ internal static class TreeRenderer
         // Emit one collapsed "lock" entry per paired resource.
         foreach (var resource in pairedResources.OrderBy(r => r, StringComparer.OrdinalIgnoreCase))
         {
-            var lockEmoji = FactEffectEmojiProvider.For(emoji, provider: "lock", operation: "held");
+            var lockEmoji = EmojiLookup.For(emoji, provider: "lock", operation: "held");
             // Omit resource name when it is always Threading.Monitor — adds no information.
             var resourceLabel = resource.Contains("Threading.Monitor", StringComparison.OrdinalIgnoreCase) ? "" : $" {ShortName(resource)}";
             result.Add($"{lockEmoji} lock{resourceLabel}");
@@ -463,7 +506,7 @@ internal static class TreeRenderer
                 continue;
             }
 
-            var glyph = FactEffectEmojiProvider.For(emoji, provider: e.Provider, operation: e.Operation);
+            var glyph = EmojiLookup.For(emoji, provider: e.Provider, operation: e.Operation);
             result.Add($"{glyph} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}");
         }
 
@@ -477,7 +520,7 @@ internal static class TreeRenderer
     internal static string FormatEffectLeaf(DerivedEffect e, IReadOnlyDictionary<string, string> emoji)
     {
         var loc = string.IsNullOrEmpty(e.FilePath) ? "" : $"  {ShortenPath(e.FilePath)}:{e.Line}";
-        var glyph = FactEffectEmojiProvider.For(emoji, provider: e.Provider, operation: e.Operation);
+        var glyph = EmojiLookup.For(emoji, provider: e.Provider, operation: e.Operation);
         return $"{glyph} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}{loc}";
     }
 
@@ -497,5 +540,52 @@ internal static class TreeRenderer
         // Render generic arity the same way resolved tree nodes do (`Seq`1.Iter` -> `Seq<T>.Iter`) so the
         // library leaves don't show raw backtick arity next to the `<T,U>` of resolved siblings.
         return $"· {PrettyGenericName(name)}{loc}";
+    }
+}
+
+// Print-order source-loc dedup for the tree. Nodes/leaves carry a trailing source location
+// (`  <relpath>:<line>`, or the `--files` definition form `  📄 <relpath>:<line>`), and consecutive lines
+// usually share a file, so the path is re-printed on nearly every line. This wraps the tree's output and
+// rewrites the path to nothing — `  :<line>` / `  📄 :<line>` — when it is unchanged from the previously
+// written line, so the file name appears only when it CHANGES, in print order. MODE-AGNOSTIC by design: it
+// keys off the rendered location, not on which flag produced it (--files/--full/--raw), so every loc dedups
+// through one filter with no per-flag matrix. Display-only; line numbers and the `📄` marker are preserved.
+// One instance per forest so the cursor spans every root.
+internal sealed class SourceLocDedupWriter(TextWriter inner) : TextWriter
+{
+    // Trailing "  [📄 ]<relpath>:<line>": the path must contain '/' (ShortenPath emits forward-slash
+    // relpaths) and no ':' before the line number, so resources like "Data.RunSummary"/"<anon>" never match.
+    // The optional 📄 prefix is the --files definition-loc marker, captured so it survives the rewrite.
+    private static readonly Regex LocSuffix = new(@"  (?<icon>📄 )?(?<p>[^\s:]+/[^\s:]+):(?<l>\d+)$", RegexOptions.CultureInvariant);
+
+    private string? _lastPath;
+
+    public override Encoding Encoding => inner.Encoding;
+
+    public override void Write(char value) => inner.Write(value);
+
+    public override void Write(string? value) => inner.Write(value);
+
+    public override void Flush() => inner.Flush();
+
+    public override void WriteLine(string? value) => inner.WriteLine(value is null ? null : Dedup(value));
+
+    private string Dedup(string line)
+    {
+        var m = LocSuffix.Match(line);
+        if (!m.Success)
+        {
+            return line;
+        }
+
+        var path = m.Groups["p"].Value;
+        if (string.Equals(path, _lastPath, StringComparison.Ordinal))
+        {
+            // Drop the repeated path, keep the marker (📄 or none) and the line number.
+            return $"{line[..m.Index]}  {m.Groups["icon"].Value}:{m.Groups["l"].Value}";
+        }
+
+        _lastPath = path;
+        return line;
     }
 }

@@ -1,8 +1,6 @@
-using System.Linq;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Domain;
 
@@ -13,7 +11,7 @@ public sealed class SiblingDedupTests
     private static FactGraphData Graph(params CallEdge[] edges)
     {
         var nodes = edges.SelectMany(e => new[] { e.Caller, e.Callee }).Distinct(StringComparer.Ordinal).Select(M).ToArray();
-        return new FactGraphData(edges, System.Array.Empty<ImplementsEdge>(), nodes);
+        return new FactGraphData(edges, Array.Empty<ImplementsEdge>(), nodes);
     }
 
     [Test]

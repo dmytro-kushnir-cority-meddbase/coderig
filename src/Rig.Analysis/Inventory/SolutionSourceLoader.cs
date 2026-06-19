@@ -1,13 +1,18 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.Loader;
+using System.Text;
 using System.Xml.Linq;
 using Buildalyzer;
+using Buildalyzer.Environment;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Diagnostics;
-using Microsoft.CodeAnalysis.Text;
 using Rig.Analysis.Rules;
 using Rig.Domain.Data;
+using ProjectInfo = Microsoft.CodeAnalysis.ProjectInfo;
+using SolutionInfo = Microsoft.CodeAnalysis.SolutionInfo;
 
 namespace Rig.Analysis.Inventory;
 
@@ -18,6 +23,11 @@ internal static class SolutionSourceLoader
     // big solution saturates every core rather than leaving most idle at a fixed cap. Override with
     // --parallelism <n> (e.g. lower it if memory-bound on a very large workspace).
     private static readonly int DefaultParallelism = Math.Max(val1: 1, val2: Environment.ProcessorCount);
+
+    // How many times a 0-source design-time build is retried before the index aborts. 0-source builds are
+    // usually a transient race (obj flush, MSBuild server hiccup) that clears on a fresh build; a couple of
+    // retries catches that, and anything still degraded after is treated as a hard, deterministic failure.
+    private const int DegradedBuildRetries = 2;
 
     public static async Task<SolutionSourceSet> LoadAsync(
         string solutionPath,
@@ -34,73 +44,86 @@ internal static class SolutionSourceLoader
         // and emit no binaries, so concurrency is safe — this is the dominant indexing cost.
         int? parallelism = null,
         // Drop test projects (by name convention) before their design-time build — --no-tests.
-        bool excludeTests = false
+        bool excludeTests = false,
+        // Optional per-phase timing collector (rig index --time). Records workspace-build,
+        // wire-generators, and the fused compile+read pass. Null = no timing.
+        PhaseTimings? timings = null,
+        // Directory for the design-time-build cache (rig index --reuse-build-cache). Null = disabled.
+        string? buildCacheDir = null
     )
     {
         var maxParallelism = Math.Max(val1: 1, val2: parallelism ?? DefaultParallelism);
+        var phase = timings is null ? null : Stopwatch.StartNew();
 
         // Buildalyzer invokes MSBuild.exe out-of-process, completely avoiding the
         // System.Collections.Immutable assembly conflict in Roslyn's BuildHost-net472 that
         // causes TypeInitializationException on XMakeElements under VS18/MSBuild18 when
-        // loading old-style ToolsVersion="4.0" projects.  (Roslyn PR #83477, not yet released
-        // as of May 2026.)  addProjectReferences:false loads project-to-project references
-        // from their compiled DLLs rather than re-evaluating the source .csproj files.
+        // loading old-style ToolsVersion="4.0" projects. The crash is specific to the
+        // MSBuildWorkspace in-process loader — plain msbuild.exe is unaffected, which is why
+        // this out-of-process path works. (Roslyn PR #83477 merged 2026-05-07 for milestone
+        // 18.8; NOT in our pinned Microsoft.CodeAnalysis 5.3.0 (~18.3), and still reported in
+        // released SDK 10.0.200 — see dotnet/roslyn#82931, dotnet/sdk#53383. Revisit a
+        // MSBuildWorkspace switch only after upgrading onto a shipped 18.8+.)
+        // addProjectReferences:false loads project-to-project references from their compiled
+        // DLLs rather than re-evaluating the source .csproj files.
         ReportProgress(progress, "Loading solution");
         var workspace = await Task.Run(
-            () => BuildWorkspace(solutionPath, progress, scopeProjectPaths, maxParallelism, excludeTests),
+            () => BuildWorkspace(solutionPath, progress, scopeProjectPaths, maxParallelism, excludeTests, timings, buildCacheDir),
             cancellationToken
         );
+        // BuildWorkspace records the finer "design-time-builds" (wall-clock) + "workspace-assembly"
+        // sub-phases itself; just reset the clock here for the next phase.
+        phase?.Restart();
 
         // Wire OutputItemType="Analyzer" ProjectReferences (source generators like the ClientPage
         // proxy generator) that Buildalyzer drops: emit each generator project's compilation to a temp
         // DLL and add it as an analyzer reference on the referencing project, so RunSourceGenerators
         // can execute it and the generated types get indexed.
         await WireGeneratorAnalyzersAsync(workspace, progress, cancellationToken);
+        if (phase is not null)
+        {
+            timings!.Record("wire-generators", phase.Elapsed);
+            phase.Restart();
+        }
 
         var csharpProjects = workspace
             .CurrentSolution.Projects.Where(p => p.Language == LanguageNames.CSharp)
             .Where(p => !rules.IsExcludedProject(p.Name))
+            .OrderBy(p => p.Name, StringComparer.Ordinal)
             .ToArray();
 
         ReportProgress(progress, $"Loaded {csharpProjects.Length} C# project(s) to index");
 
+        // ONE per-project pass: compile, collect error diagnostics, and read the project's sources
+        // against that SAME compilation — held alive (GC.KeepAlive) for the whole task so Roslyn's
+        // bounded compilation cache can't evict it between the diagnostics bind and the per-document
+        // semantic models. The old split compile-then-read passes traversed all projects twice; on a
+        // large closure (MedDBase: 123 projects) the first pass's compilations are evicted before the
+        // second pass reaches them, forcing a rebuild — the read pass measured ~as costly as the compile
+        // pass for exactly this reason. Fusing makes it build-once and drops the barrier between passes.
         var compilationErrors = new ConcurrentBag<string>();
-        var compiledProjects = 0;
-        var compileSemaphore = new SemaphoreSlim(maxParallelism);
-        await Task.WhenAll(
-            csharpProjects.Select(async project =>
-            {
-                await compileSemaphore.WaitAsync(cancellationToken);
-                try
-                {
-                    var current = Interlocked.Increment(ref compiledProjects);
-                    if (ShouldReportProgress(current: current, total: csharpProjects.Length))
-                    {
-                        ReportProgress(progress, $"Compiling project {current}/{csharpProjects.Length}: {project.Name}");
-                    }
+        var projectResults = new ConcurrentBag<ProjectSourceLoadResult>();
+        var analyzedProjects = 0;
 
-                    var compilation = await project.GetCompilationAsync(cancellationToken);
-                    if (compilation is null)
-                    {
-                        compilationErrors.Add($"{project.Name}: compilation unavailable");
-                        return;
-                    }
+        var first = csharpProjects[0];
+        var rest = csharpProjects.Skip(1);
 
-                    foreach (
-                        var diagnostic in compilation.GetDiagnostics(cancellationToken).Where(d => d.Severity == DiagnosticSeverity.Error)
-                    )
-                    {
-                        compilationErrors.Add($"{project.Name}: {diagnostic}");
-                    }
-                }
-                finally
-                {
-                    compileSemaphore.Release();
-                }
-            })
+        // let roslyn bootstrap without races
+        await ProcessProject(first, cancellationToken);
+
+        await Parallel.ForEachAsync(
+            rest,
+            new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = parallelism ?? DefaultParallelism },
+            ProcessProject
         );
 
+        if (phase is not null)
+        {
+            timings!.Record("compile+read", phase.Elapsed);
+        }
+
         var compilationErrorList = compilationErrors.OrderBy(e => e, StringComparer.Ordinal).ToArray();
+
         if (compilationErrorList.Length > 0)
         {
             // Report compilation errors as warnings and continue with partial analysis.
@@ -120,30 +143,6 @@ internal static class SolutionSourceLoader
             }
         }
 
-        var projectResults = new ConcurrentBag<ProjectSourceLoadResult>();
-        var readProjects = 0;
-        var readSemaphore = new SemaphoreSlim(maxParallelism);
-        await Task.WhenAll(
-            csharpProjects.Select(async project =>
-            {
-                await readSemaphore.WaitAsync(cancellationToken);
-                try
-                {
-                    var current = Interlocked.Increment(ref readProjects);
-                    if (ShouldReportProgress(current: current, total: csharpProjects.Length))
-                    {
-                        ReportProgress(progress, $"Reading source project {current}/{csharpProjects.Length}: {project.Name}");
-                    }
-
-                    projectResults.Add(await LoadProjectSourcesAsync(solutionPath, project, rules, cancellationToken));
-                }
-                finally
-                {
-                    readSemaphore.Release();
-                }
-            })
-        );
-
         var projectDirectories = csharpProjects
             .Select(p => p.FilePath)
             .Where(path => path is not null)
@@ -157,6 +156,35 @@ internal static class SolutionSourceLoader
             projectResults.SelectMany(r => r.Sources).OrderBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
             projectDirectories
         );
+
+        async ValueTask ProcessProject(Project project, CancellationToken ct)
+        {
+            var current = Interlocked.Increment(ref analyzedProjects);
+            ReportProgress(progress, $"Analyzing project {current}/{csharpProjects.Length}: {project.Name}");
+
+            var compilation = await project.GetCompilationAsync(ct);
+            if (compilation is null)
+            {
+                compilationErrors.Add($"{project.Name}: compilation unavailable");
+                return; // no semantic model possible — nothing to read for this project
+            }
+
+            foreach (var diagnostic in compilation.GetDiagnostics(ct).Where(d => d.Severity == DiagnosticSeverity.Error))
+            {
+                compilationErrors.Add($"{project.Name}: {diagnostic}");
+                Console.WriteLine($"{project.Name}: {diagnostic}");
+            }
+
+            projectResults.Add(
+                await LoadProjectSourcesAsync(
+                    solutionPath: solutionPath,
+                    project: project,
+                    compilation: compilation,
+                    rules: rules,
+                    cancellationToken: ct
+                )
+            );
+        }
     }
 
     private static AdhocWorkspace BuildWorkspace(
@@ -164,13 +192,81 @@ internal static class SolutionSourceLoader
         Action<string>? progress,
         IReadOnlySet<string>? scopeProjectPaths,
         int parallelism,
-        bool excludeTests
+        bool excludeTests,
+        PhaseTimings? timings = null,
+        string? buildCacheDir = null
     )
     {
         var logWriter = progress is null ? null : new ProgressLogWriter(progress);
         var options = new AnalyzerManagerOptions { LogWriter = logWriter };
 
-        List<IAnalyzerResult> results;
+        // Design-time-build cache (rig index --reuse-build-cache). On a fingerprint hit the (dominant)
+        // out-of-process build is skipped and the cached ProjectBuildInfo is replayed. Null = disabled.
+        var cache = buildCacheDir is null ? null : new BuildResultCache(buildCacheDir);
+        var cacheHits = 0;
+        var cacheMisses = 0;
+
+        // Per project: fingerprint → cache hit (skip the build) or miss (build, convert, store). With the
+        // cache off it's just build + convert. The fingerprint reads no file contents (see
+        // BuildInputFingerprint), so this is cheap relative to the build it may skip.
+        ProjectBuildInfo? BuildOrLoad(string projectFilePath, Func<IAnalyzerResult?> build)
+        {
+            if (
+                cache is not null
+                && cache.TryLoad(
+                    projectFilePath: projectFilePath,
+                    fingerprint: BuildInputFingerprint.Compute(projectFilePath),
+                    info: out var cached
+                )
+            )
+            {
+                Interlocked.Increment(ref cacheHits);
+                return cached;
+            }
+
+            var built = build();
+            if (built is null)
+            {
+                return null;
+            }
+
+            var info = ProjectBuildInfo.FromAnalyzerResult(built);
+            var name = Path.GetFileNameWithoutExtension(projectFilePath);
+
+            for (var attempt = 1; IsDegradedBuild(info) && attempt <= DegradedBuildRetries; attempt++)
+            {
+                ReportProgress(
+                    progress,
+                    $"WARN: '{name}' design-time build produced 0 source files — retrying ({attempt}/{DegradedBuildRetries})"
+                );
+                var retried = build();
+                if (retried is null)
+                {
+                    break;
+                }
+
+                info = ProjectBuildInfo.FromAnalyzerResult(retried);
+            }
+
+            if (IsDegradedBuild(info))
+            {
+                throw new DegradedBuildException(
+                    $"'{name}' design-time build produced 0 source files after {DegradedBuildRetries + 1} attempt(s) — "
+                        + "its types would be absent and dependents would fail to bind, corrupting the index. "
+                        + $"Re-run `dotnet restore` / `dotnet build` for {name}, then re-index."
+                );
+            }
+
+            if (cache is not null)
+            {
+                cache.Store(projectFilePath: projectFilePath, fingerprint: BuildInputFingerprint.Compute(projectFilePath), info: info);
+                Interlocked.Increment(ref cacheMisses);
+            }
+
+            return info;
+        }
+
+        List<ProjectBuildInfo> results;
         if (IsProjectFile(solutionPath))
         {
 #pragma warning disable CS0618
@@ -184,10 +280,16 @@ internal static class SolutionSourceLoader
             // concurrent Buildalyzer calls can corrupt each other's bin/ output if they share
             // compilation state.
             analyzer.SetGlobalProperty(key: "UseSharedCompilation", value: "false");
-            var built =
-                analyzer.Build().FirstOrDefault()
+            var singleWatch = timings is null ? null : Stopwatch.StartNew();
+            var info =
+                BuildOrLoad(Path.GetFullPath(solutionPath), () => analyzer.Build(CompileOnlyOptions()).FirstOrDefault())
                 ?? throw new InvalidOperationException($"Buildalyzer produced no build results for '{solutionPath}'.");
-            results = [built];
+            if (singleWatch is not null)
+            {
+                timings!.Record("design-time-builds", singleWatch.Elapsed);
+            }
+
+            results = [info];
         }
         else
         {
@@ -219,44 +321,129 @@ internal static class SolutionSourceLoader
             }
 
             // Design-time builds run out-of-process (MSBuild.exe) with UseSharedCompilation=false and
-            // emit no binaries, so they parallelise safely — and this is the dominant indexing cost,
-            // historically run serially. Parallel.ForEach bounds the concurrent MSBuild processes.
-            var resultsBag = new ConcurrentBag<IAnalyzerResult>();
+            // build only the `Compile` target (CompileOnlyOptions — non-destructive, see below), so they
+            // parallelise safely — and this is the dominant indexing cost, historically run serially.
+            // Parallel.ForEach bounds the concurrent MSBuild processes.
+            var resultsBag = new ConcurrentBag<ProjectBuildInfo>();
+            // Per-project build durations (only when timing). Their SUM is CPU-seconds of building, which
+            // is NOT the phase wall-clock — the builds run in parallel, so wall ≈ sum / effective-parallelism.
+            // The phase metric stays the wall-clock stopwatch below; this is the separate work/distribution view.
+            // (On a cache hit a project's "build" is just the fingerprint + sidecar read, so it shows ~0.)
+            var perProject = timings is null ? null : new ConcurrentBag<(string Name, double Seconds)>();
             var done = 0;
             var total = toBuild.Count;
-            Parallel.ForEach(
-                toBuild,
-                new ParallelOptions { MaxDegreeOfParallelism = Math.Max(val1: 1, val2: parallelism) },
-                projectAnalyzer =>
-                {
-                    var projectName = projectAnalyzer.ProjectFile.Name;
-                    var current = Interlocked.Increment(ref done);
-                    if (current == 1 || current == total || current % 10 == 0)
+            var buildsWatch = Stopwatch.StartNew();
+            try
+            {
+                Parallel.ForEach(
+                    toBuild,
+                    new ParallelOptions { MaxDegreeOfParallelism = Math.Max(val1: 1, val2: parallelism) },
+                    projectAnalyzer =>
                     {
-                        ReportProgress(progress, $"MSBuild: design-time build {current}/{total}: {projectName}");
-                    }
-
-                    projectAnalyzer.SetGlobalProperty(key: "DesignTimeBuild", value: "true");
-                    projectAnalyzer.SetGlobalProperty(key: "UseSharedCompilation", value: "false");
-                    projectAnalyzer.SetGlobalProperty(key: "BuildingInsideVisualStudio", value: "true");
-                    try
-                    {
-                        var built = projectAnalyzer.Build().FirstOrDefault();
-                        if (built is not null)
+                        var projectName = projectAnalyzer.ProjectFile.Name;
+                        var current = Interlocked.Increment(ref done);
+                        if (current == 1 || current == total || current % 10 == 0)
                         {
-                            resultsBag.Add(built);
+                            ReportProgress(progress, $"MSBuild: design-time build {current}/{total}: {projectName}");
+                        }
+
+                        projectAnalyzer.SetGlobalProperty(key: "DesignTimeBuild", value: "true");
+                        projectAnalyzer.SetGlobalProperty(key: "UseSharedCompilation", value: "false");
+                        projectAnalyzer.SetGlobalProperty(key: "BuildingInsideVisualStudio", value: "true");
+                        var projectWatch = perProject is null ? null : Stopwatch.StartNew();
+                        try
+                        {
+                            var info = BuildOrLoad(
+                                Path.GetFullPath(projectAnalyzer.ProjectFile.Path.ToString()),
+                                () => projectAnalyzer.Build(CompileOnlyOptions()).FirstOrDefault()
+                            );
+                            if (info is not null)
+                            {
+                                resultsBag.Add(info);
+                            }
+                        }
+                        catch (Exception ex) when (ex is not DegradedBuildException)
+                        {
+                            // A per-project build failure is non-fatal: skip it and carry on. A DegradedBuildException
+                            // (0 sources after retries) is the EXCEPTION — it's filtered out here so it propagates.
+                            ReportProgress(progress, $"MSBuild: skipping {projectName} — build failed: {ex.Message.Split('\n')[0].Trim()}");
+                        }
+                        finally
+                        {
+                            if (projectWatch is not null)
+                            {
+                                perProject!.Add((projectName, projectWatch.Elapsed.TotalSeconds));
+                            }
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        ReportProgress(progress, $"MSBuild: skipping {projectName} — build failed: {ex.Message.Split('\n')[0].Trim()}");
-                    }
+                );
+            }
+            catch (AggregateException aggregate)
+            {
+                // Parallel.ForEach wraps a thrown DegradedBuildException; surface it UNWRAPPED so the index
+                // aborts with the specific "0 source files" message instead of a generic AggregateException.
+                var fatal = aggregate.Flatten().InnerExceptions.OfType<DegradedBuildException>().FirstOrDefault();
+                if (fatal is not null)
+                {
+                    throw fatal;
                 }
-            );
+
+                throw;
+            }
+            buildsWatch.Stop();
+            if (timings is not null)
+            {
+                timings.Record("design-time-builds", buildsWatch.Elapsed); // WALL-CLOCK of the parallel batch
+                ReportBuildSummary(progress, perProject!, buildsWatch.Elapsed, parallelism);
+            }
+
             results = resultsBag.ToList();
         }
 
-        return BuildWorkspaceFromResults(results, progress);
+        if (cache is not null)
+        {
+            ReportProgress(progress, $"build cache: {cacheHits} hit(s), {cacheMisses} miss(es) of {results.Count} project(s)");
+        }
+
+        ReportProgress(progress, $"Assembling workspace from {results.Count} project(s)");
+        var assemblyWatch = timings is null ? null : Stopwatch.StartNew();
+        var workspace = BuildWorkspaceFromResults(results, parallelism);
+        if (assemblyWatch is not null)
+        {
+            timings!.Record("workspace-assembly", assemblyWatch.Elapsed);
+        }
+
+        return workspace;
+    }
+
+    // Per-project design-time-build distribution for --time. The wall-clock (the phase metric) is passed
+    // in; this reports the SEPARATE work view: Σ build-seconds (≠ wall — builds run in parallel), the
+    // effective parallelism achieved (Σ/wall vs the cap), the per-project spread, and the slowest few.
+    private static void ReportBuildSummary(
+        Action<string>? progress,
+        ConcurrentBag<(string Name, double Seconds)> perProject,
+        TimeSpan wall,
+        int parallelism
+    )
+    {
+        if (progress is null || perProject.IsEmpty)
+        {
+            return;
+        }
+
+        var sorted = perProject.OrderBy(p => p.Seconds).ToArray();
+        var seconds = sorted.Select(p => p.Seconds).ToArray();
+        var sum = seconds.Sum();
+        double Quantile(double q) => seconds[Math.Clamp(value: (int)Math.Round(q * (seconds.Length - 1)), min: 0, max: seconds.Length - 1)];
+        var effective = wall.TotalSeconds > 0 ? sum / wall.TotalSeconds : 0;
+        var slowest = string.Join(", ", perProject.OrderByDescending(p => p.Seconds).Take(5).Select(p => $"{p.Name} {p.Seconds:0.0}s"));
+
+        progress(
+            $"design-time builds: {perProject.Count} project(s) | wall {wall.TotalSeconds:0.0}s | "
+                + $"Σcpu {sum:0.0}s (≠ wall; ~{effective:0.0}x parallel @ cap {parallelism}) | "
+                + $"per-proj min {seconds[0]:0.0}s / median {Quantile(0.5):0.0}s / p95 {Quantile(0.95):0.0}s / max {seconds[^1]:0.0}s"
+        );
+        progress($"  slowest: {slowest}");
     }
 
     // A project is a test project by name convention (matches the CLI's --from closure heuristic):
@@ -271,14 +458,16 @@ internal static class SolutionSourceLoader
             || name.Contains(".Tests.", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static AdhocWorkspace BuildWorkspaceFromResults(IReadOnlyList<IAnalyzerResult> analyzerResults, Action<string>? progress = null)
+    private static AdhocWorkspace BuildWorkspaceFromResults(
+        IReadOnlyList<ProjectBuildInfo> projects,
+        int parallelism
+    )
     {
         var workspace = new AdhocWorkspace();
-        var solution = workspace.AddSolution(Microsoft.CodeAnalysis.SolutionInfo.Create(SolutionId.CreateNewId(), VersionStamp.Create()));
 
         // Pass 1 — assign stable ProjectIds keyed by normalised project path so cross-project
         // references can be resolved in pass 2 without depending on ordering.
-        var projectIdByPath = analyzerResults
+        var projectIdByPath = projects
             .Where(r => r.ProjectFilePath is not null)
             .ToDictionary(
                 r => Path.GetFullPath(r.ProjectFilePath!),
@@ -288,18 +477,40 @@ internal static class SolutionSourceLoader
 
         // Direct in-set project references per project (normalised paths), for the transitive-closure
         // computation below.
-        var directInSetRefsByPath = analyzerResults
+        var directInSetRefsByPath = projects
             .Where(r => r.ProjectFilePath is not null)
             .ToDictionary(
                 r => Path.GetFullPath(r.ProjectFilePath!),
-                r => (r.ProjectReferences ?? []).Select(Path.GetFullPath).Where(projectIdByPath.ContainsKey).ToArray(),
+                r => r.ProjectReferences.Select(Path.GetFullPath).Where(projectIdByPath.ContainsKey).ToArray(),
                 StringComparer.OrdinalIgnoreCase
             );
+
+        var assemblyNameByPath = projects
+            .Where(r => r.ProjectFilePath is not null)
+            .ToDictionary(
+                keySelector: r => Path.GetFullPath(r.ProjectFilePath!),
+                elementSelector: r =>
+                    r.Properties.TryGetValue(key: "AssemblyName", value: out var n)
+                        ? n
+                        : Path.GetFileNameWithoutExtension(r.ProjectFilePath!),
+                comparer: StringComparer.OrdinalIgnoreCase
+            );
+
+        var metadataCache = new ConcurrentDictionary<string, MetadataReference>(StringComparer.OrdinalIgnoreCase);
+        var existsCache = new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        var fsharpDllCache = new ConcurrentDictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+
+        bool Exists(string path) => existsCache.GetOrAdd(path, File.Exists);
+        MetadataReference Meta(string path) =>
+            metadataCache.GetOrAdd(path, p => AssemblyMetadata.CreateFromFile(p).GetReference(filePath: p));
+        string[] NonCSharpDlls(string projectPath) => fsharpDllCache.GetOrAdd(projectPath, p => NonCSharpProjectReferenceDlls(p).ToArray());
 
         // Pass 2 — build each project, converting dep project refs to Roslyn ProjectReferences
         // when the dependency is also in the indexed set.  This gives the semantic model a
         // connected type graph so HasBaseType can traverse across project boundaries.
-        foreach (var result in analyzerResults)
+        // Each ProjectInfo is a pure function of its ProjectBuildInfo plus the read-only id/ref maps and
+        // the thread-safe caches above, so the bodies run in parallel; AddProject folds them in serially.
+        ProjectInfo BuildProjectInfo(ProjectBuildInfo result)
         {
             var projectId = result.ProjectFilePath is not null
                 ? projectIdByPath.GetValueOrDefault(Path.GetFullPath(result.ProjectFilePath!), ProjectId.CreateNewId())
@@ -311,10 +522,10 @@ internal static class SolutionSourceLoader
             LanguageVersion langVersion = LanguageVersion.Default;
             if (result.Properties.TryGetValue(key: "LangVersion", value: out var lv) && lv is not null)
             {
-                Microsoft.CodeAnalysis.CSharp.LanguageVersionFacts.TryParse(lv, out langVersion);
+                LanguageVersionFacts.TryParse(lv, out langVersion);
             }
 
-            var parseOptions = new CSharpParseOptions(languageVersion: langVersion, preprocessorSymbols: result.PreprocessorSymbols ?? []);
+            var parseOptions = new CSharpParseOptions(languageVersion: langVersion, preprocessorSymbols: result.PreprocessorSymbols);
 
             // Compilation options: OutputKind must be Library for class library / web projects
             // so the compiler doesn't require a Main method (CS5001).  AllowUnsafe and Nullable
@@ -330,8 +541,8 @@ internal static class SolutionSourceLoader
                 && bool.TryParse(unsafeStr, out var unsafeBool)
                 && unsafeBool;
             var nullableContext =
-                result.Properties.TryGetValue(key: "Nullable", value: out var nullableStr)
-                && nullableStr?.Equals("enable", StringComparison.OrdinalIgnoreCase) == true
+                result.Properties.TryGetValue(key: "Nullable", value: out var str)
+                && str.Equals("enable", StringComparison.OrdinalIgnoreCase)
                     ? NullableContextOptions.Enable
                     : NullableContextOptions.Disable;
             var compilationOptions = new CSharpCompilationOptions(
@@ -340,7 +551,7 @@ internal static class SolutionSourceLoader
                 nullableContextOptions: nullableContext
             );
 
-            var allRefs = result.References ?? [];
+            var allRefs = result.References;
 
             // When a net48 project (like MedDBase.Pages) references a netstandard2.0 library
             // (like MedDBase.DataAccessTier.dll) that was compiled against the netstandard2.0
@@ -349,7 +560,7 @@ internal static class SolutionSourceLoader
             // To fix this: for every net452 reference we have, also add the netstandard2.0 sibling
             // if it exists, so both assembly identities are in the compilation.
             var siblingRefs = allRefs
-                .Where(File.Exists)
+                .Where(Exists)
                 .Select(r =>
                 {
                     var ns20 = r.Replace(
@@ -357,7 +568,7 @@ internal static class SolutionSourceLoader
                         Path.DirectorySeparatorChar + "netstandard2.0" + Path.DirectorySeparatorChar,
                         StringComparison.OrdinalIgnoreCase
                     );
-                    return ns20 != r && File.Exists(ns20) ? ns20 : null;
+                    return ns20 != r && Exists(ns20) ? ns20 : null;
                 })
                 .Where(r => r is not null)
                 .Select(r => r!);
@@ -378,13 +589,7 @@ internal static class SolutionSourceLoader
             var inWorkspaceProjectPaths = TransitiveInSetClosure(result.ProjectFilePath, directInSetRefsByPath);
 
             var inWorkspaceAssemblyNames = new HashSet<string>(
-                analyzerResults
-                    .Where(r => r.ProjectFilePath is not null && inWorkspaceProjectPaths.Contains(Path.GetFullPath(r.ProjectFilePath!)))
-                    .Select(r =>
-                        r.Properties.TryGetValue(key: "AssemblyName", value: out var n)
-                            ? n
-                            : Path.GetFileNameWithoutExtension(r.ProjectFilePath!)
-                    ),
+                inWorkspaceProjectPaths.Select(p => assemblyNameByPath[p]),
                 StringComparer.OrdinalIgnoreCase
             );
 
@@ -397,17 +602,17 @@ internal static class SolutionSourceLoader
             var fsharpRefDlls = inWorkspaceProjectPaths
                 .Append(result.ProjectFilePath is null ? null : Path.GetFullPath(result.ProjectFilePath))
                 .Where(p => p is not null)
-                .SelectMany(p => NonCSharpProjectReferenceDlls(p!))
+                .SelectMany(p => NonCSharpDlls(p!))
                 .Distinct(StringComparer.OrdinalIgnoreCase);
 
             var metadataRefs = allRefs
                 .Concat(siblingRefs)
                 .Concat(fsharpRefDlls)
-                .Where(File.Exists)
+                .Where(Exists)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 // Skip DLLs whose assembly is provided by a live project reference
                 .Where(path => !inWorkspaceAssemblyNames.Contains(Path.GetFileNameWithoutExtension(path)))
-                .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
+                .Select(Meta)
                 .ToArray();
 
             var projectRefs = inWorkspaceProjectPaths.Select(p => new ProjectReference(projectIdByPath[p])).ToArray();
@@ -419,14 +624,14 @@ internal static class SolutionSourceLoader
             // OutputItemType="Analyzer" ProjectReferences (e.g. the ClientPage proxy generator) are NOT
             // reported here — Buildalyzer drops them — so they're wired separately AFTER the workspace
             // is built (WireGeneratorAnalyzers), by emitting each generator project's compilation.
-            var analyzerRefs = (result.AnalyzerReferences ?? [])
-                .Where(File.Exists)
+            var analyzerRefs = result
+                .AnalyzerReferences.Where(Exists)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Select(path => (AnalyzerReference)new AnalyzerFileReference(path, HostRedirectingAnalyzerLoader.Instance))
                 .ToArray();
 
-            var documents = (result.SourceFiles ?? [])
-                .Where(File.Exists)
+            var documents = result
+                .SourceFiles.Where(Exists)
                 .Select(filePath =>
                     DocumentInfo.Create(
                         DocumentId.CreateNewId(projectId),
@@ -438,9 +643,9 @@ internal static class SolutionSourceLoader
                 .ToArray();
 
             var projectName = result.ProjectFilePath is not null ? Path.GetFileNameWithoutExtension(result.ProjectFilePath) : "Unknown";
-            var assemblyName = result.Properties.TryGetValue(key: "AssemblyName", value: out var a) ? a : projectName;
+            var assemblyName = result.Properties.GetValueOrDefault("AssemblyName", defaultValue: projectName);
 
-            var projectInfo = Microsoft.CodeAnalysis.ProjectInfo.Create(
+            var projectInfo = ProjectInfo.Create(
                 projectId,
                 VersionStamp.Create(),
                 name: projectName,
@@ -455,8 +660,25 @@ internal static class SolutionSourceLoader
                 documents: documents
             );
 
-            solution = solution.AddProject(projectInfo);
+            return projectInfo;
         }
+
+        // Build the ProjectInfos in parallel (the heavy, disk-bound metadata reads); writing each into its
+        // own slot preserves input order so the assembled solution is deterministic. AddProject then folds
+        // them in serially — a Solution is an immutable snapshot rebuilt on each call, not thread-safe to
+        // accumulate concurrently.
+        var infos = new ProjectInfo[projects.Count];
+
+        Parallel.For(
+            fromInclusive: 0,
+            toExclusive: projects.Count,
+            new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, parallelism) },
+            i => infos[i] = BuildProjectInfo(projects[i])
+        );
+
+        var solution = workspace.AddSolution(
+            SolutionInfo.Create(SolutionId.CreateNewId(), VersionStamp.Create(), projects: infos)
+        );
 
         workspace.TryApplyChanges(solution);
         return workspace;
@@ -611,9 +833,14 @@ internal static class SolutionSourceLoader
         return closure;
     }
 
+    // `compilation` is the project's compilation, passed in (not re-fetched from `project`) so the SAME
+    // instance the caller bound diagnostics against is reused AND kept rooted across this whole method —
+    // Roslyn holds final compilations recoverably, so without an explicit reference the bind cache could be
+    // evicted mid-read and silently rebuilt (the fused compile+read pass exists precisely to avoid that).
     private static async Task<ProjectSourceLoadResult> LoadProjectSourcesAsync(
         string solutionPath,
         Project project,
+        Compilation compilation,
         AnalysisRuleSet rules,
         CancellationToken cancellationToken
     )
@@ -657,12 +884,17 @@ internal static class SolutionSourceLoader
 
             var tree = await document.GetSyntaxTreeAsync(cancellationToken);
             var root = tree is null ? null : await tree.GetRootAsync(cancellationToken);
-            var semanticModel = await document.GetSemanticModelAsync(cancellationToken);
 
-            if (tree is null || root is null || semanticModel is null)
+            if (tree is null || root is null)
             {
                 continue;
             }
+
+            // Bind through the passed-in compilation (not document.GetSemanticModelAsync) so the model is
+            // built over the SAME instance ProcessProject warmed via GetDiagnostics — same-tree binding hits
+            // that warmed cache instead of triggering a recompile. The document's tree is one of this
+            // compilation's syntax trees (same project snapshot), so GetSemanticModel resolves it directly.
+            var semanticModel = compilation.GetSemanticModel(tree);
 
             sources.Add(
                 new SourceModel(
@@ -682,7 +914,7 @@ internal static class SolutionSourceLoader
         // explicitly with a CSharpGeneratorDriver over the project compilation and index the trees it
         // produces — that's what makes the generated proxy base-type facts (the clientpage_proxy
         // effect gate's discriminator) exist.
-        foreach (var generated in await RunSourceGeneratorsAsync(project, cancellationToken))
+        foreach (var generated in await RunSourceGeneratorsAsync(project, compilation, cancellationToken))
         {
             sourceFiles.Add(
                 new SourceFileInfo(
@@ -794,7 +1026,11 @@ internal static class SolutionSourceLoader
     // the generator-updated compilation. Projects with no generators (the common case) return empty
     // after a cheap check. Generator failures are swallowed (best-effort) so one bad generator can't
     // fail the whole index.
-    private static async Task<IReadOnlyList<SourceModel>> RunSourceGeneratorsAsync(Project project, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<SourceModel>> RunSourceGeneratorsAsync(
+        Project project,
+        Compilation compilation,
+        CancellationToken cancellationToken
+    )
     {
         var generators = project.AnalyzerReferences.SelectMany(ar => ar.GetGenerators(LanguageNames.CSharp)).ToArray();
         if (generators.Length == 0)
@@ -804,15 +1040,9 @@ internal static class SolutionSourceLoader
 
         try
         {
-            var compilation = await project.GetCompilationAsync(cancellationToken);
-            if (compilation is null)
-            {
-                return [];
-            }
-
             var parseOptions = project.ParseOptions as CSharpParseOptions;
             GeneratorDriver driver = CSharpGeneratorDriver.Create(generators, parseOptions: parseOptions);
-            driver = driver.RunGeneratorsAndUpdateCompilation(
+            driver.RunGeneratorsAndUpdateCompilation(
                 compilation: compilation,
                 outputCompilation: out var generatedCompilation,
                 diagnostics: out _,
@@ -853,8 +1083,6 @@ internal static class SolutionSourceLoader
         }
     }
 
-    private static bool ShouldReportProgress(int current, int total) => current == 1 || current == total || current % 10 == 0;
-
     // Progress is reported concurrently from the parallel build/compile/read loops. The contract is
     // that a non-null sink is itself thread-safe: the CLI passes Console.Out (a synchronized
     // SyncTextWriter, atomic per WriteLine), and tests pass no sink at all (null). So no app-level
@@ -863,6 +1091,36 @@ internal static class SolutionSourceLoader
 
     private static bool IsProjectFile(string path) =>
         path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase);
+
+    // Build ONLY the `Compile` target instead of Buildalyzer's default ["Clean", "Build"]. The default
+    // runs `Clean` first — which DELETES the project's bin/obj — and then a design-time `Build`
+    // (DesignTimeBuild=true) that emits nothing, so a plain Build() DESTROYS any pre-built output
+    // (msbuild/CI binaries, dependency-DLL copies). That's the open Buildalyzer#105. `Compile` still runs
+    // ResolveAssemblyReferences + Csc — so the resolved references and the command-line args Buildalyzer
+    // parses are still captured (DesignTimeBuild makes CoreCompile fire its command-line event without a
+    // real emit, so the Clean+NonExistentFile force-recompile trick isn't needed) — but skips Clean,
+    // CopyFilesToOutputDirectory, and Before/AfterBuild. Non-destructive, and a 30-50% cold-load speedup
+    // with identical reference/document counts (Buildalyzer#344). A fresh instance per call: the parallel
+    // build loop must not share one mutable options object across threads.
+    private static EnvironmentOptions CompileOnlyOptions()
+    {
+        var options = new EnvironmentOptions();
+        options.TargetsToBuild.Clear();
+        options.TargetsToBuild.Add("Compile");
+        return options;
+    }
+
+    // A design-time build is degraded if it produced NO source files. A healthy C# project build always
+    // yields at least the generated AssemblyInfo / GlobalUsings; zero means the build aborted before
+    // CoreCompile (transient failure or a racing obj flush), so the project compiles to nothing and its
+    // dependents fail to bind. Such a result must never be cached (see BuildOrLoad).
+    private static bool IsDegradedBuild(ProjectBuildInfo info) => info.SourceFiles.Count == 0;
+
+    // Thrown when a project's design-time build yields 0 source files even after DegradedBuildRetries — a
+    // deterministic failure that would corrupt the index. Derives from InvalidOperationException so the
+    // index command's existing load-failure handler catches it (clean exit, no raw stack trace), and is a
+    // distinct type so the per-project "skip on build failure" catch can let it through to abort the run.
+    private sealed class DegradedBuildException(string message) : InvalidOperationException(message);
 
     private sealed record ProjectSourceLoadResult(IReadOnlyList<SourceFileInfo> SourceFiles, IReadOnlyList<SourceModel> Sources);
 
@@ -892,7 +1150,7 @@ internal static class SolutionSourceLoader
                 return;
             }
 
-            System.Runtime.Loader.AssemblyLoadContext.Default.Resolving += (_, name) =>
+            AssemblyLoadContext.Default.Resolving += (_, name) =>
             {
                 if (name.Name is null)
                 {
@@ -916,7 +1174,7 @@ internal static class SolutionSourceLoader
 
     private sealed class ProgressLogWriter(Action<string> progress) : TextWriter
     {
-        public override System.Text.Encoding Encoding => System.Text.Encoding.UTF8;
+        public override Encoding Encoding => Encoding.UTF8;
 
         public override void WriteLine(string? value)
         {

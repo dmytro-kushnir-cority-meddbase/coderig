@@ -1,3 +1,4 @@
+using System.Text;
 using Rig.Domain.Data;
 
 namespace Rig.Domain.Functions;
@@ -886,7 +887,7 @@ public static partial class FactPathFinder
             return type;
         }
 
-        var sb = new System.Text.StringBuilder(type.Length);
+        var sb = new StringBuilder(type.Length);
         var depth = 0;
         foreach (var c in type)
         {

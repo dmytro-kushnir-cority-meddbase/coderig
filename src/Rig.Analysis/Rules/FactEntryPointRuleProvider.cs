@@ -17,8 +17,7 @@ public static class FactEntryPointRuleProvider
     )
     {
         var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
-        var ruleSet = AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths);
-        return ruleSet.TypeEntryPoints.Select(Project).ToArray();
+        return ProjectTypeEntryPoints(AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths));
     }
 
     // Loads the classInheritance entry-point rules projected for the fact deriver (Pattern C:
@@ -29,9 +28,15 @@ public static class FactEntryPointRuleProvider
     )
     {
         var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
-        var ruleSet = AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths);
-        return ruleSet.ClassInheritanceEntryPoints.Select(Project).ToArray();
+        return ProjectClassInheritance(AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths));
     }
+
+    // Project off an already-merged rule set, so RuleSet.Load can project these slices without a second load.
+    internal static IReadOnlyList<FactEntryPointRule> ProjectTypeEntryPoints(AnalysisRuleSet ruleSet) =>
+        ruleSet.TypeEntryPoints.Select(Project).ToArray();
+
+    internal static IReadOnlyList<FactClassInheritanceRule> ProjectClassInheritance(AnalysisRuleSet ruleSet) =>
+        ruleSet.ClassInheritanceEntryPoints.Select(Project).ToArray();
 
     private static FactClassInheritanceRule Project(ClassInheritanceEntryPointRule rule)
     {

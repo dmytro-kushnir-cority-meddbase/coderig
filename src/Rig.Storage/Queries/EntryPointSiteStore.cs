@@ -29,7 +29,7 @@ public static class EntryPointSiteStore
         // ExecuteNonQuery (as ApplyReadPragmasAsync does), so the schema reset is one call, not four.
         await using (var ddl = connection.CreateCommand())
         {
-            ddl.Transaction = (DbTransaction)tx;
+            ddl.Transaction = tx;
             ddl.CommandText = """
                 DROP TABLE IF EXISTS entry_point_sites;
                 DROP TABLE IF EXISTS entry_point_sites_meta;
@@ -41,7 +41,7 @@ public static class EntryPointSiteStore
 
         await using (var meta = connection.CreateCommand())
         {
-            meta.Transaction = (DbTransaction)tx;
+            meta.Transaction = tx;
             meta.CommandText = "INSERT INTO entry_point_sites_meta(RulesHash) VALUES ($h);";
             AddParam(meta, "$h", rulesHash);
             await meta.ExecuteNonQueryAsync(cancellationToken);
@@ -49,7 +49,7 @@ public static class EntryPointSiteStore
 
         await using (var insert = connection.CreateCommand())
         {
-            insert.Transaction = (DbTransaction)tx;
+            insert.Transaction = tx;
             insert.CommandText = "INSERT INTO entry_point_sites(FilePath, Line, Kind, Requires) VALUES ($f, $l, $k, $r);";
             var pf = AddParam(insert, "$f", "");
             var pl = AddParam(insert, "$l", 0);

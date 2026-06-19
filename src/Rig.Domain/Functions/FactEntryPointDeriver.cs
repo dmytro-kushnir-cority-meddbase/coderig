@@ -1,3 +1,4 @@
+using System.Text;
 using Rig.Domain.Data;
 
 namespace Rig.Domain.Functions;
@@ -214,7 +215,7 @@ public static class FactEntryPointDeriver
             return text;
         }
 
-        var sb = new System.Text.StringBuilder(text.Length);
+        var sb = new StringBuilder(text.Length);
         for (var i = 0; i < text.Length; i++)
         {
             if (text[i] == '`')

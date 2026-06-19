@@ -3,6 +3,7 @@ using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
 using Rig.Storage.Queries;
+using Rig.Storage.Storage;
 using static Rig.Cli.Graph.TraversalGraphLoader;
 using static Rig.Cli.Rendering.SymbolNameFormatter;
 
@@ -14,38 +15,68 @@ internal static class FactCommands
 {
     internal static Command BuildRuns(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var cmd = new Command(name: "runs", description: "List indexed runs (solution, counts, timestamp).");
+        var cmd = new Command(name: "runs", description: "List indexed runs across every per-commit store (solution, counts, timestamp).");
         cmd.SetAction(_ =>
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
                 error,
                 async () =>
                 {
-                    await using var context = OpenReadContext(workingDirectory);
-                    var runs = await Reads.ListRunsAsync(context);
-                    output.WriteLine("Runs");
-                    foreach (var run in runs)
+                    // Per-commit layout: enumerate EVERY store, not just LATEST — otherwise `rig runs` hides
+                    // the other indexed commits (e.g. the base store `impact --base` diffs against), which
+                    // made a mine-order / pointer mix-up impossible to see. Mark the LATEST (the store the
+                    // other read commands default to). No per-commit stores => fall back to the single
+                    // default context (legacy flat store, or a clean "no store" via CommandGuard).
+                    var storeIds = StoreLayout.AvailableStoreIds(workingDirectory);
+                    if (storeIds.Count == 0)
                     {
-                        output.WriteLine($"{Indent.L1}{run.Id}");
-                        output.WriteLine($"{Indent.L2}indexed={run.CreatedAtUtc:u}");
-                        output.WriteLine($"{Indent.L2}solution={run.SolutionPath}");
-                        if (run.SourceCommit is { } commit)
-                        {
-                            var shortSha = commit.Length >= 12 ? commit[..12] : commit;
-                            var branch = run.SourceBranch is { } b ? $" ({b})" : "";
-                            var dirty = run.SourceDirty ? " +dirty" : "";
-                            output.WriteLine($"{Indent.L2}commit={shortSha}{branch}{dirty}");
-                        }
-
-                        output.WriteLine(
-                            $"{Indent.L2}symbols={run.SymbolCount} references={run.ReferenceCount} di={run.DiRegistrationCount}"
-                        );
+                        await using var context = OpenReadContext(workingDirectory);
+                        output.WriteLine("Runs");
+                        await RenderRunsAsync(context: context, output: output, idIndent: Indent.L1, detailIndent: Indent.L2);
+                        return 0;
                     }
+
+                    var latest = StoreLayout.LatestStoreId(workingDirectory);
+                    output.WriteLine($"Runs ({storeIds.Count} store(s) in {StoreLayout.RigDir(workingDirectory)})");
+                    foreach (var storeId in storeIds)
+                    {
+                        var marker = string.Equals(storeId, latest, StringComparison.OrdinalIgnoreCase) ? "  ← LATEST (read default)" : "";
+                        output.WriteLine($"{Indent.L1}store {storeId}{marker}");
+                        await using var context = OpenReadContext(workingDirectory: workingDirectory, storeRef: storeId);
+                        await RenderRunsAsync(context: context, output: output, idIndent: Indent.L2, detailIndent: Indent.L3);
+                    }
+
                     return 0;
                 }
             )
         );
         return cmd;
+    }
+
+    // Render the runs in one open store context, at the given indent levels (id line / detail lines).
+    private static async Task RenderRunsAsync(
+        RigDbContext context,
+        TextWriter output,
+        string idIndent,
+        string detailIndent
+    )
+    {
+        var runs = await Reads.ListRunsAsync(context);
+        foreach (var run in runs)
+        {
+            output.WriteLine($"{idIndent}{run.Id}");
+            output.WriteLine($"{detailIndent}indexed={run.CreatedAtUtc:u}");
+            output.WriteLine($"{detailIndent}solution={run.SolutionPath}");
+            if (run.SourceCommit is { } commit)
+            {
+                var shortSha = commit.Length >= 12 ? commit[..12] : commit;
+                var branch = run.SourceBranch is { } b ? $" ({b})" : "";
+                var dirty = run.SourceDirty ? " +dirty" : "";
+                output.WriteLine($"{detailIndent}commit={shortSha}{branch}{dirty}");
+            }
+
+            output.WriteLine($"{detailIndent}symbols={run.SymbolCount} references={run.ReferenceCount} di={run.DiRegistrationCount}");
+        }
     }
 
     internal static Command BuildDi(TextWriter output, TextWriter error, string workingDirectory)
