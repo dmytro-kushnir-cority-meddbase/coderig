@@ -1,3 +1,4 @@
+using System.Globalization;
 using Rig.Domain.Data;
 
 namespace Rig.Cli.CommandLine;
@@ -93,7 +94,7 @@ internal static class StoreLayout
             return provenance.Dirty ? shortSha + "-dirty" : shortSha;
         }
 
-        return "ts-" + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss", System.Globalization.CultureInfo.InvariantCulture);
+        return "ts-" + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
     }
 
     // The per-commit store directory for a new index (created if absent).
@@ -199,7 +200,6 @@ internal static class StoreLayout
             .EnumerateDirectories(rig)
             .Where(d => File.Exists(Path.Combine(d, DbFileName)))
             .Select(d => Path.GetFileName(d))
-            .OfType<string>()
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToList();
     }

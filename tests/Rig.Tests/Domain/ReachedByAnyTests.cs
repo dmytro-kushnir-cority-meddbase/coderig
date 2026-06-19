@@ -1,7 +1,6 @@
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Domain;
 
@@ -36,7 +35,7 @@ public sealed class ReachedByAnyTests
             new MethodRef("M:N.Root3.Y", "Y", "T:N.Root3"),
             new MethodRef("M:N.Other.Z", "Z", "T:N.Other"),
         };
-        return new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods, null, null);
+        return new FactGraphData(edges, Array.Empty<ImplementsEdge>(), methods);
     }
 
     [Test]

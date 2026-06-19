@@ -6,6 +6,7 @@ using Rig.Cli.Rendering;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
+using Rig.Storage.Storage;
 using static Rig.Cli.Effects.EffectDerivation;
 using static Rig.Cli.EntryPoints.EntryPointContext;
 using static Rig.Cli.Graph.TraversalGraphLoader;
@@ -275,7 +276,7 @@ internal static class ImpactCommand
 
     // Read a store's provenance from its own run row (the run with the most symbols — the primary index).
     // Short sha = first 12 chars, matching `rig runs`. Fallback is the store-ref the user passed.
-    private static async Task<StoreProvenance> ReadProvenanceAsync(Rig.Storage.Storage.RigDbContext context, string storeRef)
+    private static async Task<StoreProvenance> ReadProvenanceAsync(RigDbContext context, string storeRef)
     {
         var runs = await Reads.ListRunsAsync(context);
         var primary = runs.OrderByDescending(r => r.SymbolCount).FirstOrDefault();
@@ -287,7 +288,7 @@ internal static class ImpactCommand
     // The base store's provenance — opened read-only for just its run row.
     private static async Task<StoreProvenance> ResolveBaseProvenanceAsync(string baseDbPath, string baseRef)
     {
-        await using var baseContext = new Rig.Storage.Storage.RigDbContext(baseDbPath, readOnly: true);
+        await using var baseContext = new RigDbContext(baseDbPath, readOnly: true);
         return await ReadProvenanceAsync(baseContext, baseRef);
     }
 
@@ -307,7 +308,7 @@ internal static class ImpactCommand
     // working dir — no query cache — so running it on a second store is correct. Internal for testing.
     internal static async Task<EpDiff> ComputeEpDiffAsync(string baseDbPath, IReadOnlyList<DerivedEntryPoint> branchEps, RuleSet rules)
     {
-        await using var baseContext = new Rig.Storage.Storage.RigDbContext(baseDbPath, readOnly: true);
+        await using var baseContext = new RigDbContext(baseDbPath, readOnly: true);
         var baseEpData = await Reads.LoadFactEntryPointDataAsync(baseContext);
         var baseSet = await DeriveEntryPointsAsync(baseContext, baseEpData, rules);
         var baseEps = baseSet.Derived.Concat(baseSet.PromotedOrigins).ToList();
@@ -787,7 +788,7 @@ internal static class ImpactCommand
         IReadOnlyDictionary<string, string> BodyHashes
     )> ComputeBaseSideAsync(string baseDbPath, RuleSet rules, FactPathFinder.TraversalMode mode)
     {
-        await using var context = new Rig.Storage.Storage.RigDbContext(baseDbPath, readOnly: true);
+        await using var context = new RigDbContext(baseDbPath, readOnly: true);
         var graph = await Reads.LoadFactGraphAsync(context, rules.Handoff);
         graph = FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context);
         graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));

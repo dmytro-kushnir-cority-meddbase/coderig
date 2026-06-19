@@ -1,4 +1,5 @@
 ﻿using System.Data.Common;
+using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
@@ -85,7 +86,7 @@ public static class Reads
             .ThenByDescending(run => run.Id)
             .Select(run => new RunSummary(
                 Id: run.Id,
-                CreatedAtUtc: DateTimeOffset.Parse(run.CreatedAtUtcText, System.Globalization.CultureInfo.InvariantCulture),
+                CreatedAtUtc: DateTimeOffset.Parse(run.CreatedAtUtcText, CultureInfo.InvariantCulture),
                 SolutionPath: run.SolutionPath,
                 SymbolCount: run.SymbolCount,
                 ReferenceCount: run.ReferenceCount,
@@ -293,7 +294,7 @@ public static class Reads
         }
         catch (InvalidCastException)
         {
-            return int.TryParse(reader.GetString(ordinal), System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0;
+            return int.TryParse(reader.GetString(ordinal), CultureInfo.InvariantCulture, out var v) ? v : 0;
         }
     }
 

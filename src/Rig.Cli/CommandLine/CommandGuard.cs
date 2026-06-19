@@ -1,3 +1,5 @@
+using System.Data.Common;
+
 namespace Rig.Cli.CommandLine;
 
 // The uniform action wrapper for every command: translates a SQLite/EF DbException that escapes the body
@@ -22,7 +24,7 @@ internal static class CommandGuard
             );
             return 2;
         }
-        catch (System.Data.Common.DbException exception)
+        catch (DbException exception)
         {
             // A SQLite error escaping a command almost always means the store is missing (wrong cwd) or
             // was built by an older rig (schema drift — a column/table added since). Translate the raw
@@ -34,7 +36,7 @@ internal static class CommandGuard
 
     // Clean exit-2 message for a store that can't be read: distinguish "no store here" (wrong directory)
     // from "older-rig schema mismatch" (re-index needed) from any other read failure.
-    internal static int StoreError(string workingDirectory, System.Data.Common.DbException exception, TextWriter error)
+    internal static int StoreError(string workingDirectory, DbException exception, TextWriter error)
     {
         var dbPath = StoreLayout.DbPath(workingDirectory);
         if (!File.Exists(dbPath))

@@ -1,14 +1,18 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.Loader;
+using System.Text;
 using System.Xml.Linq;
 using Buildalyzer;
+using Buildalyzer.Environment;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Diagnostics;
-using Microsoft.CodeAnalysis.Text;
 using Rig.Analysis.Rules;
 using Rig.Domain.Data;
+using ProjectInfo = Microsoft.CodeAnalysis.ProjectInfo;
+using SolutionInfo = Microsoft.CodeAnalysis.SolutionInfo;
 
 namespace Rig.Analysis.Inventory;
 
@@ -403,7 +407,7 @@ internal static class SolutionSourceLoader
 
         ReportProgress(progress, $"Assembling workspace from {results.Count} project(s)");
         var assemblyWatch = timings is null ? null : Stopwatch.StartNew();
-        var workspace = BuildWorkspaceFromResults(results, parallelism, progress);
+        var workspace = BuildWorkspaceFromResults(results, parallelism);
         if (assemblyWatch is not null)
         {
             timings!.Record("workspace-assembly", assemblyWatch.Elapsed);
@@ -456,8 +460,7 @@ internal static class SolutionSourceLoader
 
     private static AdhocWorkspace BuildWorkspaceFromResults(
         IReadOnlyList<ProjectBuildInfo> projects,
-        int parallelism,
-        Action<string>? progress = null
+        int parallelism
     )
     {
         var workspace = new AdhocWorkspace();
@@ -507,7 +510,7 @@ internal static class SolutionSourceLoader
         // connected type graph so HasBaseType can traverse across project boundaries.
         // Each ProjectInfo is a pure function of its ProjectBuildInfo plus the read-only id/ref maps and
         // the thread-safe caches above, so the bodies run in parallel; AddProject folds them in serially.
-        Microsoft.CodeAnalysis.ProjectInfo BuildProjectInfo(ProjectBuildInfo result)
+        ProjectInfo BuildProjectInfo(ProjectBuildInfo result)
         {
             var projectId = result.ProjectFilePath is not null
                 ? projectIdByPath.GetValueOrDefault(Path.GetFullPath(result.ProjectFilePath!), ProjectId.CreateNewId())
@@ -538,8 +541,8 @@ internal static class SolutionSourceLoader
                 && bool.TryParse(unsafeStr, out var unsafeBool)
                 && unsafeBool;
             var nullableContext =
-                result.Properties.TryGetValue(key: "Nullable", value: out var nullableStr)
-                && nullableStr?.Equals("enable", StringComparison.OrdinalIgnoreCase) == true
+                result.Properties.TryGetValue(key: "Nullable", value: out var str)
+                && str.Equals("enable", StringComparison.OrdinalIgnoreCase)
                     ? NullableContextOptions.Enable
                     : NullableContextOptions.Disable;
             var compilationOptions = new CSharpCompilationOptions(
@@ -642,7 +645,7 @@ internal static class SolutionSourceLoader
             var projectName = result.ProjectFilePath is not null ? Path.GetFileNameWithoutExtension(result.ProjectFilePath) : "Unknown";
             var assemblyName = result.Properties.GetValueOrDefault("AssemblyName", defaultValue: projectName);
 
-            var projectInfo = Microsoft.CodeAnalysis.ProjectInfo.Create(
+            var projectInfo = ProjectInfo.Create(
                 projectId,
                 VersionStamp.Create(),
                 name: projectName,
@@ -664,7 +667,7 @@ internal static class SolutionSourceLoader
         // own slot preserves input order so the assembled solution is deterministic. AddProject then folds
         // them in serially — a Solution is an immutable snapshot rebuilt on each call, not thread-safe to
         // accumulate concurrently.
-        var infos = new Microsoft.CodeAnalysis.ProjectInfo[projects.Count];
+        var infos = new ProjectInfo[projects.Count];
 
         Parallel.For(
             fromInclusive: 0,
@@ -674,7 +677,7 @@ internal static class SolutionSourceLoader
         );
 
         var solution = workspace.AddSolution(
-            Microsoft.CodeAnalysis.SolutionInfo.Create(SolutionId.CreateNewId(), VersionStamp.Create(), projects: infos)
+            SolutionInfo.Create(SolutionId.CreateNewId(), VersionStamp.Create(), projects: infos)
         );
 
         workspace.TryApplyChanges(solution);
@@ -1039,7 +1042,7 @@ internal static class SolutionSourceLoader
         {
             var parseOptions = project.ParseOptions as CSharpParseOptions;
             GeneratorDriver driver = CSharpGeneratorDriver.Create(generators, parseOptions: parseOptions);
-            driver = driver.RunGeneratorsAndUpdateCompilation(
+            driver.RunGeneratorsAndUpdateCompilation(
                 compilation: compilation,
                 outputCompilation: out var generatedCompilation,
                 diagnostics: out _,
@@ -1099,9 +1102,9 @@ internal static class SolutionSourceLoader
     // CopyFilesToOutputDirectory, and Before/AfterBuild. Non-destructive, and a 30-50% cold-load speedup
     // with identical reference/document counts (Buildalyzer#344). A fresh instance per call: the parallel
     // build loop must not share one mutable options object across threads.
-    private static Buildalyzer.Environment.EnvironmentOptions CompileOnlyOptions()
+    private static EnvironmentOptions CompileOnlyOptions()
     {
-        var options = new Buildalyzer.Environment.EnvironmentOptions();
+        var options = new EnvironmentOptions();
         options.TargetsToBuild.Clear();
         options.TargetsToBuild.Add("Compile");
         return options;
@@ -1147,7 +1150,7 @@ internal static class SolutionSourceLoader
                 return;
             }
 
-            System.Runtime.Loader.AssemblyLoadContext.Default.Resolving += (_, name) =>
+            AssemblyLoadContext.Default.Resolving += (_, name) =>
             {
                 if (name.Name is null)
                 {
@@ -1171,7 +1174,7 @@ internal static class SolutionSourceLoader
 
     private sealed class ProgressLogWriter(Action<string> progress) : TextWriter
     {
-        public override System.Text.Encoding Encoding => System.Text.Encoding.UTF8;
+        public override Encoding Encoding => Encoding.UTF8;
 
         public override void WriteLine(string? value)
         {

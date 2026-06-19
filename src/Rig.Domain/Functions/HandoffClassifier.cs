@@ -1,3 +1,4 @@
+using System.Text;
 using Rig.Domain.Data;
 
 namespace Rig.Domain.Functions;
@@ -198,7 +199,7 @@ public static class HandoffClassifier
             return docId;
         }
 
-        var sb = new System.Text.StringBuilder(docId.Length);
+        var sb = new StringBuilder(docId.Length);
         for (var i = 0; i < docId.Length; i++)
         {
             if (docId[i] == '`')

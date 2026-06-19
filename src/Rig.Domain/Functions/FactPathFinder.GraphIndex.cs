@@ -189,7 +189,6 @@ public static partial class FactPathFinder
     private sealed class GraphIndex
     {
         public Dictionary<string, List<CallEdge>> Adjacency = new(StringComparer.Ordinal);
-        public Dictionary<string, List<MethodRef>> MethodsByType = new(StringComparer.Ordinal);
 
         // Methods keyed by the GENERIC-STRIPPED containing type (Foo`2 / Foo{A,B} -> Foo), so
         // dispatch lookups land regardless of whether the base/impl/interface type DocID is the
@@ -237,8 +236,8 @@ public static partial class FactPathFinder
         // these rules is a traversal leaf — its successors are NOT yielded by Successors. Only
         // enabled for BuildTree / ReachesWithFanout (tree/reaches/path); never for dead-code or
         // callers traversals (which must see the full graph).
-        public bool ApplyTraversalCuts = false;
-        public IReadOnlyList<FactTraversalCutRule>? TraversalCutRules = null;
+        public bool ApplyTraversalCuts;
+        public IReadOnlyList<FactTraversalCutRule>? TraversalCutRules;
 
         public bool IsTraversalCut(string symbolId)
         {
@@ -295,21 +294,21 @@ public static partial class FactPathFinder
             index.Nodes.Add(edge.Caller);
             index.Nodes.Add(edge.Callee);
         }
-        index.MethodsByType = graph
-            .Methods.Where(m => m.ContainingTypeId is not null)
-            .GroupBy(m => m.ContainingTypeId!, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+
         index.MethodsByStrippedType = graph
             .Methods.Where(m => m.ContainingTypeId is not null)
             .GroupBy(m => TypeClosure.StripGeneric(m.ContainingTypeId!), StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+        
         index.ImplsByInterface = graph
             .ImplementsEdges.GroupBy(e => e.InterfaceType, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.Select(e => e.ImplType).Distinct(StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
+        
         index.ImplsByErrorInterfaceName = graph
             .ImplementsEdges.Where(e => e.InterfaceType.StartsWith("!:", StringComparison.Ordinal))
             .GroupBy(e => SimpleTypeName(e.InterfaceType), StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.Select(e => e.ImplType).Distinct(StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
+        
         index.StrippedBaseEdges = TypeClosure.BuildBaseEdgeLookup(
             (graph.BaseEdges ?? new List<BaseEdge>()).Select(e => (e.SubType, e.BaseType))
         );

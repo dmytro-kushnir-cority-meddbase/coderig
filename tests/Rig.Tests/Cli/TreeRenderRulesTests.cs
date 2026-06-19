@@ -1,8 +1,6 @@
-using Rig.Cli;
 using Rig.Cli.Rendering;
 using Rig.Domain.Data;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Cli;
 

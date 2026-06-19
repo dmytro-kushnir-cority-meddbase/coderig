@@ -1,9 +1,7 @@
 using System.Text.Json;
-using Rig.Analysis;
 using Rig.Analysis.Inventory;
 using Rig.Analysis.Rules;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Analysis;
 

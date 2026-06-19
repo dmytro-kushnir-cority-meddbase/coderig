@@ -461,7 +461,7 @@ public static class SqlReachability
         {
             await ReadAsync(
                 connection,
-                $"""
+                """
                 SELECT rf.EnclosingSymbolId, rf.TargetSymbolId, rf.Line, rf.TypeArguments
                 FROM reference_facts rf JOIN reach_set r ON rf.EnclosingSymbolId = r.sym
                 WHERE rf.TypeArguments IS NOT NULL;

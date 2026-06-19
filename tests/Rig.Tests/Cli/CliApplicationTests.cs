@@ -1,7 +1,10 @@
 using Rig.Cli;
+using Rig.Cli.CommandLine;
+using Rig.Domain.Data;
+using Rig.Storage.Queries;
+using Rig.Storage.Storage;
 using Rig.Tests.Fixtures;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Cli;
 
@@ -315,21 +318,21 @@ public sealed class CliApplicationTests
     // given commit + branch so the impact header can render provenance. storeId is what --base/--head resolve.
     private static async Task<string> MaterializeStoreAsync(
         string workingDirectory,
-        Rig.Domain.Data.AnalysisResult result,
+        AnalysisResult result,
         string commit,
         string branch
     )
     {
-        var storeId = Rig.Cli.CommandLine.StoreLayout.NewStoreId(
-            new Rig.Domain.Data.GitProvenance(Commit: commit, Branch: branch, Dirty: false)
+        var storeId = StoreLayout.NewStoreId(
+            new GitProvenance(Commit: commit, Branch: branch, Dirty: false)
         );
-        var dir = Rig.Cli.CommandLine.StoreLayout.NewStoreDir(workingDirectory, storeId);
-        var db = Path.Combine(dir, Rig.Cli.CommandLine.StoreLayout.DbFileName);
-        await using var ctx = new Rig.Storage.Storage.RigDbContext(db, pooling: false);
-        await Rig.Storage.Queries.Writes.SaveAsync(
+        var dir = StoreLayout.NewStoreDir(workingDirectory, storeId);
+        var db = Path.Combine(dir, StoreLayout.DbFileName);
+        await using var ctx = new RigDbContext(db, pooling: false);
+        await Writes.SaveAsync(
             ctx,
             result,
-            provenance: new Rig.Domain.Data.GitProvenance(Commit: commit, Branch: branch, Dirty: false)
+            provenance: new GitProvenance(Commit: commit, Branch: branch, Dirty: false)
         );
         return storeId;
     }

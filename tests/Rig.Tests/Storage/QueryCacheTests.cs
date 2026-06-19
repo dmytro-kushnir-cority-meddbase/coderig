@@ -1,7 +1,6 @@
 using Rig.Domain.Data;
 using Rig.Storage.Queries;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Storage;
 

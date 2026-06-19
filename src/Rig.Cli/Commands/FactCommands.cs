@@ -3,6 +3,7 @@ using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
 using Rig.Storage.Queries;
+using Rig.Storage.Storage;
 using static Rig.Cli.Graph.TraversalGraphLoader;
 using static Rig.Cli.Rendering.SymbolNameFormatter;
 
@@ -54,7 +55,7 @@ internal static class FactCommands
 
     // Render the runs in one open store context, at the given indent levels (id line / detail lines).
     private static async Task RenderRunsAsync(
-        Rig.Storage.Storage.RigDbContext context,
+        RigDbContext context,
         TextWriter output,
         string idIndent,
         string detailIndent

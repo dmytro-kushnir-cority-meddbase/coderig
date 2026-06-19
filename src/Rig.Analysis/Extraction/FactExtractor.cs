@@ -1,11 +1,10 @@
+using System.Collections.Immutable;
 using System.IO.Hashing;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Rig.Analysis;
 using Rig.Domain.Data;
 
 namespace Rig.Analysis.Extraction;
@@ -725,7 +724,7 @@ internal static class FactExtractor
     // because the renderer resolves them against the PARENT node's declaring/method concretes (whose param
     // spaces are exactly the enclosing method's containing type + the enclosing method itself). Returns null
     // for a null/empty arg list (non-generic). A `Seq<T>`-style composite arg yields "?" (placeholder kept).
-    private static string? GenericArgBinding(System.Collections.Immutable.ImmutableArray<ITypeSymbol>? args)
+    private static string? GenericArgBinding(ImmutableArray<ITypeSymbol>? args)
     {
         if (args is not { Length: > 0 } list)
         {

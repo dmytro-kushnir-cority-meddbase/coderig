@@ -1,6 +1,5 @@
 using Rig.Cli.Commands;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Cli;
 

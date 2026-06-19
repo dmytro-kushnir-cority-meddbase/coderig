@@ -1,3 +1,4 @@
+using System.Data;
 using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
 using Rig.Storage.Storage;
@@ -16,8 +17,8 @@ internal static class StorageProbes
     // open connection; FTS5 / PRAGMA / recursive-CTE SQL isn't expressible in EF LINQ).
     public static async Task<DbConnection> OpenConnectionAsync(RigDbContext context, CancellationToken cancellationToken)
     {
-        var connection = (DbConnection)context.Database.GetDbConnection();
-        if (connection.State != System.Data.ConnectionState.Open)
+        var connection = context.Database.GetDbConnection();
+        if (connection.State != ConnectionState.Open)
         {
             await connection.OpenAsync(cancellationToken);
             await ApplyReadPragmasAsync(connection, cancellationToken);

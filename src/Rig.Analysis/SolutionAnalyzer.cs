@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Rig.Analysis.Extraction;
 using Rig.Analysis.Inventory;
 using Rig.Analysis.Rules;
@@ -28,7 +29,7 @@ public static class SolutionAnalyzer
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
-        var phase = timings is null ? null : System.Diagnostics.Stopwatch.StartNew();
+        var phase = timings is null ? null : Stopwatch.StartNew();
         progress?.Invoke("Loading rules");
         var rules = AnalysisRuleSet.LoadForSolution(solutionFullPath, extraRulesPaths);
         if (phase is not null)

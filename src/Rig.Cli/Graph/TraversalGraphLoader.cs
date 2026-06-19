@@ -1,4 +1,5 @@
 using Rig.Analysis.Rules;
+using Rig.Cli.CommandLine;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
@@ -16,7 +17,7 @@ internal static class TraversalGraphLoader
     // write to the main DB, so a read command can never mutate the index. Writers (index/mine/graph) use
     // the default read-write constructor.
     internal static RigDbContext OpenReadContext(string workingDirectory, string? storeRef = null) =>
-        new(CommandLine.StoreLayout.DbPathForRef(workingDirectory, storeRef), readOnly: true);
+        new(StoreLayout.DbPathForRef(workingDirectory, storeRef), readOnly: true);
 
     // The call graph for a traversal command (reaches/tree/path/callers). When the derived edge views
     // exist (`rig graph` has been run) it returns the BOUNDED subgraph for `pattern` in the given

@@ -46,7 +46,7 @@ public static class Writes
         // fresh DB (the standalone atomic-publish path always writes a fresh temp); an old store is
         // re-indexed/re-mined, never altered in place (declare + require — see the --merge guard and
         // docs/multi-solution-storage.md).
-        var connection = (DbConnection)context.Database.GetDbConnection();
+        var connection = context.Database.GetDbConnection();
         if (connection.State != ConnectionState.Open)
         {
             await connection.OpenAsync(cancellationToken);
