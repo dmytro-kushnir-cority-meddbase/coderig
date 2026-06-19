@@ -485,7 +485,7 @@ internal static class FactExtractor
                 var other => other.ToString().ToLowerInvariant(),
             }
             : "";
-        
+
         symbols.Add(
             new SymbolFact(
                 SymbolId: docId,
@@ -528,12 +528,9 @@ internal static class FactExtractor
         }
 
         Span<byte> hash = stackalloc byte[8];
-        
-        XxHash3.Hash(
-            source: MemoryMarshal.AsBytes(fileText.AsSpan(start: span.Start, length: span.Length)),
-            destination: hash
-        );
-        
+
+        XxHash3.Hash(source: MemoryMarshal.AsBytes(fileText.AsSpan(start: span.Start, length: span.Length)), destination: hash);
+
         return Convert.ToHexStringLower(hash);
     }
 
@@ -1339,7 +1336,8 @@ internal static class FactExtractor
         SemanticModel model,
         SyntaxTree tree,
         string fileText,
-        List<ReferenceFact> references)
+        List<ReferenceFact> references
+    )
     {
         var ids = new Dictionary<SyntaxNode, string>();
         var ordinalByMember = new Dictionary<string, int>(StringComparer.Ordinal);

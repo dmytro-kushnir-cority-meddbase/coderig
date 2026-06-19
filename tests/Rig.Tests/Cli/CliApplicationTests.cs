@@ -240,7 +240,9 @@ public sealed class CliApplicationTests
 
                 // Human output: the two-store header, the entry-point diff, and the behavioral/structural
                 // sections — NONE of the removed working-tree chrome.
-                (await CliApplication.RunAsync(["impact", "--base", baseId, "--head", headId], output, error, workingDirectory)).ShouldBe(0);
+                (await CliApplication.RunAsync(["impact", "--base", baseId, "--head", headId], output, error, workingDirectory)).ShouldBe(
+                    0
+                );
                 var human = output.ToString();
                 human.ShouldContain("Impact:"); // the two-store header
                 human.ShouldContain("head-branch"); // HEAD provenance rendered
@@ -318,7 +320,9 @@ public sealed class CliApplicationTests
         string branch
     )
     {
-        var storeId = Rig.Cli.CommandLine.StoreLayout.NewStoreId(new Rig.Domain.Data.GitProvenance(Commit: commit, Branch: branch, Dirty: false));
+        var storeId = Rig.Cli.CommandLine.StoreLayout.NewStoreId(
+            new Rig.Domain.Data.GitProvenance(Commit: commit, Branch: branch, Dirty: false)
+        );
         var dir = Rig.Cli.CommandLine.StoreLayout.NewStoreDir(workingDirectory, storeId);
         var db = Path.Combine(dir, Rig.Cli.CommandLine.StoreLayout.DbFileName);
         await using var ctx = new Rig.Storage.Storage.RigDbContext(db, pooling: false);

@@ -298,11 +298,7 @@ internal static class ImpactCommand
     // The PROVEN store-vs-store diff: the entry-point set diff, the entry points whose reachable EFFECT set
     // changed (PerEp — the behavioral signal), and the entry points whose reachable TREE changed (AffectedEps —
     // structural). All three are derived purely from the two indexed stores.
-    internal sealed record ImpactDiff(
-        EpDiff? Ep,
-        IReadOnlyList<EpReachDelta> AffectedEps,
-        IReadOnlyList<EpFootprintDelta> PerEp
-    );
+    internal sealed record ImpactDiff(EpDiff? Ep, IReadOnlyList<EpReachDelta> AffectedEps, IReadOnlyList<EpFootprintDelta> PerEp);
 
     internal sealed record EpDiff(IReadOnlyList<(string Kind, string Route)> Added, IReadOnlyList<(string Kind, string Route)> Removed);
 
@@ -944,7 +940,9 @@ internal static class ImpactCommand
         output.WriteLine();
         if (deltas.Count == 0)
         {
-            output.WriteLine($"Behavioral changes per entry point vs '{baseProv.ShortLabel}': none — no entry point's reachable-effect set changed.");
+            output.WriteLine(
+                $"Behavioral changes per entry point vs '{baseProv.ShortLabel}': none — no entry point's reachable-effect set changed."
+            );
             return;
         }
 

@@ -100,7 +100,9 @@ public sealed class ImpactTwoStoreTests(AnalyzedPlaygrounds playgrounds)
 
             // The tsv form emits the proven, typed store-vs-store rows with no human chrome.
             output.GetStringBuilder().Clear();
-            (await CliApplication.RunAsync(["impact", "--base", baseId, "--head", headId, "--format", "tsv"], output, error, wd)).ShouldBe(0);
+            (await CliApplication.RunAsync(["impact", "--base", baseId, "--head", headId, "--format", "tsv"], output, error, wd)).ShouldBe(
+                0
+            );
             var tsv = output.ToString();
             tsv.ShouldContain("\t");
             tsv.ShouldContain("structural_summary\t");
