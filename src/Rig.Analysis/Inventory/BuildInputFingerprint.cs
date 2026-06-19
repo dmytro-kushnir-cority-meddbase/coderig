@@ -1,15 +1,24 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 
 namespace Rig.Analysis.Inventory;
 
 // Cheap, pessimistic fingerprint over the inputs that determine a project's DESIGN-TIME BUILD output:
-// resolved references (obj/project.assets.json), compile options (the .csproj + Directory.* props +
-// global.json up the tree), and the SET of source files. It deliberately reads NO file contents —
-// content changes are picked up by Roslyn re-reading the files on every index (cache hit or miss), so
-// they must NOT invalidate this key. The big restore artifact is STAT'd (length + mtime), not hashed —
-// measured ~280x cheaper on the MedDBase closure (16ms vs 4.5s). Errs toward "changed" (→ cache miss →
-// rebuild) on any ambiguity, so a wrong answer is slow, never incorrect.
+// compile options (the .csproj + Directory.* props + global.json up the tree), the dependency manifests
+// (paket.lock, packages.config, Directory.Packages.props, nuget.config), and the SET of source files.
+//
+// The small, build-STABLE inputs (the .csproj + the manifests) are CONTENT-HASHED, NOT stat'd. An earlier
+// version stat'd them (length + mtime) for speed, but `git switch` rewrites file mtimes without changing
+// content, so a branch switch — especially a round-trip — invalidated the whole closure even though the
+// builds were identical. Content-hashing makes the key stable across switches: only a real edit flips it.
+// These files are KBs, and a shared root manifest (paket.lock / Directory.Packages.props) is hashed once
+// per run via ContentHashCache, not once per project, so the cost stays negligible.
+//
+// Source FILE CONTENT is still NOT read — only the SET of *.cs paths is folded (add/remove/rename), because
+// body edits are picked up by Roslyn re-reading the files on every index (cache hit or miss) and must NOT
+// invalidate this key. Errs toward "changed" (→ cache miss → rebuild) on any ambiguity, so a wrong answer
+// is slow, never incorrect.
 internal static class BuildInputFingerprint
 {
     // Version/config manifests across the dependency mechanisms this codebase mixes — Paket, classic
@@ -49,8 +58,9 @@ internal static class BuildInputFingerprint
         // build races the flush, so the fingerprint took multiple indexes to converge. Inputs don't race.)
         //
         // The project file itself — declared PackageReference versions, direct/framework <Reference>s,
-        // TFM, compile options all live here, so an edit flips the key.
-        FeedStat(hash, fullProjectPath);
+        // TFM, compile options all live here, so an edit flips the key. Content-hashed (not stat'd) so a
+        // branch switch that rewrites its mtime but not its content stays a cache HIT.
+        FeedContent(hash, fullProjectPath);
 
         // Build props/targets + CPM versions + SDK pin + the dependency-manifest allowlist, walked up to
         // the drive root. Under Central Package Management every package version is in
@@ -61,12 +71,12 @@ internal static class BuildInputFingerprint
         {
             foreach (var name in AncestorConfigFiles)
             {
-                FeedStat(hash, Path.Combine(dir, name));
+                FeedContent(hash, Path.Combine(dir, name));
             }
 
             // The Paket tooling/wiring lives in a .paket subdir at the repo root. Its targets define HOW
             // references resolve, so a Paket upgrade can change resolution without touching paket.lock.
-            FeedStat(hash, Path.Combine(dir, ".paket", "Paket.Restore.targets"));
+            FeedContent(hash, Path.Combine(dir, ".paket", "Paket.Restore.targets"));
         }
 
         // The SET of *.cs paths (detects add / remove / rename — removals also self-heal downstream via
@@ -83,14 +93,34 @@ internal static class BuildInputFingerprint
         return Convert.ToHexString(hash.GetHashAndReset());
     }
 
-    private static void FeedStat(IncrementalHash hash, string path)
+    // Per-run memo of file CONTENT hashes, keyed by (path, length, mtime) so a shared root manifest
+    // (paket.lock, Directory.Packages.props, …) is hashed once even though every project in the closure
+    // walks up to it. The mtime is only a memo-validity check — the fingerprint folds the content hash, so
+    // a `git switch` that bumps mtime without changing content recomputes the SAME hash → still a cache hit.
+    // A one-shot CLI process; the key self-invalidates if a file is genuinely edited mid-session (tests).
+    private static readonly ConcurrentDictionary<string, string> ContentHashCache = new(StringComparer.Ordinal);
+
+    private static void FeedContent(IncrementalHash hash, string path)
     {
-        // length + mtime when present; a fixed marker when absent, so presence/absence flips the key.
-        // Used only for inputs the build does NOT rewrite (the .csproj + Directory.* props + global.json).
-        var bytes = File.Exists(path)
-            ? Encoding.UTF8.GetBytes($"{path}|{new FileInfo(path).Length}|{File.GetLastWriteTimeUtc(path).Ticks}\n")
-            : Encoding.UTF8.GetBytes($"{path}|-\n");
-        hash.AppendData(bytes);
+        // The SHA-256 of the file's bytes when present; a fixed marker when absent, so presence/absence
+        // flips the key. Content (not mtime) is what determines the build, so this is stable across the
+        // mtime churn a branch checkout produces.
+        if (!File.Exists(path))
+        {
+            hash.AppendData(Encoding.UTF8.GetBytes($"{path}|-\n"));
+            return;
+        }
+
+        var info = new FileInfo(path);
+        var memoKey = $"{path}|{info.Length}|{File.GetLastWriteTimeUtc(path).Ticks}";
+        var contentHash = ContentHashCache.GetOrAdd(memoKey, static (_, arg) => HashFile(arg), path);
+        hash.AppendData(Encoding.UTF8.GetBytes($"{path}|{contentHash}\n"));
+    }
+
+    private static string HashFile(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream));
     }
 
     // *.cs under the project dir, skipping obj/bin/.vs. No content read — enumeration only.

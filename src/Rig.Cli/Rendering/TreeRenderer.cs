@@ -128,6 +128,10 @@ internal static class TreeRenderer
         IReadOnlyDictionary<string, (string? File, int Line)>? locById = null,
         // `--signatures`: show each method's compact parameter signature so same-named overloads differ.
         bool signatures = false,
+        // `--plain`: drop the box-drawing connectors (├─ └─ │) for pure 2-space-per-depth indentation. The
+        // hierarchy stays legible but the lines carry no positional glyphs, so a diff of two plain trees shows
+        // only real structure changes — the connectors otherwise churn whenever a sibling is added/removed.
+        bool plain = false,
         // Traversal-cut rules for the «cut» marker: a node matching a cut rule gets a visible marker
         // indicating that its subtree was cut during traversal (not just render). Null = no markers.
         IReadOnlyList<FactTraversalCutRule>? cutRules = null,
@@ -150,7 +154,18 @@ internal static class TreeRenderer
         // actually rendered (pruning may drop effectless children, making ×2 fan-out misleading
         // when only 1 child survives).
         var children = prune ? node.Children.Where(c => SubtreeHasEffect(c, effectsByMethod)).ToList() : node.Children.ToList();
-        var childPrefix = isRoot ? "" : prefix + (isLast ? "   " : "│  ");
+        // Plain mode: pure indentation, no vertical guides — children indent 2 spaces per level (the root prints
+        // flush-left, but ITS children still indent). Box-drawing mode: the standard ├─/└─ guides with the │
+        // continuation lane, and the root contributes no prefix (its children align under it).
+        var childPrefix =
+            plain ? prefix + "  "
+            : isRoot ? ""
+            : prefix + (isLast ? "   " : "│  ");
+        // The branch connector for a NON-root line at this prefix, given whether it is the last visible child.
+        string Connector(bool last) =>
+            plain ? ""
+            : last ? "└─ "
+            : "├─ ";
 
         var dispatchTag = node.DispatchBasis == "heuristic" ? $"{node.EdgeKind} ~heuristic" : node.EdgeKind;
         // A folded single-impl hop shows «via IFoo» (the collapsed interface) in place of the dispatch tag.
@@ -258,7 +273,7 @@ internal static class TreeRenderer
         // print order; the root has no reaching edge (CallFile null).
         var callLoc = full && !string.IsNullOrEmpty(node.CallFile) ? $"  {ShortenPath(node.CallFile)}:{node.CallLine}" : "";
         var label = $"{epPrefix}{name}{dispatch}{handoff}{loop}{calls}{seen}{opaqueTag}{cutTag}{fx}{loc}{epSuffix}{callLoc}";
-        output.WriteLine(isRoot ? label : $"{prefix}{(isLast ? "└─ " : "├─ ")}{label}");
+        output.WriteLine(isRoot ? label : $"{prefix}{Connector(isLast)}{label}");
 
         // Collapse-seam render rule: this node is a fan-out hub (e.g. a reflection service-locator or
         // an ORM entity-constructor factory). Fold its candidate children into ONE summary leaf —
@@ -282,7 +297,7 @@ internal static class TreeRenderer
             for (var i = 0; i < fxLeaves.Count; i++)
             {
                 var lastLeaf = trailing == 0 && i == fxLeaves.Count - 1;
-                output.WriteLine($"{childPrefix}{(lastLeaf ? "└─ " : "├─ ")}{fxLeaves[i]}");
+                output.WriteLine($"{childPrefix}{Connector(lastLeaf)}{fxLeaves[i]}");
             }
         }
 
@@ -303,7 +318,7 @@ internal static class TreeRenderer
             var overflow = effects.Count > cap ? $" …+{effects.Count - cap} more" : "";
             var fxUnion = effects.Count == 0 ? "" : "  " + string.Join(' ', shown) + overflow;
             output.WriteLine(
-                $"{childPrefix}└─ ⋯ {children.Count} dispatch targets collapsed [seam: {seam.Label}]{fxUnion}  (+{hidden} lines hidden — `tree --raw` to expand)"
+                $"{childPrefix}{Connector(last: true)}⋯ {children.Count} dispatch targets collapsed [seam: {seam.Label}]{fxUnion}  (+{hidden} lines hidden — `tree --raw` to expand)"
             );
             return;
         }
@@ -323,6 +338,7 @@ internal static class TreeRenderer
                 files: files,
                 locById: locById,
                 signatures: signatures,
+                plain: plain,
                 cutRules: cutRules,
                 epContext: epContext,
                 full: full,

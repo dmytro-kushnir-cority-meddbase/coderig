@@ -233,6 +233,35 @@ public static partial class FactPathFinder
         return results;
     }
 
+    // Exact-id forward reach from EACH seed independently, returning the FULL per-node ReachInfo per seed
+    // (NOT just the reachable-node set, as ReachesFromEachSeed does). Same index/dispatch semantics; the
+    // extra payload is the loop context (NearestLoopKind) and depth/dispatch tags already computed by the
+    // BFS — `rig impact`'s effect-AMPLIFICATION pass needs the loop flag per reachable effect-bearing node,
+    // which the set-only twin discards. Built once, run in parallel over the shared read-only index.
+    public static IReadOnlyList<IReadOnlyDictionary<string, ReachInfo>> ReachesInfoFromEachSeed(
+        FactGraphData graph,
+        IReadOnlyList<string> seedIds,
+        int maxDepth = 20,
+        int maxNodes = 20000,
+        bool narrowDispatch = true,
+        TraversalMode mode = TraversalMode.SyncCut
+    )
+    {
+        var index = BuildIndex(graph, narrowDispatch);
+        var results = new IReadOnlyDictionary<string, ReachInfo>[seedIds.Count];
+        Parallel.For(
+            fromInclusive: 0,
+            toExclusive: seedIds.Count,
+            body: i =>
+            {
+                var seed = seedIds[i];
+                var seeds = index.Nodes.Contains(seed) ? new[] { seed } : Array.Empty<string>();
+                results[i] = ReachesWithFanoutCore(index, seeds, maxDepth, maxNodes, mode);
+            }
+        );
+        return results;
+    }
+
     // The shared BFS body of ReachesWithFanout / ReachesFromEachSeed: one-hop dispatch forward reach over a
     // PREBUILT index from the given seed nodes. All traversal state below is LOCAL — safe to run concurrently
     // over one shared (read-only) index (DescendantsCache is concurrent).

@@ -11,7 +11,7 @@ namespace Rig.Tests.Storage;
 public sealed class AssemblyRegistryTests
 {
     private static SymbolFact Symbol(string id, string assembly) =>
-        new(id, "method", id, "Ns", null, "public", "", id + "()", "F.cs", 1, assembly, false);
+        new(id, "method", id, "Ns", null, "public", "", id + "()", "F.cs", 1, 1, assembly, false);
 
     private static ReferenceFact Invocation(string target, string enclosing) =>
         new(target, "invocation", enclosing, "Other.Asm", true, "F.cs", 2);

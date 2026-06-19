@@ -1,8 +1,6 @@
-using Rig.Cli;
 using Rig.Cli.Rendering;
 using Rig.Domain.Data;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Cli;
 
@@ -29,18 +27,54 @@ public sealed class TreeRenderRulesTests
         FactRenderRules rules,
         IReadOnlyDictionary<string, List<string>> effects,
         bool prune = false,
-        IReadOnlyDictionary<string, List<string>>? seamEffects = null
+        IReadOnlyDictionary<string, List<string>>? seamEffects = null,
+        bool plain = false
     )
     {
         var output = new StringWriter();
         seamEffects ??= new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        TreeRenderer.RenderTreeNode(root, prefix: "", isLast: true, isRoot: true, effects, prune, rules, seamEffects, output);
+        TreeRenderer.RenderTreeNode(root, prefix: "", isLast: true, isRoot: true, effects, prune, rules, seamEffects, output, plain: plain);
         return output.ToString();
     }
 
     // A node carrying generic monomorphization bindings (JSON C:/T:/M: token arrays), as the mine produces.
     private static TraceNode Bind(string id, string? declaring, string? method, params TraceNode[] children) =>
         new(id, "invocation", null, null, children, DeclaringTypeArgBinding: declaring, MethodTypeArgBinding: method);
+
+    [Test]
+    public void Plain_mode_drops_box_drawing_connectors_for_pure_indentation()
+    {
+        // A 3-level tree with a fan-out so both ├─ (non-last) and └─ (last) + the │ lane would appear.
+        var root = Node("M:App.Root.Go()", Node("M:App.A.M()", Node("M:App.A1.M()")), Node("M:App.B.M()"));
+
+        var plain = Render(root, FactRenderRules.Empty, Effects(), plain: true);
+        var boxed = Render(root, FactRenderRules.Empty, Effects(), plain: false);
+
+        // Box-drawing connectors are gone in plain mode...
+        plain.ShouldNotContain("├");
+        plain.ShouldNotContain("└");
+        plain.ShouldNotContain("│");
+        // ...but the boxed render DID use them (so the assertion above is meaningful, not vacuous).
+        boxed.ShouldContain("├─ ");
+        boxed.ShouldContain("└─ ");
+    }
+
+    [Test]
+    public void Plain_mode_preserves_depth_via_two_space_indentation()
+    {
+        var root = Node("M:App.Root.Go()", Node("M:App.A.M()", Node("M:App.A1.M()")));
+
+        var lines = Render(root, FactRenderRules.Empty, Effects(), plain: true)
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.TrimEnd('\r'))
+            .ToList();
+
+        // Root flush-left; each level indents 2 more spaces. Same node set, just no glyphs. (ShortName drops
+        // the namespace, so `M:App.A.M()` renders as `A.M`.)
+        lines[0].ShouldStartWith("Root.Go");
+        lines[1].ShouldBe("  A.M");
+        lines[2].ShouldBe("    A1.M");
+    }
 
     [Test]
     public void Concrete_declaring_binding_substitutes_the_declaring_type_placeholders()

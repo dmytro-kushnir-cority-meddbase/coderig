@@ -1,5 +1,7 @@
+using System.Data;
 using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
+using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Storage;
 using static System.Globalization.CultureInfo;
@@ -29,10 +31,10 @@ public static class GraphMaterializer
 
     public static async Task<GraphStats> BuildAsync(
         RigDbContext context,
-        Domain.Data.FactHandoffRule[]? handoffRules = null,
+        FactHandoffRule[]? handoffRules = null,
         Action<string>? progress = null,
         CancellationToken cancellationToken = default,
-        IReadOnlyList<Domain.Data.FactGenericFactoryRule>? factoryRules = null
+        IReadOnlyList<FactGenericFactoryRule>? factoryRules = null
     )
     {
         progress?.Invoke("Loading facts");
@@ -51,8 +53,8 @@ public static class GraphMaterializer
         // in-memory pass re-applies over the bounded graph. No-op when factoryRules is null/empty.
         graph = FactPathFinder.RewriteGenericFactories(graph, factoryRules ?? []);
 
-        var connection = (DbConnection)context.Database.GetDbConnection();
-        if (connection.State != System.Data.ConnectionState.Open)
+        var connection = context.Database.GetDbConnection();
+        if (connection.State != ConnectionState.Open)
         {
             await connection.OpenAsync(cancellationToken);
         }
@@ -256,7 +258,7 @@ public static class GraphMaterializer
     private static async Task<int> InsertCallEdgesAsync(
         DbConnection connection,
         DbTransaction transaction,
-        Domain.Data.FactGraphData graph,
+        FactGraphData graph,
         Action<string>? progress,
         CancellationToken cancellationToken
     )
@@ -301,7 +303,7 @@ public static class GraphMaterializer
     private static async Task<(int Total, int Heuristic)> InsertDispatchEdgesAsync(
         DbConnection connection,
         DbTransaction transaction,
-        Domain.Data.FactGraphData graph,
+        FactGraphData graph,
         Action<string>? progress,
         CancellationToken cancellationToken
     )

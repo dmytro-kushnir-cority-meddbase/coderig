@@ -1,4 +1,6 @@
+using System.Text;
 using Rig.Analysis.Rules;
+using Rig.Cli.CommandLine;
 using Rig.Cli.Deployments;
 using Rig.Cli.Rendering;
 using Rig.Domain.Data;
@@ -120,7 +122,7 @@ internal static class EntryPointContext
             body = body.Substring(startIndex: 0, length: paren);
         }
 
-        var sb = new System.Text.StringBuilder(body.Length);
+        var sb = new StringBuilder(body.Length);
         for (var i = 0; i < body.Length; i++)
         {
             if (body[i] == '`')
@@ -163,7 +165,7 @@ internal static class EntryPointContext
 
         var siteById = graph
             .Methods.GroupBy(m => m.SymbolId, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => ((string?)g.First().FilePath, g.First().Line), StringComparer.Ordinal);
+            .ToDictionary(g => g.Key, g => (g.First().FilePath, g.First().Line), StringComparer.Ordinal);
 
         return new EpRenderContext(deployments, siteById, epSiteKind);
     }
@@ -201,8 +203,8 @@ internal static class EntryPointContext
         }
 
         // Tier 2: query cache (handles --rules, which the table doesn't cover).
-        var rigDir = CommandLine.StoreLayout.ResolveStoreDir(workingDirectory);
-        var storeKey = StoreKey(Path.Combine(rigDir, CommandLine.StoreLayout.DbFileName));
+        var rigDir = StoreLayout.ResolveStoreDir(workingDirectory);
+        var storeKey = StoreKey(Path.Combine(rigDir, StoreLayout.DbFileName));
         using var cache = QueryCache.Open(rigDirectory: rigDir, storeKey: storeKey);
         var key = cache is null ? null : EpCacheKey(storeKey, rulesHash);
         if (key is not null && cache!.Get(key) is { } blob && EpSiteCacheCodec.Decode(blob) is { } hit)

@@ -1,6 +1,5 @@
 using Rig.Domain.Functions;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Analysis;
 

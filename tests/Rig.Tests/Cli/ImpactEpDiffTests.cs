@@ -6,7 +6,6 @@ using Rig.Storage.Queries;
 using Rig.Storage.Storage;
 using Rig.Tests.Fixtures;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Cli;
 

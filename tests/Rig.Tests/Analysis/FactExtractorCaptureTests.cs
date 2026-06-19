@@ -1,9 +1,10 @@
+using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Rig.Analysis;
 using Rig.Analysis.Extraction;
+using Rig.Domain.Data;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Analysis;
 
@@ -95,7 +96,7 @@ public sealed class FactExtractorCaptureTests
 
         var result = Extract(source);
 
-        Rig.Domain.Data.ReferenceFact Enumerate(string enclosing) =>
+        ReferenceFact Enumerate(string enclosing) =>
             result.References.Single(r =>
                 r.RefKind == "invocation"
                 && r.TargetSymbolId.Contains("QueryPipeline")
@@ -174,7 +175,7 @@ public sealed class FactExtractorCaptureTests
 
         var result = Extract(source);
 
-        Rig.Domain.Data.ReferenceFact Create(string enclosing) =>
+        ReferenceFact Create(string enclosing) =>
             result.References.Single(r =>
                 r.RefKind == "invocation"
                 && r.TargetSymbolId.Contains("QueryPipeline")
@@ -221,7 +222,7 @@ public sealed class FactExtractorCaptureTests
 
         // The permission-shape call: the right is a member path at argument 1 (NOT the first argument).
         var hasRight = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Cert.HasRight"));
-        var names = System.Text.Json.JsonSerializer.Deserialize<string?[]>(hasRight.ArgumentNames!)!;
+        var names = JsonSerializer.Deserialize<string?[]>(hasRight.ArgumentNames!)!;
         names.Length.ShouldBe(3);
         names[0].ShouldBe("account");
         names[1].ShouldBe("Rights.Account.CanViewAccounts");
@@ -229,9 +230,9 @@ public sealed class FactExtractorCaptureTests
 
         // A string-literal argument is captured in the templates list at its position.
         var get = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Api.Get"));
-        System.Text.Json.JsonSerializer.Deserialize<string?[]>(get.ArgumentTemplates!)![0].ShouldBe("client");
+        JsonSerializer.Deserialize<string?[]>(get.ArgumentTemplates!)![0].ShouldBe("client");
         // arg 0 of Api.Get is a literal, not a member/identifier -> JSON null in the names list.
-        System.Text.Json.JsonSerializer.Deserialize<string?[]>(get.ArgumentNames!)![0].ShouldBeNull();
+        JsonSerializer.Deserialize<string?[]>(get.ArgumentNames!)![0].ShouldBeNull();
     }
 
     [Test]
@@ -254,11 +255,10 @@ public sealed class FactExtractorCaptureTests
 
         var call = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Db.GetConnectionString"));
         // The call site only NAMES the constant; the templates list resolves it to its value...
-        System
-            .Text.Json.JsonSerializer.Deserialize<string?[]>(call.ArgumentTemplates!)![0]
+        JsonSerializer.Deserialize<string?[]>(call.ArgumentTemplates!)![0]
             .ShouldBe("MedDBase.DataAccessTier.ConnectionString");
         // ...while the names list keeps the const reference path.
-        System.Text.Json.JsonSerializer.Deserialize<string?[]>(call.ArgumentNames!)![0].ShouldBe("Keys.Conn");
+        JsonSerializer.Deserialize<string?[]>(call.ArgumentNames!)![0].ShouldBe("Keys.Conn");
     }
 
     // 18b lambda identity: a lambda passed as an argument to a call/ctor gets a synthetic symbol that

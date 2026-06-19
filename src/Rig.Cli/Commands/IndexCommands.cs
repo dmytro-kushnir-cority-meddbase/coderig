@@ -1,8 +1,12 @@
 using System.CommandLine;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Rig.Analysis;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
+using Rig.Cli.Git;
 using Rig.Domain.Data;
 using Rig.Storage.Queries;
 using Rig.Storage.Storage;
@@ -119,7 +123,7 @@ internal static class IndexCommands
         // Capture provenance + the destination store-id up front, so the store location and commit can be
         // announced BEFORE the (long) analysis — useful when monitoring a re-index. The commit IS the
         // store-id (docs/design-impact-behavioral-diff.md §4.4-4.5).
-        var provenance = Git.GitProvenanceProbe.Capture(fromProject ?? Path.GetFullPath(target));
+        var provenance = GitProvenanceProbe.Capture(fromProject ?? Path.GetFullPath(target));
         var storeId = StoreLayout.NewStoreId(provenance);
 
         var totalWatch = Stopwatch.StartNew();
@@ -310,206 +314,7 @@ internal static class IndexCommands
 
         output.WriteLine($"  {"total", -20} {FormatElapsed(TimeSpan.FromSeconds(total)), 8}  100.0%");
     }
-
-    internal static Command BuildMine(TextWriter output, TextWriter error, string workingDirectory)
-    {
-        var solution = CommonOptions.Pattern(name: "solution", description: "Solution to mine.");
-        var from = new Option<string?>("--from") { Description = "Entry project (.csproj) to BFS from.", Required = true };
-        var rules = CommonOptions.Rules();
-        var identity = new Option<string?>("--identity") { Description = "Store identity (defaults to a hash of the solution path)." };
-        var parallelism = new Option<int?>("--parallelism") { Description = "Max concurrent project analyses." };
-
-        var cmd = new Command(name: "mine", description: "BFS-index a project dependency closure, level by level, in parallel.")
-        {
-            solution,
-            from,
-            rules,
-            identity,
-            parallelism,
-        };
-        cmd.SetAction(pr =>
-            CommandGuard.RunGuardedAsync(
-                workingDirectory,
-                error,
-                () =>
-                    RunMineAsync(
-                        solutionPath: Path.GetFullPath(pr.GetValue(solution)!),
-                        fromProject: Path.GetFullPath(pr.GetValue(from)!),
-                        extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
-                        identity: pr.GetValue(identity),
-                        parallelismOverride: pr.GetValue(parallelism),
-                        output: output,
-                        error: error,
-                        workingDirectory: workingDirectory
-                    )
-            )
-        );
-        return cmd;
-    }
-
-    private static async Task<int> RunMineAsync(
-        string solutionPath,
-        string fromProject,
-        IReadOnlyList<string> extraRules,
-        string? identity,
-        int? parallelismOverride,
-        TextWriter output,
-        TextWriter error,
-        string workingDirectory
-    )
-    {
-        var parallelism = parallelismOverride ?? Math.Max(val1: 1, val2: Environment.ProcessorCount / 2);
-        identity ??= ComputeIdentity(solutionPath);
-        output.WriteLine($"Mine: {solutionPath}");
-        output.WriteLine($"From: {fromProject}");
-        output.WriteLine($"Identity: {identity}");
-        output.WriteLine($"Parallelism: {parallelism}");
-
-        // Build the dependency graph from the solution (parse ProjectReference elements only — no MSBuild needed)
-        var depGraph = await DependencyGraph.BuildAsync(solutionPath, output);
-
-        // BFS from the starting project, indexing each level in parallel.
-        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var queue = new Queue<string>();
-        queue.Enqueue(fromProject);
-
-        var totalIndexed = 0;
-        var totalFailed = 0;
-
-        while (queue.Count > 0)
-        {
-            // Collect the current BFS level — all projects with no unvisited dependencies
-            var batch = new List<string>();
-            while (queue.Count > 0)
-            {
-                var proj = queue.Dequeue();
-                if (visited.Add(proj))
-                {
-                    batch.Add(proj);
-                }
-            }
-
-            if (batch.Count == 0)
-            {
-                break;
-            }
-
-            output.WriteLine($"\n[mine] Batch: {batch.Count} project(s)");
-
-            await Parallel.ForEachAsync(
-                batch,
-                new ParallelOptions { MaxDegreeOfParallelism = parallelism },
-                async (proj, ct) =>
-                {
-                    var projName = Path.GetFileNameWithoutExtension(proj);
-                    output.WriteLine($"  [mine] Indexing: {projName}");
-
-                    var exitCode = await RunIndexAsync(
-                        target: proj,
-                        extraRules: extraRules,
-                        identity: identity,
-                        fromProject: null,
-                        parallelism: null,
-                        merge: false,
-                        includeTests: false,
-                        noGraph: true, // mine builds the graph ONCE after all batches (see end of RunMineAsync)
-                        time: false,
-                        reuseBuildCache: false,
-                        output: output,
-                        error: error,
-                        workingDirectory: workingDirectory
-                    );
-
-                    if (exitCode == 0)
-                    {
-                        Interlocked.Increment(ref totalIndexed);
-                        output.WriteLine($"  [mine] Done: {projName}");
-                    }
-                    else
-                    {
-                        Interlocked.Increment(ref totalFailed);
-                        output.WriteLine($"  [mine] Failed: {projName} (exit {exitCode})");
-                    }
-                }
-            );
-
-            // Enqueue the next level: direct dependencies of this batch that haven't been visited
-            foreach (var proj in batch)
-            {
-                if (depGraph.TryGetValue(proj, out var deps))
-                {
-                    foreach (var dep in deps.Where(d => !visited.Contains(d)))
-                    {
-                        queue.Enqueue(dep);
-                    }
-                }
-            }
-        }
-
-        output.WriteLine($"\n[mine] Complete: {totalIndexed} indexed, {totalFailed} failed, {visited.Count} total projects reached.");
-
-        // Write a reachable-projects index alongside the .rig database so subsequent
-        // queries can filter to only runs that belong to this dependency closure.
-        var indexPath = Path.Combine(workingDirectory, "reachable-projects.json");
-
-        WriteJsonSidecar(
-            indexPath,
-            new
-            {
-                identity,
-                solutionPath = Path.GetFullPath(solutionPath),
-                entryProject = Path.GetFullPath(fromProject),
-                indexedAt = DateTimeOffset.UtcNow.ToString("O"),
-                projects = visited.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray(),
-            }
-        );
-        output.WriteLine($"[mine] Reachable projects index written: {indexPath}");
-
-        // Build the call-graph views ONCE over the accumulated store (per-project indexing ran with
-        // --no-graph), so the mined store is query-ready on the fast SQL path without a manual `rig graph`.
-        var minedDbPath = StoreLayout.DbPath(workingDirectory);
-        if (File.Exists(minedDbPath))
-        {
-            output.WriteLine("[mine] Building call-graph views");
-            await MaterializeGraphAsync(dbPath: minedDbPath, workingDirectory: workingDirectory, output: output);
-        }
-
-        return totalFailed > 0 ? 1 : 0;
-    }
-
-    internal static Command BuildGraph(TextWriter output, TextWriter error, string workingDirectory)
-    {
-        var cmd = new Command(
-            name: "graph",
-            description: "Rebuild the derived call-graph views (call_edges + dispatch_edges) from facts; idempotent, no rescan."
-        );
-        var store = CommonOptions.Store();
-        cmd.Add(store);
-        cmd.SetAction(pr =>
-            CommandGuard.RunGuardedAsync(
-                workingDirectory,
-                error,
-                () => RunGraphAsync(output: output, error: error, workingDirectory: workingDirectory, storeRef: pr.GetValue(store))
-            )
-        );
-        return cmd;
-    }
-
-    // Rebuilds the derived call-graph views (call_edges + dispatch_edges) from facts already in the
-    // store. Decoupled from index/mine and idempotent — no Roslyn, no rescan; rerun any time. These
-    // views back the SQL recursive-CTE reachability path (reaches/callers/tree/dead).
-    private static async Task<int> RunGraphAsync(TextWriter output, TextWriter error, string workingDirectory, string? storeRef)
-    {
-        var dbPath = StoreLayout.DbPathForRef(workingDirectory, storeRef);
-        if (!File.Exists(dbPath))
-        {
-            return CommandGuard.NoRunError(error);
-        }
-
-        await MaterializeGraphAsync(dbPath: dbPath, workingDirectory: workingDirectory, output: output);
-        return 0;
-    }
-
+    
     // Build the derived call-graph views (call_edges + dispatch_edges) + the EP-site table into the store at
     // dbPath. Shared by the standalone `graph` command and the tail of `index` (so a freshly-indexed store is
     // query-ready on the fast SQL path without a manual follow-up). Idempotent — rerun any time, no rescan.
@@ -619,7 +424,7 @@ internal static class IndexCommands
 
     private static string ComputeIdentity(string solutionPath) =>
         Convert.ToHexString(
-            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(solutionPath)))
+            SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(solutionPath)))
         )[..16];
 
     // The indented-JSON sidecar write shared by `index --from` (relevant-projects.json) and `mine`
@@ -627,6 +432,6 @@ internal static class IndexCommands
     private static void WriteJsonSidecar(string path, object data) =>
         File.WriteAllText(
             path: path,
-            contents: System.Text.Json.JsonSerializer.Serialize(data, new System.Text.Json.JsonSerializerOptions { WriteIndented = true })
+            contents: JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true })
         );
 }

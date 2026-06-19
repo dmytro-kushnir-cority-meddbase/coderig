@@ -1,7 +1,10 @@
 using Rig.Cli;
+using Rig.Cli.CommandLine;
+using Rig.Domain.Data;
+using Rig.Storage.Queries;
+using Rig.Storage.Storage;
 using Rig.Tests.Fixtures;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Cli;
 
@@ -211,93 +214,127 @@ public sealed class CliApplicationTests
         reaches.ShouldContain("PaymentGatewayProcessDns.PaymentService");
     }
 
-    // `rig impact` end-to-end over the playground: index it, git-init the SOURCE tree, edit a file that
-    // declares an entry point + its effect-bearing callees, then run `impact --repo <src> --base HEAD`.
-    // The working-tree edit must surface as the changed file, its declared methods as the changed set, the
-    // PaymentGatewayCaller.Dispatch entry point as affected, and the gateway effects in the forward reach —
-    // proving impact composes the same reverse/forward engine the other commands use, seeded from a diff.
+    // `rig impact` end-to-end as a PURE two-store diff: materialize two indexed per-commit stores (a BASE and
+    // a HEAD) in one working directory — different sources, so the entry-point set and reachable effects
+    // genuinely differ — then run `impact --base <store> --head <store>`. The output must be the store-vs-store
+    // PROVEN diff: a header naming both branches/commits, the entry-point diff, the per-EP behavioral changes,
+    // and the structural-only breadcrumb. There is NO git working-tree diff and NO speculative blast radius.
     [Test]
-    public async Task Impact_reports_blast_radius_of_a_working_tree_edit()
+    public async Task Impact_diffs_two_indexed_stores()
     {
-        using var playground = await TempPlayground.CreateEntryPointEffectsAsync();
-        var workingDirectory = Path.Combine(playground.RootDirectory, "workspace");
-        var sourceDir = playground.WorkingDirectory; // the copied source tree the FilePath facts point into
+        var playgrounds = new AnalyzedPlaygrounds();
+        try
+        {
+            var head = await playgrounds.EntryPointEffectsAsync();
+            var @base = await playgrounds.LegacyNet48Async();
+
+            var workingDirectory = Path.Combine(Path.GetTempPath(), $"rig-impact-2store-{Guid.NewGuid():n}");
+            Directory.CreateDirectory(workingDirectory);
+            try
+            {
+                // Two indexed stores under .rig/<id>/, stamped with branch + commit so the header renders the
+                // provenance. The store-id is the 12-char short sha (StoreLayout.NewStoreId), addressable by
+                // --base/--head exactly as a real `rig index` would write it.
+                var headId = await MaterializeStoreAsync(workingDirectory, head.Result, "aaaaaaaaaaaa0000head", "head-branch");
+                var baseId = await MaterializeStoreAsync(workingDirectory, @base.Result, "bbbbbbbbbbbb0000base", "base-branch");
+
+                var output = new StringWriter();
+                var error = new StringWriter();
+
+                // Human output: the two-store header, the entry-point diff, and the behavioral/structural
+                // sections — NONE of the removed working-tree chrome.
+                (await CliApplication.RunAsync(["impact", "--base", baseId, "--head", headId], output, error, workingDirectory)).ShouldBe(
+                    0
+                );
+                var human = output.ToString();
+                human.ShouldContain("Impact:"); // the two-store header
+                human.ShouldContain("head-branch"); // HEAD provenance rendered
+                human.ShouldContain("base-branch"); // BASE provenance rendered
+                human.ShouldContain("->"); // base -> head arrow
+                human.ShouldContain("Diff vs"); // the diff-summary line
+                human.ShouldContain("Entry-point diff vs"); // the EP set diff (sources differ => non-empty)
+                human.ShouldNotContain("working-tree"); // working-tree mode is gone
+                human.ShouldNotContain("Impact of"); // the old header wording is gone
+                human.ShouldNotContain("Blast radius"); // the speculative blast radius is gone
+                human.ShouldNotContain("Behavioral delta"); // the old git-seeded section is gone
+
+                // tsv mode: typed store-vs-store rows, tab-separated, no headline chrome and no git-seeded /
+                // reverse-reach rows.
+                output.GetStringBuilder().Clear();
+                (
+                    await CliApplication.RunAsync(
+                        ["impact", "--base", baseId, "--head", headId, "--format", "tsv"],
+                        output,
+                        error,
+                        workingDirectory
+                    )
+                ).ShouldBe(0);
+                var tsv = output.ToString();
+                tsv.ShouldContain("\t");
+                tsv.ShouldContain("structural_summary\t"); // the proven per-EP cause breakdown
+                tsv.ShouldNotContain("Diff vs"); // no human summary chrome in tsv mode
+                tsv.ShouldNotContain("changed\t"); // the old git-diff row is gone
+                tsv.ShouldNotContain("entrypoint\t"); // the speculative reverse-reach row is gone
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(workingDirectory, recursive: true);
+                }
+                catch (IOException) { }
+            }
+        }
+        finally
+        {
+            playgrounds.Dispose();
+        }
+    }
+
+    // `rig impact` requires BOTH store refs — it is a pure two-store diff with no working-tree fallback. A
+    // missing --base or --head (or both) is a clear command-validation error, exit 1, before any store is opened.
+    [Test]
+    public async Task Impact_requires_both_base_and_head_store_refs()
+    {
         var output = new StringWriter();
         var error = new StringWriter();
 
-        (await CliApplication.RunAsync(["index", playground.SolutionPath], output, error, workingDirectory)).ShouldBe(0);
+        // Neither side given.
+        (await CliApplication.RunAsync(["impact"], output, error)).ShouldBe(1);
+        error.ToString().ShouldContain("requires both --base");
 
-        // Make the source tree a git repo with a clean baseline, then edit the gateway fixture so it shows
-        // up as a working-tree change vs HEAD.
-        await RunGitAsync(sourceDir, "init");
-        await RunGitAsync(sourceDir, "config", "user.email", "t@t.t");
-        await RunGitAsync(sourceDir, "config", "user.name", "t");
-        await RunGitAsync(sourceDir, "add", "-A");
-        await RunGitAsync(sourceDir, "commit", "-m", "baseline");
+        // Only --base given (no --head).
+        error.GetStringBuilder().Clear();
+        (await CliApplication.RunAsync(["impact", "--base", "deadbeef"], output, error)).ShouldBe(1);
+        error.ToString().ShouldContain("requires both --base");
 
-        var fixture = Path.Combine(sourceDir, "EntryPointEffects.Api", "Services", "PaymentGatewayFixture.cs");
-        File.AppendAllText(fixture, "\n// impact-test edit\n");
-
-        output.GetStringBuilder().Clear();
-        var exit = await CliApplication.RunAsync(
-            ["impact", "--repo", sourceDir, "--base", "HEAD", "--rules", Path.Combine(sourceDir, "rig.rules.json")],
-            output,
-            error,
-            workingDirectory
-        );
-
-        exit.ShouldBe(0);
-        var impact = output.ToString();
-        impact.ShouldContain("RISK:");
-        impact.ShouldContain("Changed:"); // the changed-method summary
-        impact.ShouldContain("Affected entry points");
-        impact.ShouldContain("Effects in the forward reach");
-        // The edited fixture declares PaymentGatewayCaller.Dispatch, which calls the gateway tell/ask. Those
-        // effects are in the forward reach of the changed set, so a gateway effect must be reported. (This
-        // playground defines NO entry-point rules — only effects — so the affected-EP count is legitimately
-        // 0; the EP-site join is covered by the engine tests + the live MedDBase verification.)
-        impact.ShouldContain("gateway");
-
-        // tsv mode: typed rows (changed/entrypoint/effect), tab-separated, no headline chrome.
-        output.GetStringBuilder().Clear();
-        (
-            await CliApplication.RunAsync(
-                ["impact", "--repo", sourceDir, "--base", "HEAD", "--format", "tsv", "--rules", Path.Combine(sourceDir, "rig.rules.json")],
-                output,
-                error,
-                workingDirectory
-            )
-        ).ShouldBe(0);
-        var tsv = output.ToString();
-        tsv.ShouldContain("\t");
-        tsv.ShouldContain("changed\t");
-        tsv.ShouldNotContain("RISK:");
+        // Only --head given (no --base).
+        error.GetStringBuilder().Clear();
+        (await CliApplication.RunAsync(["impact", "--head", "deadbeef"], output, error)).ShouldBe(1);
+        error.ToString().ShouldContain("requires both --base");
     }
 
-    // Runs `git <args>` in dir, throwing on non-zero so a broken setup fails the test loudly (not silently
-    // leaving impact with no diff).
-    private static async Task RunGitAsync(string dir, params string[] args)
+    // Materialize an analysis result into an indexed per-commit store (.rig/<storeId>/rig.db), stamped with the
+    // given commit + branch so the impact header can render provenance. storeId is what --base/--head resolve.
+    private static async Task<string> MaterializeStoreAsync(
+        string workingDirectory,
+        AnalysisResult result,
+        string commit,
+        string branch
+    )
     {
-        var psi = new System.Diagnostics.ProcessStartInfo("git")
-        {
-            WorkingDirectory = dir,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (var a in args)
-        {
-            psi.ArgumentList.Add(a);
-        }
-
-        using var proc = System.Diagnostics.Process.Start(psi)!;
-        var stderr = await proc.StandardError.ReadToEndAsync();
-        await proc.WaitForExitAsync();
-        if (proc.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr}");
-        }
+        var storeId = StoreLayout.NewStoreId(
+            new GitProvenance(Commit: commit, Branch: branch, Dirty: false)
+        );
+        var dir = StoreLayout.NewStoreDir(workingDirectory, storeId);
+        var db = Path.Combine(dir, StoreLayout.DbFileName);
+        await using var ctx = new RigDbContext(db, pooling: false);
+        await Writes.SaveAsync(
+            ctx,
+            result,
+            provenance: new GitProvenance(Commit: commit, Branch: branch, Dirty: false)
+        );
+        return storeId;
     }
 
     // --format tsv (Tier-1 #10): tree/path/callers emit tab-separated, full-DocID rows with no text chrome,

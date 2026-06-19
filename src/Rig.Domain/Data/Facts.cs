@@ -17,8 +17,10 @@ public sealed record SymbolFact(
     string Signature, // human display signature
     string FilePath,
     int Line,
+    int EndLine,
     string DefiningAssembly,
-    bool IsOverride
+    bool IsOverride,
+    string BodyHash = ""
 );
 
 /// <summary>A resolved reference to a symbol at a usage site.</summary>

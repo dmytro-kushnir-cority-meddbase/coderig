@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using static System.Globalization.CultureInfo;
 
 namespace Rig.Cli.Rendering;
@@ -356,9 +357,9 @@ internal static class SymbolNameFormatter
         string[]? tokens;
         try
         {
-            tokens = System.Text.Json.JsonSerializer.Deserialize<string[]>(bindingJson!);
+            tokens = JsonSerializer.Deserialize<string[]>(bindingJson!);
         }
-        catch (System.Text.Json.JsonException)
+        catch (JsonException)
         {
             return null;
         }

@@ -1,7 +1,6 @@
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Domain;
 

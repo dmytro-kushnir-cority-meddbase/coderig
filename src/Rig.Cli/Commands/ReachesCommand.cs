@@ -131,7 +131,7 @@ internal static class ReachesCommand
                     Loop: loopDetail,
                     Via: ri.DispatchVia,
                     ViaDegree: ri.DispatchDegree,
-                    HandoffVia: ri.HandoffVia,
+                    ri.HandoffVia,
                     Basis: ri.DispatchBasis,
                     Effect: e
                 );

@@ -1,12 +1,9 @@
-using Rig.Analysis;
 using Rig.Analysis.Rules;
-using Rig.Cli;
 using Rig.Cli.Rendering;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Tests.Fixtures;
 using Shouldly;
-using TUnit.Core;
 
 namespace Rig.Tests.Analysis;
 
