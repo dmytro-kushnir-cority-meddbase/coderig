@@ -53,7 +53,12 @@ internal static class FactCommands
     }
 
     // Render the runs in one open store context, at the given indent levels (id line / detail lines).
-    private static async Task RenderRunsAsync(Rig.Storage.Storage.RigDbContext context, TextWriter output, string idIndent, string detailIndent)
+    private static async Task RenderRunsAsync(
+        Rig.Storage.Storage.RigDbContext context,
+        TextWriter output,
+        string idIndent,
+        string detailIndent
+    )
     {
         var runs = await Reads.ListRunsAsync(context);
         foreach (var run in runs)

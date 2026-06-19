@@ -118,7 +118,8 @@ public sealed class ImpactStructuralCauseTests
         // path-style route. This is what makes the behavioral + structural EP labels round-trip into `rig tree`.
         var idBySite = new Dictionary<(string, int), string>
         {
-            [("C:/repo/Patient/Medical/ObservationRequest.cs", 224)] = "M:MedDBase.Pages.Patient.Medical.ObservationRequest.Save(System.Boolean)",
+            [("C:/repo/Patient/Medical/ObservationRequest.cs", 224)] =
+                "M:MedDBase.Pages.Patient.Medical.ObservationRequest.Save(System.Boolean)",
         };
 
         var label = ImpactCommand.FqnForCard(

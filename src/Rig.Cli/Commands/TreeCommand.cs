@@ -32,7 +32,10 @@ internal static class TreeCommand
         var raw = CommonOptions.Raw();
         var files = CommonOptions.Files();
         var signatures = CommonOptions.Signatures();
-        var plain = new Option<bool>("--plain") { Description = "Drop box-drawing connectors (├─ └─ │) for pure indentation — diff-friendly." };
+        var plain = new Option<bool>("--plain")
+        {
+            Description = "Drop box-drawing connectors (├─ └─ │) for pure indentation — diff-friendly.",
+        };
         var rules = CommonOptions.Rules();
         var depth = CommonOptions.Depth();
         var only = CommonOptions.Only();

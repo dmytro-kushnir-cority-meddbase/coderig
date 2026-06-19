@@ -157,9 +157,15 @@ internal static class TreeRenderer
         // Plain mode: pure indentation, no vertical guides — children indent 2 spaces per level (the root prints
         // flush-left, but ITS children still indent). Box-drawing mode: the standard ├─/└─ guides with the │
         // continuation lane, and the root contributes no prefix (its children align under it).
-        var childPrefix = plain ? prefix + "  " : isRoot ? "" : prefix + (isLast ? "   " : "│  ");
+        var childPrefix =
+            plain ? prefix + "  "
+            : isRoot ? ""
+            : prefix + (isLast ? "   " : "│  ");
         // The branch connector for a NON-root line at this prefix, given whether it is the last visible child.
-        string Connector(bool last) => plain ? "" : last ? "└─ " : "├─ ";
+        string Connector(bool last) =>
+            plain ? ""
+            : last ? "└─ "
+            : "├─ ";
 
         var dispatchTag = node.DispatchBasis == "heuristic" ? $"{node.EdgeKind} ~heuristic" : node.EdgeKind;
         // A folded single-impl hop shows «via IFoo» (the collapsed interface) in place of the dispatch tag.
