@@ -171,7 +171,15 @@ internal static class SolutionSourceLoader
                 Console.WriteLine($"{project.Name}: {diagnostic}");
             }
 
-            projectResults.Add(await LoadProjectSourcesAsync(solutionPath, project, rules, ct));
+            projectResults.Add(
+                await LoadProjectSourcesAsync(
+                    solutionPath: solutionPath,
+                    project: project,
+                    compilation: compilation,
+                    rules: rules,
+                    cancellationToken: ct
+                )
+            );
         }
     }
 
@@ -393,7 +401,7 @@ internal static class SolutionSourceLoader
             ReportProgress(progress, $"build cache: {cacheHits} hit(s), {cacheMisses} miss(es) of {results.Count} project(s)");
         }
 
-        ReportProgress(progress, $"Assembling workspace from {results.Count} project(s) (no per-item progress — this is the slow step)…");
+        ReportProgress(progress, $"Assembling workspace from {results.Count} project(s)");
         var assemblyWatch = timings is null ? null : Stopwatch.StartNew();
         var workspace = BuildWorkspaceFromResults(results, parallelism, progress);
         if (assemblyWatch is not null)
@@ -453,7 +461,6 @@ internal static class SolutionSourceLoader
     )
     {
         var workspace = new AdhocWorkspace();
-        var solution = workspace.AddSolution(Microsoft.CodeAnalysis.SolutionInfo.Create(SolutionId.CreateNewId(), VersionStamp.Create()));
 
         // Pass 1 — assign stable ProjectIds keyed by normalised project path so cross-project
         // references can be resolved in pass 2 without depending on ordering.
@@ -473,6 +480,17 @@ internal static class SolutionSourceLoader
                 r => Path.GetFullPath(r.ProjectFilePath!),
                 r => r.ProjectReferences.Select(Path.GetFullPath).Where(projectIdByPath.ContainsKey).ToArray(),
                 StringComparer.OrdinalIgnoreCase
+            );
+
+        var assemblyNameByPath = projects
+            .Where(r => r.ProjectFilePath is not null)
+            .ToDictionary(
+                keySelector: r => Path.GetFullPath(r.ProjectFilePath!),
+                elementSelector: r =>
+                    r.Properties.TryGetValue(key: "AssemblyName", value: out var n)
+                        ? n
+                        : Path.GetFileNameWithoutExtension(r.ProjectFilePath!),
+                comparer: StringComparer.OrdinalIgnoreCase
             );
 
         var metadataCache = new ConcurrentDictionary<string, MetadataReference>(StringComparer.OrdinalIgnoreCase);
@@ -568,13 +586,7 @@ internal static class SolutionSourceLoader
             var inWorkspaceProjectPaths = TransitiveInSetClosure(result.ProjectFilePath, directInSetRefsByPath);
 
             var inWorkspaceAssemblyNames = new HashSet<string>(
-                projects
-                    .Where(r => r.ProjectFilePath is not null && inWorkspaceProjectPaths.Contains(Path.GetFullPath(r.ProjectFilePath!)))
-                    .Select(r =>
-                        r.Properties.TryGetValue(key: "AssemblyName", value: out var n)
-                            ? n
-                            : Path.GetFileNameWithoutExtension(r.ProjectFilePath!)
-                    ),
+                inWorkspaceProjectPaths.Select(p => assemblyNameByPath[p]),
                 StringComparer.OrdinalIgnoreCase
             );
 
@@ -628,7 +640,7 @@ internal static class SolutionSourceLoader
                 .ToArray();
 
             var projectName = result.ProjectFilePath is not null ? Path.GetFileNameWithoutExtension(result.ProjectFilePath) : "Unknown";
-            var assemblyName = result.Properties.TryGetValue(key: "AssemblyName", value: out var a) ? a : projectName;
+            var assemblyName = result.Properties.GetValueOrDefault("AssemblyName", defaultValue: projectName);
 
             var projectInfo = Microsoft.CodeAnalysis.ProjectInfo.Create(
                 projectId,
@@ -653,17 +665,17 @@ internal static class SolutionSourceLoader
         // them in serially — a Solution is an immutable snapshot rebuilt on each call, not thread-safe to
         // accumulate concurrently.
         var infos = new Microsoft.CodeAnalysis.ProjectInfo[projects.Count];
+
         Parallel.For(
             fromInclusive: 0,
             toExclusive: projects.Count,
-            new ParallelOptions { MaxDegreeOfParallelism = Math.Max(val1: 1, val2: parallelism) },
+            new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, parallelism) },
             i => infos[i] = BuildProjectInfo(projects[i])
         );
 
-        foreach (var projectInfo in infos)
-        {
-            solution = solution.AddProject(projectInfo);
-        }
+        var solution = workspace.AddSolution(
+            Microsoft.CodeAnalysis.SolutionInfo.Create(SolutionId.CreateNewId(), VersionStamp.Create(), projects: infos)
+        );
 
         workspace.TryApplyChanges(solution);
         return workspace;
@@ -818,9 +830,14 @@ internal static class SolutionSourceLoader
         return closure;
     }
 
+    // `compilation` is the project's compilation, passed in (not re-fetched from `project`) so the SAME
+    // instance the caller bound diagnostics against is reused AND kept rooted across this whole method —
+    // Roslyn holds final compilations recoverably, so without an explicit reference the bind cache could be
+    // evicted mid-read and silently rebuilt (the fused compile+read pass exists precisely to avoid that).
     private static async Task<ProjectSourceLoadResult> LoadProjectSourcesAsync(
         string solutionPath,
         Project project,
+        Compilation compilation,
         AnalysisRuleSet rules,
         CancellationToken cancellationToken
     )
@@ -864,12 +881,17 @@ internal static class SolutionSourceLoader
 
             var tree = await document.GetSyntaxTreeAsync(cancellationToken);
             var root = tree is null ? null : await tree.GetRootAsync(cancellationToken);
-            var semanticModel = await document.GetSemanticModelAsync(cancellationToken);
 
-            if (tree is null || root is null || semanticModel is null)
+            if (tree is null || root is null)
             {
                 continue;
             }
+
+            // Bind through the passed-in compilation (not document.GetSemanticModelAsync) so the model is
+            // built over the SAME instance ProcessProject warmed via GetDiagnostics — same-tree binding hits
+            // that warmed cache instead of triggering a recompile. The document's tree is one of this
+            // compilation's syntax trees (same project snapshot), so GetSemanticModel resolves it directly.
+            var semanticModel = compilation.GetSemanticModel(tree);
 
             sources.Add(
                 new SourceModel(
@@ -889,7 +911,7 @@ internal static class SolutionSourceLoader
         // explicitly with a CSharpGeneratorDriver over the project compilation and index the trees it
         // produces — that's what makes the generated proxy base-type facts (the clientpage_proxy
         // effect gate's discriminator) exist.
-        foreach (var generated in await RunSourceGeneratorsAsync(project, cancellationToken))
+        foreach (var generated in await RunSourceGeneratorsAsync(project, compilation, cancellationToken))
         {
             sourceFiles.Add(
                 new SourceFileInfo(
@@ -1001,7 +1023,11 @@ internal static class SolutionSourceLoader
     // the generator-updated compilation. Projects with no generators (the common case) return empty
     // after a cheap check. Generator failures are swallowed (best-effort) so one bad generator can't
     // fail the whole index.
-    private static async Task<IReadOnlyList<SourceModel>> RunSourceGeneratorsAsync(Project project, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<SourceModel>> RunSourceGeneratorsAsync(
+        Project project,
+        Compilation compilation,
+        CancellationToken cancellationToken
+    )
     {
         var generators = project.AnalyzerReferences.SelectMany(ar => ar.GetGenerators(LanguageNames.CSharp)).ToArray();
         if (generators.Length == 0)
@@ -1011,12 +1037,6 @@ internal static class SolutionSourceLoader
 
         try
         {
-            var compilation = await project.GetCompilationAsync(cancellationToken);
-            if (compilation is null)
-            {
-                return [];
-            }
-
             var parseOptions = project.ParseOptions as CSharpParseOptions;
             GeneratorDriver driver = CSharpGeneratorDriver.Create(generators, parseOptions: parseOptions);
             driver = driver.RunGeneratorsAndUpdateCompilation(

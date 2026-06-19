@@ -11,6 +11,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/dv00d00/coderig</RepositoryUrl>
     <PackageProjectUrl>https://github.com/dv00d00/coderig</PackageProjectUrl>
+    <Features>runtime-async=on</Features>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.CommandLine" />

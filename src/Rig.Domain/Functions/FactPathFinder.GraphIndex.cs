@@ -174,6 +174,14 @@ public static partial class FactPathFinder
             {
                 return true;
             }
+
+            // Interface arm: receiver r is an interface that the override's declaring type implements.
+            // Mirror of InReceiverScope (forward) — without it, a cleanly-typed interface receiver
+            // can't narrow to its impl and the legitimate reverse-dispatch edge is pruned.
+            if (ImplementsInterface(strippedType: overrideStripped, interfaceTypeId: r, index: index))
+            {
+                return true;
+            }
         }
         return false;
     }

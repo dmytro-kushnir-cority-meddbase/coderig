@@ -11,7 +11,7 @@ dotnet_diagnostic.MA0009.severity = none
 dotnet_diagnostic.CS8602.severity = error
 dotnet_diagnostic.CS8604.severity = error
 
-dotnet_diagnostic.UseNamedArgs.exclude_methods = String.Substring|String.Equals|String.Replace|Path.Combine|File.Move|File.WriteAllText|Dictionary.TryGetValue|IReadOnlyDictionary.TryGetValue|Dictionary.TryAdd|Enumerable.ToLookup|ConcurrentDictionary.GetOrAdd|ConcurrentDictionary.AddOrUpdate
+dotnet_diagnostic.UseNamedArgs.exclude_methods = Math.Max|Math.Min|String.Substring|String.Equals|String.Replace|Path.Combine|File.Move|File.WriteAllText|Dictionary.TryGetValue|IReadOnlyDictionary.TryGetValue|Dictionary.TryAdd|Enumerable.ToLookup|ConcurrentDictionary.GetOrAdd|ConcurrentDictionary.AddOrUpdate
 
 resharper_csharp_arguments_literal_style = named_for_same_type_adjacent
 resharper_csharp_arguments_other_style = named_for_same_type_adjacent
