@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -113,7 +114,7 @@ internal static class BuildInputFingerprint
 
         var info = new FileInfo(path);
         var memoKey = $"{path}|{info.Length}|{File.GetLastWriteTimeUtc(path).Ticks}";
-        var contentHash = ContentHashCache.GetOrAdd(memoKey, _ => HashFile(path));
+        var contentHash = ContentHashCache.GetOrAdd(memoKey, static (_, arg) => HashFile(arg), path);
         hash.AppendData(Encoding.UTF8.GetBytes($"{path}|{contentHash}\n"));
     }
 

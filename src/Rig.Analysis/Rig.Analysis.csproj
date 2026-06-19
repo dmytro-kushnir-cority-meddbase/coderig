@@ -13,6 +13,7 @@
          nuspec floors it at 1.0.31, but its binary needs TypedParts 9.0.0.0 for MefHostServices —
          without this, `new AdhocWorkspace()` throws at runtime). Versions come from Directory.Packages.props. -->
     <PackageReference Include="Microsoft.CodeAnalysis.VisualBasic" />
+    <PackageReference Include="System.IO.Hashing" />
     <PackageReference Include="System.Security.Cryptography.Xml" />
     <PackageReference Include="System.Composition" />
   </ItemGroup>

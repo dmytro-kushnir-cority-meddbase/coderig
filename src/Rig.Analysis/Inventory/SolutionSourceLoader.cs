@@ -156,14 +156,8 @@ internal static class SolutionSourceLoader
         async ValueTask ProcessProject(Project project, CancellationToken ct)
         {
             var current = Interlocked.Increment(ref analyzedProjects);
-            // Log EVERY project at the start of its analysis (not throttled): the next line, GetCompilationAsync,
-            // is where Roslyn binds + runs source generators — the dominant, otherwise-silent per-project cost. A
-            // per-project breadcrumb makes a slow project/generator visible by name. These interleave under the
-            // parallel loop (several run at once); the atomic `current` keeps the N/total meaningful regardless.
             ReportProgress(progress, $"Analyzing project {current}/{csharpProjects.Length}: {project.Name}");
 
-            // Build the compilation ONCE; the diagnostics bind warms the per-document semantic
-            // models that LoadProjectSourcesAsync reuses.
             var compilation = await project.GetCompilationAsync(ct);
             if (compilation is null)
             {
@@ -227,11 +221,6 @@ internal static class SolutionSourceLoader
             var info = ProjectBuildInfo.FromAnalyzerResult(built);
             var name = Path.GetFileNameWithoutExtension(projectFilePath);
 
-            // Fail-safe health check on the design-time build OUTPUT. A healthy build of a C# project always
-            // yields source files (the real .cs plus generated AssemblyInfo / GlobalUsings); ZERO sources
-            // means the build aborted before CoreCompile — usually a transient failure or a racing obj flush —
-            // so the project's types are absent and its dependents won't bind (the MedDBase Import.TAL
-            // "0 sources → 6694 CS0246" cascade). RETRY: a transient failure normally clears on a fresh build.
             for (var attempt = 1; IsDegradedBuild(info) && attempt <= DegradedBuildRetries; attempt++)
             {
                 ReportProgress(
@@ -247,10 +236,6 @@ internal static class SolutionSourceLoader
                 info = ProjectBuildInfo.FromAnalyzerResult(retried);
             }
 
-            // Still degraded after the retries → DIE. A degraded compilation silently emits WRONG facts (its
-            // own types missing, every dependent unbound), so a hard abort beats shipping a quietly-corrupt
-            // index. DegradedBuildException is filtered OUT of the per-project "skip on build failure" catch in
-            // the parallel build loop, so it propagates and aborts the whole index. Never cached either way.
             if (IsDegradedBuild(info))
             {
                 throw new DegradedBuildException(
@@ -262,15 +247,6 @@ internal static class SolutionSourceLoader
 
             if (cache is not null)
             {
-                // Re-fingerprint AFTER the build and store THAT. The csproj + manifests are content-hashed and
-                // the build never rewrites them, so for THOSE inputs pre- and post-build are identical. The
-                // input that DOES settle during the build is the *.cs path SET: projects with build-time
-                // codegen into the project tree (T4 with TransformOnBuild — MedDBase's ImportLayer2 /
-                // ServiceLayer .tt files emit *.g.cs NEXT TO the .tt, not into obj) gain those source paths
-                // only after CoreCompile. Storing the SETTLED post-build set means the next index — which
-                // sees the generated files — matches and hits in ONE run; storing the pre-build set would
-                // miss once and converge over two. (Cheap: the content-hash memo makes re-hashing the
-                // unchanged manifests almost free, so the only real post-build work is the path re-walk.)
                 cache.Store(projectFilePath: projectFilePath, fingerprint: BuildInputFingerprint.Compute(projectFilePath), info: info);
                 Interlocked.Increment(ref cacheMisses);
             }
@@ -417,10 +393,6 @@ internal static class SolutionSourceLoader
             ReportProgress(progress, $"build cache: {cacheHits} hit(s), {cacheMisses} miss(es) of {results.Count} project(s)");
         }
 
-        // Assembling the in-memory workspace from the (built/cached) project results: Roslyn loads all
-        // projects + their reference closures into one MSBuildWorkspace. This is single-shot with no per-item
-        // callback, so it's the otherwise-silent multi-minute stretch right after the build-cache line — name
-        // it so the pause reads as a known phase, not a hang. (Source generators wire/run just after this.)
         ReportProgress(progress, $"Assembling workspace from {results.Count} project(s) (no per-item progress — this is the slow step)…");
         var assemblyWatch = timings is null ? null : Stopwatch.StartNew();
         var workspace = BuildWorkspaceFromResults(results, parallelism, progress);
@@ -503,13 +475,6 @@ internal static class SolutionSourceLoader
                 StringComparer.OrdinalIgnoreCase
             );
 
-        // Shared caches across ALL projects. The same framework/package DLL is referenced by dozens of
-        // projects; parsing its metadata once per *file* (here) instead of once per *referencing project*
-        // (the old MetadataReference.CreateFromFile-in-the-loop) is the dominant workspace-assembly win —
-        // and reusing the SAME MetadataReference instance lets Roslyn share the parsed AssemblyMetadata.
-        // File.Exists probes and csproj XML loads are deduped likewise. All three are read concurrently by
-        // the parallel project-build below, so they're ConcurrentDictionary. (A factory racing on the same
-        // key parses twice and discards one — wasteful but correct; no lock needed.)
         var metadataCache = new ConcurrentDictionary<string, MetadataReference>(StringComparer.OrdinalIgnoreCase);
         var existsCache = new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         var fsharpDllCache = new ConcurrentDictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);

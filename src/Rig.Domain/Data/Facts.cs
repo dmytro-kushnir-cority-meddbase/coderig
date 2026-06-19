@@ -17,19 +17,9 @@ public sealed record SymbolFact(
     string Signature, // human display signature
     string FilePath,
     int Line,
-    // The LAST line of the declaration's span (1-based, inclusive). Together with Line this is the
-    // symbol's source extent — what `rig impact` overlaps against a git diff's changed line ranges to
-    // narrow the blast radius from file-granular to symbol-granular. 0 when unknown (a store written
-    // before this fact existed); consumers must treat 0 as "span unknown" and fall back conservatively.
     int EndLine,
     string DefiningAssembly,
     bool IsOverride,
-    // A deterministic hash of the symbol's declaration text (its body + signature, normalized by Roslyn's
-    // node.ToString()). Lets `rig impact` catch an IN-PLACE body edit — a changed constant, a tweaked literal,
-    // any change that leaves the call-structure (and thus the reachable-set diff) untouched but still alters
-    // behavior. Two stores' hashes for the same DocID differ iff the declaration text changed. "" when the
-    // symbol has no body to hash, OR on a store written before this fact existed (consumers treat "" as
-    // "unknown" and skip the in-place signal). A SHA-256 hex prefix — cheap, collision-safe for this use.
     string BodyHash = ""
 );
 

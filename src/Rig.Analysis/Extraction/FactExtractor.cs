@@ -1,3 +1,6 @@
+using System.IO.Hashing;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -19,6 +22,11 @@ internal static class FactExtractor
         var root = source.Root;
         var tree = source.Tree;
 
+        // The full source text, materialized ONCE per tree. BodyHashOf slices node spans out of this
+        // (cheap substring) instead of calling node.ToString() per symbol (which re-walks the green
+        // subtree and allocates a fresh string every time) — the hot cost at ~2M symbols.
+        var fileText = tree.GetText().ToString();
+
         var symbols = new List<SymbolFact>();
         var references = new List<ReferenceFact>();
         var relations = new List<TypeRelationFact>();
@@ -27,7 +35,7 @@ internal static class FactExtractor
 
         // --- Lambda identity (18b): synthesize a symbol + handoff edge for each argument-passed lambda
         //     BEFORE the reference pass, so EnclosingSymbolId can re-root the lambda body's facts. ---
-        var lambdaIds = CollectLambdaSymbols(root, model, tree, symbols, references);
+        var lambdaIds = CollectLambdaSymbols(symbols, root, model, tree, fileText, references);
 
         // --- Declarations -> SymbolFact (+ TypeRelation for type base/interface edges, DispatchFact
         //     for exact member-level dispatch) ---
@@ -46,7 +54,7 @@ internal static class FactExtractor
                 {
                     if (model.GetDeclaredSymbol(variable) is { } fieldSymbol)
                     {
-                        AddSymbol(symbols, fieldSymbol, tree, variable);
+                        AddSymbol(symbols, fieldSymbol, tree, fileText, variable);
                     }
                 }
                 return;
@@ -58,7 +66,7 @@ internal static class FactExtractor
                 return;
             }
 
-            AddSymbol(symbols, symbol, tree, decl);
+            AddSymbol(symbols, symbol, tree, fileText, decl);
 
             if (symbol is INamedTypeSymbol typeSymbol)
             {
@@ -80,7 +88,7 @@ internal static class FactExtractor
                         continue;
                     }
 
-                    AddSymbol(symbols, accessor, tree, AccessorNode(accessor) ?? decl);
+                    AddSymbol(symbols, accessor, tree, fileText, AccessorNode(accessor) ?? decl);
                     if (accessor.OverriddenMethod is { } overriddenAccessor)
                     {
                         AddDispatchFact(dispatch, dispatchSeen, source: overriddenAccessor, target: accessor, kind: DispatchKinds.Override);
@@ -446,7 +454,7 @@ internal static class FactExtractor
         }
     }
 
-    private static void AddSymbol(List<SymbolFact> symbols, ISymbol symbol, SyntaxTree tree, SyntaxNode node)
+    private static void AddSymbol(List<SymbolFact> symbols, ISymbol symbol, SyntaxTree tree, string fileText, SyntaxNode node)
     {
         var docId = symbol.GetDocumentationCommentId();
         if (docId is null)
@@ -454,6 +462,30 @@ internal static class FactExtractor
             return;
         }
 
+        var lineSpan = tree.GetLineSpan(node.Span);
+
+        var typeKind = symbol is INamedTypeSymbol t
+            ? t.TypeKind switch
+            {
+                TypeKind.Unknown => "unknown",
+                TypeKind.Array => "array",
+                TypeKind.Class => "class",
+                TypeKind.Delegate => "delegate",
+                TypeKind.Dynamic => "dynamic",
+                TypeKind.Enum => "enum",
+                TypeKind.Error => "error",
+                TypeKind.Interface => "interface",
+                TypeKind.Module => "module",
+                TypeKind.Pointer => "pointer",
+                TypeKind.Struct => "struct",
+                TypeKind.TypeParameter => "typeparameter",
+                TypeKind.Submission => "submission",
+                TypeKind.FunctionPointer => "functionpointer",
+                TypeKind.Extension => "extension",
+                var other => other.ToString().ToLowerInvariant(),
+            }
+            : "";
+        
         symbols.Add(
             new SymbolFact(
                 SymbolId: docId,
@@ -462,34 +494,47 @@ internal static class FactExtractor
                 Namespace: symbol.ContainingNamespace?.ToDisplayString() ?? "",
                 ContainingSymbolId: symbol.ContainingSymbol?.GetDocumentationCommentId(),
                 Modifiers: ModifiersOf(symbol),
-                TypeKind: symbol is INamedTypeSymbol t ? t.TypeKind.ToString().ToLowerInvariant() : "",
+                TypeKind: typeKind,
                 Signature: symbol.ToDisplayString(),
                 FilePath: tree.FilePath,
-                Line: tree.GetLineSpan(node.Span).StartLinePosition.Line + 1,
-                EndLine: tree.GetLineSpan(node.Span).EndLinePosition.Line + 1,
+                Line: lineSpan.StartLinePosition.Line + 1,
+                EndLine: lineSpan.EndLinePosition.Line + 1,
                 DefiningAssembly: symbol.ContainingAssembly?.Name ?? "",
                 IsOverride: symbol.IsOverride,
                 // The declaration's normalized text — so `rig impact` detects an IN-PLACE body edit (a changed
                 // constant/literal that leaves call structure, and thus the reachable-set diff, untouched).
-                BodyHash: BodyHashOf(node)
+                BodyHash: BodyHashOf(fileText, node)
             )
         );
     }
 
-    // A deterministic content hash of a declaration node's text — node.ToString() is the verbatim source span
-    // (whitespace/comments included), stable across runs of the same source. A SHA-256 hex PREFIX (16 hex
-    // chars = 64 bits) is cheap and collision-safe for diffing two stores of the same codebase. "" when there
-    // is no node text to hash.
-    private static string BodyHashOf(SyntaxNode node)
+    // A deterministic content hash of a declaration node's verbatim source span (whitespace/comments
+    // included), stable across runs of the same source. node.Span slices the same characters node.ToString()
+    // would return, but straight out of the cached file text — no green-tree re-walk, no substring alloc.
+    // We SHA-256 the UTF-16 bytes in place (stack destination, no intermediate byte[]); the 64-bit hex PREFIX
+    // (16 chars) is collision-safe for diffing two stores of the same codebase. "" for an empty span.
+    //
+    // NOTE: this hashes the chars' native-endian UTF-16 bytes rather than the previous UTF-8 transcode, so the
+    // values differ from older stores — re-mine before comparing across versions (any FactExtractor change
+    // already requires a re-index). Byte order is identical across every little-endian host (Windows/macOS/Linux
+    // on x64 or ARM64 are all LE), so two stores mined on different machines still diff correctly; only a
+    // big-endian host (effectively extinct, never targeted) would produce a different hash.
+    private static string BodyHashOf(string fileText, SyntaxNode node)
     {
-        var text = node.ToString();
-        if (string.IsNullOrEmpty(text))
+        var span = node.Span;
+        if (span.IsEmpty)
         {
             return "";
         }
 
-        var bytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text));
-        return Convert.ToHexStringLower(inArray: bytes, offset: 0, length: 8);
+        Span<byte> hash = stackalloc byte[8];
+        
+        XxHash3.Hash(
+            source: MemoryMarshal.AsBytes(fileText.AsSpan(start: span.Start, length: span.Length)),
+            destination: hash
+        );
+        
+        return Convert.ToHexStringLower(hash);
     }
 
     private static void AddTypeRelations(List<TypeRelationFact> relations, INamedTypeSymbol type, string typeDocId)
@@ -1289,12 +1334,12 @@ internal static class FactExtractor
     // Outer lambdas precede their nested children in document order, so a nested lambda's own edge
     // resolves its enclosing to the OUTER lambda (already in the map).
     private static Dictionary<SyntaxNode, string> CollectLambdaSymbols(
+        List<SymbolFact> symbols,
         SyntaxNode root,
         SemanticModel model,
         SyntaxTree tree,
-        List<SymbolFact> symbols,
-        List<ReferenceFact> references
-    )
+        string fileText,
+        List<ReferenceFact> references)
     {
         var ids = new Dictionary<SyntaxNode, string>();
         var ordinalByMember = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -1338,7 +1383,7 @@ internal static class FactExtractor
                     EndLine: lineSpan.EndLinePosition.Line + 1,
                     DefiningAssembly: assembly,
                     IsOverride: false,
-                    BodyHash: BodyHashOf(lambda)
+                    BodyHash: BodyHashOf(fileText, lambda)
                 )
             );
             references.Add(
