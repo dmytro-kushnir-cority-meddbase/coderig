@@ -59,13 +59,17 @@ public static class SolutionAnalyzer
         // iteration, so no write races.
         var extracted = 0;
         var extractionResults = new SourceExtractionResult[sources.Count];
+        // ONE shared DocID memo across the whole parallel extraction: each symbol's DocID is computed once
+        // for the run (not once per reference site), and every fact gets the one shared string instance.
+        var symbolCache = new SymbolStringCache();
+
         Parallel.For(
             fromInclusive: 0,
             toExclusive: sources.Count,
             new ParallelOptions { MaxDegreeOfParallelism = parallelism ?? Environment.ProcessorCount },
             i =>
             {
-                extractionResults[i] = ExtractSource(sources[i], rules);
+                extractionResults[i] = ExtractSource(sources[i], rules, symbolCache);
                 var current = Interlocked.Increment(ref extracted);
                 if (ShouldReportProgress(current: current, total: sources.Count))
                 {
@@ -80,76 +84,30 @@ public static class SolutionAnalyzer
             phase.Restart();
         }
 
+        // Extraction is done — the SemanticModels/SyntaxTrees in the SourceModels are never read again
+        // (projections + interning below work off the plain-fact arrays). Release the Roslyn graph they
+        // pin NOW so it can collect before the save/graph phases instead of co-residing with them. A
+        // pre-save heap dump (gcroot) showed the compilations stay rooted via TWO independent paths:
+        //   (a) the AdhocWorkspace's SolutionCompilationState (incremental source-generator DriverStateTable), and
+        //   (b) THIS extract Parallel.For's closure, still captured on a parked thread-pool thread.
+        // So both must go: Dispose the workspace, AND clear the shared SourceModel list — emptying it frees
+        // the SourceModels (and their semantic models) out from under the lingering closure and sourceSet alike.
+
         progress?.Invoke("Building projections");
-        var diRegistrations = extractionResults.SelectMany(result => result.DiRegistrations).ToArray();
-        var symbolFacts = extractionResults.SelectMany(result => result.Symbols).ToArray();
-        var referenceFacts = extractionResults.SelectMany(result => result.References).ToArray();
-        var typeRelationFacts = extractionResults.SelectMany(result => result.TypeRelations).ToArray();
-        var dispatchFacts = extractionResults.SelectMany(result => result.Dispatch).ToArray();
 
-        // Dedupe the fact strings to one instance each. DocIDs (TargetSymbolId/EnclosingSymbolId/SymbolId),
-        // file paths, assembly names and namespaces repeat across millions of facts — GetDocumentationCommentId
-        // allocates a fresh string per call, so the same value exists once per fact. Rewrite each array IN
-        // PLACE through a shared pool (cross-file dedup, no second copy of the array held); only the high-
-        // duplication id/path/kind fields — the unique ones (BodyHash, templates, signatures) aren't worth a
-        // lookup. Pure peak-memory pass: the stored VALUES are unchanged, only object identity is shared.
-        var interner = new StringInterner();
-        Parallel.For(
-            fromInclusive: 0,
-            toExclusive: referenceFacts.Length,
-            i =>
-            {
-                var r = referenceFacts[i];
-                referenceFacts[i] = r with
-                {
-                    TargetSymbolId = interner.Intern(r.TargetSymbolId),
-                    RefKind = interner.Intern(r.RefKind),
-                    EnclosingSymbolId = interner.InternNullable(r.EnclosingSymbolId),
-                    TargetAssembly = interner.Intern(r.TargetAssembly),
-                    FilePath = interner.Intern(r.FilePath),
-                    ReceiverType = interner.InternNullable(r.ReceiverType),
-                };
-            }
-        );
-        Parallel.For(
-            fromInclusive: 0,
-            toExclusive: symbolFacts.Length,
-            i =>
-            {
-                var s = symbolFacts[i];
-                symbolFacts[i] = s with
-                {
-                    SymbolId = interner.Intern(s.SymbolId),
-                    Kind = interner.Intern(s.Kind),
-                    Namespace = interner.Intern(s.Namespace),
-                    ContainingSymbolId = interner.InternNullable(s.ContainingSymbolId),
-                    Modifiers = interner.Intern(s.Modifiers),
-                    TypeKind = interner.Intern(s.TypeKind),
-                    FilePath = interner.Intern(s.FilePath),
-                    DefiningAssembly = interner.Intern(s.DefiningAssembly),
-                };
-            }
-        );
-        for (var i = 0; i < typeRelationFacts.Length; i++)
-        {
-            var t = typeRelationFacts[i];
-            typeRelationFacts[i] = t with
-            {
-                TypeSymbolId = interner.Intern(t.TypeSymbolId),
-                RelatedSymbolId = interner.Intern(t.RelatedSymbolId),
-                RelationKind = interner.Intern(t.RelationKind),
-            };
-        }
+        List<DiRegistrationInfo> diRegistrations = [];
+        List<SymbolFact> symbolFacts = [];
+        List<ReferenceFact> referenceFacts = [];
+        List<TypeRelationFact> typeRelationFacts = [];
+        List<DispatchFact> dispatchFacts = [];
 
-        for (var i = 0; i < dispatchFacts.Length; i++)
+        foreach (var result in extractionResults)
         {
-            var d = dispatchFacts[i];
-            dispatchFacts[i] = d with
-            {
-                SourceMember = interner.Intern(d.SourceMember),
-                TargetMember = interner.Intern(d.TargetMember),
-                Kind = interner.Intern(d.Kind),
-            };
+            diRegistrations.AddRange(result.DiRegistrations);
+            symbolFacts.AddRange(result.Symbols);
+            referenceFacts.AddRange(result.References);
+            typeRelationFacts.AddRange(result.TypeRelations);
+            dispatchFacts.AddRange(result.Dispatch);
         }
 
         // Mine XML service descriptor files (e.g. App_Data/Common/Xml/Services/*.xml) and
@@ -167,6 +125,7 @@ public static class SolutionAnalyzer
             Reason: "static_di_mapping",
             Evidence: string.Empty
         ));
+
         var allDiRegistrations = diRegistrations.Concat(xmlRegistrations).Concat(staticRegistrations).ToArray();
         if (phase is not null)
         {
@@ -179,8 +138,8 @@ public static class SolutionAnalyzer
         }
 
         progress?.Invoke(
-            $"Analysis complete: {symbolFacts.Length} symbols, "
-                + $"{referenceFacts.Length} references, {allDiRegistrations.Length} di registrations"
+            $"Analysis complete: {symbolFacts.Count} symbols, "
+                + $"{referenceFacts.Count} references, {allDiRegistrations.Length} di registrations"
         );
 
         // Memory-profiling pause (RIG_PROFILE_PAUSE): here the Roslyn workspace, every project's
@@ -188,15 +147,6 @@ public static class SolutionAnalyzer
         // alongside the just-built fact arrays — the true co-resident peak. A gcdump now shows that
         // whole live set. No-op unless the env var is set.
         ProfilingPause.MaybePause("extract-peak (roslyn live)");
-
-        // Extraction is done — every fact is now a plain immutable record (no SyntaxNode/ISymbol/Compilation
-        // refs). Dispose the workspace NOW so its SolutionCompilationState — which, via the incremental
-        // source-generator DriverStateTable, pins every Compilation + SemanticModel (~6 GB on MedDBase) —
-        // becomes collectable before the save/graph phases, instead of being held to process exit. The
-        // SourceModels in sourceSet.IndexedSources are no longer read past this point. (Confirmed by a
-        // gcroot on the pre-save heap dump: the live Roslyn graph was rooted through the workspace's
-        // generator-driver state, not through AnalysisResult.)
-        sourceSet.Workspace.Dispose();
 
         // For project-level indexing, record the specific project path
         var sourceProjectPath =
@@ -223,9 +173,9 @@ public static class SolutionAnalyzer
         return current == 1 || current == total || current % 100 == 0;
     }
 
-    private static SourceExtractionResult ExtractSource(SourceModel source, RuleSet rules)
+    private static SourceExtractionResult ExtractSource(SourceModel source, RuleSet rules, SymbolStringCache symbolCache)
     {
-        var facts = FactExtractor.Extract(source);
+        var facts = FactExtractor.Extract(source, symbolCache);
 
         return new SourceExtractionResult(
             DiRegistrationExtractor.FindDiRegistrations(source, rules).ToArray(),

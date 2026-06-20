@@ -321,7 +321,13 @@ internal static class IndexCommands
         {
             output.WriteLine("Progress: Building call-graph views");
             var graphWatch = Stopwatch.StartNew();
-            await MaterializeGraphAsync(finalDbPath, rules, result, workingDirectory, output);
+            await MaterializeGraphAsync(
+                dbPath: finalDbPath,
+                rules: rules,
+                result: result,
+                workingDirectory: workingDirectory,
+                output: output
+            );
             graphWatch.Stop();
             timings?.Record("graph", graphWatch.Elapsed);
         }

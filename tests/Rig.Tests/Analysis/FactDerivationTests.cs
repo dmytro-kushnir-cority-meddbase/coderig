@@ -25,7 +25,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
             .Select(e => e.Route)
             .OrderBy(r => r, StringComparer.Ordinal)
             .ToArray();
-        
+
         actionRoutes.ShouldBe(
             new[]
             {

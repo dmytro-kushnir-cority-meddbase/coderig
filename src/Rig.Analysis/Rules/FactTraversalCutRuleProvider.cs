@@ -6,7 +6,8 @@ namespace Rig.Analysis.Rules;
 // in through RuleSetLoader; the matcher lives in Domain (FactTraversalCutRule.IsMatch).
 internal static class FactTraversalCutRuleProvider
 {
-    internal static IReadOnlyList<FactTraversalCutRule> Project(AnalysisRulesDocument doc) => (doc.TraversalCuts ?? []).Select(Project).ToArray();
+    internal static IReadOnlyList<FactTraversalCutRule> Project(AnalysisRulesDocument doc) =>
+        (doc.TraversalCuts ?? []).Select(Project).ToArray();
 
     private static FactTraversalCutRule Project(TraversalCutRule rule) =>
         new(Pattern: rule.Pattern, Label: rule.Label ?? rule.Reason ?? rule.Pattern);

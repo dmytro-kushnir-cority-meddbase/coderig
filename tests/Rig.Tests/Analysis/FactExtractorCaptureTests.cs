@@ -20,7 +20,7 @@ public sealed class FactExtractorCaptureTests
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
         );
         var model = compilation.GetSemanticModel(tree);
-        return FactExtractor.Extract(new SourceModel("Snippet", "Snippet.cs", tree, tree.GetRoot(), model));
+        return FactExtractor.Extract(new SourceModel("Snippet", "Snippet.cs", tree, tree.GetRoot(), model), new SymbolStringCache());
     }
 
     [Test]

@@ -23,7 +23,7 @@ public sealed record RuleSet
     public FactObservationRules Observations { get; init; } = new([], [], [], []);
     public IReadOnlyList<FactEntryPointRule> EntryPoints { get; init; } = [];
     public IReadOnlyList<FactClassInheritanceRule> ClassInheritance { get; init; } = [];
-    public FactRenderRules Render { get; init; } = new([], []);
+    public FactRenderRules Render { get; init; } = new(CollapseSeams: [], OpaqueTypes: []);
     public IReadOnlyDictionary<string, string> EffectEmoji { get; init; } =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -41,7 +41,8 @@ public sealed record RuleSet
 
     public FileRule? FindExcludedFile(string relativePath) => FileExclude.LastOrDefault(rule => rule.IsMatch(relativePath));
 
-    public bool IsTestProject(string projectName) => TestProjectPatterns.Any(pattern => GlobMatcher.IsMatch(value: projectName, glob: pattern));
+    public bool IsTestProject(string projectName) =>
+        TestProjectPatterns.Any(pattern => GlobMatcher.IsMatch(value: projectName, glob: pattern));
 
     public bool IsExcludedProject(string projectName) =>
         ProjectExcludePatterns.Any(pattern => GlobMatcher.IsMatch(value: projectName, glob: pattern));

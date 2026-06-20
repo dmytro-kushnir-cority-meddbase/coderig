@@ -6,7 +6,8 @@ namespace Rig.Analysis.Rules;
 // HandoffClassifier consumes. The generic matcher lives in Domain; rule data flows in through RuleSetLoader.
 internal static class FactHandoffRuleProvider
 {
-    internal static IReadOnlyList<FactHandoffRule> Project(AnalysisRulesDocument doc) => (doc.HandoffDispatchers ?? []).Select(Project).ToArray();
+    internal static IReadOnlyList<FactHandoffRule> Project(AnalysisRulesDocument doc) =>
+        (doc.HandoffDispatchers ?? []).Select(Project).ToArray();
 
     private static FactHandoffRule Project(HandoffDispatcherRule rule) =>
         new(

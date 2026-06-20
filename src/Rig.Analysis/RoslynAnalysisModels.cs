@@ -9,11 +9,7 @@ internal sealed record SourceFileClassification(string Status, string Confidence
 // AdhocWorkspace's SolutionCompilationState, which (via the incremental source-generator DriverStateTable)
 // pins every Compilation + SemanticModel for the rest of the run. Disposing it after extract releases that
 // ~multi-GB graph before the save/graph phases instead of holding it to process exit.
-internal sealed record SolutionSourceSet(
-    IReadOnlyList<SourceFileInfo> SourceFiles,
-    IReadOnlyList<SourceModel> IndexedSources,
-    Workspace Workspace
-);
+internal sealed record SolutionSourceSet(IReadOnlyList<SourceFileInfo> SourceFiles, IReadOnlyList<SourceModel> IndexedSources);
 
 internal sealed record SourceExtractionResult(
     IReadOnlyList<DiRegistrationInfo> DiRegistrations,

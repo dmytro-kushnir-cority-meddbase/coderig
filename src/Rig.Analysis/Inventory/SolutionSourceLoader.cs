@@ -69,19 +69,15 @@ internal static class SolutionSourceLoader
         // addProjectReferences:false loads project-to-project references from their compiled
         // DLLs rather than re-evaluating the source .csproj files.
         ReportProgress(progress, "Loading solution");
-        var workspace = await Task.Run(
-            () =>
-                BuildWorkspace(
-                    solutionPath,
-                    progress,
-                    scopeProjectPaths,
-                    maxParallelism,
-                    excludeTests,
-                    timings,
-                    buildCacheDir,
-                    verifyBuildCache
-                ),
-            cancellationToken
+        var workspace = BuildWorkspace(
+            solutionPath,
+            progress,
+            scopeProjectPaths,
+            maxParallelism,
+            excludeTests,
+            timings,
+            buildCacheDir,
+            verifyBuildCache
         );
         // BuildWorkspace records the finer "design-time-builds" (wall-clock) + "workspace-assembly"
         // sub-phases itself; just reset the clock here for the next phase.
@@ -152,6 +148,7 @@ internal static class SolutionSourceLoader
             // the missing types, so entry point and effect extraction can proceed.
             var errorCount = compilationErrorList.Length;
             ReportProgress(progress, $"Warning: {errorCount} compilation error(s) — analysis will be partial for affected files");
+
             foreach (var error in compilationErrorList.Take(10))
             {
                 ReportProgress(progress, $"  {error}");
@@ -165,8 +162,7 @@ internal static class SolutionSourceLoader
 
         return new SolutionSourceSet(
             projectResults.SelectMany(r => r.SourceFiles).OrderBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
-            projectResults.SelectMany(r => r.Sources).OrderBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
-            Workspace: workspace
+            projectResults.SelectMany(r => r.Sources).OrderBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase).ToList()
         );
 
         async ValueTask ProcessProject(Project project, CancellationToken ct)
@@ -1013,6 +1009,7 @@ internal static class SolutionSourceLoader
                 filePath: document.FilePath,
                 rules: rules
             );
+
             sourceFiles.Add(
                 new SourceFileInfo(
                     ProjectName: project.Name,

@@ -248,7 +248,11 @@ public static class RuleSetLoader
             return a ?? b;
         }
 
-        return new RenderRulesSection { CollapseSeams = Concat(a.CollapseSeams, b.CollapseSeams), OpaqueTypes = Concat(a.OpaqueTypes, b.OpaqueTypes) };
+        return new RenderRulesSection
+        {
+            CollapseSeams = Concat(a.CollapseSeams, b.CollapseSeams),
+            OpaqueTypes = Concat(a.OpaqueTypes, b.OpaqueTypes),
+        };
     }
 
     private static Dictionary<string, string>? MergeEmoji(Dictionary<string, string>? existing, Dictionary<string, string>? incoming)

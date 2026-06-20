@@ -2,7 +2,7 @@
   <PropertyGroup>
     <IsPackable>false</IsPackable>
     <OutputType>Exe</OutputType>
-    <Features>runtime-async=on</Features>
+    <!--    <Features>runtime-async=on</Features>-->
   </PropertyGroup>
 
   <ItemGroup>
