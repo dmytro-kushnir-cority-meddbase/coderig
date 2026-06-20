@@ -23,11 +23,17 @@ internal static class BuildInputFingerprint
 {
     // Version/config manifests across the dependency mechanisms this codebase mixes — Paket, classic
     // NuGet (packages.config), PackageReference / Central Package Management — plus MSBuild props and the
-    // SDK pin. Stat'd up the directory tree: root-level ones (paket.lock/dependencies, global.json,
-    // Directory.*, nuget.config) are found at the repo root; project-level ones (paket.references,
-    // packages.config) at the project dir. ALL are committed SOURCE files the design-time build only
-    // READS — paket/nuget *restore* doesn't rewrite them (only `paket install`/`update` or a manual edit
-    // does) — so stat is stable and never races the build's obj output.
+    // SDK pin. Stat'd up the directory tree: root-level ones (global.json, Directory.*, nuget.config) are
+    // found at the repo root; project-level ones (paket.references, packages.config) at the project dir.
+    // ALL are committed SOURCE files the design-time build only READS — paket/nuget *restore* doesn't
+    // rewrite them (only `paket install`/`update` or a manual edit does) — so stat is stable and never
+    // races the build's obj output.
+    //
+    // The root paket.lock + paket.dependencies are deliberately NOT here: hashing them WHOLESALE keyed every
+    // project to the entire dependency graph, so one version bump invalidated all ~300 projects. They are now
+    // folded PER PROJECT via PaketClosure (only the project's transitive closure + the global resolution
+    // settings), so a bump invalidates exactly the projects that resolve the changed package. paket.references
+    // stays here (per-project already) so a binding-redirect/suffix-only edit PaketClosure ignores still flips.
     //
     // This is deliberately an ALLOWLIST: a version pinned by a mechanism not listed here ("god knows what
     // else") won't flip the key. That's why --reuse-build-cache is opt-in — after an exotic dependency
@@ -38,8 +44,6 @@ internal static class BuildInputFingerprint
         "Directory.Build.targets",
         "Directory.Packages.props",
         "global.json",
-        "paket.lock",
-        "paket.dependencies",
         "paket.references",
         "packages.config",
         "nuget.config",
@@ -64,9 +68,8 @@ internal static class BuildInputFingerprint
 
         // Build props/targets + CPM versions + SDK pin + the dependency-manifest allowlist, walked up to
         // the drive root. Under Central Package Management every package version is in
-        // Directory.Packages.props; under Paket the versions are in paket.lock — either way a bump flips
-        // the key here. (Gap: a transitive-only bump with no manifest change isn't seen — narrow, and
-        // --reuse-build-cache is opt-in; re-index without it after such a change.)
+        // Directory.Packages.props; under Paket the versions are in paket.lock — folded PER PROJECT below
+        // (PaketClosure), not here, so a bump only flips the projects that resolve the changed package.
         for (var dir = projectDir; !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir))
         {
             foreach (var name in AncestorConfigFiles)
@@ -77,6 +80,17 @@ internal static class BuildInputFingerprint
             // The Paket tooling/wiring lives in a .paket subdir at the repo root. Its targets define HOW
             // references resolve, so a Paket upgrade can change resolution without touching paket.lock.
             FeedContent(hash, Path.Combine(dir, ".paket", "Paket.Restore.targets"));
+        }
+
+        // Paket's per-project resolved closure, derived from the COMMITTED root paket.lock + paket.dependencies
+        // scoped to THIS project's paket.references (PaketClosure). Replaces hashing the whole lock into every
+        // project: a version bump now invalidates only the projects whose transitive closure contains it.
+        // Null when the project isn't paket-managed (no paket.references) — then there's no lock dependency to
+        // fold. Conservative (over-approximates the closure), so it errs toward "changed", never stale.
+        var paketClosure = PaketClosure.Compute(projectDir);
+        if (paketClosure is not null)
+        {
+            hash.AppendData(Encoding.UTF8.GetBytes(paketClosure));
         }
 
         // The SET of *.cs paths (detects add / remove / rename — removals also self-heal downstream via
