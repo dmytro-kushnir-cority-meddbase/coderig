@@ -335,19 +335,22 @@ internal static class IndexCommands
     {
         var entries = timings.Entries;
         var total = entries.Sum(e => e.Elapsed.TotalSeconds);
-        output.WriteLine("Timing breakdown (cpu% normalised to all cores; self=this process, sys=whole machine):");
+        output.WriteLine("Timing breakdown (cpu% normalised to all cores; self=this process, sys=whole machine; gc%=time paused for GC):");
         output.WriteLine(
-            $"  {"phase", -20} {"wall", 8} {"%", 6}  {"cpu:self", 8} {"cpu:sys", 8}  {"peakRAM", 8}  {"diskR", 8} {"diskW", 8}"
+            $"  {"phase", -20} {"wall", 8} {"%", 6}  {"cpu:self", 8} {"cpu:sys", 8} {"gc%", 6}  {"peakRAM", 8} {"alloc/s", 9}  {"diskR", 8} {"diskW", 8}"
         );
         foreach (var entry in entries)
         {
             var inPhase = samples.Where(s => s.At >= entry.Start && s.At < entry.End).ToArray();
             var pct = total > 0 ? entry.Elapsed.TotalSeconds / total * 100 : 0;
+            var secs = entry.Elapsed.TotalSeconds;
             output.WriteLine(
                 $"  {entry.Name, -20} {FormatElapsed(entry.Elapsed), 8} {pct, 5:0.0}%  "
                     + $"{FormatPercent(Average(inPhase, s => s.ProcessCpuPercent)), 8} "
-                    + $"{FormatPercent(Average(inPhase, s => s.SystemCpuPercent)), 8}  "
-                    + $"{FormatBytes(Peak(inPhase, s => s.WorkingSetBytes)), 8}  "
+                    + $"{FormatPercent(Average(inPhase, s => s.SystemCpuPercent)), 8} "
+                    + $"{FormatGcPercent(inPhase, secs), 6}  "
+                    + $"{FormatBytes(Peak(inPhase, s => s.WorkingSetBytes)), 8} "
+                    + $"{FormatRate(DiskDelta(inPhase, s => s.AllocatedBytes), secs), 9}  "
                     + $"{FormatBytes(DiskDelta(inPhase, s => s.DiskReadBytes)), 8} "
                     + $"{FormatBytes(DiskDelta(inPhase, s => s.DiskWriteBytes)), 8}"
             );
@@ -375,7 +378,8 @@ internal static class IndexCommands
         var path = Path.Combine(workingDirectory, "rig-index-telemetry.csv");
         var lines = new List<string>(samples.Count + 1)
         {
-            "elapsed_s,phase,proc_cpu_pct,sys_cpu_pct,ws_mb,heap_mb,disk_read_cum_mb,disk_write_cum_mb",
+            "elapsed_s,phase,proc_cpu_pct,sys_cpu_pct,ws_mb,heap_mb,disk_read_cum_mb,disk_write_cum_mb,"
+                + "gen0_cum,gen1_cum,gen2_cum,gc_pause_ms_cum,alloc_mb_cum",
         };
         foreach (var s in samples)
         {
@@ -383,7 +387,8 @@ internal static class IndexCommands
             lines.Add(
                 string.Create(
                     CultureInfo.InvariantCulture,
-                    $"{s.At.TotalSeconds:0.0},{phase},{s.ProcessCpuPercent:0.0},{CsvDouble(s.SystemCpuPercent)},{Mb(s.WorkingSetBytes):0.0},{Mb(s.ManagedHeapBytes):0.0},{CsvMb(s.DiskReadBytes)},{CsvMb(s.DiskWriteBytes)}"
+                    $"{s.At.TotalSeconds:0.0},{phase},{s.ProcessCpuPercent:0.0},{CsvDouble(s.SystemCpuPercent)},{Mb(s.WorkingSetBytes):0.0},{Mb(s.ManagedHeapBytes):0.0},{CsvMb(s.DiskReadBytes)},{CsvMb(s.DiskWriteBytes)},"
+                        + $"{s.Gen0},{s.Gen1},{s.Gen2},{s.GcPauseMs:0.0},{Mb(s.AllocatedBytes):0.0}"
                 )
             );
         }
@@ -472,6 +477,23 @@ internal static class IndexCommands
     }
 
     private static string FormatPercent(double percent) => double.IsNaN(percent) ? "n/a" : $"{percent:0}%";
+
+    // Share of the phase wall spent paused for GC: (GC pause-ms accrued in the phase) / phase-ms. A high
+    // value on a low-cpu:self phase is the smoking gun that the phase is GC-bound, not compute-bound.
+    private static string FormatGcPercent(IReadOnlyList<ResourceSampler.Sample> samples, double seconds)
+    {
+        if (samples.Count == 0 || seconds <= 0)
+        {
+            return "n/a";
+        }
+
+        var pauseMs = samples[^1].GcPauseMs - samples[0].GcPauseMs;
+        return $"{Math.Max(val1: 0, val2: pauseMs / (seconds * 1000) * 100):0}%";
+    }
+
+    // Allocation throughput: bytes allocated during the phase / phase seconds, formatted as a byte rate.
+    private static string FormatRate(long bytes, double seconds) =>
+        bytes < 0 || seconds <= 0 ? "n/a" : FormatBytes((long)(bytes / seconds)) + "/s";
 
     private static string FormatBytes(long bytes) =>
         bytes < 0 ? "n/a"

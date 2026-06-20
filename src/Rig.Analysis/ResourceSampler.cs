@@ -33,7 +33,15 @@ public sealed class ResourceSampler : IDisposable
         long WorkingSetBytes,
         long ManagedHeapBytes,
         long DiskReadBytes,
-        long DiskWriteBytes
+        long DiskWriteBytes,
+        // GC, all cumulative (per-phase deltas taken at render): collection counts per generation, total
+        // stop-the-world pause time, and total allocated bytes (→ allocation throughput). These distinguish
+        // a GC-bound phase (high pause %, gen2 churn) from a lock-bound one (low CPU, low GC).
+        int Gen0,
+        int Gen1,
+        int Gen2,
+        double GcPauseMs,
+        long AllocatedBytes
     );
 
     private readonly Func<TimeSpan> _clock;
@@ -98,7 +106,12 @@ public sealed class ResourceSampler : IDisposable
                 WorkingSetBytes: _self.WorkingSet64,
                 ManagedHeapBytes: GC.GetTotalMemory(forceFullCollection: false),
                 DiskReadBytes: read,
-                DiskWriteBytes: write
+                DiskWriteBytes: write,
+                Gen0: GC.CollectionCount(0),
+                Gen1: GC.CollectionCount(1),
+                Gen2: GC.CollectionCount(2),
+                GcPauseMs: GC.GetTotalPauseDuration().TotalMilliseconds,
+                AllocatedBytes: GC.GetTotalAllocatedBytes(precise: false)
             );
             lock (_gate)
             {
