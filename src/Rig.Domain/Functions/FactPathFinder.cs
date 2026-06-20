@@ -428,7 +428,7 @@ public static partial class FactPathFinder
     // as Reaches/Find (direct calls + interface->impl + base->override dispatch, with loop context),
     // but materialized as a tree for rendering. Each method is EXPANDED ONCE globally: the first time
     // it's reached (shallowest depth, source order among same-depth peers) its children are built;
-    // later encounters become a Truncated leaf ("seen"), so a cycle or a heavily-shared callee can't
+    // later encounters become a Truncated leaf ("⋯elided"), so a cycle or a heavily-shared callee can't
     // blow the tree up. maxDepth bounds depth; maxNodes bounds total emitted nodes (a Truncated leaf
     // is emitted at the cap). Returns one TraceNode per root.
     //
@@ -456,10 +456,10 @@ public static partial class FactPathFinder
         var mutableRoots = new List<MutableNode>();
         // DEPTH-FIRST, PRE-ORDER traversal (a stack, children pushed in reverse so they pop in render
         // order). This makes `expanded` fill in exactly top-to-bottom reading order, so the FIRST visual
-        // occurrence of a shared symbol is the one expanded and every LATER occurrence is the "↺seen"
+        // occurrence of a shared symbol is the one expanded and every LATER occurrence is the "⋯elided"
         // leaf — the marker always refers to a subtree already shown ABOVE it. (A breadth-first walk
         // expanded whichever occurrence was shallowest, which could render BELOW a deeper twin, leaving
-        // the "↺seen" reading before its expansion.)
+        // the "⋯elided" reading before its expansion.)
         var stack = new Stack<MutableNode>();
 
         var matched = index.Nodes.Where(n => Contains(value: n, pattern: fromPattern)).ToHashSet(StringComparer.Ordinal);
@@ -525,7 +525,7 @@ public static partial class FactPathFinder
             {
                 // Collapse identical sibling edges: a generic method or bodied accessor called N times
                 // under one parent resolves to one symbol → N edges that would render byte-identically
-                // (1 expansion + N-1 "↺seen"). Fold them into a single kid carrying a call-site count.
+                // (1 expansion + N-1 "⋯elided"). Fold them into a single kid carrying a call-site count.
                 // Keyed on every field that affects the rendered line so only true duplicates merge.
                 // Manual scan rather than Kids.FirstOrDefault(k => ...): the lambda captures `s`, so the
                 // LINQ form heap-allocated a closure + delegate on every successor edge of every node.
@@ -1113,7 +1113,7 @@ public static partial class FactPathFinder
     // A synthetic lambda node id is `{containerMemberId}~λ{ordinal}` (FactExtractor). When the root pattern
     // matches a method AND its inline lambdas (e.g. `tree "Foo"` matches Foo, Foo~λ0, Foo~λ1), the lambdas
     // are NOT independent roots: each already renders inline under its container, so re-rooting it would
-    // emit a spurious top-level `↺seen` (the container's expansion already marked it seen). Drop a matched
+    // emit a spurious top-level `⋯elided` (the container's expansion already marked it seen). Drop a matched
     // lambda only when its container ALSO matched; a lambda whose container did not match (e.g. a promoted
     // async-handoff entry point targeted on its own) stays a legitimate root.
     private static bool IsContainedLambdaOfMatched(string nodeId, HashSet<string> matched)

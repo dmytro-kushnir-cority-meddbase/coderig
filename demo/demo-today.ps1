@@ -152,7 +152,7 @@ rig tree 'Audits.AuditsRepository.SubmitEvent' --full --rules $Rules 2>&1 | ForE
 Cmd 'rig tree "Xero2ClientIO.CreateInvoice" --effects --rules rig.rules.json   # effect leaf'
 rig tree 'Xero2ClientIO.CreateInvoice' --effects --rules $Rules 2>&1 | ForEach-Object { Write-Host "  $_" }
 
-Cmd 'rig tree "Xero2ClientIO.CreateInvoice" --depth 2 --rules rig.rules.json   # skeleton + ↺seen cycle marker'
+Cmd 'rig tree "Xero2ClientIO.CreateInvoice" --depth 2 --rules rig.rules.json   # skeleton + ⋯elided marker'
 rig tree 'Xero2ClientIO.CreateInvoice' --depth 2 --rules $Rules 2>&1 | ForEach-Object { Write-Host "  $_" }
 
 Cmd 'rig tree "Audits.AuditsRepository.SubmitEvent" --effects --rules rig.rules.json   # cross-solution: dapper + db_connection + throw⚠️'

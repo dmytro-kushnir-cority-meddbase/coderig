@@ -310,7 +310,7 @@ public sealed record PathStep(
 // that reached this node from its parent (EdgeKind="entry" for a root; "invocation"/"impl-dispatch"/
 // "override-dispatch"; LoopKind set when that call sits inside a loop). Truncated=true marks a node
 // whose subtree was NOT expanded because the method was already expanded elsewhere (cycle / shared
-// callee — shown as "seen") or a depth/budget cap was hit.
+// callee) or a depth/budget cap was hit — rendered as "⋯elided".
 public sealed record TraceNode(
     string SymbolId,
     string EdgeKind,
@@ -334,7 +334,7 @@ public sealed record TraceNode(
     // Number of distinct call sites under the SAME parent that resolve to this identical edge (same
     // callee + edge kind + loop + handoff + fan-out + basis). A generic method or bodied accessor
     // invoked N times from one parent collapses to a single child carrying N, instead of 1 expansion
-    // + N-1 "↺seen" duplicate leaves. 1 for an ordinary single-call edge.
+    // + N-1 "⋯elided" duplicate leaves. 1 for an ordinary single-call edge.
     int CallSites = 1,
     // Set by the render-time single-impl fold: when an interface/base method dispatched to EXACTLY one
     // target, that lone interface hop is collapsed into its impl, and this carries the folded-away
