@@ -74,6 +74,8 @@ public static class GraphMaterializer
             await connection.OpenAsync(cancellationToken);
         }
 
+        await ApplyGraphPragmasAsync(connection, cancellationToken);
+
         await EnsureSchemaAsync(connection, cancellationToken);
 
         progress?.Invoke("Rebuilding derived edge tables");
@@ -109,6 +111,32 @@ public static class GraphMaterializer
         await ExecuteAsync(connection, null, "ANALYZE;", cancellationToken);
 
         return new GraphStats(CallEdges: callCount, DispatchEdges: dispatchCount, Nodes: nodeCount, HeuristicDispatchEdges: heuristicCount);
+    }
+
+    // Tune THIS connection for the graph rebuild. The phase is both write-heavy (DELETE + bulk-insert
+    // ~550k call edges + ~260k nodes) and READ-heavy: the FTS5 trigram builds, the `nodes` UNION, and
+    // ANALYZE all full-scan the just-written fact tables, which on SQLite defaults (mmap_size=0, 2 MB
+    // cache) means a syscall-per-page cold read — the bulk of the phase's multi-GB disk reads. A big
+    // mmap + page cache serves those scans from memory, temp_store=MEMORY keeps the FTS/ANALYZE scratch
+    // off disk, and synchronous=OFF drops fsyncs (the rebuild is idempotent — re-run `rig graph`). This
+    // is the same read-pragma template the query paths use (StorageProbes), plus synchronous=OFF.
+    // journal_mode is deliberately LEFT ON: unlike the save path (which writes a throwaway .tmp then
+    // atomically renames), graph mutates the PUBLISHED store in place, so the rollback journal must
+    // stay for the one-transaction rebuild to remain crash-safe. Best-effort — a PRAGMA that doesn't
+    // take just leaves the default.
+    private static async Task ApplyGraphPragmasAsync(DbConnection connection, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                "PRAGMA mmap_size=1073741824; PRAGMA cache_size=-262144; PRAGMA temp_store=MEMORY; PRAGMA synchronous=OFF;";
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (DbException)
+        {
+            // pragmas are an optimization only — ignore and run with the defaults
+        }
     }
 
     private static async Task BuildSearchIndexAsync(DbConnection connection, Action<string>? progress, CancellationToken cancellationToken)

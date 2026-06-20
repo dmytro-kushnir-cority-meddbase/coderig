@@ -11,8 +11,8 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Rig.Domain.Data;
 using ProjectInfo = Microsoft.CodeAnalysis.ProjectInfo;
-using SolutionInfo = Microsoft.CodeAnalysis.SolutionInfo;
 using RuleSet = Rig.Domain.Data.RuleSet;
+using SolutionInfo = Microsoft.CodeAnalysis.SolutionInfo;
 
 namespace Rig.Analysis.Inventory;
 
@@ -659,7 +659,18 @@ internal static class SolutionSourceLoader
                 LanguageVersionFacts.TryParse(lv, out langVersion);
             }
 
-            var parseOptions = new CSharpParseOptions(languageVersion: langVersion, preprocessorSymbols: result.PreprocessorSymbols);
+            // DocumentationMode.None: don't parse `///` XML doc comments into structured trivia and don't
+            // bind/validate them. Fact extraction is doc-comment-AGNOSTIC — symbols, DocIDs
+            // (GetDocumentationCommentId derives from symbol STRUCTURE, not the `///` text), references,
+            // type-relations and dispatch are identical either way; only doc-comment diagnostics depend on
+            // it, and those are discarded. The default (Parse) makes Roslyn build doc-comment trivia and,
+            // via GetDiagnostics, run DocumentationCommentCompiler (~hundreds of MB of churn on MedDBase).
+            // Same principled-and-strictly-less-work rationale as the nullable-off compilation option below.
+            var parseOptions = new CSharpParseOptions(
+                languageVersion: langVersion,
+                preprocessorSymbols: result.PreprocessorSymbols,
+                documentationMode: DocumentationMode.None
+            );
 
             // Compilation options: OutputKind must be Library for class library / web projects
             // so the compiler doesn't require a Main method (CS5001).  AllowUnsafe and Nullable
