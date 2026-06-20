@@ -683,11 +683,15 @@ internal static class SolutionSourceLoader
                 result.Properties.TryGetValue(key: "AllowUnsafeBlocks", value: out var unsafeStr)
                 && bool.TryParse(unsafeStr, out var unsafeBool)
                 && unsafeBool;
-            var nullableContext =
-                result.Properties.TryGetValue(key: "Nullable", value: out var str)
-                && str.Equals("enable", StringComparison.OrdinalIgnoreCase)
-                    ? NullableContextOptions.Enable
-                    : NullableContextOptions.Disable;
+            // Force nullable context OFF regardless of the project's <Nullable> setting: fact extraction is
+            // nullable-AGNOSTIC (symbol resolution, DocIDs, references, type-relations and dispatch are
+            // identical with or without it; nullable context only governs warnings, which we discard), so
+            // skipping NullableWalker flow analysis is free of facts. NB: measured benefit on MedDBase was
+            // only marginal (~3s / 0.3 GB peak) — a dotnet-trace gc-verbose profile showed the big
+            // `TypeWithAnnotations` churn is Roslyn's UNIVERSAL internal type representation (all overload
+            // resolution / type construction), not nullable-flow-specific, so it allocates either way.
+            // Kept because it's principled and strictly less work, not because it's a major win.
+            const NullableContextOptions nullableContext = NullableContextOptions.Disable;
             var compilationOptions = new CSharpCompilationOptions(
                 outputKind,
                 allowUnsafe: allowUnsafe,
