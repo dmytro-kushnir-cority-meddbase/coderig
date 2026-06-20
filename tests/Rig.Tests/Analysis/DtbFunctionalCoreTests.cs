@@ -118,13 +118,33 @@ public sealed class DtbFunctionalCoreTests
     }
 
     [Test]
-    public void Compare_flags_changed_properties()
+    public void Compare_flags_a_changed_CONSUMED_property()
     {
-        var fresh = Pbi() with { Properties = new Dictionary<string, string> { ["TFM"] = "net8.0" } };
-        var cached = Pbi() with { Properties = new Dictionary<string, string> { ["TFM"] = "net48" } };
+        // LangVersion is consumed by rig (it sets the parse options) — a drift here is a real mismatch.
+        var fresh = Pbi() with
+        {
+            Properties = new Dictionary<string, string> { ["LangVersion"] = "12.0" },
+        };
+        var cached = Pbi() with { Properties = new Dictionary<string, string> { ["LangVersion"] = "11.0" } };
         var result = BuildInfoEquivalence.Compare(fresh: fresh, cached: cached);
         result.IsEquivalent.ShouldBeFalse();
         result.Summary.ShouldContain("Properties");
+    }
+
+    [Test]
+    public void Compare_ignores_non_consumed_properties()
+    {
+        // The Buildalyzer Properties dict carries hundreds of nondeterministic entries rig never reads; a
+        // drift in one of those is NOT a mismatch (this is the calibration the MedDBase verify run forced).
+        var fresh = Pbi() with
+        {
+            Properties = new Dictionary<string, string> { ["LangVersion"] = "12.0", ["BuildStartTime"] = "T1" },
+        };
+        var cached = Pbi() with
+        {
+            Properties = new Dictionary<string, string> { ["LangVersion"] = "12.0", ["BuildStartTime"] = "T2" },
+        };
+        BuildInfoEquivalence.Compare(fresh: fresh, cached: cached).IsEquivalent.ShouldBeTrue();
     }
 
     private static BuildInputFingerprint.BuildInputs Inputs() =>

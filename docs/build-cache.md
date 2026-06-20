@@ -103,8 +103,44 @@ Builds every project anyway (ignoring hits) and **diffs the freshly-built `Proje
 hit would have replayed** (`BuildInfoEquivalence.Compare`, set-compared so parallel-build ordering isn't a
 false mismatch), reporting any drift — i.e. an input the fingerprint failed to fold (a latent stale-hit).
 Refreshes the sidecar either way; prints `build-cache verify: M match, N MISMATCH, K no-baseline`. Catches
-the completeness gap no fingerprint unit test can. **Built + unit-tested, but NOT YET RUN on MedDBase** — a
-clean `0 MISMATCH` there is the gate before trusting the cache (esp. the new Paket scoping).
+the completeness gap no fingerprint unit test can. Refreshes the sidecar either way.
+
+**Validated on MedDBase 2026-06-20.** First run flagged **134/136 on `Properties`** while EVERY consumed
+input (References/ProjectReferences/SourceFiles/AnalyzerReferences/PreprocessorSymbols) matched — because
+Buildalyzer's `Properties` dict carries hundreds of environment/path/timestamp entries rig never reads. So
+`BuildInfoEquivalence` was calibrated to compare ONLY the consumed property slice (the 5 keys
+`BuildProjectInfo` reads). Re-run: **135 match, 1 MISMATCH, 0 no-baseline**. The lone mismatch
+(`MedDBase.ReferralSystemService.Common: References (+0/-1)`) is one reference resolving in the cached build
+but not the fresh one with NO input change — i.e. parallel-MSBuild reference-resolution NONDETERMINISM (the
+very thing the cache neutralises by resolve-once-replay), not an under-specified fingerprint. **Conclusion:
+the fingerprint — incl. the new per-project Paket scoping — captures every consumed build input; the cache is
+sound on MedDBase.** Caveat: verify can't distinguish a nondeterministic build from a fingerprint gap (both
+show as a diff), so a small, non-reproducing `References ±N` with no input change reads as build flakiness.
+
+## Extending the per-project scoping: CPM vs Directory.Build.props
+Can the PaketClosure technique (scope a central version list per project so a bump invalidates only the
+projects that resolve it) apply to the other dependency mechanisms in the allowlist?
+
+- **`Directory.Packages.props` (Central Package Management) — YES, direct analog, feasible.** It's the NuGet
+  equivalent of `paket.lock`: `<PackageVersion Include="X" Version=".."/>` centrally, `<PackageReference
+  Include="X"/>` (no version) per project. Today it's hashed WHOLESALE into every project under it, so one
+  `<PackageVersion>` bump invalidates all — the exact problem PaketClosure fixed for Paket. Scoping: parse the
+  props → package→version map; per project fold only the versions for packages it references. SIMPLER than
+  Paket in the common case — no transitive walk needed, because CPM versions only the project's DIRECT
+  `<PackageReference>`s; transitive versions are resolved by NuGet (in the racy `obj/project.assets.json`, not
+  the props). Two caveats: (1) `<GlobalPackageReference>` applies to all projects → fold globally; (2) if
+  `CentralPackageTransitivePinningEnabled` is on, `<PackageVersion>` governs transitive deps too → you'd need
+  the closure (assets.json, racy) → fall back to wholesale (detect the flag). **MedDBase reality:** CPM is used
+  ONLY in `src/audits/` (its own `Directory.Packages.props`, 30 `<PackageVersion>`, no transitive pinning, no
+  `<GlobalPackageReference>`), and that subtree is NOT in the `MedDBase.Site` `--from` closure rig indexes — so
+  the win is ~zero for the indexed set today. Worth doing only if/when a CPM subtree enters the indexed scope.
+
+- **`Directory.Build.props` / `.targets` — NO, correctly global (leave as-is).** It's arbitrary MSBuild
+  (properties, items, imports, targets), not a version list — a change can affect any project under it in
+  ways not tied to a package, so there's no sound per-package scoping. It IS already scoped by DIRECTORY
+  LOCALITY via the ancestor walk: a project only folds the `Directory.Build.props` files in ITS ancestor
+  chain, so a leaf-subtree props only invalidates that subtree; only a repo-ROOT one invalidates everyone,
+  correctly (MedDBase's root sets `LangVersion`, `Deterministic`, … — genuinely global to every compile).
 
 ### Phasing (general config — still planned; Paket already scoped via PaketClosure)
 1. Extract allowlist → `BuildCacheConfig` (current defaults; no behaviour change).

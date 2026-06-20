@@ -6,10 +6,18 @@ namespace Rig.Analysis.Inventory;
 // fingerprint is under-specified (a real input it doesn't fold changed the build), i.e. a latent stale-hit.
 //
 // The out-of-process build orders references/sources nondeterministically across parallel runs, so each
-// list is compared as a SET (order-independent) and Properties as an unordered map — otherwise verify would
-// cry wolf on mere ordering. Returns the differing fields so a mismatch report names what drifted. No IO.
+// list is compared as a SET (order-independent). Properties is compared on ONLY the slice rig consumes —
+// not the whole dict: a verify run on MedDBase flagged all 134 projects on `Properties` while every consumed
+// input (references/sources) matched, because Buildalyzer's Properties carries hundreds of environment/path/
+// timestamp-derived entries that are nondeterministic across builds and that a cache hit never feeds rig
+// differently. Comparing the consumed slice makes a mismatch mean a build input rig ACTUALLY uses drifted.
+// Returns the differing fields so a mismatch report names what drifted. No IO.
 internal static class BuildInfoEquivalence
 {
+    // The MSBuild properties rig reads from a build (see SolutionSourceLoader.BuildProjectInfo). Everything
+    // else in Properties is replayed-but-unread, so its drift can't change rig's output and isn't a mismatch.
+    private static readonly string[] ConsumedPropertyKeys = ["AssemblyName", "LangVersion", "OutputType", "AllowUnsafeBlocks", "Nullable"];
+
     internal sealed record Result(bool IsEquivalent, IReadOnlyList<string> Differences)
     {
         public string Summary => IsEquivalent ? "match" : string.Join(separator: ", ", values: Differences);
@@ -45,6 +53,7 @@ internal static class BuildInfoEquivalence
     }
 
     private static bool PropertiesEqual(IReadOnlyDictionary<string, string> fresh, IReadOnlyDictionary<string, string> cached) =>
-        fresh.Count == cached.Count
-        && fresh.All(kv => cached.TryGetValue(kv.Key, out var v) && string.Equals(v, kv.Value, StringComparison.Ordinal));
+        ConsumedPropertyKeys.All(k => string.Equals(Value(fresh, k), Value(cached, k), StringComparison.Ordinal));
+
+    private static string? Value(IReadOnlyDictionary<string, string> props, string key) => props.TryGetValue(key, out var v) ? v : null;
 }
