@@ -1,5 +1,6 @@
 using System.CommandLine;
 using Rig.Analysis.Rules;
+using Rig.Cli.Caching;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Deployments;
 using Rig.Cli.Rendering;
@@ -7,6 +8,7 @@ using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
 using Rig.Storage.Storage;
+using static Rig.Cli.Caching.QueryCacheKeys;
 using static Rig.Cli.Effects.EffectDerivation;
 using static Rig.Cli.EntryPoints.EntryPointContext;
 using static Rig.Cli.Graph.TraversalGraphLoader;
@@ -50,6 +52,7 @@ internal static class ImpactCommand
         var rules = CommonOptions.Rules();
         var format = CommonOptions.Format();
         var limit = CommonOptions.Limit();
+        var noCache = CommonOptions.NoCache();
         var structural = new Option<bool>("--structural")
         {
             Description =
@@ -69,6 +72,7 @@ internal static class ImpactCommand
             rules,
             format,
             limit,
+            noCache,
             structural,
         };
         // Both stores are mandatory — impact is a pure two-store diff, there is no working-tree/git fallback
@@ -96,6 +100,7 @@ internal static class ImpactCommand
                         extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                         format: pr.GetValue(format),
                         limit: pr.GetValue(limit),
+                        noCache: pr.GetValue(noCache),
                         structural: pr.GetValue(structural),
                         output: output,
                         error: error,
@@ -113,6 +118,7 @@ internal static class ImpactCommand
         IReadOnlyList<string> extraRules,
         string? format,
         int? limit,
+        bool noCache,
         bool structural,
         TextWriter output,
         TextWriter error,
@@ -126,16 +132,54 @@ internal static class ImpactCommand
         // threaded into every helper below.
         var rules = RuleSet.Load(workingDirectory, extraRules);
 
-        // The HEAD (after) store: a REQUIRED indexed commit store ref. OpenReadContext resolves it via
-        // ResolveReadStoreDir (sha / short-sha / store-id → per-commit store dir); an unmatched ref throws
-        // StoreRefNotFoundException → CommandGuard lists what's indexed.
-        await using var context = OpenReadContext(workingDirectory: workingDirectory, storeRef: headRef);
-
-        // The BASE (before) store: resolved the SAME way. ResolveReadStoreDir throws StoreRefNotFoundException
-        // for an unmatched ref (CommandGuard lists what's indexed), so by the time we're past this both stores
-        // exist and are addressable.
+        // Resolve BOTH per-commit stores up front (sha / short-sha / store-id → store dir). ResolveReadStoreDir
+        // throws StoreRefNotFoundException for an unmatched ref → CommandGuard lists what's indexed, so past
+        // this point both stores exist and are addressable. The HEAD store dir also hosts the result cache.
+        var headDir = StoreLayout.ResolveReadStoreDir(workingDirectory: workingDirectory, storeRef: headRef);
         var baseDir = StoreLayout.ResolveReadStoreDir(workingDirectory: workingDirectory, storeRef: baseRef);
         var baseDbPath = Path.Combine(baseDir, StoreLayout.DbFileName);
+
+        // Query cache (best-effort, opt-out via --no-cache). The impact diff is a PURE function of the two
+        // IMMUTABLE per-commit stores + rule fingerprint + traversal mode, so a repeat run skips BOTH store
+        // loads and BOTH per-EP reach computations and renders from the blob. cache.db lives in the HEAD store
+        // dir (keyed by the head store identity for its purge column); the cache KEY folds in BOTH store
+        // identities, so reindexing either side misses. Render-only flags (--structural/--format/--limit) are
+        // absent from the key — they re-present the SAME cached diff and must not fragment it.
+        var headStoreKey = StoreKey(Path.Combine(headDir, StoreLayout.DbFileName));
+        var baseStoreKey = StoreKey(baseDbPath);
+        using var cache = noCache ? null : QueryCache.Open(rigDirectory: headDir, storeKey: headStoreKey);
+        var cacheKey = cache is null
+            ? null
+            : ImpactCacheKey(
+                baseStoreKey: baseStoreKey,
+                headStoreKey: headStoreKey,
+                rulesHash: RulesFingerprint.Compute(workingDirectory, extraRules),
+                mode: mode
+            );
+
+        // The HEAD store: opened for the (cheap) deployment-map read on a hit, and the full derivation on a
+        // miss. Opening issues no query — the cost is in the graph load + reach a hit skips.
+        await using var context = OpenReadContext(workingDirectory: workingDirectory, storeRef: headRef);
+
+        // WARM PATH: a fully-materialized diff + provenance + per-EP FQN subset → render WITHOUT loading the
+        // base store or shaping/walking either graph. Deployments are reloaded (a pure function of the
+        // immutable store + deployments.json, so byte-identical to the cold render) for the --structural chips.
+        if (cacheKey is not null && cache!.Get(cacheKey) is { } cachedBlob && ImpactCacheCodec.Decode(cachedBlob) is { } art)
+        {
+            RenderImpact(
+                output: output,
+                impactDiff: art.Diff,
+                baseProv: art.BaseProvenance,
+                headProv: art.HeadProvenance,
+                mode: mode,
+                deployments: await LoadDeploymentsAsync(context, workingDirectory, error),
+                fqnSites: art.FqnSites,
+                tsv: tsv,
+                structural: structural,
+                max: max
+            );
+            return 0;
+        }
 
         // Provenance for the header: each store's source branch + short commit (12-char sha), read from its
         // own run row. Falls back to the store-id when a store has no commit/branch provenance.
@@ -224,17 +268,67 @@ internal static class ImpactCommand
         // fully-qualified dotted name (FqnForCard), which round-trips into `rig tree`, instead of the path route.
         var fqnSites = idBySite;
 
+        // Cache the proven diff + both sides' provenance + the diff-site FQN subset (best-effort) so a re-run —
+        // including one that only changes render flags — replays it instead of reloading both stores. Stored
+        // UNTRUNCATED (--limit is a render concern), so every --limit value renders correctly from one blob.
+        if (cacheKey is not null)
+        {
+            TryCache(() =>
+                cache!.Put(
+                    key: cacheKey,
+                    payload: ImpactCacheCodec.Encode(
+                        diff: impactDiff,
+                        baseProvenance: baseProv,
+                        headProvenance: headProv,
+                        idBySite: fqnSites
+                    )
+                )
+            );
+        }
+
+        RenderImpact(
+            output: output,
+            impactDiff: impactDiff,
+            baseProv: baseProv,
+            headProv: headProv,
+            mode: mode,
+            deployments: deployments,
+            fqnSites: fqnSites,
+            tsv: tsv,
+            structural: structural,
+            max: max
+        );
+        return 0;
+    }
+
+    // The render of a computed impact diff — shared by the cold (just-computed) and warm (cache-replayed)
+    // paths so a hit is BYTE-IDENTICAL to a recompute. A pure function of the diff + provenance + deployments
+    // + the FQN site map + the presentation flags: tsv emits the typed rows, else the human sections. FqnForCard
+    // only ever looks up the diff's own sites, so the warm path's site SUBSET serves it exactly as the full map.
+    private static void RenderImpact(
+        TextWriter output,
+        ImpactDiff impactDiff,
+        StoreProvenance baseProv,
+        StoreProvenance headProv,
+        FactPathFinder.TraversalMode mode,
+        DeploymentMap deployments,
+        Dictionary<(string, int), string> fqnSites,
+        bool tsv,
+        bool structural,
+        int max
+    )
+    {
         if (tsv)
         {
             EmitTsv(output, impactDiff, fqnSites, max);
-            return 0;
+            return;
         }
 
         WriteHeader(output, baseProv, headProv, mode, impactDiff);
-        WriteEpDiffHuman(output, baseProv, epDiff, max);
+        WriteEpDiffHuman(output, baseProv, impactDiff.Ep, max);
         // PRIMARY signal: the entry points whose reachable EFFECT set changed (the behavioral handful). Always
         // shown — this is the "what actually does something different" answer.
-        WritePerEpHuman(output, baseProv, perEpDeltas, fqnSites, max);
+        WritePerEpHuman(output, baseProv, impactDiff.PerEp, fqnSites, max);
         // The structural reachable-tree diff is mostly data-shape ripple (a record field add lights up every
         // reaching EP). By default we DEMOTE it to a one-line, cause-classified breadcrumb so a no-net-new-effect
         // migration still can't hide; --structural expands it to the full per-EP list.
@@ -244,10 +338,8 @@ internal static class ImpactCommand
         }
         else
         {
-            WriteStructuralBreadcrumb(output, baseProv, impactDiff, perEpDeltas);
+            WriteStructuralBreadcrumb(output, baseProv, impactDiff, impactDiff.PerEp);
         }
-
-        return 0;
     }
 
     // The source-control provenance of a store, condensed for the header: a short commit (12-char sha) +

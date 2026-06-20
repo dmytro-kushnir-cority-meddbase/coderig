@@ -53,6 +53,21 @@ internal static class QueryCacheKeys
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 
+    // The cache key for a `rig impact` two-store diff artifact: the artifact is a pure function of the TWO
+    // immutable per-commit stores (each addressed by its own StoreKey = rig.db size+mtime), the effective
+    // rule fingerprint, and the traversal mode (sync-cut vs async-handoff — it changes the reach footprint).
+    // Both store keys are folded in, so reindexing EITHER side shifts the key (miss); `mode` distinguishes a
+    // --async run from a sync one. Render-only flags (--structural / --format / --limit) are deliberately
+    // ABSENT: they only change how the SAME diff is presented (which section, truncation, tsv vs human), not
+    // the diff itself, so they must not fragment the cache. `v1` is the payload-schema version (bump to
+    // ignore older blobs). The artifact is stored in the HEAD store's cache.db (its store_key purge column),
+    // so the base side's identity lives only in this key — a stale base store can never serve a hit.
+    internal static string ImpactCacheKey(string baseStoreKey, string headStoreKey, string rulesHash, FactPathFinder.TraversalMode mode)
+    {
+        var material = $"impact|v1|{baseStoreKey}|{headStoreKey}|{rulesHash}|{mode}";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+    }
+
     // A stable signature of the effect filters (--only/--exclude) for the render-sidecar key: sorted +
     // lowercased so token order/casing don't fragment it, empty in the common no-filter case. The seam
     // summaries in the sidecar are a function of the FILTERED effects, so two queries that differ only by
@@ -73,8 +88,7 @@ internal static class QueryCacheKeys
         {
             put();
         }
-        catch (Exception ex)
-            when (ex is JsonException or NotSupportedException or InvalidOperationException or IOException)
+        catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException or IOException)
         {
             // skip caching this result
         }
