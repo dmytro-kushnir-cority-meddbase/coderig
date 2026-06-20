@@ -60,22 +60,27 @@ public static class SolutionAnalyzer
 
         progress?.Invoke($"Extracting observations from {sources.Count} indexed source files");
 
+        // Parallel.For into pre-allocated slots (NOT AsParallel().AsOrdered()): writing result[i] for
+        // source[i] keeps the output deterministic by input position — which the FactIndex surrogate keys
+        // depend on — WITHOUT PLINQ's order-preserving merge, which buffers/reorders completed results and
+        // added synchronization + retained-memory overhead on the hot extract path. Distinct slots per
+        // iteration, so no write races.
         var extracted = 0;
-        var extractionResults = sources
-            .AsParallel()
-            .AsOrdered()
-            .WithDegreeOfParallelism(parallelism ?? Environment.ProcessorCount)
-            .Select(source =>
+        var extractionResults = new SourceExtractionResult[sources.Count];
+        Parallel.For(
+            fromInclusive: 0,
+            toExclusive: sources.Count,
+            new ParallelOptions { MaxDegreeOfParallelism = parallelism ?? Environment.ProcessorCount },
+            i =>
             {
-                var result = ExtractSource(source, rules);
+                extractionResults[i] = ExtractSource(sources[i], rules);
                 var current = Interlocked.Increment(ref extracted);
                 if (ShouldReportProgress(current: current, total: sources.Count))
                 {
                     progress?.Invoke($"Extracted {current}/{sources.Count} source files");
                 }
-                return result;
-            })
-            .ToArray();
+            }
+        );
 
         if (phase is not null)
         {
