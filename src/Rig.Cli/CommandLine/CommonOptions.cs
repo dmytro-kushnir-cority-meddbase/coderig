@@ -10,10 +10,8 @@ namespace Rig.Cli.CommandLine;
 // live, now expressed once, declaratively.
 internal static class CommonOptions
 {
-    
-    private static void LOame(){}
-    
-    
+    private static void LOame() { }
+
     internal static Argument<string> Pattern(string name, string description) => new(name) { Description = description };
 
     // --rules <path>... (repeatable): each value is resolved to a full path, matching the old loop.

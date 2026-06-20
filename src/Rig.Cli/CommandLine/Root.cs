@@ -13,12 +13,10 @@ internal static class Root
         new("Runtime Intelligence Graph")
         {
             IndexCommands.BuildIndex(output, error, workingDirectory),
-            
             FactCommands.BuildRuns(output, error, workingDirectory),
             FactCommands.BuildDi(output, error, workingDirectory),
             FactCommands.BuildSymbols(output, error, workingDirectory),
             FactCommands.BuildRefs(output, error, workingDirectory),
-            
             PathCommand.Build(output, error, workingDirectory),
             TreeCommand.Build(output, error, workingDirectory),
             CallersCommand.Build(output, error, workingDirectory),
@@ -26,9 +24,8 @@ internal static class Root
             DeriveCommand.Build(output, error, workingDirectory),
             EntryPointsCommand.Build(output, error, workingDirectory),
             ImpactCommand.Build(output, error, workingDirectory),
-            
             // DeadCommand.Build(output, error, workingDirectory),
-            
+
             FactCommands.BuildFiles(output, error, workingDirectory),
             FactCommands.BuildProfile(output, error, workingDirectory),
         };

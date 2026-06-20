@@ -255,8 +255,7 @@ public sealed class FactExtractorCaptureTests
 
         var call = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Db.GetConnectionString"));
         // The call site only NAMES the constant; the templates list resolves it to its value...
-        JsonSerializer.Deserialize<string?[]>(call.ArgumentTemplates!)![0]
-            .ShouldBe("MedDBase.DataAccessTier.ConnectionString");
+        JsonSerializer.Deserialize<string?[]>(call.ArgumentTemplates!)![0].ShouldBe("MedDBase.DataAccessTier.ConnectionString");
         // ...while the names list keeps the const reference path.
         JsonSerializer.Deserialize<string?[]>(call.ArgumentNames!)![0].ShouldBe("Keys.Conn");
     }

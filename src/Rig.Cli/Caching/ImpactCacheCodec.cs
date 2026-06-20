@@ -75,9 +75,7 @@ internal static class ImpactCacheCodec
         }
 
         var payload = new ImpactCachePayload(
-            Ep: diff.Ep is null
-                ? null
-                : new EpDiffDto(Added: MapKindRoutes(diff.Ep.Added), Removed: MapKindRoutes(diff.Ep.Removed)),
+            Ep: diff.Ep is null ? null : new EpDiffDto(Added: MapKindRoutes(diff.Ep.Added), Removed: MapKindRoutes(diff.Ep.Removed)),
             AffectedEps: diff.AffectedEps.Select(MapReach).ToArray(),
             PerEp: diff.PerEp.Select(MapFootprint).ToArray(),
             BaseProvenance: MapProv(baseProvenance),

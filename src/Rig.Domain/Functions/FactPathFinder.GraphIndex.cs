@@ -299,16 +299,16 @@ public static partial class FactPathFinder
             .Methods.Where(m => m.ContainingTypeId is not null)
             .GroupBy(m => TypeClosure.StripGeneric(m.ContainingTypeId!), StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
-        
+
         index.ImplsByInterface = graph
             .ImplementsEdges.GroupBy(e => e.InterfaceType, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.Select(e => e.ImplType).Distinct(StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
-        
+
         index.ImplsByErrorInterfaceName = graph
             .ImplementsEdges.Where(e => e.InterfaceType.StartsWith("!:", StringComparison.Ordinal))
             .GroupBy(e => SimpleTypeName(e.InterfaceType), StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.Select(e => e.ImplType).Distinct(StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
-        
+
         index.StrippedBaseEdges = TypeClosure.BuildBaseEdgeLookup(
             (graph.BaseEdges ?? new List<BaseEdge>()).Select(e => (e.SubType, e.BaseType))
         );

@@ -316,24 +316,13 @@ public sealed class CliApplicationTests
 
     // Materialize an analysis result into an indexed per-commit store (.rig/<storeId>/rig.db), stamped with the
     // given commit + branch so the impact header can render provenance. storeId is what --base/--head resolve.
-    private static async Task<string> MaterializeStoreAsync(
-        string workingDirectory,
-        AnalysisResult result,
-        string commit,
-        string branch
-    )
+    private static async Task<string> MaterializeStoreAsync(string workingDirectory, AnalysisResult result, string commit, string branch)
     {
-        var storeId = StoreLayout.NewStoreId(
-            new GitProvenance(Commit: commit, Branch: branch, Dirty: false)
-        );
+        var storeId = StoreLayout.NewStoreId(new GitProvenance(Commit: commit, Branch: branch, Dirty: false));
         var dir = StoreLayout.NewStoreDir(workingDirectory, storeId);
         var db = Path.Combine(dir, StoreLayout.DbFileName);
         await using var ctx = new RigDbContext(db, pooling: false);
-        await Writes.SaveAsync(
-            ctx,
-            result,
-            provenance: new GitProvenance(Commit: commit, Branch: branch, Dirty: false)
-        );
+        await Writes.SaveAsync(ctx, result, provenance: new GitProvenance(Commit: commit, Branch: branch, Dirty: false));
         return storeId;
     }
 
