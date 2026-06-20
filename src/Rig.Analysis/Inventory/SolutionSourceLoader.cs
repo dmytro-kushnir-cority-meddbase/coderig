@@ -116,6 +116,12 @@ internal static class SolutionSourceLoader
         var compilationErrors = new ConcurrentBag<string>();
         var projectResults = new ConcurrentBag<ProjectSourceLoadResult>();
         var analyzedProjects = 0;
+        // Per-project compile/diagnostics/read seconds (only when timing). Σ far above wall/parallelism, or a
+        // few projects dominating getCompilation, is the fingerprint of shared-dependency compilations being
+        // evicted and REBUILT across the parallel traversal — reported after the phase, like the build summary.
+        var perProjectCompile = timings is null
+            ? null
+            : new ConcurrentBag<(string Name, double CompileSec, double DiagSec, double ReadSec)>();
 
         var first = csharpProjects[0];
         var rest = csharpProjects.Skip(1);
@@ -131,7 +137,9 @@ internal static class SolutionSourceLoader
 
         if (phase is not null)
         {
-            timings!.Record("compile+read", phase.Elapsed);
+            var compileReadWall = phase.Elapsed;
+            timings!.Record("compile+read", compileReadWall);
+            ReportCompileSummary(progress, perProjectCompile!, compileReadWall, parallelism ?? DefaultParallelism);
         }
 
         var compilationErrorList = compilationErrors.OrderBy(e => e, StringComparer.Ordinal).ToArray();
@@ -174,19 +182,26 @@ internal static class SolutionSourceLoader
             var current = Interlocked.Increment(ref analyzedProjects);
             ReportProgress(progress, $"Analyzing project {current}/{csharpProjects.Length}: {project.Name}");
 
+            // One reused stopwatch split across the three sub-steps (only when timing) — getCompilation is
+            // the rebuild-prone one (its cost balloons if a shared dependency's compilation was evicted).
+            var watch = perProjectCompile is null ? null : Stopwatch.StartNew();
             var compilation = await project.GetCompilationAsync(ct);
+            var compileSec = watch?.Elapsed.TotalSeconds ?? 0;
             if (compilation is null)
             {
                 compilationErrors.Add($"{project.Name}: compilation unavailable");
                 return; // no semantic model possible — nothing to read for this project
             }
 
+            watch?.Restart();
             foreach (var diagnostic in compilation.GetDiagnostics(ct).Where(d => d.Severity == DiagnosticSeverity.Error))
             {
                 compilationErrors.Add($"{project.Name}: {diagnostic}");
                 Console.WriteLine($"{project.Name}: {diagnostic}");
             }
 
+            var diagSec = watch?.Elapsed.TotalSeconds ?? 0;
+            watch?.Restart();
             projectResults.Add(
                 await LoadProjectSourcesAsync(
                     solutionPath: solutionPath,
@@ -196,6 +211,7 @@ internal static class SolutionSourceLoader
                     cancellationToken: ct
                 )
             );
+            perProjectCompile?.Add((project.Name, compileSec, diagSec, watch?.Elapsed.TotalSeconds ?? 0));
         }
     }
 
@@ -541,6 +557,39 @@ internal static class SolutionSourceLoader
                 + $"per-proj min {seconds[0]:0.0}s / median {Quantile(0.5):0.0}s / p95 {Quantile(0.95):0.0}s / max {seconds[^1]:0.0}s"
         );
         progress($"  slowest: {slowest}");
+    }
+
+    // Per-project compile+read distribution for --time: getCompilation / diagnostics / document-read seconds
+    // per project. Σcpu far above wall × parallelism, or a few projects dominating getCompilation, is the
+    // fingerprint of shared-dependency compilations being evicted and REBUILT across the parallel traversal
+    // (the "are we re-binding the graph per project?" question). The phase wall is passed in; the rest is the
+    // separate work view, same shape as ReportBuildSummary.
+    private static void ReportCompileSummary(
+        Action<string>? progress,
+        ConcurrentBag<(string Name, double CompileSec, double DiagSec, double ReadSec)> perProject,
+        TimeSpan wall,
+        int parallelism
+    )
+    {
+        if (progress is null || perProject.IsEmpty)
+        {
+            return;
+        }
+
+        var items = perProject.ToArray();
+        var compile = items.Sum(p => p.CompileSec);
+        var diag = items.Sum(p => p.DiagSec);
+        var read = items.Sum(p => p.ReadSec);
+        var sumCpu = compile + diag + read;
+        var effective = wall.TotalSeconds > 0 ? sumCpu / wall.TotalSeconds : 0;
+        var slowest = string.Join(", ", items.OrderByDescending(p => p.CompileSec).Take(5).Select(p => $"{p.Name} {p.CompileSec:0.0}s"));
+
+        progress(
+            $"compile+read: {items.Length} project(s) | wall {wall.TotalSeconds:0.0}s | "
+                + $"Σcpu {sumCpu:0.0}s (≠ wall; ~{effective:0.0}x parallel @ cap {parallelism}) | "
+                + $"Σ getCompilation {compile:0.0}s / Σ diagnostics {diag:0.0}s / Σ read {read:0.0}s"
+        );
+        progress($"  slowest getCompilation: {slowest}");
     }
 
     // A project is a test project by name convention (matches the CLI's --from closure heuristic):

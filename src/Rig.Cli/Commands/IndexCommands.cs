@@ -1,5 +1,6 @@
 using System.CommandLine;
 using System.Diagnostics;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -115,6 +116,10 @@ internal static class IndexCommands
     )
     {
         var timings = time ? new PhaseTimings() : null;
+        // Sample CPU (process + whole-machine) / RAM / disk on a background timer for the whole run, so the
+        // --time breakdown can show WHY a phase is slow — e.g. design-time-builds is low process-CPU but high
+        // system-CPU (the work is in child MSBuild processes), not just how long it took. No-op without --time.
+        timings?.StartSampling();
         // Design-time-build cache: ON BY DEFAULT, lives outside the per-commit store dir so it's shared across
         // indexes. --no-build-cache opts out; --verify-build-cache forces it on (it diffs against + refreshes
         // the sidecars), so verify wins over a contradictory --no-build-cache.
@@ -313,28 +318,171 @@ internal static class IndexCommands
 
         if (timings is not null)
         {
-            WriteTimingBreakdown(output, timings);
+            var samples = timings.StopSampling();
+            WriteTimingBreakdown(output, timings, samples);
+            WriteTelemetryCsv(output, workingDirectory, timings, samples);
         }
 
         return 0;
     }
 
-    // Per-phase timing table for `rig index --time`: each recorded phase with its share of the summed
-    // total. Phases are emitted in execution order (rules-load, workspace-build, wire-generators,
-    // compile+read, extract, projections+xml-di, save, graph) so the analysis sub-phases group first.
-    private static void WriteTimingBreakdown(TextWriter output, PhaseTimings timings)
+    // Per-phase timing + resource table for `rig index --time`: each recorded phase with its share of the
+    // summed total AND the CPU/RAM/disk it cost, by bucketing the background samples into the phase's
+    // [Start, End) interval. The headline is cpu:self vs cpu:sys — a phase that is low-self/high-sys is
+    // bound by our child MSBuild processes, not our own work; high disk with low CPU is I/O-bound. Phases
+    // are emitted in execution order so the analysis sub-phases group first.
+    private static void WriteTimingBreakdown(TextWriter output, PhaseTimings timings, IReadOnlyList<ResourceSampler.Sample> samples)
     {
         var entries = timings.Entries;
-        var total = entries.Sum(e => e.Value.TotalSeconds);
-        output.WriteLine("Timing breakdown:");
-        foreach (var (name, elapsed) in entries)
+        var total = entries.Sum(e => e.Elapsed.TotalSeconds);
+        output.WriteLine("Timing breakdown (cpu% normalised to all cores; self=this process, sys=whole machine):");
+        output.WriteLine(
+            $"  {"phase", -20} {"wall", 8} {"%", 6}  {"cpu:self", 8} {"cpu:sys", 8}  {"peakRAM", 8}  {"diskR", 8} {"diskW", 8}"
+        );
+        foreach (var entry in entries)
         {
-            var pct = total > 0 ? elapsed.TotalSeconds / total * 100 : 0;
-            output.WriteLine($"  {name, -20} {FormatElapsed(elapsed), 8}  {pct, 5:0.0}%");
+            var inPhase = samples.Where(s => s.At >= entry.Start && s.At < entry.End).ToArray();
+            var pct = total > 0 ? entry.Elapsed.TotalSeconds / total * 100 : 0;
+            output.WriteLine(
+                $"  {entry.Name, -20} {FormatElapsed(entry.Elapsed), 8} {pct, 5:0.0}%  "
+                    + $"{FormatPercent(Average(inPhase, s => s.ProcessCpuPercent)), 8} "
+                    + $"{FormatPercent(Average(inPhase, s => s.SystemCpuPercent)), 8}  "
+                    + $"{FormatBytes(Peak(inPhase, s => s.WorkingSetBytes)), 8}  "
+                    + $"{FormatBytes(DiskDelta(inPhase, s => s.DiskReadBytes)), 8} "
+                    + $"{FormatBytes(DiskDelta(inPhase, s => s.DiskWriteBytes)), 8}"
+            );
         }
 
-        output.WriteLine($"  {"total", -20} {FormatElapsed(TimeSpan.FromSeconds(total)), 8}  100.0%");
+        output.WriteLine($"  {"total", -20} {FormatElapsed(TimeSpan.FromSeconds(total)), 8} 100.0%");
     }
+
+    // Dump the raw per-sample telemetry to a CSV next to the store (working dir) for offline plotting. Each
+    // sample is tagged with the phase it fell in (or "startup" before the first phase / "tail" after the
+    // last). InvariantCulture throughout so the file parses the same on any locale.
+    private static void WriteTelemetryCsv(
+        TextWriter output,
+        string workingDirectory,
+        PhaseTimings timings,
+        IReadOnlyList<ResourceSampler.Sample> samples
+    )
+    {
+        if (samples.Count == 0)
+        {
+            return;
+        }
+
+        var entries = timings.Entries;
+        var path = Path.Combine(workingDirectory, "rig-index-telemetry.csv");
+        var lines = new List<string>(samples.Count + 1)
+        {
+            "elapsed_s,phase,proc_cpu_pct,sys_cpu_pct,ws_mb,heap_mb,disk_read_cum_mb,disk_write_cum_mb",
+        };
+        foreach (var s in samples)
+        {
+            var phase = PhaseAt(entries, s.At);
+            lines.Add(
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{s.At.TotalSeconds:0.0},{phase},{s.ProcessCpuPercent:0.0},{CsvDouble(s.SystemCpuPercent)},{Mb(s.WorkingSetBytes):0.0},{Mb(s.ManagedHeapBytes):0.0},{CsvMb(s.DiskReadBytes)},{CsvMb(s.DiskWriteBytes)}"
+                )
+            );
+        }
+
+        try
+        {
+            File.WriteAllLines(path, lines);
+            output.WriteLine($"Telemetry: {samples.Count} samples -> {path}");
+        }
+        catch (IOException exception)
+        {
+            output.WriteLine($"Telemetry: could not write {path} ({exception.Message})");
+        }
+    }
+
+    // The phase whose [Start, End) contains the sample time, else "startup" (before any phase) / "tail".
+    private static string PhaseAt(IReadOnlyList<PhaseTimings.PhaseEntry> entries, TimeSpan at)
+    {
+        foreach (var e in entries)
+        {
+            if (at >= e.Start && at < e.End)
+            {
+                return e.Name;
+            }
+        }
+
+        return entries.Count > 0 && at < entries[0].Start ? "startup" : "tail";
+    }
+
+    // Mean of a sample projection, skipping NaN (system CPU is NaN where the platform can't supply it).
+    private static double Average(IReadOnlyList<ResourceSampler.Sample> samples, Func<ResourceSampler.Sample, double> select)
+    {
+        double sum = 0;
+        var count = 0;
+        foreach (var s in samples)
+        {
+            var v = select(s);
+            if (!double.IsNaN(v))
+            {
+                sum += v;
+                count++;
+            }
+        }
+
+        return count == 0 ? double.NaN : sum / count;
+    }
+
+    private static long Peak(IReadOnlyList<ResourceSampler.Sample> samples, Func<ResourceSampler.Sample, long> select)
+    {
+        long peak = -1;
+        foreach (var s in samples)
+        {
+            var v = select(s);
+            if (v > peak)
+            {
+                peak = v;
+            }
+        }
+
+        return peak;
+    }
+
+    // Bytes transferred DURING the phase = last cumulative reading minus first, over samples with a valid
+    // (non-negative) counter. -1 (counter unavailable on this platform) when none qualify.
+    private static long DiskDelta(IReadOnlyList<ResourceSampler.Sample> samples, Func<ResourceSampler.Sample, long> select)
+    {
+        long first = -1;
+        long last = -1;
+        foreach (var s in samples)
+        {
+            var v = select(s);
+            if (v < 0)
+            {
+                continue;
+            }
+
+            if (first < 0)
+            {
+                first = v;
+            }
+
+            last = v;
+        }
+
+        return first < 0 ? -1 : last - first;
+    }
+
+    private static string FormatPercent(double percent) => double.IsNaN(percent) ? "n/a" : $"{percent:0}%";
+
+    private static string FormatBytes(long bytes) =>
+        bytes < 0 ? "n/a"
+        : bytes >= 1L << 30 ? $"{bytes / (double)(1L << 30):0.0}GB"
+        : $"{bytes / (double)(1L << 20):0}MB";
+
+    private static double Mb(long bytes) => bytes / (double)(1L << 20);
+
+    private static string CsvDouble(double value) => double.IsNaN(value) ? "" : value.ToString("0.0", CultureInfo.InvariantCulture);
+
+    private static string CsvMb(long bytes) => bytes < 0 ? "" : Mb(bytes).ToString("0.0", CultureInfo.InvariantCulture);
 
     // Build the derived call-graph views (call_edges + dispatch_edges) + the EP-site table into the store at
     // dbPath. Shared by the standalone `graph` command and the tail of `index` (so a freshly-indexed store is
