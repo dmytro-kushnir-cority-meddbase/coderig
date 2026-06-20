@@ -12,6 +12,15 @@
       "environmentVariables": {
         "RIG_PROFILE_PAUSE": "1"
       }
+    },
+    "index MedDBase (profile-dump)": {
+      "commandName": "Project",
+      "commandLineArgs": "index \"C:\\Git\\meddbase-main-application\\MedDBase.slnx\" --from \"C:\\Git\\meddbase-main-application\\src\\main\\MedDBase.Site\\MedDBase\\MedDBase.csproj\" --time",
+      "workingDirectory": "C:\\Git\\meddbase-analysis",
+      "environmentVariables": {
+        "RIG_PROFILE_DUMP": "both",
+        "RIG_PROFILE_DIR": "C:\\Git\\meddbase-analysis\\dumps"
+      }
     }
   }
 }
