@@ -25,23 +25,24 @@ internal static class PaketClosure
     // the lock's `GROUP Foo`, the references'/dependencies' `group Foo`, and this sentinel line up.
     private const string MainGroup = "Main";
 
-    private sealed record LockPackage(string RawLine, List<string> DepNamesLower);
+    internal sealed record LockPackage(string RawLine, List<string> DepNamesLower);
 
     // group -> (packageLower -> resolved entry), plus the lock's non-package "settings" lines (headers,
     // sources, RESTRICTION/REDIRECTS, GROUP/NUGET markers) folded globally.
-    private sealed record LockModel(Dictionary<string, Dictionary<string, LockPackage>> Groups, string Settings);
+    internal sealed record LockModel(Dictionary<string, Dictionary<string, LockPackage>> Groups, string Settings);
 
     // group -> (packageLower -> raw `nuget` declaration line), plus the dependencies' non-`nuget` settings.
-    private sealed record DepsModel(Dictionary<string, Dictionary<string, string>> Groups, string Settings);
+    internal sealed record DepsModel(Dictionary<string, Dictionary<string, string>> Groups, string Settings);
 
     // Memoised per (path, length, mtime) so the ~2k-line lock is parsed once per run, not once per project;
     // the identity in the key self-invalidates if a file is edited mid-session (tests).
     private static readonly ConcurrentDictionary<string, LockModel?> LockCache = new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<string, DepsModel?> DepsCache = new(StringComparer.Ordinal);
 
-    // The fingerprint material for a project's Paket dependencies, or null when the project is NOT paket-managed
-    // (no paket.references) or no paket.lock is found up-tree — in which case the build-cache fingerprint folds
-    // nothing for Paket (correct: such a project's build doesn't depend on the lock). Deterministic + ordered.
+    // IMPERATIVE SHELL: the fingerprint material for a project's Paket dependencies, or null when the project
+    // is NOT paket-managed (no paket.references) or no paket.lock is found up-tree — then the build-cache
+    // fingerprint folds nothing for Paket (correct: such a project's build doesn't depend on the lock). All IO
+    // (up-tree lookup, reads, per-path parse memo) lives here; the closure + fold is the pure Material core.
     public static string? Compute(string projectDir)
     {
         var referencesPath = Path.Combine(projectDir, "paket.references");
@@ -57,18 +58,42 @@ internal static class PaketClosure
         }
 
         var lockPath = Path.Combine(lockDir, "paket.lock");
-        var lockModel = LockCache.GetOrAdd(MemoKey(lockPath), _ => ParseLock(lockPath));
+        var lockModel = LockCache.GetOrAdd(MemoKey(lockPath), _ => ReadLockModel(lockPath));
         if (lockModel is null)
         {
             return null;
         }
 
         var depsPath = Path.Combine(lockDir, "paket.dependencies");
-        var depsModel = File.Exists(depsPath) ? DepsCache.GetOrAdd(MemoKey(depsPath), _ => ParseDeps(depsPath)) : null;
+        var depsModel = File.Exists(depsPath) ? DepsCache.GetOrAdd(MemoKey(depsPath), _ => ReadDepsModel(depsPath)) : null;
 
-        // The project's DIRECT references, per group (package names lower-cased — Paket is case-insensitive).
-        var directByGroup = ParseReferences(referencesPath);
+        string[] referenceLines;
+        try
+        {
+            referenceLines = File.ReadAllLines(referencesPath);
+        }
+        catch (IOException)
+        {
+            return null;
+        }
 
+        return Material(lockModel: lockModel, depsModel: depsModel, directByGroup: ParseReferences(referenceLines));
+    }
+
+    // PURE entry point for tests + reuse: parse the three manifests from raw text and produce the same closure
+    // material the shell folds from disk. No IO — the natural unit to drive exhaustively from in-memory strings.
+    internal static string ComputeMaterial(string lockText, string? depsText, string referencesText) =>
+        Material(
+            lockModel: ParseLock(SplitLines(lockText)),
+            depsModel: depsText is null ? null : ParseDeps(SplitLines(depsText)),
+            directByGroup: ParseReferences(SplitLines(referencesText))
+        );
+
+    // PURE CORE: the transitive closure of the project's direct references over the lock's dependency edges,
+    // folded with the global resolution settings into deterministic, order-stable fingerprint material. No IO,
+    // no clock — a function of the parsed manifests alone, so it is exhaustively unit-testable in isolation.
+    internal static string Material(LockModel lockModel, DepsModel? depsModel, Dictionary<string, List<string>> directByGroup)
+    {
         // Transitive closure per group over the lock's dependency edges. Deps stay within their own group
         // (Paket groups are isolated), so the walk never crosses group boundaries. Keyed "group\tpackageLower"
         // in a SortedSet for a stable, order-independent fold.
@@ -130,6 +155,14 @@ internal static class PaketClosure
         return material.ToString();
     }
 
+    // Split raw manifest text into lines the way File.ReadAllLines does (normalise CRLF, and a trailing
+    // newline yields no final empty line), so the pure ComputeMaterial matches the shell's per-file parse.
+    private static string[] SplitLines(string text)
+    {
+        var lines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        return lines.Length > 0 && lines[^1].Length == 0 ? lines[..^1] : lines;
+    }
+
     // The nearest ancestor directory (inclusive) that contains fileName, or null. Mirrors BuildInputFingerprint's
     // up-tree walk so the lock is found at the repo root regardless of how deep the project sits.
     private static string? FindUpwards(string startDir, string fileName)
@@ -163,18 +196,20 @@ internal static class PaketClosure
     // markers, `remote:`, RESTRICTION/REDIRECTS/STRATEGY) is a settings line folded globally. Package + edge
     // names are lower-cased for matching; the package's RAW line (version + any restriction) is kept for the
     // fingerprint so a version OR restriction change flips it.
-    private static LockModel? ParseLock(string path)
+    private static LockModel? ReadLockModel(string path)
     {
-        string[] lines;
         try
         {
-            lines = File.ReadAllLines(path);
+            return ParseLock(File.ReadAllLines(path));
         }
         catch (IOException)
         {
             return null;
         }
+    }
 
+    internal static LockModel ParseLock(string[] lines)
+    {
         var groups = new Dictionary<string, Dictionary<string, LockPackage>>(StringComparer.OrdinalIgnoreCase)
         {
             [MainGroup] = new(StringComparer.Ordinal),
@@ -229,18 +264,20 @@ internal static class PaketClosure
     // Parse paket.dependencies. `nuget <Name> …` lines are the per-group direct declarations (kept raw so a
     // version/flag change flips that package's contribution); `group <name>` switches the current group;
     // everything else (source / framework / redirects / comments) is a global settings line.
-    private static DepsModel? ParseDeps(string path)
+    private static DepsModel? ReadDepsModel(string path)
     {
-        string[] lines;
         try
         {
-            lines = File.ReadAllLines(path);
+            return ParseDeps(File.ReadAllLines(path));
         }
         catch (IOException)
         {
             return null;
         }
+    }
 
+    internal static DepsModel ParseDeps(string[] lines)
+    {
         var groups = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase)
         {
             [MainGroup] = new(StringComparer.Ordinal),
@@ -277,20 +314,10 @@ internal static class PaketClosure
     // The project's direct package references per group. `group <name>` switches group; blank/comment lines are
     // skipped; otherwise the first token is the package name (the `redirects: force`-style suffix is ignored —
     // a suffix-only change is still caught because BuildInputFingerprint hashes the paket.references file whole).
-    private static Dictionary<string, List<string>> ParseReferences(string path)
+    internal static Dictionary<string, List<string>> ParseReferences(string[] lines)
     {
         var result = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
         var current = MainGroup;
-        string[] lines;
-        try
-        {
-            lines = File.ReadAllLines(path);
-        }
-        catch (IOException)
-        {
-            return result;
-        }
-
         foreach (var raw in lines)
         {
             var trimmed = raw.Trim();

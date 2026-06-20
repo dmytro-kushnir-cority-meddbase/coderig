@@ -41,6 +41,12 @@ internal static class IndexCommands
             Description =
                 "Reuse cached design-time build results for projects whose inputs are unchanged (skips the dominant build phase).",
         };
+        var verifyBuildCache = new Option<bool>("--verify-build-cache")
+        {
+            Description =
+                "Guardrail: build EVERY project (ignore cache hits) and diff the fresh result against the cached one, "
+                + "reporting any mismatch — proves the fingerprint captures every build input before the cache is trusted.",
+        };
 
         var cmd = new Command(name: "index", description: "Index a solution/project into a .rig store.")
         {
@@ -54,6 +60,7 @@ internal static class IndexCommands
             noGraph,
             time,
             reuseBuildCache,
+            verifyBuildCache,
         };
 
         cmd.SetAction(pr =>
@@ -72,6 +79,7 @@ internal static class IndexCommands
                         noGraph: pr.GetValue(noGraph),
                         time: pr.GetValue(time),
                         reuseBuildCache: pr.GetValue(reuseBuildCache),
+                        verifyBuildCache: pr.GetValue(verifyBuildCache),
                         output: output,
                         error: error,
                         workingDirectory: workingDirectory
@@ -92,6 +100,7 @@ internal static class IndexCommands
         bool noGraph,
         bool time,
         bool reuseBuildCache,
+        bool verifyBuildCache,
         TextWriter output,
         TextWriter error,
         string workingDirectory
@@ -99,7 +108,8 @@ internal static class IndexCommands
     {
         var timings = time ? new PhaseTimings() : null;
         // Design-time-build cache lives outside the per-commit store dir so it's shared across indexes.
-        var buildCacheDir = reuseBuildCache ? Path.Combine(StoreLayout.RigDir(workingDirectory), "dtb-cache") : null;
+        // --verify-build-cache also needs the cache dir (it diffs against the stored sidecars + refreshes them).
+        var buildCacheDir = reuseBuildCache || verifyBuildCache ? Path.Combine(StoreLayout.RigDir(workingDirectory), "dtb-cache") : null;
         // --from <csproj>: index only the transitive ProjectReference closure of the entry project
         // (minus test projects) in ONE cross-project Roslyn workspace — skips every out-of-closure
         // test/tool project before its design-time build runs. The closure is written to
@@ -172,7 +182,8 @@ internal static class IndexCommands
                 // them back in.
                 excludeTests: !includeTests,
                 timings: timings,
-                buildCacheDir: buildCacheDir
+                buildCacheDir: buildCacheDir,
+                verifyBuildCache: verifyBuildCache
             );
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException)
@@ -314,7 +325,7 @@ internal static class IndexCommands
 
         output.WriteLine($"  {"total", -20} {FormatElapsed(TimeSpan.FromSeconds(total)), 8}  100.0%");
     }
-    
+
     // Build the derived call-graph views (call_edges + dispatch_edges) + the EP-site table into the store at
     // dbPath. Shared by the standalone `graph` command and the tail of `index` (so a freshly-indexed store is
     // query-ready on the fast SQL path without a manual follow-up). Idempotent — rerun any time, no rescan.
@@ -423,15 +434,10 @@ internal static class IndexCommands
         elapsed.TotalMinutes >= 1 ? $"{(int)elapsed.TotalMinutes}m{elapsed.Seconds:00}s" : $"{elapsed.TotalSeconds:0.0}s";
 
     private static string ComputeIdentity(string solutionPath) =>
-        Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(solutionPath)))
-        )[..16];
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(solutionPath))))[..16];
 
     // The indented-JSON sidecar write shared by `index --from` (relevant-projects.json) and `mine`
     // (reachable-projects.json).
     private static void WriteJsonSidecar(string path, object data) =>
-        File.WriteAllText(
-            path: path,
-            contents: JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true })
-        );
+        File.WriteAllText(path: path, contents: JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
 }

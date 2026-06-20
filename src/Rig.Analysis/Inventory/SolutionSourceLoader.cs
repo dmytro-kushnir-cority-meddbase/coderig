@@ -49,7 +49,9 @@ internal static class SolutionSourceLoader
         // wire-generators, and the fused compile+read pass. Null = no timing.
         PhaseTimings? timings = null,
         // Directory for the design-time-build cache (rig index --reuse-build-cache). Null = disabled.
-        string? buildCacheDir = null
+        string? buildCacheDir = null,
+        // --verify-build-cache: build everything ignoring hits and diff fresh vs cached, reporting mismatches.
+        bool verifyBuildCache = false
     )
     {
         var maxParallelism = Math.Max(val1: 1, val2: parallelism ?? DefaultParallelism);
@@ -68,7 +70,17 @@ internal static class SolutionSourceLoader
         // DLLs rather than re-evaluating the source .csproj files.
         ReportProgress(progress, "Loading solution");
         var workspace = await Task.Run(
-            () => BuildWorkspace(solutionPath, progress, scopeProjectPaths, maxParallelism, excludeTests, timings, buildCacheDir),
+            () =>
+                BuildWorkspace(
+                    solutionPath,
+                    progress,
+                    scopeProjectPaths,
+                    maxParallelism,
+                    excludeTests,
+                    timings,
+                    buildCacheDir,
+                    verifyBuildCache
+                ),
             cancellationToken
         );
         // BuildWorkspace records the finer "design-time-builds" (wall-clock) + "workspace-assembly"
@@ -194,7 +206,10 @@ internal static class SolutionSourceLoader
         int parallelism,
         bool excludeTests,
         PhaseTimings? timings = null,
-        string? buildCacheDir = null
+        string? buildCacheDir = null,
+        // --verify-build-cache: build EVERY project (ignore hits) and diff fresh vs cached ProjectBuildInfo,
+        // reporting mismatches. The completeness guardrail; requires buildCacheDir to be set.
+        bool verifyBuildCache = false
     )
     {
         var logWriter = progress is null ? null : new ProgressLogWriter(progress);
@@ -206,24 +221,65 @@ internal static class SolutionSourceLoader
         var cacheHits = 0;
         var cacheMisses = 0;
 
+        // --verify-build-cache tallies: a project a HIT would have served whose fresh build MATCHED the cached
+        // output, one that MISMATCHED (a latent stale-hit — the fingerprint is under-specified), and one with
+        // no matching sidecar to check against (cold/changed — nothing to verify this run).
+        var verifyMatches = 0;
+        var verifyMismatches = 0;
+        var verifyNoBaseline = 0;
+
         // Per project: fingerprint → cache hit (skip the build) or miss (build, convert, store). With the
         // cache off it's just build + convert. The fingerprint reads no file contents (see
         // BuildInputFingerprint), so this is cheap relative to the build it may skip.
+        // Functional-core/imperative-shell over the design-time-build cache, per project:
+        //   PREPARE (impure): compute the input fingerprint (Gather→Of) + read the sidecar (Load).
+        //   DECIDE  (pure):   BuildCacheDecision.Decide — hit (replay) or miss (rebuild under this fingerprint).
+        //   COMMIT  (impure): on hit return the cached output; on miss build (BuildChecked) and Store.
+        // Cache off → straight to BuildChecked, no fingerprint, no sidecar.
         ProjectBuildInfo? BuildOrLoad(string projectFilePath, Func<IAnalyzerResult?> build)
         {
-            if (
-                cache is not null
-                && cache.TryLoad(
-                    projectFilePath: projectFilePath,
-                    fingerprint: BuildInputFingerprint.Compute(projectFilePath),
-                    info: out var cached
-                )
-            )
+            if (cache is null)
             {
-                Interlocked.Increment(ref cacheHits);
-                return cached;
+                return BuildChecked(projectFilePath, build);
             }
 
+            // VERIFY: build EVERY project (never trust a hit) and diff fresh vs what a hit would have replayed.
+            // Catches an under-specified fingerprint that no unit test can — then refresh the sidecar.
+            if (verifyBuildCache)
+            {
+                return VerifyAndBuild(projectFilePath, build);
+            }
+
+            // PREPARE
+            var fingerprint = BuildInputFingerprint.Compute(projectFilePath);
+            var stored = cache.Load(projectFilePath);
+
+            // DECIDE
+            var decision = BuildCacheDecision.Decide(currentFingerprint: fingerprint, stored: stored);
+
+            // COMMIT
+            if (decision is BuildCacheDecision.Hit hit)
+            {
+                Interlocked.Increment(ref cacheHits);
+                return hit.Info;
+            }
+
+            var info = BuildChecked(projectFilePath, build);
+            if (info is null)
+            {
+                return null;
+            }
+
+            cache.Store(projectFilePath: projectFilePath, fingerprint: fingerprint, info: info);
+            Interlocked.Increment(ref cacheMisses);
+            return info;
+        }
+
+        // The build EFFECT (impure): run the design-time build, convert, and retry a degraded (0-source-file)
+        // build a bounded number of times before failing the index — a degraded build would drop the project's
+        // types and corrupt dependents. Shared by the cache-miss and cache-off paths.
+        ProjectBuildInfo? BuildChecked(string projectFilePath, Func<IAnalyzerResult?> build)
+        {
             var built = build();
             if (built is null)
             {
@@ -257,13 +313,43 @@ internal static class SolutionSourceLoader
                 );
             }
 
-            if (cache is not null)
+            return info;
+        }
+
+        // --verify-build-cache (impure): build fresh regardless, then — if a hit WOULD have been served — diff
+        // the fresh output against the cached one and tally match / mismatch; refresh the sidecar either way.
+        // A mismatch is the signal that matters: the fingerprint missed a build-affecting input (latent stale).
+        ProjectBuildInfo? VerifyAndBuild(string projectFilePath, Func<IAnalyzerResult?> build)
+        {
+            var fingerprint = BuildInputFingerprint.Compute(projectFilePath);
+            var stored = cache!.Load(projectFilePath);
+            var fresh = BuildChecked(projectFilePath, build);
+            if (fresh is null)
             {
-                cache.Store(projectFilePath: projectFilePath, fingerprint: BuildInputFingerprint.Compute(projectFilePath), info: info);
-                Interlocked.Increment(ref cacheMisses);
+                return null;
             }
 
-            return info;
+            var name = Path.GetFileNameWithoutExtension(projectFilePath);
+            if (BuildCacheDecision.Decide(currentFingerprint: fingerprint, stored: stored) is BuildCacheDecision.Hit hit)
+            {
+                var comparison = BuildInfoEquivalence.Compare(fresh: fresh, cached: hit.Info);
+                if (comparison.IsEquivalent)
+                {
+                    Interlocked.Increment(ref verifyMatches);
+                }
+                else
+                {
+                    Interlocked.Increment(ref verifyMismatches);
+                    ReportProgress(progress, $"BUILD-CACHE VERIFY MISMATCH: '{name}': {comparison.Summary}");
+                }
+            }
+            else
+            {
+                Interlocked.Increment(ref verifyNoBaseline); // no matching sidecar (cold/changed) — nothing to verify
+            }
+
+            cache.Store(projectFilePath: projectFilePath, fingerprint: fingerprint, info: fresh);
+            return fresh;
         }
 
         List<ProjectBuildInfo> results;
@@ -400,7 +486,18 @@ internal static class SolutionSourceLoader
             results = resultsBag.ToList();
         }
 
-        if (cache is not null)
+        if (cache is not null && verifyBuildCache)
+        {
+            var verdict =
+                verifyMismatches == 0
+                    ? "OK — fingerprint captures all build inputs"
+                    : "MISMATCH — fingerprint is under-specified (see above)";
+            ReportProgress(
+                progress,
+                $"build-cache verify: {verifyMatches} match, {verifyMismatches} MISMATCH, {verifyNoBaseline} no-baseline of {results.Count} project(s) — {verdict}"
+            );
+        }
+        else if (cache is not null)
         {
             ReportProgress(progress, $"build cache: {cacheHits} hit(s), {cacheMisses} miss(es) of {results.Count} project(s)");
         }
@@ -458,10 +555,7 @@ internal static class SolutionSourceLoader
             || name.Contains(".Tests.", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static AdhocWorkspace BuildWorkspaceFromResults(
-        IReadOnlyList<ProjectBuildInfo> projects,
-        int parallelism
-    )
+    private static AdhocWorkspace BuildWorkspaceFromResults(IReadOnlyList<ProjectBuildInfo> projects, int parallelism)
     {
         var workspace = new AdhocWorkspace();
 
@@ -676,9 +770,7 @@ internal static class SolutionSourceLoader
             i => infos[i] = BuildProjectInfo(projects[i])
         );
 
-        var solution = workspace.AddSolution(
-            SolutionInfo.Create(SolutionId.CreateNewId(), VersionStamp.Create(), projects: infos)
-        );
+        var solution = workspace.AddSolution(SolutionInfo.Create(SolutionId.CreateNewId(), VersionStamp.Create(), projects: infos));
 
         workspace.TryApplyChanges(solution);
         return workspace;

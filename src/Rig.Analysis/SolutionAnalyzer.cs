@@ -25,7 +25,9 @@ public static class SolutionAnalyzer
         // projections here; the loader records workspace-build / wire-generators / compile+read.
         PhaseTimings? timings = null,
         // Directory for the design-time-build cache (rig index --reuse-build-cache). Null = disabled.
-        string? buildCacheDir = null
+        string? buildCacheDir = null,
+        // --verify-build-cache: build everything ignoring hits and diff fresh vs cached, reporting mismatches.
+        bool verifyBuildCache = false
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
@@ -47,7 +49,8 @@ public static class SolutionAnalyzer
             parallelism: parallelism,
             excludeTests: excludeTests,
             timings: timings,
-            buildCacheDir: buildCacheDir
+            buildCacheDir: buildCacheDir,
+            verifyBuildCache: verifyBuildCache
         );
         // Start the extraction clock fresh after the loader's phases so it isn't double-counted.
         phase?.Restart();
