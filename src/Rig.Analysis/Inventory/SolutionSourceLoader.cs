@@ -165,14 +165,12 @@ internal static class SolutionSourceLoader
 
         return new SolutionSourceSet(
             projectResults.SelectMany(r => r.SourceFiles).OrderBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
-            projectResults.SelectMany(r => r.Sources).OrderBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase).ToList()
+            projectResults.SelectMany(r => r.Sources).OrderBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
+            Workspace: workspace
         );
 
         async ValueTask ProcessProject(Project project, CancellationToken ct)
         {
-            var current = Interlocked.Increment(ref analyzedProjects);
-            ReportProgress(progress, $"Analyzing project {current}/{csharpProjects.Length}: {project.Name}");
-
             // One reused stopwatch split across the three sub-steps (only when timing) — getCompilation is
             // the rebuild-prone one (its cost balloons if a shared dependency's compilation was evicted).
             var watch = perProjectCompile is null ? null : Stopwatch.StartNew();
@@ -203,6 +201,9 @@ internal static class SolutionSourceLoader
                 )
             );
             perProjectCompile?.Add((project.Name, compileSec, diagSec, watch?.Elapsed.TotalSeconds ?? 0));
+
+            var current = Interlocked.Increment(ref analyzedProjects);
+            ReportProgress(progress, $"Analyzed project {current}/{csharpProjects.Length}: {project.Name}");
         }
     }
 
