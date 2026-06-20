@@ -14,8 +14,13 @@
   the racy `obj/*.paket.props`), plus the global resolution settings. A bump invalidates only the projects
   that resolve it (measured on MedDBase: a leaf-package bump went `0 hit/136 miss` → `134 hit/2 miss`).
   Conservative: dependency-edge framework restrictions are not applied, so the closure is a superset of
-  Paket's resolution → can only over-invalidate, never replay stale. The general `rig.rules.json` config
-  design is still unbuilt (only Paket is scoped; other mechanisms still hash wholesale via the allowlist).
+  Paket's resolution → can only over-invalidate, never replay stale.
+- **Per-project Central Package Management invalidation (`CpmClosure`).** The same scoping for the NuGet
+  central version list: `Directory.Packages.props` removed from the wholesale ancestor walk, folded per
+  project (referenced `<PackageVersion>`s + the props' global part). See "Per-project scoping … CPM" below.
+  The general `rig.rules.json` config design is still unbuilt, but both central version lists (Paket + CPM)
+  are now scoped; the remaining allowlist entries (`Directory.Build.props`, `packages.config`, nuget.config)
+  are either correctly global or classic-NuGet wholesale.
 - **Functional core / imperative shell.** The correctness-bearing logic is now pure and unit-tested without a
   filesystem: `BuildInputFingerprint.Of(BuildInputs)` (gathered by the impure `Gather`), `PaketClosure.Material`
   / `.ComputeMaterial(text)`, and the hit/miss verdict `BuildCacheDecision.Decide(fp, stored)`.
@@ -117,30 +122,36 @@ the fingerprint — incl. the new per-project Paket scoping — captures every c
 sound on MedDBase.** Caveat: verify can't distinguish a nondeterministic build from a fingerprint gap (both
 show as a diff), so a small, non-reproducing `References ±N` with no input change reads as build flakiness.
 
-## Extending the per-project scoping: CPM vs Directory.Build.props
-Can the PaketClosure technique (scope a central version list per project so a bump invalidates only the
-projects that resolve it) apply to the other dependency mechanisms in the allowlist?
+## Per-project scoping of the other central version list: CPM (shipped) vs Directory.Build.props (no)
+The PaketClosure technique (scope a central version list per project so a bump invalidates only the projects
+that resolve it) was applied to the other mechanisms in the allowlist:
 
-- **`Directory.Packages.props` (Central Package Management) — YES, direct analog, feasible.** It's the NuGet
-  equivalent of `paket.lock`: `<PackageVersion Include="X" Version=".."/>` centrally, `<PackageReference
-  Include="X"/>` (no version) per project. Today it's hashed WHOLESALE into every project under it, so one
-  `<PackageVersion>` bump invalidates all — the exact problem PaketClosure fixed for Paket. Scoping: parse the
-  props → package→version map; per project fold only the versions for packages it references. SIMPLER than
-  Paket in the common case — no transitive walk needed, because CPM versions only the project's DIRECT
-  `<PackageReference>`s; transitive versions are resolved by NuGet (in the racy `obj/project.assets.json`, not
-  the props). Two caveats: (1) `<GlobalPackageReference>` applies to all projects → fold globally; (2) if
-  `CentralPackageTransitivePinningEnabled` is on, `<PackageVersion>` governs transitive deps too → you'd need
-  the closure (assets.json, racy) → fall back to wholesale (detect the flag). **MedDBase reality:** CPM is used
-  ONLY in `src/audits/` (its own `Directory.Packages.props`, 30 `<PackageVersion>`, no transitive pinning, no
-  `<GlobalPackageReference>`), and that subtree is NOT in the `MedDBase.Site` `--from` closure rig indexes — so
-  the win is ~zero for the indexed set today. Worth doing only if/when a CPM subtree enters the indexed scope.
+- **`Directory.Packages.props` (Central Package Management) — SHIPPED 2026-06-20 (`CpmClosure`).** It's the
+  NuGet equivalent of `paket.lock`: `<PackageVersion Include="X" Version=".."/>` centrally, version-LESS
+  `<PackageReference Include="X"/>` per project. It used to be hashed WHOLESALE into every project under it, so
+  one `<PackageVersion>` bump invalidated all — the exact problem PaketClosure fixed for Paket. Now removed
+  from `AncestorConfigFiles` and folded PER PROJECT: `CpmClosure` parses the props into a package→version map
+  + a "global blob" (everything that ISN'T a `<PackageVersion>` — properties, imports, `<GlobalPackageReference>`),
+  reads the project's referenced package names from its csproj (+ ancestor `Directory.Build.props`), and folds
+  only the referenced versions + the global blob. SIMPLER than Paket — no transitive walk, because CPM versions
+  only a project's DIRECT references (transitive versions are NuGet-resolved into the racy `obj/project.assets.json`,
+  which we never read). Conservative fallbacks: `<CentralPackageTransitivePinningEnabled>` (versions govern
+  transitive deps too → fold ALL versions) and any unparseable csproj/props (fold all). **MedDBase reality:**
+  CPM is used ONLY in `src/audits/` (30 `<PackageVersion>`, no transitive pinning), which isn't in the
+  `MedDBase.Site` `--from` closure rig indexes — so the win is ~zero for the indexed set today; built for
+  correctness + other repos / future scopes. Tests: `CpmClosureTests`.
 
-- **`Directory.Build.props` / `.targets` — NO, correctly global (leave as-is).** It's arbitrary MSBuild
-  (properties, items, imports, targets), not a version list — a change can affect any project under it in
-  ways not tied to a package, so there's no sound per-package scoping. It IS already scoped by DIRECTORY
-  LOCALITY via the ancestor walk: a project only folds the `Directory.Build.props` files in ITS ancestor
-  chain, so a leaf-subtree props only invalidates that subtree; only a repo-ROOT one invalidates everyone,
-  correctly (MedDBase's root sets `LangVersion`, `Deterministic`, … — genuinely global to every compile).
+- **`Directory.Build.props` / `.targets` — NO, correctly global (left as-is in the allowlist).** It's arbitrary
+  MSBuild (properties, items, imports, targets), not a version list — a change can affect any project under it
+  in ways not tied to a package, so there's no sound per-package scoping. It IS already scoped by DIRECTORY
+  LOCALITY via the ancestor walk: a project only folds the `Directory.Build.props` files in ITS ancestor chain,
+  so a leaf-subtree props only invalidates that subtree; only a repo-ROOT one invalidates everyone, correctly
+  (MedDBase's root sets `LangVersion`, `Deterministic`, … — genuinely global to every compile).
+
+> **One-time invalidation:** removing `Directory.Packages.props` from the wholesale ancestor walk drops its
+> per-dir absent-markers from the hash, so EVERY project's fingerprint shifts once — the next index after this
+> change is a full cold rebuild that repopulates the cache (then stable). Same one-time cost the Paket scoping
+> already incurred. Expected; it's a cache.
 
 ### Phasing (general config — still planned; Paket already scoped via PaketClosure)
 1. Extract allowlist → `BuildCacheConfig` (current defaults; no behaviour change).

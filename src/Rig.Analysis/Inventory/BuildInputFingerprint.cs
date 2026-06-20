@@ -29,11 +29,16 @@ internal static class BuildInputFingerprint
     // rewrite them (only `paket install`/`update` or a manual edit does) — so stat is stable and never
     // races the build's obj output.
     //
-    // The root paket.lock + paket.dependencies are deliberately NOT here: hashing them WHOLESALE keyed every
-    // project to the entire dependency graph, so one version bump invalidated all ~300 projects. They are now
-    // folded PER PROJECT via PaketClosure (only the project's transitive closure + the global resolution
-    // settings), so a bump invalidates exactly the projects that resolve the changed package. paket.references
-    // stays here (per-project already) so a binding-redirect/suffix-only edit PaketClosure ignores still flips.
+    // The root paket.lock + paket.dependencies are deliberately NOT here, nor is Directory.Packages.props:
+    // hashing those central version lists WHOLESALE keyed every project to the entire list, so one version
+    // bump invalidated all ~300 projects. They are now folded PER PROJECT — Paket via PaketClosure (the
+    // project's transitive closure + global resolution settings), Central Package Management via CpmClosure
+    // (the central versions for packages the project references + the props' global part) — so a bump
+    // invalidates exactly the projects that resolve the changed package. paket.references stays here
+    // (per-project already) so a binding-redirect/suffix-only edit PaketClosure ignores still flips.
+    // Directory.Build.props/.targets STAY here: they're arbitrary MSBuild, not version lists, so they're
+    // correctly global — already scoped by directory locality (a project only folds the ones in ITS ancestor
+    // chain, so a leaf-subtree props invalidates only that subtree; only a repo-root one invalidates all).
     //
     // This is deliberately an ALLOWLIST: a version pinned by a mechanism not listed here ("god knows what
     // else") won't flip the key. That's why --reuse-build-cache is opt-in — after an exotic dependency
@@ -42,7 +47,6 @@ internal static class BuildInputFingerprint
     [
         "Directory.Build.props",
         "Directory.Build.targets",
-        "Directory.Packages.props",
         "global.json",
         "paket.references",
         "packages.config",
@@ -55,13 +59,15 @@ internal static class BuildInputFingerprint
     public readonly record struct FileFold(string Path, string? Sha256);
 
     // Everything the design-time-build fingerprint is a function of, materialised off disk by Gather so Of can
-    // fold it purely: the project file, the ancestor manifest walk (in walk order), the paket closure material
-    // (null when the project isn't paket-managed), and the sorted *.cs path set. The functional-core boundary —
-    // a recompute is Of(Gather(path)); the pure half is independently testable and reused by --verify-build-cache.
+    // fold it purely: the project file, the ancestor manifest walk (in walk order), the per-project Paket and
+    // CPM closure materials (each null when the project isn't managed by that mechanism), and the sorted *.cs
+    // path set. The functional-core boundary — a recompute is Of(Gather(path)); the pure half is independently
+    // testable and reused by --verify-build-cache.
     public sealed record BuildInputs(
         FileFold ProjectFile,
         IReadOnlyList<FileFold> ConfigFiles,
         string? PaketClosureMaterial,
+        string? CpmClosureMaterial,
         IReadOnlyList<string> CsPaths
     );
 
@@ -82,6 +88,13 @@ internal static class BuildInputFingerprint
         if (inputs.PaketClosureMaterial is not null)
         {
             hash.AppendData(Encoding.UTF8.GetBytes(inputs.PaketClosureMaterial));
+        }
+
+        // Central Package Management's per-project closure (CpmClosure) — the central versions for packages
+        // this project references + the props' global part, same per-project scoping as Paket.
+        if (inputs.CpmClosureMaterial is not null)
+        {
+            hash.AppendData(Encoding.UTF8.GetBytes(inputs.CpmClosureMaterial));
         }
 
         // The SET of *.cs paths (detects add / remove / rename). Paths only, no content — body edits are
@@ -124,6 +137,7 @@ internal static class BuildInputFingerprint
             ProjectFile: Fold(fullProjectPath),
             ConfigFiles: configFiles,
             PaketClosureMaterial: PaketClosure.Compute(projectDir),
+            CpmClosureMaterial: CpmClosure.Compute(fullProjectPath),
             CsPaths: csFiles
         );
     }

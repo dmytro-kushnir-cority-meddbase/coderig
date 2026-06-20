@@ -49,6 +49,7 @@ public sealed class DtbFunctionalCoreTests
             .Of(baseline with { ConfigFiles = [new("Directory.Build.props", "CFG2"), new("global.json", null)] })
             .ShouldNotBe(BuildInputFingerprint.Of(baseline));
         BuildInputFingerprint.Of(baseline with { PaketClosureMaterial = "different" }).ShouldNotBe(BuildInputFingerprint.Of(baseline));
+        BuildInputFingerprint.Of(baseline with { CpmClosureMaterial = "cpm-different" }).ShouldNotBe(BuildInputFingerprint.Of(baseline));
         BuildInputFingerprint.Of(baseline with { CsPaths = ["A.cs"] }).ShouldNotBe(BuildInputFingerprint.Of(baseline));
     }
 
@@ -156,6 +157,7 @@ public sealed class DtbFunctionalCoreTests
                 new BuildInputFingerprint.FileFold("global.json", null),
             ],
             PaketClosureMaterial: "paket-lock-settings\nsource x\n",
+            CpmClosureMaterial: null,
             CsPaths: ["A.cs", "B.cs"]
         );
 
