@@ -149,7 +149,7 @@ internal static class TreeCommand
 
         // One merged load for the whole command; --raw zeroes the graph-shaping + render rules (the exact
         // unfiltered tree), else they're applied. Render rules are presentation-only — never affect reach.
-        var rules = RuleSet.Load(workingDirectory, extraRules);
+        var rules = RuleSetLoader.Load(workingDirectory, extraRules);
         var shaped = raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
         var renderRules = raw ? FactRenderRules.Empty : rules.Render;
 

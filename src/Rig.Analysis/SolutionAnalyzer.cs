@@ -8,11 +8,8 @@ namespace Rig.Analysis;
 
 public static class SolutionAnalyzer
 {
-    public static async Task<AnalysisResult> AnalyzeAsync(
-        string solutionPath,
-        CancellationToken cancellationToken = default,
+    public static async Task<AnalysisResult> AnalyzeAsync(string solutionPath, RuleSet rules, CancellationToken cancellationToken = default,
         Action<string>? progress = null,
-        IReadOnlyList<string>? extraRulesPaths = null,
         string? projectIdentity = null,
         // When non-null, restrict the solution index to this set of project paths (the entry-project
         // closure from `rig index --from`); still ONE cross-project Roslyn workspace / run.
@@ -32,12 +29,6 @@ public static class SolutionAnalyzer
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
         var phase = timings is null ? null : Stopwatch.StartNew();
-        progress?.Invoke("Loading rules");
-        var rules = AnalysisRuleSet.LoadForSolution(solutionFullPath, extraRulesPaths);
-        if (phase is not null)
-        {
-            timings!.Record("rules-load", phase.Elapsed);
-        }
 
         progress?.Invoke("Loading solution");
         var sourceSet = await SolutionSourceLoader.LoadAsync(
@@ -54,8 +45,6 @@ public static class SolutionAnalyzer
         );
         // Start the extraction clock fresh after the loader's phases so it isn't double-counted.
         phase?.Restart();
-        progress?.Invoke("Merging project rules");
-        rules = rules.MergeWithProjectDirectories(sourceSet.ProjectDirectories);
         var sources = sourceSet.IndexedSources;
 
         progress?.Invoke($"Extracting observations from {sources.Count} indexed source files");
@@ -151,7 +140,7 @@ public static class SolutionAnalyzer
         return current == 1 || current == total || current % 100 == 0;
     }
 
-    private static SourceExtractionResult ExtractSource(SourceModel source, AnalysisRuleSet rules)
+    private static SourceExtractionResult ExtractSource(SourceModel source, RuleSet rules)
     {
         var facts = FactExtractor.Extract(source);
 

@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "index MedDBase (--time)": {
+      "commandName": "Project",
+      "commandLineArgs": "index \"C:\\Git\\meddbase-main-application\\MedDBase.slnx\" --from \"C:\\Git\\meddbase-main-application\\src\\main\\MedDBase.Site\\MedDBase\\MedDBase.csproj\" --time",
+      "workingDirectory": "C:\\Git\\meddbase-analysis"
+    }
+  }
+}

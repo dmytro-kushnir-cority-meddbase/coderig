@@ -253,7 +253,7 @@ internal static class EntryPointContext
             return;
         }
 
-        var sites = await DeriveEpSiteKindAsync(context, RuleSet.Load(workingDirectory));
+        var sites = await DeriveEpSiteKindAsync(context, RuleSetLoader.Load(workingDirectory));
         await EntryPointSiteStore.PersistAsync(context, sites, RulesFingerprint.Compute(workingDirectory, []));
     }
 

@@ -5,18 +5,17 @@ namespace Rig.Analysis.Rules;
 
 // A content hash of the EFFECTIVE merged rule set (builtin-rules.json + global ~/.rig + local
 // rig.rules.json + any --rules files) for use in query-cache keys: any rule edit, or adding/removing a
-// layer, changes the hash → the cached artifact misses → recompute. AnalysisRuleSet.LoadForSolution
-// already resolves exactly which files the cascade loaded (LoadedRulesPaths), so this hashes each of
-// those by path + content — no need to re-implement the resolution.
+// layer, changes the hash → the cached artifact misses → recompute. RuleSetLoader.ResolveLoadedPaths
+// already resolves exactly which files the cascade loaded, so this hashes each of those by path +
+// content — no need to re-implement the resolution.
 public static class RulesFingerprint
 {
     public static string Compute(string workingDirectory, IReadOnlyList<string>? extraRulesPaths = null)
     {
-        var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
-        var ruleSet = AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths);
+        var loadedPaths = RuleSetLoader.ResolveLoadedPaths(workingDirectory, extraRulesPaths);
 
         using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        foreach (var path in ruleSet.LoadedRulesPaths.OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+        foreach (var path in loadedPaths.OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
         {
             sha.AppendData(Encoding.UTF8.GetBytes(path));
             sha.AppendData([0]);

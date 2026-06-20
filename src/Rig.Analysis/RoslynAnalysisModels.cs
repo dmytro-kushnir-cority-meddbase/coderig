@@ -7,8 +7,7 @@ internal sealed record SourceFileClassification(string Status, string Confidence
 
 internal sealed record SolutionSourceSet(
     IReadOnlyList<SourceFileInfo> SourceFiles,
-    IReadOnlyList<SourceModel> IndexedSources,
-    IReadOnlyList<string> ProjectDirectories
+    IReadOnlyList<SourceModel> IndexedSources
 );
 
 internal sealed record SourceExtractionResult(

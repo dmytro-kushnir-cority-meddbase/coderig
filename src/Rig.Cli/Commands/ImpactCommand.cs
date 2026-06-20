@@ -130,7 +130,7 @@ internal static class ImpactCommand
         var mode = CommonOptions.Mode(async); // --async => walk handoff edges (reverse + forward), else sync-cut
         // One rule load for the whole run — rules are working-dir-scoped, so the SAME set serves both stores;
         // threaded into every helper below.
-        var rules = RuleSet.Load(workingDirectory, extraRules);
+        var rules = RuleSetLoader.Load(workingDirectory, extraRules);
 
         // Resolve BOTH per-commit stores up front (sha / short-sha / store-id → store dir). ResolveReadStoreDir
         // throws StoreRefNotFoundException for an unmatched ref → CommandGuard lists what's indexed, so past

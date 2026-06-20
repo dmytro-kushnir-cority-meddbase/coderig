@@ -1,13 +1,13 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Rig.Analysis.Rules;
 using Rig.Domain.Data;
+using RuleSet = Rig.Domain.Data.RuleSet;
 
 namespace Rig.Analysis.Extraction;
 
 internal static class DiRegistrationExtractor
 {
-    public static IEnumerable<DiRegistrationInfo> FindDiRegistrations(SourceModel source, AnalysisRuleSet rules)
+    public static IEnumerable<DiRegistrationInfo> FindDiRegistrations(SourceModel source, RuleSet rules)
     {
         foreach (var invocation in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {

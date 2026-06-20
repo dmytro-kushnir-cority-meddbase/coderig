@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Rig.Analysis.Inventory;
 using Rig.Analysis.Rules;
+using Rig.Domain.Data;
 using Shouldly;
 
 namespace Rig.Tests.Analysis;
@@ -104,7 +105,7 @@ public sealed class SourceFileClassifierTests
         classification.Evidence.ShouldBe("src/Rig/Program.cs");
     }
 
-    private static AnalysisRuleSet Rules(string json)
+    private static RuleSet Rules(string json)
     {
         var document = JsonSerializer.Deserialize<AnalysisRulesDocument>(
             json,
@@ -112,7 +113,7 @@ public sealed class SourceFileClassifierTests
         );
         document.ShouldNotBeNull();
 
-        return new AnalysisRuleSet
+        return new RuleSet
         {
             FileInclude = document.Files?.Include?.Select(rule => rule.ToFileRule("include")).ToArray() ?? [],
             FileExclude = document.Files?.Exclude?.Select(rule => rule.ToFileRule("exclude")).ToArray() ?? [],

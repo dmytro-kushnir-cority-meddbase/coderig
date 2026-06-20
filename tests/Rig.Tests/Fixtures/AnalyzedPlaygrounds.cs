@@ -1,4 +1,5 @@
 using Rig.Analysis;
+using Rig.Analysis.Rules;
 using Rig.Domain.Data;
 
 namespace Rig.Tests.Fixtures;
@@ -28,7 +29,8 @@ public sealed class AnalyzedPlaygrounds : IDisposable
                     {
                         _owned.Add(playground);
                     }
-                    var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath);
+                    var rules = RuleSetLoader.Load(playground.WorkingDirectory);
+                    var result = await SolutionAnalyzer.AnalyzeAsync(playground.SolutionPath, rules);
                     return new AnalyzedPlayground(result, playground.WorkingDirectory, playground.SolutionPath);
                 });
                 _cache[key] = lazy;

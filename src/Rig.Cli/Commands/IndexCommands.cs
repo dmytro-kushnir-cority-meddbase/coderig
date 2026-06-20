@@ -9,6 +9,7 @@ using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Git;
 using Rig.Domain.Data;
+using Rig.Domain.Functions;
 using Rig.Storage.Queries;
 using Rig.Storage.Storage;
 using static Rig.Cli.EntryPoints.EntryPointContext;
@@ -145,6 +146,8 @@ internal static class IndexCommands
             }
         }
 
+        var rules = RuleSetLoader.Load(target);
+
         // Capture provenance + the destination store-id up front, so the store location and commit can be
         // announced BEFORE the (long) analysis — useful when monitoring a re-index. The commit IS the
         // store-id (docs/design-impact-behavioral-diff.md §4.4-4.5).
@@ -188,8 +191,8 @@ internal static class IndexCommands
 
             result = await SolutionAnalyzer.AnalyzeAsync(
                 target,
+                rules,
                 progress: message => output.WriteLine($"Progress: {message}"),
-                extraRulesPaths: extraRules.Count > 0 ? extraRules : null,
                 projectIdentity: identity,
                 scopeProjectPaths: scopeProjectPaths,
                 parallelism: parallelism,
@@ -311,7 +314,7 @@ internal static class IndexCommands
         {
             output.WriteLine("Progress: Building call-graph views");
             var graphWatch = Stopwatch.StartNew();
-            await MaterializeGraphAsync(dbPath: finalDbPath, workingDirectory: workingDirectory, output: output);
+            await MaterializeGraphAsync(finalDbPath, rules, result, workingDirectory, output);
             graphWatch.Stop();
             timings?.Record("graph", graphWatch.Elapsed);
         }
@@ -492,8 +495,7 @@ internal static class IndexCommands
     }
 
     // Allocation throughput: bytes allocated during the phase / phase seconds, formatted as a byte rate.
-    private static string FormatRate(long bytes, double seconds) =>
-        bytes < 0 || seconds <= 0 ? "n/a" : FormatBytes((long)(bytes / seconds)) + "/s";
+    private static string FormatRate(long bytes, double seconds) => bytes < 0 || seconds <= 0 ? "n/a" : FormatBytes((long)(bytes / seconds)) + "/s";
 
     private static string FormatBytes(long bytes) =>
         bytes < 0 ? "n/a"
@@ -507,22 +509,25 @@ internal static class IndexCommands
     private static string CsvMb(long bytes) => bytes < 0 ? "" : Mb(bytes).ToString("0.0", CultureInfo.InvariantCulture);
 
     // Build the derived call-graph views (call_edges + dispatch_edges) + the EP-site table into the store at
-    // dbPath. Shared by the standalone `graph` command and the tail of `index` (so a freshly-indexed store is
-    // query-ready on the fast SQL path without a manual follow-up). Idempotent — rerun any time, no rescan.
-    private static async Task MaterializeGraphAsync(string dbPath, string workingDirectory, TextWriter output)
+    // dbPath, using the already-loaded rules passed in by the caller (no second rule load). Run as the tail of
+    // `index` so a freshly-indexed store is query-ready on the fast SQL path without a manual follow-up.
+    // Idempotent — rerun any time, no rescan.
+    private static async Task MaterializeGraphAsync(string dbPath, RuleSet rules, AnalysisResult result, string workingDirectory, TextWriter output)
     {
         var stopwatch = Stopwatch.StartNew();
         await using var context = new RigDbContext(dbPath);
-        // Classification rules flow in here so call_edges is written with Kind="handoff" baked in — the
-        // single place classification persists, read back by every SQL query path. Generic-factory rules
-        // flow in too so the factory monomorphization is baked into call_edges (so the SQL bounding walk
-        // sees the rewritten edges the in-memory traversal does — no effect-path divergence).
-        var rules = RuleSet.Load(workingDirectory);
-        var stats = await GraphMaterializer.BuildAsync(
+        // Build the call graph from the facts we just extracted (in memory) instead of re-reading the whole
+        // fact store back off disk — FactGraphProjection.FromAnalysis is the field-for-field equivalent of
+        // Reads.LoadFactGraphAsync. Classification rules flow in here so call_edges is written with
+        // Kind="handoff" baked in; generic-factory rules flow to BuildFromGraphAsync so the factory
+        // monomorphization is baked into call_edges (so the SQL bounding walk sees the rewritten edges the
+        // in-memory traversal does — no effect-path divergence).
+        var graph = FactGraphProjection.FromAnalysis(result, rules.Handoff);
+        var stats = await GraphMaterializer.BuildFromGraphAsync(
             context,
-            rules.Handoff.ToArray(),
-            message => output.WriteLine($"Progress: {message}"),
-            factoryRules: rules.Factory
+            graph,
+            rules.Factory,
+            message => output.WriteLine($"Progress: {message}")
         );
         output.WriteLine(
             $"Graph: {stats.CallEdges} call edge(s), {stats.DispatchEdges} dispatch edge(s) "
@@ -533,6 +538,7 @@ internal static class IndexCommands
         // directly instead of re-deriving from the whole-store fact tables. No-op without deployments.json.
         await MaterializeEntryPointSitesAsync(context, workingDirectory);
     }
+
 
     // Transitive ProjectReference closure of an entry project, minus test projects — the build scope
     // for `rig index --from`. Parses the dependency graph (XML only, no MSBuild), BFS from the entry,

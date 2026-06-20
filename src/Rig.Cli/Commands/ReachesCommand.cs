@@ -86,7 +86,7 @@ internal static class ReachesCommand
         var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
         var mode = CommonOptions.Mode(async);
 
-        var rules = RuleSet.Load(workingDirectory, extraRules);
+        var rules = RuleSetLoader.Load(workingDirectory, extraRules);
         // --raw zeroes cut/context; reaches keeps Factory (it monomorphizes generic factories even under
         // --raw, a long-standing asymmetry vs path/tree/callers).
         var shaped = raw ? rules with { Cut = [], Context = [] } : rules;

@@ -103,7 +103,7 @@ internal static class CallersCommand
         // --raw bypasses shaping (the exact unfiltered reverse closure); else monomorphize factories + cut +
         // context, honoured symmetrically by the reverse traversal (a cut node yields no successors forward,
         // so it is never a predecessor in reverse).
-        var rules = RuleSet.Load(workingDirectory, extraRules);
+        var rules = RuleSetLoader.Load(workingDirectory, extraRules);
         var shaped = raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
 
         await using var context = OpenReadContext(workingDirectory, storeRef);

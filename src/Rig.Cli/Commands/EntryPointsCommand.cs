@@ -61,7 +61,7 @@ internal static class EntryPointsCommand
         var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
         var max = limit ?? int.MaxValue; // --limit absent => unbounded (this IS the listing)
 
-        var rules = RuleSet.Load(workingDirectory, extraRules);
+        var rules = RuleSetLoader.Load(workingDirectory, extraRules);
         await using var context = OpenReadContext(workingDirectory, storeRef);
 
         var epData = await Reads.LoadFactEntryPointDataAsync(context);

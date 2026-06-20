@@ -75,7 +75,7 @@ internal static class PathCommand
         var mode = CommonOptions.Mode(async);
         // --raw bypasses all shaping (the exact unfiltered plumbing); else monomorphize factories + cut +
         // context-narrow, honoured symmetrically by the reverse/forward traversal.
-        var rules = RuleSet.Load(workingDirectory, extraRules);
+        var rules = RuleSetLoader.Load(workingDirectory, extraRules);
         var shaped = raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
 
         await using var context = OpenReadContext(workingDirectory, storeRef);

@@ -31,7 +31,7 @@ public static class GraphMaterializer
 
     public static async Task<GraphStats> BuildAsync(
         RigDbContext context,
-        FactHandoffRule[]? handoffRules = null,
+        IReadOnlyList<FactHandoffRule>? handoffRules = null,
         Action<string>? progress = null,
         CancellationToken cancellationToken = default,
         IReadOnlyList<FactGenericFactoryRule>? factoryRules = null
@@ -42,7 +42,22 @@ public static class GraphMaterializer
         // table) so the persisted Kind="handoff" + HandoffDispatcher flow to every SQL reader; the
         // in-memory oracle classifies identically by being given the same rules.
         var graph = await Reads.LoadFactGraphAsync(context, handoffRules, cancellationToken);
+        return await BuildFromGraphAsync(context, graph, factoryRules, progress, cancellationToken);
+    }
 
+    // Materialize the derived tables from a graph ALREADY built in memory (FactGraphProjection.FromAnalysis at
+    // index time), so the graph phase skips re-reading the whole fact store off disk. The graph MUST already be
+    // handoff-classified — both FromAnalysis and LoadFactGraphAsync do this — this method only bakes the
+    // generic-factory rewrite and persists. `rig index` calls this with the facts it just extracted; the
+    // DB-loading BuildAsync overload above wraps it for callers that only have a store (a re-graph).
+    public static async Task<GraphStats> BuildFromGraphAsync(
+        RigDbContext context,
+        FactGraphData graph,
+        IReadOnlyList<FactGenericFactoryRule>? factoryRules = null,
+        Action<string>? progress = null,
+        CancellationToken cancellationToken = default
+    )
+    {
         // Bake generic-factory monomorphization into the persisted edges — the SAME RewriteGenericFactories
         // the in-memory traversal applies via ShapeGraph. This is the EDGE-CREATING shaping (it rewrites
         // `caller -> Factory<X>` to `caller -> X.Target`), so it MUST be in call_edges or the SQL bounding

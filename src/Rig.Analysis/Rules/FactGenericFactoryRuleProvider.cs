@@ -2,24 +2,12 @@ using Rig.Domain.Data;
 
 namespace Rig.Analysis.Rules;
 
-// Bridges the internal AnalysisRuleSet to Rig.Domain's FactGenericFactoryRule: loads the
-// `genericFactories` rule section (built-in + global ~/.rig + local rig.rules.json + --rules) and
-// projects it to the fact-layer rule the graph transform consumes. Same cascade + layering as the
-// render/handoff providers — rule data flows in from this layer; the transform lives in Domain.
-public static class FactGenericFactoryRuleProvider
+// Projects the merged `genericFactories` rule section to Rig.Domain's FactGenericFactoryRule the graph
+// transform consumes. Rule data flows in through RuleSetLoader; the transform lives in Domain.
+internal static class FactGenericFactoryRuleProvider
 {
-    public static IReadOnlyList<FactGenericFactoryRule> LoadForWorkingDirectory(
-        string workingDirectory,
-        IReadOnlyList<string>? extraRulesPaths = null
-    )
-    {
-        var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
-        return Project(AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths));
-    }
-
-    // Project off an already-merged rule set, so RuleSet.Load can project this slice without a second load.
-    internal static IReadOnlyList<FactGenericFactoryRule> Project(AnalysisRuleSet ruleSet) =>
-        ruleSet.GenericFactories.Select(Project).ToArray();
+    internal static IReadOnlyList<FactGenericFactoryRule> Project(AnalysisRulesDocument doc) =>
+        (doc.GenericFactories ?? []).Select(Project).ToArray();
 
     private static FactGenericFactoryRule Project(GenericFactoryRule rule) =>
         new(Method: rule.Method, ConstructArgIndex: rule.ConstructArgIndex, TargetMethod: rule.TargetMethod);

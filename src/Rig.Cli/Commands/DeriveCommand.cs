@@ -14,7 +14,7 @@ namespace Rig.Cli.Commands;
 
 // `rig derive` — the stage-2 pass over facts (no Roslyn): re-derives effects, page/action entry points, and
 // delegate/method-group handoff entry points from the reference index in a single command, one DB open, one
-// rule load. Effects and entry points are matched against the same AnalysisRuleSet JSON the Roslyn pass uses
+// rule load. Effects and entry points are matched against the same rig.rules.json the Roslyn pass uses
 // (detectors are data, not code). `--format tsv` emits full-fidelity rows for tooling.
 internal static class DeriveCommand
 {
@@ -68,7 +68,7 @@ internal static class DeriveCommand
         string? storeRef
     )
     {
-        var rules = RuleSet.Load(workingDirectory, extraRules);
+        var rules = RuleSetLoader.Load(workingDirectory, extraRules);
         await using var context = OpenReadContext(workingDirectory, storeRef);
 
         // Deployment attribution (opt-in: only when deployments.json sits next to .rig). Empty (no-op) when

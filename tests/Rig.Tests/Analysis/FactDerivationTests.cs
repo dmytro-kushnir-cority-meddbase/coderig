@@ -17,14 +17,15 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var result = playground.Result;
 
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
-        var rules = FactEntryPointRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
-        var entryPoints = FactEntryPointDeriver.Derive(FactProjection.EntryPointData(result), rules);
+        var rules = RuleSetLoader.Load(playground.WorkingDirectory, [rulesPath]);
+        var entryPoints = FactEntryPointDeriver.Derive(FactProjection.EntryPointData(result), rules.EntryPoints);
 
         var actionRoutes = entryPoints
             .Where(e => e.Kind == "action")
             .Select(e => e.Route)
             .OrderBy(r => r, StringComparer.Ordinal)
             .ToArray();
+        
         actionRoutes.ShouldBe(
             new[]
             {
@@ -63,8 +64,8 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var result = playground.Result;
 
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
-        var pageRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
-        var classRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var pageRules = RuleSetLoader.Load(playground.WorkingDirectory, [rulesPath]).EntryPoints;
+        var classRules = RuleSetLoader.Load(playground.WorkingDirectory, [rulesPath]).ClassInheritance;
         var entryPoints = FactEntryPointDeriver.Derive(FactProjection.EntryPointData(result), pageRules, classRules);
 
         entryPoints.ShouldContain(e => e.Kind == "page" && e.Route == "Account/Public/LegacyLogin");
@@ -79,8 +80,8 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var result = playground.Result;
 
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
-        var pageRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
-        var classRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var pageRules = RuleSetLoader.Load(playground.WorkingDirectory, [rulesPath]).EntryPoints;
+        var classRules = RuleSetLoader.Load(playground.WorkingDirectory, [rulesPath]).ClassInheritance;
         var entryPoints = FactEntryPointDeriver.Derive(FactProjection.EntryPointData(result), pageRules, classRules);
 
         var backend = entryPoints
@@ -473,11 +474,10 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var playground = await playgrounds.LegacyNet48Async();
         var result = playground.Result;
 
-        var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
-        var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var rules = RuleSetLoader.Load(playground.WorkingDirectory);
         var effects = FactEffectDeriver.Derive(
             FactProjection.Invocations(result),
-            rules,
+            rules.Effects,
             providerFilter: null,
             baseEdges: FactProjection.EntryPointData(result).BaseEdges
         );
@@ -510,11 +510,10 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var playground = await playgrounds.LegacyNet48Async();
         var result = playground.Result;
 
-        var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
-        var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var rules = RuleSetLoader.Load(playground.WorkingDirectory);
         var effects = FactEffectDeriver.Derive(
             FactProjection.Invocations(result),
-            rules,
+            rules.Effects,
             providerFilter: null,
             baseEdges: FactProjection.EntryPointData(result).BaseEdges
         );
@@ -546,7 +545,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var result = playground.Result;
 
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
-        var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var rules = RuleSetLoader.Load(playground.WorkingDirectory, [rulesPath]).Effects;
         var effects = FactEffectDeriver.Derive(
             FactProjection.Invocations(result),
             rules,
@@ -568,8 +567,8 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var result = playground.Result;
 
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
-        var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
-        var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var effectRules = RuleSetLoader.Load(playground.WorkingDirectory, [rulesPath]).Effects;
+        var observationRules = RuleSetLoader.Load(playground.WorkingDirectory, [rulesPath]).Observations;
         var epData = FactProjection.EntryPointData(result);
         var effects = FactEffectDeriver.Derive(
             FactProjection.Invocations(result),
@@ -598,7 +597,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var result = playground.Result;
 
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
-        var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var rules = RuleSetLoader.Load(playground.WorkingDirectory, [rulesPath]).Effects;
         var epData = FactProjection.EntryPointData(result);
         var effects = FactEffectDeriver.Derive(
             FactProjection.Invocations(result),
@@ -625,7 +624,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         var result = playground.Result;
 
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
-        var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var rules = RuleSetLoader.Load(playground.WorkingDirectory, [rulesPath]).Effects;
         var baseEdges = FactProjection.EntryPointData(result).BaseEdges;
         var effects = FactEffectDeriver.Derive(FactProjection.Invocations(result), rules, providerFilter: null, baseEdges: baseEdges);
 
@@ -678,7 +677,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         //     data-driven lock rule (no rule change). Ground truth: the explicit Monitor.Enter/Exit
         //     call in ExplicitMonitor derives the SAME effect, so synthetic and real paths agree.
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
-        var rules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var rules = RuleSetLoader.Load(playground.WorkingDirectory, [rulesPath]).Effects;
         var effects = FactEffectDeriver.Derive(FactProjection.Invocations(result), rules);
         var lockEffects = effects.Where(e => e.Provider == "lock").ToArray();
 
@@ -734,8 +733,8 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
         // --- Derivation: the soap effect inside the using(transaction) gets a transaction_spans_effect
         //     observation; the lock-wrapped soap (LockZoo.SubmitUnderLock) gets lock_held_across_effect.
         var rulesPath = Path.Combine(playground.WorkingDirectory, "rig.rules.json");
-        var effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
-        var observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory, [rulesPath]);
+        var effectRules = RuleSetLoader.Load(playground.WorkingDirectory, [rulesPath]).Effects;
+        var observationRules = RuleSetLoader.Load(playground.WorkingDirectory, [rulesPath]).Observations;
         var effects = FactEffectDeriver.Derive(
             FactProjection.Invocations(result),
             effectRules,

@@ -9,10 +9,10 @@ using Buildalyzer.Environment;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Diagnostics;
-using Rig.Analysis.Rules;
 using Rig.Domain.Data;
 using ProjectInfo = Microsoft.CodeAnalysis.ProjectInfo;
 using SolutionInfo = Microsoft.CodeAnalysis.SolutionInfo;
+using RuleSet = Rig.Domain.Data.RuleSet;
 
 namespace Rig.Analysis.Inventory;
 
@@ -31,7 +31,7 @@ internal static class SolutionSourceLoader
 
     public static async Task<SolutionSourceSet> LoadAsync(
         string solutionPath,
-        AnalysisRuleSet rules,
+        RuleSet rules,
         CancellationToken cancellationToken,
         Action<string>? progress = null,
         // When non-null, only projects whose normalised full path is in this set are built and
@@ -163,18 +163,9 @@ internal static class SolutionSourceLoader
             }
         }
 
-        var projectDirectories = csharpProjects
-            .Select(p => p.FilePath)
-            .Where(path => path is not null)
-            .Select(path => Path.GetDirectoryName(path) ?? string.Empty)
-            .Where(dir => dir.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
         return new SolutionSourceSet(
             projectResults.SelectMany(r => r.SourceFiles).OrderBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
-            projectResults.SelectMany(r => r.Sources).OrderBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase).ToList(),
-            projectDirectories
+            projectResults.SelectMany(r => r.Sources).OrderBy(s => s.FilePath, StringComparer.OrdinalIgnoreCase).ToList()
         );
 
         async ValueTask ProcessProject(Project project, CancellationToken ct)
@@ -986,7 +977,7 @@ internal static class SolutionSourceLoader
         string solutionPath,
         Project project,
         Compilation compilation,
-        AnalysisRuleSet rules,
+        RuleSet rules,
         CancellationToken cancellationToken
     )
     {

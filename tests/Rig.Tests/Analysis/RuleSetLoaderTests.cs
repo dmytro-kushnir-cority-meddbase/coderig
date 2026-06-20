@@ -3,7 +3,7 @@ using Shouldly;
 
 namespace Rig.Tests.Analysis;
 
-public sealed class AnalysisRuleSetTests
+public sealed class RuleSetLoaderTests
 {
     [Test]
     public void LoadForSolution_rejects_file_rules_without_id()
@@ -18,7 +18,7 @@ public sealed class AnalysisRuleSetTests
             """
         );
 
-        var exception = Should.Throw<InvalidOperationException>(() => AnalysisRuleSet.LoadForSolution(workspace.SolutionPath));
+        var exception = Should.Throw<InvalidOperationException>(() => RuleSetLoader.LoadForSolution(workspace.SolutionPath));
 
         exception.Message.ShouldContain("File rule in `exclude` is missing `id`.");
     }
@@ -36,7 +36,7 @@ public sealed class AnalysisRuleSetTests
             """
         );
 
-        var exception = Should.Throw<InvalidOperationException>(() => AnalysisRuleSet.LoadForSolution(workspace.SolutionPath));
+        var exception = Should.Throw<InvalidOperationException>(() => RuleSetLoader.LoadForSolution(workspace.SolutionPath));
 
         exception.Message.ShouldContain("File rule `include-contract` is missing `glob`.");
     }
@@ -61,7 +61,7 @@ public sealed class AnalysisRuleSetTests
             """
         );
 
-        var rules = AnalysisRuleSet.LoadForSolution(workspace.SolutionPath, [workspace.ExtraRulesPath]);
+        var rules = RuleSetLoader.LoadForSolution(workspace.SolutionPath, [workspace.ExtraRulesPath]);
 
         rules.IsTestProject("Rig.Tests").ShouldBeTrue();
         rules.IsExcludedProject("Sample.AppHost").ShouldBeTrue();
@@ -82,7 +82,7 @@ public sealed class AnalysisRuleSetTests
             """
         );
 
-        var projected = FactEntryPointRuleProvider.LoadForWorkingDirectory(workspace.DirectoryPath);
+        var projected = RuleSetLoader.Load(workspace.DirectoryPath).EntryPoints;
 
         projected.ShouldHaveSingleItem().Requires.ShouldBe(["FrontEnd", "BackEnd"]);
     }
@@ -104,9 +104,9 @@ public sealed class AnalysisRuleSetTests
             """
         );
 
-        var rules = AnalysisRuleSet.LoadForSolution(workspace.SolutionPath);
+        var rules = RuleSetLoader.LoadForSolution(workspace.SolutionPath);
 
-        rules.TypeEntryPoints.ShouldHaveSingleItem().Id.ShouldBe("legacy");
+        rules.EntryPoints.ShouldHaveSingleItem().Id.ShouldBe("legacy");
     }
 
     [Test]
@@ -122,7 +122,7 @@ public sealed class AnalysisRuleSetTests
             """
         );
 
-        var projected = FactHandoffRuleProvider.LoadForWorkingDirectory(workspace.DirectoryPath);
+        var projected = RuleSetLoader.Load(workspace.DirectoryPath).Handoff;
 
         projected.ShouldHaveSingleItem().Requires.ShouldBe(["FrontEnd"]);
     }
