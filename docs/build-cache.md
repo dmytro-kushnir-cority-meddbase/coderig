@@ -1,10 +1,15 @@
-# Design-time-build cache (`rig index --reuse-build-cache`)
+# Design-time-build cache (ON BY DEFAULT; `rig index --no-build-cache` to disable)
 
-> Status: **built, opt-in, validated on playgrounds.** Since 2026-06-20: per-project Paket invalidation
-> (`PaketClosure`), a functional-core refactor of the cache (pure `Of`/`Material`/`Decide` + thin shell),
-> and the `--verify-build-cache` guardrail have ALL shipped (see "Shipped 2026-06-20" below). **Still NOT
-> trusted on MedDBase** until `--verify-build-cache` is actually *run* there (`0 MISMATCH`) — that run is
-> the gate. Open 6694-error investigation below. Captured 2026-06-18, updated 2026-06-20.
+> Status: **ON BY DEFAULT as of 2026-06-20** (was opt-in `--reuse-build-cache`, now a hidden no-op;
+> `--no-build-cache` opts out; `--verify-build-cache` forces it + audits). Shipped this round: per-project
+> Paket invalidation (`PaketClosure`), per-project Central Package Management invalidation (`CpmClosure`), a
+> functional-core refactor (pure `Of`/`Material`/`Decide` + thin shell), and the `--verify-build-cache`
+> guardrail. **Validated on MedDBase** via that guardrail: every CONSUMED build input (references/sources/
+> project-refs/options) matched fresh-vs-cached across 136 projects — the only diffs were uncon­sumed-property
+> noise (calibrated out) + 1 nondeterministic reference. The default flip is safe w.r.t. the open 6694-error
+> item below: verify proved the cache replays the SAME compilation inputs a fresh build produces, so any 6694
+> errors occur identically with or without the cache (they're the F#/VB-DLL baseline gap, cache-independent).
+> Captured 2026-06-18, updated 2026-06-20.
 
 ## Shipped 2026-06-20
 - **Per-project Paket invalidation (`PaketClosure`).** Supersedes the `rootManifests`-invalidate-all idea in

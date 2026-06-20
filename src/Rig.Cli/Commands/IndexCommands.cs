@@ -36,10 +36,17 @@ internal static class IndexCommands
         {
             Description = "Print a per-phase timing breakdown (workspace build, compile+read, extract, save, graph).",
         };
+        // The design-time-build cache is ON BY DEFAULT (validated on MedDBase via --verify-build-cache, 2026-06-20):
+        // a project whose build inputs are unchanged skips the dominant build phase. --reuse-build-cache is kept
+        // as a deprecated no-op so existing scripts don't error; --no-build-cache opts out.
         var reuseBuildCache = new Option<bool>("--reuse-build-cache")
         {
-            Description =
-                "Reuse cached design-time build results for projects whose inputs are unchanged (skips the dominant build phase).",
+            Description = "(deprecated; the build cache is on by default) — no-op. Use --no-build-cache to disable.",
+            Hidden = true,
+        };
+        var noBuildCache = new Option<bool>("--no-build-cache")
+        {
+            Description = "Disable the design-time-build cache (always do a full build; don't read or write the cache).",
         };
         var verifyBuildCache = new Option<bool>("--verify-build-cache")
         {
@@ -60,6 +67,7 @@ internal static class IndexCommands
             noGraph,
             time,
             reuseBuildCache,
+            noBuildCache,
             verifyBuildCache,
         };
 
@@ -78,7 +86,7 @@ internal static class IndexCommands
                         includeTests: pr.GetValue(includeTests),
                         noGraph: pr.GetValue(noGraph),
                         time: pr.GetValue(time),
-                        reuseBuildCache: pr.GetValue(reuseBuildCache),
+                        noBuildCache: pr.GetValue(noBuildCache),
                         verifyBuildCache: pr.GetValue(verifyBuildCache),
                         output: output,
                         error: error,
@@ -99,7 +107,7 @@ internal static class IndexCommands
         bool includeTests,
         bool noGraph,
         bool time,
-        bool reuseBuildCache,
+        bool noBuildCache,
         bool verifyBuildCache,
         TextWriter output,
         TextWriter error,
@@ -107,9 +115,11 @@ internal static class IndexCommands
     )
     {
         var timings = time ? new PhaseTimings() : null;
-        // Design-time-build cache lives outside the per-commit store dir so it's shared across indexes.
-        // --verify-build-cache also needs the cache dir (it diffs against the stored sidecars + refreshes them).
-        var buildCacheDir = reuseBuildCache || verifyBuildCache ? Path.Combine(StoreLayout.RigDir(workingDirectory), "dtb-cache") : null;
+        // Design-time-build cache: ON BY DEFAULT, lives outside the per-commit store dir so it's shared across
+        // indexes. --no-build-cache opts out; --verify-build-cache forces it on (it diffs against + refreshes
+        // the sidecars), so verify wins over a contradictory --no-build-cache.
+        var useBuildCache = !noBuildCache || verifyBuildCache;
+        var buildCacheDir = useBuildCache ? Path.Combine(StoreLayout.RigDir(workingDirectory), "dtb-cache") : null;
         // --from <csproj>: index only the transitive ProjectReference closure of the entry project
         // (minus test projects) in ONE cross-project Roslyn workspace — skips every out-of-closure
         // test/tool project before its design-time build runs. The closure is written to
