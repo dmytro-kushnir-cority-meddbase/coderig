@@ -219,6 +219,13 @@ internal static class IndexCommands
         analyzeWatch.Stop();
         output.WriteLine($"Progress: Analysis phase done in {FormatElapsed(analyzeWatch.Elapsed)}");
 
+        // Memory-profiling pause (RIG_PROFILE_PAUSE): AnalyzeAsync has returned, so its Roslyn
+        // workspace/compilations/semantic models are now UNROOTED — only the plain-string fact set
+        // (`result`) is reachable. A gcdump here forces a GC, so it shows the LIVE set after collection;
+        // diffing it against the "extract-peak" snapshot reveals how much of the ceiling was genuine
+        // working set vs. uncollected Gen-2 garbage. No-op unless the env var is set.
+        ProfilingPause.MaybePause("pre-save (roslyn unrooted)");
+
         // Publish model. A standalone `index` is a full REPLACE published via write-to-temp +
         // atomic rename, so a crash can't tear the live store (and the previous index survives a
         // failed re-index). Fast/durability-off pragmas are the DEFAULT here — a corrupt temp is
@@ -495,7 +502,8 @@ internal static class IndexCommands
     }
 
     // Allocation throughput: bytes allocated during the phase / phase seconds, formatted as a byte rate.
-    private static string FormatRate(long bytes, double seconds) => bytes < 0 || seconds <= 0 ? "n/a" : FormatBytes((long)(bytes / seconds)) + "/s";
+    private static string FormatRate(long bytes, double seconds) =>
+        bytes < 0 || seconds <= 0 ? "n/a" : FormatBytes((long)(bytes / seconds)) + "/s";
 
     private static string FormatBytes(long bytes) =>
         bytes < 0 ? "n/a"
@@ -512,7 +520,13 @@ internal static class IndexCommands
     // dbPath, using the already-loaded rules passed in by the caller (no second rule load). Run as the tail of
     // `index` so a freshly-indexed store is query-ready on the fast SQL path without a manual follow-up.
     // Idempotent — rerun any time, no rescan.
-    private static async Task MaterializeGraphAsync(string dbPath, RuleSet rules, AnalysisResult result, string workingDirectory, TextWriter output)
+    private static async Task MaterializeGraphAsync(
+        string dbPath,
+        RuleSet rules,
+        AnalysisResult result,
+        string workingDirectory,
+        TextWriter output
+    )
     {
         var stopwatch = Stopwatch.StartNew();
         await using var context = new RigDbContext(dbPath);
@@ -538,7 +552,6 @@ internal static class IndexCommands
         // directly instead of re-deriving from the whole-store fact tables. No-op without deployments.json.
         await MaterializeEntryPointSitesAsync(context, workingDirectory);
     }
-
 
     // Transitive ProjectReference closure of an entry project, minus test projects — the build scope
     // for `rig index --from`. Parses the dependency graph (XML only, no MSBuild), BFS from the entry,
@@ -619,11 +632,6 @@ internal static class IndexCommands
     private static string FormatElapsed(TimeSpan elapsed) =>
         elapsed.TotalMinutes >= 1 ? $"{(int)elapsed.TotalMinutes}m{elapsed.Seconds:00}s" : $"{elapsed.TotalSeconds:0.0}s";
 
-    private static string ComputeIdentity(string solutionPath) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(solutionPath))))[..16];
-
-    // The indented-JSON sidecar write shared by `index --from` (relevant-projects.json) and `mine`
-    // (reachable-projects.json).
     private static void WriteJsonSidecar(string path, object data) =>
         File.WriteAllText(path: path, contents: JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
 }

@@ -8,7 +8,10 @@ namespace Rig.Analysis;
 
 public static class SolutionAnalyzer
 {
-    public static async Task<AnalysisResult> AnalyzeAsync(string solutionPath, RuleSet rules, CancellationToken cancellationToken = default,
+    public static async Task<AnalysisResult> AnalyzeAsync(
+        string solutionPath,
+        RuleSet rules,
+        CancellationToken cancellationToken = default,
         Action<string>? progress = null,
         string? projectIdentity = null,
         // When non-null, restrict the solution index to this set of project paths (the entry-project
@@ -114,6 +117,12 @@ public static class SolutionAnalyzer
             $"Analysis complete: {symbolFacts.Length} symbols, "
                 + $"{referenceFacts.Length} references, {allDiRegistrations.Length} di registrations"
         );
+
+        // Memory-profiling pause (RIG_PROFILE_PAUSE): here the Roslyn workspace, every project's
+        // compilation, and every file's SemanticModel are STILL ROOTED via sourceSet.IndexedSources,
+        // alongside the just-built fact arrays — the true co-resident peak. A gcdump now shows that
+        // whole live set. No-op unless the env var is set.
+        ProfilingPause.MaybePause("extract-peak (roslyn live)");
 
         // For project-level indexing, record the specific project path
         var sourceProjectPath =
