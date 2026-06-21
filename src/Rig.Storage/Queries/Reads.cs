@@ -838,7 +838,13 @@ public static class Reads
     public static Task<IReadOnlyList<FactFieldAccess>> LoadStaticFieldWriteRefsAsync(
         RigDbContext context,
         CancellationToken cancellationToken = default
-    ) => LoadStaticFieldAccessRefsAsync(context: context, refKind: RefKinds.Write, cancellationToken: cancellationToken);
+    ) =>
+        LoadStaticFieldAccessRefsAsync(
+            context: context,
+            refKind: RefKinds.Write,
+            excludeReadonly: false,
+            cancellationToken: cancellationToken
+        );
 
     // Loads READ reference facts (RefKind="read") whose TARGET is a STATIC field/auto-property — the FR-1
     // read arm, the symmetric twin of LoadStaticFieldWriteRefsAsync. A read of `StaticType.SharedField` is
@@ -847,15 +853,28 @@ public static class Reads
     public static Task<IReadOnlyList<FactFieldAccess>> LoadStaticFieldReadRefsAsync(
         RigDbContext context,
         CancellationToken cancellationToken = default
-    ) => LoadStaticFieldAccessRefsAsync(context: context, refKind: RefKinds.Read, cancellationToken: cancellationToken);
+    ) =>
+        LoadStaticFieldAccessRefsAsync(
+            context: context,
+            refKind: RefKinds.Read,
+            excludeReadonly: true,
+            cancellationToken: cancellationToken
+        );
 
     // Shared loader for both static-field-access arms (read vs write differ only by RefKind). Joins the
     // access ref to symbol_facts on a STATIC target (the fact layer's only source of the target's modifiers),
     // first-party only (TargetInSource), enclosing non-null (keys the effect to a call-graph node), carries
     // the access's structural context (mirrors LoadInvocationRefsAsync), and dedups by site.
+    //
+    // `excludeReadonly` additionally drops `readonly` static targets — set ONLY on the READ arm. A read of an
+    // immutable cell (static readonly / const-folded field, e.g. a logger or a frozen table) can never be the
+    // "check" of a TOCTOU read-before-write: the value cannot change underneath, so such reads are pure noise
+    // (~99k on the real store, dominated by static readonly loggers). The WRITE arm keeps readonly targets:
+    // a write to a readonly static is ctor-only and already rare, and remains a genuine shared-state mutation.
     private static async Task<IReadOnlyList<FactFieldAccess>> LoadStaticFieldAccessRefsAsync(
         RigDbContext context,
         string refKind,
+        bool excludeReadonly,
         CancellationToken cancellationToken = default
     )
     {
@@ -863,7 +882,9 @@ public static class Reads
             .ReferenceFacts.AsNoTracking()
             .Where(r => r.RefKind == refKind && r.TargetInSource && r.EnclosingSymbolId != null)
             .Join(
-                context.SymbolFacts.AsNoTracking().Where(s => s.Modifiers.Contains("static")),
+                context
+                    .SymbolFacts.AsNoTracking()
+                    .Where(s => s.Modifiers.Contains("static") && (!excludeReadonly || !s.Modifiers.Contains("readonly"))),
                 r => r.TargetSymbolId,
                 s => s.SymbolId,
                 (r, s) =>

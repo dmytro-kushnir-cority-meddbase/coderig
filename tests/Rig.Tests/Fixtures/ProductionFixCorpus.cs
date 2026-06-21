@@ -79,6 +79,11 @@ public static class ProductionFixCorpus
         // the read-before-write / TOCTOU finding. Sugar over ObservationsIn for the race_window corpus tests.
         public IReadOnlyList<EffectObservationInfo> RaceWindowsIn(string enclosingMarker) =>
             ObservationsIn(enclosingMarker, FactHazardDeriver.RaceWindowType);
+
+        // The lazy-init / do-once split of race_window: every lazy_init_race observation (low confidence,
+        // heuristic) on a mutate effect enclosed by the marker method. Sugar over ObservationsIn.
+        public IReadOnlyList<EffectObservationInfo> LazyInitRacesIn(string enclosingMarker) =>
+            ObservationsIn(enclosingMarker, FactHazardDeriver.LazyInitRaceType);
     }
 
     public static CorpusResult Analyze(string source)
@@ -149,10 +154,17 @@ public static class ProductionFixCorpus
     // selected by refKind) whose target is a STATIC field/auto-property slot (gated via the symbol's
     // modifiers), deduped by site. This is the FR-1(b) write / FR-1 read input population — and it only works
     // because the field-emission fix now emits class field symbols.
+    //
+    // The READ arm additionally excludes `readonly` static targets (immutable cell ⇒ cannot be a TOCTOU
+    // "check" ⇒ pure noise), mirroring the shipped path's `excludeReadonly` gate. The WRITE arm keeps them.
     private static IReadOnlyList<FactFieldAccess> StaticFieldAccessRefs(AnalysisResult result, string refKind)
     {
+        var excludeReadonly = refKind == RefKinds.Read;
         var staticSlots = (result.Symbols ?? [])
-            .Where(s => s.Modifiers.Contains("static", StringComparison.Ordinal))
+            .Where(s =>
+                s.Modifiers.Contains("static", StringComparison.Ordinal)
+                && (!excludeReadonly || !s.Modifiers.Contains("readonly", StringComparison.Ordinal))
+            )
             .Select(s => s.SymbolId)
             .ToHashSet(StringComparer.Ordinal);
 
