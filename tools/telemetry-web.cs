@@ -21,14 +21,10 @@ if (!args.Any(a => a.StartsWith("--urls", StringComparison.Ordinal)))
 var app = builder.Build();
 
 var root = Directory.GetCurrentDirectory();
-var dashboardPath = Path.Combine(root, "tools", "telemetry-dashboard.html");
+var dashboardPath = Path.Combine(root, "telemetry-dashboard.html");
 
-// Where rig writes telemetry by default; the MedDBase analysis store. Override per-request with ?csv=.
 const string DefaultCsvPath = @"C:\git\meddbase-analysis\rig-index-telemetry.csv";
 
-// Replace the dashboard's `const DEFAULT_CSV = ` ... ` ;` literal with live CSV text. A MatchEvaluator is
-// used so `$` in the data is never treated as a substitution; CSV carries no backticks, so the literal stays
-// well-formed (guarded anyway).
 static string Inject(string html, string csv)
 {
     var safe = csv.Replace("`", "'");
@@ -55,13 +51,14 @@ app.MapGet(
     }
 );
 
-// The raw CSV currently being served, handy for scripting / sanity checks.
 app.MapGet(
     "/csv",
     (string? csv) =>
     {
         var csvPath = string.IsNullOrWhiteSpace(csv) ? DefaultCsvPath : csv;
-        return File.Exists(csvPath) ? Results.Text(File.ReadAllText(csvPath), "text/csv") : Results.NotFound($"No CSV at {csvPath}");
+        return File.Exists(csvPath) 
+            ? Results.Text(File.ReadAllText(csvPath), "text/csv") 
+            : Results.NotFound($"No CSV at {csvPath}");
     }
 );
 
