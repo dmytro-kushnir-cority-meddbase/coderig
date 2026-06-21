@@ -1879,6 +1879,25 @@
         "providers": ["object_store"],
         "unsupportedTypePatterns": ["LanguageExt.Option", "LanguageExt.Either"]
       }
+    ],
+    "nPlusOne": [
+      {
+        "providers": [
+          "http",
+          "redis",
+          "inproc_cache",
+          "entity_cache",
+          "db_reader",
+          "db_command",
+          "llblgen",
+          "repository",
+          "efcore",
+          "fhir",
+          "elasticsearch",
+          "azure_search"
+        ],
+        "operations": ["GET", "read", "row_read", "query", "fetch", "search", "index_read"]
+      }
     ]
   },
   "effectEmoji": {

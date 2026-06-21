@@ -239,6 +239,7 @@ public static class RuleSetLoader
             ResilienceRetry = Concat(a.ResilienceRetry, b.ResilienceRetry),
             ResourceSpan = Concat(a.ResourceSpan, b.ResourceSpan),
             SerializationHazard = Concat(a.SerializationHazard, b.SerializationHazard),
+            NPlusOne = Concat(a.NPlusOne, b.NPlusOne),
         };
     }
 

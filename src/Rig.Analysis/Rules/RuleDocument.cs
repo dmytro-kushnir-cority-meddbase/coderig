@@ -163,6 +163,12 @@ internal sealed record ResourceSpanObservationRule(
 // generic type arguments. Projected to FactSerializationHazardRule. Annotate-only.
 internal sealed record SerializationHazardObservationRule(IReadOnlyList<string>? Providers, IReadOnlyList<string> UnsupportedTypePatterns);
 
+// FR-3 (RCA #2892): flag a READ-category effect inside a loop whose key argument VARIES per iteration (an
+// n+1 / read amplification). `providers` + `operations` gate which effects count as a read (empty list =
+// any for that dimension); the loop iteration variable appearing in the read's key argument is the
+// discriminator over plain looped_effect. Projected to FactNPlusOneRule. Annotate-only.
+internal sealed record NPlusOneObservationRule(IReadOnlyList<string>? Providers, IReadOnlyList<string>? Operations);
+
 internal sealed class AnalysisRulesDocument
 {
     public EntryPointRulesDocument? EntryPoints { get; set; }
@@ -221,6 +227,8 @@ internal sealed class ObservationsSection
     public List<ResourceSpanObservationRule>? ResourceSpan { get; set; }
 
     public List<SerializationHazardObservationRule>? SerializationHazard { get; set; }
+
+    public List<NPlusOneObservationRule>? NPlusOne { get; set; }
 }
 
 internal sealed class ProjectsSection

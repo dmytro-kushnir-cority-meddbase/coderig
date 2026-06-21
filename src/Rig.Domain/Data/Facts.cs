@@ -599,12 +599,28 @@ public sealed record FactSerializationHazardRule(
     IReadOnlyList<string> UnsupportedTypePatterns // substrings matched against the call's type arguments
 );
 
+// An n+1 / read-amplification observation rule (FR-3, RCA #2892): a READ-category effect inside a loop
+// whose KEY ARGUMENT VARIES per iteration yields an `n_plus_1` observation on that effect. This refines
+// the structural `looped_effect` — a read in a loop with a CONSTANT key is hoistable and is NOT an n+1;
+// the discriminator is whether the loop's iteration variable appears in the read's key argument. Like
+// serialization_hazard, this keys off the effect's OWN call (its loop identifier + argument names/
+// templates), not the surrounding structure beyond the loop. Providers/Operations gate which effects
+// count as a READ (e.g. http GET, cache/db/repository/llblgen reads) — only reads should fire, a looped
+// WRITE being a different concern. An empty Providers OR Operations list means "any" for that dimension;
+// both empty = any effect (not recommended — would fire on writes). Data-driven: the read set + gating
+// live in the rules JSON, never hardcoded. Annotate-only: it adds a note; the effect is never removed.
+public sealed record FactNPlusOneRule(
+    IReadOnlyList<string> Providers, // effect providers that count as a read boundary (e.g. "http"); empty = any
+    IReadOnlyList<string> Operations // effect operations that count as a read (e.g. "GET", "read"); empty = any
+);
+
 public sealed record FactObservationRules(
     IReadOnlyList<FactResilienceRetryRule> ResilienceRetry,
     IReadOnlyList<FactConcurrencyHandledRule> ConcurrencyHandled,
     IReadOnlyList<FactParallelFanoutRule> ParallelFanout,
     IReadOnlyList<FactResourceSpanRule> ResourceSpan,
-    IReadOnlyList<FactSerializationHazardRule> SerializationHazard
+    IReadOnlyList<FactSerializationHazardRule> SerializationHazard,
+    IReadOnlyList<FactNPlusOneRule> NPlusOne
 );
 
 // An entry point re-derived from facts (type_relation_facts BFS + symbol_facts + reference_facts).

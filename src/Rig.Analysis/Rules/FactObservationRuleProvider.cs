@@ -43,7 +43,10 @@ internal static class FactObservationRuleProvider
         var serializationHazard = (doc.Observations?.SerializationHazard ?? [])
             .Select(r => new FactSerializationHazardRule(Providers: r.Providers ?? [], UnsupportedTypePatterns: r.UnsupportedTypePatterns))
             .ToArray();
+        var nPlusOne = (doc.Observations?.NPlusOne ?? [])
+            .Select(r => new FactNPlusOneRule(Providers: r.Providers ?? [], Operations: r.Operations ?? []))
+            .ToArray();
 
-        return new FactObservationRules(resilience, concurrency, ParallelFanout, resourceSpan, serializationHazard);
+        return new FactObservationRules(resilience, concurrency, ParallelFanout, resourceSpan, serializationHazard, nPlusOne);
     }
 }

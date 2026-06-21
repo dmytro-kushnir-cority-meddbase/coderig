@@ -20,7 +20,7 @@ public sealed record RuleSet
     public IReadOnlyList<FactTraversalCutRule> Cut { get; init; } = [];
     public IReadOnlyList<FactContextDispatchRule> Context { get; init; } = [];
     public IReadOnlyList<FactEffectRule> Effects { get; init; } = [];
-    public FactObservationRules Observations { get; init; } = new([], [], [], [], []);
+    public FactObservationRules Observations { get; init; } = new([], [], [], [], [], []);
     public IReadOnlyList<FactEntryPointRule> EntryPoints { get; init; } = [];
     public IReadOnlyList<FactClassInheritanceRule> ClassInheritance { get; init; } = [];
     public FactRenderRules Render { get; init; } = new(CollapseSeams: [], OpaqueTypes: []);

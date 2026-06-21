@@ -64,6 +64,11 @@ public static class ProductionFixCorpus
         // Every serialization_hazard observation attached to an effect enclosed by the marker method.
         public IReadOnlyList<EffectObservationInfo> SerializationHazardsIn(string enclosingMarker) =>
             EffectsIn(enclosingMarker).SelectMany(e => e.Observations ?? []).Where(o => o.Type == "serialization_hazard").ToList();
+
+        // Every observation of the given type attached to an effect enclosed by the marker method (e.g.
+        // "n_plus_1" / "looped_effect"). The general form behind SerializationHazardsIn.
+        public IReadOnlyList<EffectObservationInfo> ObservationsIn(string enclosingMarker, string observationType) =>
+            EffectsIn(enclosingMarker).SelectMany(e => e.Observations ?? []).Where(o => o.Type == observationType).ToList();
     }
 
     public static CorpusResult Analyze(string source)

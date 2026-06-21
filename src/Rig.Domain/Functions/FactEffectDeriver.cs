@@ -191,7 +191,12 @@ public static class FactEffectDeriver
                         rules: observationRules,
                         provider: rule.Provider,
                         enclosingScopes: FactStructuralContext.DecodeScopes(inv.EnclosingScopes),
-                        typeArguments: inv.TypeArguments
+                        typeArguments: inv.TypeArguments,
+                        operation: rule.Operation,
+                        firstArgName: inv.FirstArgName,
+                        firstArgTemplate: inv.FirstArgTemplate,
+                        argumentNames: inv.ArgumentNames,
+                        argumentTemplates: inv.ArgumentTemplates
                     );
 
                 results.Add(
