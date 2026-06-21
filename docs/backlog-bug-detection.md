@@ -43,6 +43,24 @@ Found via full-history `Revert` merges + direct-to-main revert commits + follow-
 Out-of-scope classes are kept in the table on purpose: they bound the claim. rig is not a null-checker or
 a build linter, and the corpus shows how much of the revert stream is those (don't oversell coverage).
 
+### Class breadth (wider issue-tracker sweep)
+
+§2 is the deep-dive culprits; this is the BREADTH — how often each class recurs across the tracker, and how
+many are still **open** (`(open)` = unresolved, live demand). It's why the FRs target *classes*, not one-offs.
+
+| Bug class | Representative issues (`(open)` = unresolved) | FR |
+|---|---|---|
+| Concurrency: lost-update / two-user | #279(open) #2652 #1166 #2930 #1926(open) #1192(open) | FR-1 |
+| Concurrency: shared-collection / service-locator | #1166 #3779 #3866 #806 #2208 #1123 | FR-1 |
+| Concurrency: deadlock | #311/#67830 #279 #63 | FR-2 (limit) |
+| Cache coherence / staleness | #4199(open) #3963 #3941 #4367 #940 #3758(open) | FR-7 |
+| Serialization contract | #4160 #1646 #3989 #2330 | FR-6 |
+| Read amplification / N+1 | #2892 #4320 #3333 #940 | FR-3 |
+
+Concurrency (FR-1/FR-2) dominates by count and carries the most open issues — corroborating FR-1 as the
+headline. Classes overlap as the failures do: #1166 is both lost-update and shared-collection; #940 is both
+cache-staleness and N+1.
+
 ---
 
 ## 3. What was validated live (2026-06-21, HEAD index `ae082702cf`)
@@ -64,8 +82,9 @@ Tested the **!10706** precondition against the existing MedDBase index without r
   crosses a handoff boundary rig does not walk by default.
 
 Conclusion: rig has the **raw material** for the headline concurrency case (region detection + effect
-tagging). What's missing is (a) field-write extraction, (b) walking into the concurrency body, and (c) the
-aliasing/escape join. That split drives the feature priorities below.
+tagging). What's missing is (a) a derive arm for field-write effects (the facts already exist — see
+FR-1(b)), (b) walking into the concurrency body, and (c) the aliasing/escape join. That split drives the
+feature priorities below.
 
 ---
 
