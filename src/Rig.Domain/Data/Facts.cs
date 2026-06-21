@@ -230,6 +230,25 @@ public sealed record MethodRef(
 // resolved enclosing method (most callers filter those out at the query).
 public sealed record SymbolRef(string Target, string? Enclosing, string FilePath, int Line);
 
+// A static-field/auto-property WRITE ref (FR-1(b)) carrying the structural context the SymbolRef shape
+// drops, so the field-write effect arm can derive the SAME observations the invocation arm does. Target is
+// the written slot DocID ("F:Ns.Type.field" / "P:Ns.Type.Prop"); Enclosing keys the effect to a call-graph
+// node. The Enclosing* fields mirror FactInvocation's (decode with FactStructuralContext) and feed
+// FactObservationDeriver — a static-field publish under a loop / Parallel.ForEach / lock / try-catch then
+// carries looped_effect / parallel_fanout / lock_held_across_effect / concurrency_handled. All structural
+// fields default to null, so a write with no enclosing structure (the common case) carries no observation.
+public sealed record FactFieldWrite(
+    string Target,
+    string? Enclosing,
+    string FilePath,
+    int Line,
+    string? LoopKind = null,
+    string? LoopDetail = null,
+    string? EnclosingInvocations = null,
+    string? CatchTypes = null,
+    string? EnclosingScopes = null
+);
+
 // A declared method symbol (symbol_facts kind="method") with the metadata the entry-point deriver needs:
 // page EPs use the .ctor rows; class-inheritance EPs use the named-handler rows (IsOverride gates
 // RequireOverride rules; Signature feeds parameter-type matching). Distinct from MethodRef (the call-graph

@@ -821,7 +821,7 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
 
         // The caller (Reads.LoadStaticFieldWriteRefsAsync) pre-filters to STATIC targets; the deriver is
         // handed only those, so this ref stands for a write to a static field.
-        var staticWrite = new SymbolRef(
+        var staticWrite = new FactFieldWrite(
             Target: "F:App.GlobalCache.SharedCounter",
             Enclosing: "M:App.Importer.Run",
             FilePath: "Importer.cs",

@@ -34,8 +34,10 @@ public static class FactEffectDeriver
         // FR-1(b): write refs whose TARGET is a STATIC field/auto-property, pre-filtered by the caller
         // (the static-ness gate lives in the loader's symbol_facts join — the fact layer's only source
         // of the target's modifiers). Each Target is the written slot's DocID ("F:Ns.Type.field" /
-        // "P:Ns.Type.Prop"); MatchFieldWrite rules consume these. Null/empty when not supplied.
-        IReadOnlyList<SymbolRef>? staticFieldWriteRefs = null
+        // "P:Ns.Type.Prop"); MatchFieldWrite rules consume these. The FactFieldWrite carrier also brings
+        // the write's structural context (enclosing loop / fan-out / lock / try-catch) so the field-write
+        // effect derives the SAME observations as an invocation. Null/empty when not supplied.
+        IReadOnlyList<FactFieldWrite>? staticFieldWriteRefs = null
     )
     {
         // Precompute a base-type closure per distinct DeclaringTypeBaseTypes set (e.g. ProxyBase).
@@ -409,6 +411,26 @@ public static class FactEffectDeriver
                     // DocID (the precise field), so the resource is never empty for a matched write.
                     var resource = string.Equals(rule.Resource, "declaring_type", StringComparison.Ordinal) ? declaringType : write.Target;
 
+                    // Observations from the write's structural context — MIRRORS the invocation arm exactly
+                    // (same observation rules, same decode helpers, same provider). A static-field publish
+                    // under Parallel.ForEach / a loop / a lock now carries parallel_fanout / looped_effect /
+                    // lock_held_across_effect, closing the FR-1 region-join gap for the field-write family.
+                    // The slot's MEMBER name is the methodName analogue (the concurrency_handled commit-method
+                    // gate keys on it); a plain `=` write matches no commit method, so it is inert there.
+                    var member = slot.Value.Member;
+                    var observations = observationRules is null
+                        ? null
+                        : FactObservationDeriver.Derive(
+                            methodName: member,
+                            loopKind: write.LoopKind,
+                            loopDetail: write.LoopDetail,
+                            enclosingInvocations: FactStructuralContext.DecodeInvocations(write.EnclosingInvocations),
+                            catchTypes: FactStructuralContext.DecodeList(write.CatchTypes),
+                            rules: observationRules,
+                            provider: rule.Provider,
+                            enclosingScopes: FactStructuralContext.DecodeScopes(write.EnclosingScopes)
+                        );
+
                     results.Add(
                         new DerivedEffect(
                             Provider: rule.Provider,
@@ -417,6 +439,7 @@ public static class FactEffectDeriver
                             EnclosingSymbolId: write.Enclosing,
                             FilePath: write.FilePath,
                             Line: write.Line,
+                            Observations: observations,
                             Atomic: rule.Atomic
                         )
                     );

@@ -251,16 +251,16 @@ public sealed class ProductionFixCorpusTests
         mutate.ShouldContain(e => e.Observations != null && e.Observations.Any(o => o.Type == "parallel_fanout"));
     }
 
-    // _Gap_ — the field-write arm carries NO structural context (its input is a plain SymbolRef with no
-    // enclosing-invocations), so a STATIC-FIELD publish reached under Parallel.ForEach fires
-    // shared_state:mutate but gets NO `parallel_fanout` observation. That means FR-1's region-join currently
-    // MISSES the !10706 / latent-publish family (a field publish under fan-out) — the highest-value shape.
-    // Pinned so that wiring structural context into the field-write arm flips this test and proves the fix.
+    // §!10706 / latent-publish family — a STATIC-FIELD publish reached under Parallel.ForEach. The
+    // field-write arm now carries the write's structural context (enclosing fan-out invocation), so the
+    // shared_state:mutate effect derives the SAME `parallel_fanout` observation an invocation effect would.
+    // This closes FR-1's region-join over the highest-value shape (a shared field published under a parallel
+    // import fan-out) — previously the arm dropped structural context and missed it entirely.
     [Test]
-    public void field_publish_under_fanout_Gap_fires_mutate_but_misses_the_region_observation()
+    public void field_publish_under_fanout_carries_the_region_observation()
     {
-        // Uses the idiomatic `Parallel.ForEach` so the missing parallel_fanout is attributable to the
-        // field-write arm dropping structural context — NOT to the receiver-text artifact.
+        // Uses the idiomatic `Parallel.ForEach`; fanout detection resolves the receiver TYPE, so the
+        // qualified and using-imported forms match identically.
         var result = ProductionFixCorpus.Analyze(
             """
             using System.Threading.Tasks;
@@ -282,8 +282,8 @@ public sealed class ProductionFixCorpusTests
 
         var mutate = result.SharedStateMutationsIn("Publish_Bug");
         mutate.ShouldNotBeEmpty(); // FR-1(b) sees the static-field publish
-        // ...but the field-write arm drops structural context, so the under-fanout region is NOT observed
-        // even with the idiomatic receiver — proving the gap is the arm, not the syntactic match.
-        mutate.ShouldAllBe(e => e.Observations == null || e.Observations.All(o => o.Type != "parallel_fanout"));
+        // ...and the field-write arm now carries the write's structural context, so the under-fanout region
+        // IS observed — the publish-under-parallel-fanout shape is surfaced, not silently dropped.
+        mutate.ShouldContain(e => e.Observations != null && e.Observations.Any(o => o.Type == "parallel_fanout"));
     }
 }

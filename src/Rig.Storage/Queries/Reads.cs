@@ -835,7 +835,7 @@ public static class Reads
     // written slot's modifiers (the call graph carries method->method edges only). First-party only
     // (TargetInSource) and EnclosingSymbolId not null so the effect keys to a call-graph node. Target is
     // the written slot DocID ("F:Ns.Type.field" / "P:Ns.Type.Prop"); the deriver gates its declaring type.
-    public static async Task<IReadOnlyList<SymbolRef>> LoadStaticFieldWriteRefsAsync(
+    public static async Task<IReadOnlyList<FactFieldWrite>> LoadStaticFieldWriteRefsAsync(
         RigDbContext context,
         CancellationToken cancellationToken = default
     )
@@ -847,7 +847,20 @@ public static class Reads
                 context.SymbolFacts.AsNoTracking().Where(s => s.Modifiers.Contains("static")),
                 r => r.TargetSymbolId,
                 s => s.SymbolId,
-                (r, s) => new SymbolRef(Target: r.TargetSymbolId, Enclosing: r.EnclosingSymbolId, FilePath: r.FilePath, Line: r.Line)
+                // Carry the write's structural context (mirrors LoadInvocationRefsAsync) so the field-write
+                // effect arm can derive the same observations (parallel_fanout / looped_effect / …, FR-1).
+                (r, s) =>
+                    new FactFieldWrite(
+                        Target: r.TargetSymbolId,
+                        Enclosing: r.EnclosingSymbolId,
+                        FilePath: r.FilePath,
+                        Line: r.Line,
+                        LoopKind: r.EnclosingLoopKind,
+                        LoopDetail: r.EnclosingLoopDetail,
+                        EnclosingInvocations: r.EnclosingInvocations,
+                        CatchTypes: r.EnclosingCatchTypes,
+                        EnclosingScopes: r.EnclosingScopes
+                    )
             )
             .ToListAsync(cancellationToken);
 

@@ -148,7 +148,17 @@ internal static class FactExtractor
                 symbolCache
             );
             var (argumentTemplates, argumentNames) = ArgumentListOf(refKind, invocation, model);
-            var structural = StructuralContextOf(invocation, model, symbolCache);
+            // Structural context (enclosing loop / fan-out invocation / try-catch / held-resource scope)
+            // feeds the stage-2 observation deriver. The walk root is the invocation node for a call, but a
+            // STATIC-FIELD WRITE (`StaticType.Field = v`) also derives a shared_state:mutate effect (FR-1b)
+            // that must carry the SAME observations — a publish under Parallel.ForEach is the highest-value
+            // shape — so a write ref walks from its LHS `name` node (its ancestors include the enclosing
+            // loop / fan-out call / lock). Other ref kinds keep no structural context (no effect consumes it).
+            SyntaxNode? structuralRoot =
+                refKind == RefKinds.Invocation ? invocation
+                : refKind == RefKinds.Write ? name
+                : null;
+            var structural = StructuralContextOf(structuralRoot, model, symbolCache);
             var delegateConsumer = refKind == RefKinds.MethodGroup ? DelegateConsumerOf(name, model) : null;
             AddReference(
                 references,

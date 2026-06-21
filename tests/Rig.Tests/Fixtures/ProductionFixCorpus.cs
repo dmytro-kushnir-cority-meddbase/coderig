@@ -118,7 +118,7 @@ public static class ProductionFixCorpus
     // Mirror of Reads.LoadStaticFieldWriteRefsAsync over the in-memory facts: write refs whose target is a
     // STATIC field/auto-property slot (gated via the symbol's modifiers), deduped by site. This is the FR-1(b)
     // input population — and it only works because the field-emission fix now emits class field symbols.
-    private static IReadOnlyList<SymbolRef> StaticFieldWriteRefs(AnalysisResult result)
+    private static IReadOnlyList<FactFieldWrite> StaticFieldWriteRefs(AnalysisResult result)
     {
         var staticSlots = (result.Symbols ?? [])
             .Where(s => s.Modifiers.Contains("static", StringComparison.Ordinal))
@@ -131,7 +131,17 @@ public static class ProductionFixCorpus
             )
             .GroupBy(r => (r.FilePath, r.Line, r.TargetSymbolId))
             .Select(g => g.First())
-            .Select(r => new SymbolRef(Target: r.TargetSymbolId, Enclosing: r.EnclosingSymbolId, FilePath: r.FilePath, Line: r.Line))
+            .Select(r => new FactFieldWrite(
+                Target: r.TargetSymbolId,
+                Enclosing: r.EnclosingSymbolId,
+                FilePath: r.FilePath,
+                Line: r.Line,
+                LoopKind: r.EnclosingLoopKind,
+                LoopDetail: r.EnclosingLoopDetail,
+                EnclosingInvocations: r.EnclosingInvocations,
+                CatchTypes: r.EnclosingCatchTypes,
+                EnclosingScopes: r.EnclosingScopes
+            ))
             .ToList();
     }
 }
