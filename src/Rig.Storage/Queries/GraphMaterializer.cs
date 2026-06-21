@@ -87,22 +87,38 @@ public static class GraphMaterializer
         await EnsureSchemaAsync(connection, cancellationToken);
 
         progress?.Invoke("Rebuilding derived edge tables");
+        // The distinct node universe = every edge endpoint PLUS every declared method; endpoints are
+        // collected into this set as the edges are inserted, methods are added below, then `nodes` is
+        // built from it — replacing four full-table scans + a UNION distinct (BuildNodesFromSetAsync).
+        var nodes = new HashSet<string>(StringComparer.Ordinal);
+
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
 
         await ExecuteAsync(connection, transaction, "DELETE FROM call_edges;", cancellationToken);
         await ExecuteAsync(connection, transaction, "DELETE FROM dispatch_edges;", cancellationToken);
 
-        var callCount = await InsertCallEdgesAsync(connection, transaction, graph, progress, cancellationToken);
-        var (dispatchCount, heuristicCount) = await InsertDispatchEdgesAsync(connection, transaction, graph, progress, cancellationToken);
+        var callCount = await InsertCallEdgesAsync(connection, transaction, graph, nodes, progress, cancellationToken);
+        var (dispatchCount, heuristicCount) = await InsertDispatchEdgesAsync(
+            connection,
+            transaction,
+            graph,
+            nodes,
+            progress,
+            cancellationToken
+        );
 
         await transaction.CommitAsync(cancellationToken);
 
-        // `nodes` = the distinct symbol universe the SQL reachability seeds scan: every edge endpoint
-        // PLUS every declared method (symbol_facts), so it matches FactPathFinder's index.Nodes (which
-        // includes edge-less methods). One indexed LIKE scan over this replaces four full edge-column
-        // scans for pattern seeding. Built after the edges are committed; a plain SQL pass, no Roslyn.
+        // `nodes` matches FactPathFinder's index.Nodes (edge endpoints + every declared method, incl.
+        // edge-less ones — the SQL `symbol_facts WHERE Kind='method'` arm). graph.Methods is built from
+        // that same predicate, so adding it here yields exactly the old UNION's set.
+        foreach (var method in graph.Methods)
+        {
+            nodes.Add(method.SymbolId);
+        }
+
         progress?.Invoke("Building node index");
-        var nodeCount = await BuildNodesAsync(connection, cancellationToken);
+        var nodeCount = await BuildNodesFromSetAsync(connection, nodes, cancellationToken);
 
         // Trigram FTS indexes for substring search (`rig symbols` / `rig refs`). A leading-wildcard
         // LIKE '%pat%' can't use any B-tree index, so it full-scans symbol_facts / reference_facts; the
@@ -299,24 +315,41 @@ public static class GraphMaterializer
         await transaction.CommitAsync(cancellationToken);
     }
 
-    private static async Task<int> BuildNodesAsync(DbConnection connection, CancellationToken cancellationToken)
+    // Builds the `nodes` table from the in-memory node set instead of the SQL UNION over
+    // call_edges/dispatch_edges/symbol_facts. `nodes` already holds every edge endpoint (collected during
+    // the two insert loops); here we add every declared method — the exact `symbol_facts WHERE Kind='method'`
+    // arm, since graph.Methods is built from that same predicate in both the index (FromAnalysis) and
+    // re-graph (LoadFactGraphAsync) paths. So the result equals the old UNION, but skips four full-table
+    // scans (two over call_edges, two over dispatch_edges, one over the big symbol_facts) + the distinct
+    // sort. Keys are inserted in sorted order so the WITHOUT ROWID primary-key B-tree builds sequentially
+    // (what the UNION's sorted output gave us for free).
+    private static async Task<int> BuildNodesFromSetAsync(
+        DbConnection connection,
+        HashSet<string> nodes,
+        CancellationToken cancellationToken
+    )
     {
         await ExecuteAsync(connection, null, "DROP TABLE IF EXISTS nodes;", cancellationToken);
         await ExecuteAsync(connection, null, "CREATE TABLE nodes(sym TEXT PRIMARY KEY) WITHOUT ROWID;", cancellationToken);
-        await ExecuteAsync(
-            connection,
-            null,
-            """
-            INSERT OR IGNORE INTO nodes(sym)
-            SELECT FromSym FROM call_edges     UNION SELECT ToSym FROM call_edges
-            UNION SELECT FromSym FROM dispatch_edges UNION SELECT ToSym FROM dispatch_edges
-            UNION SELECT SymbolId FROM symbol_facts WHERE Kind = 'method';
-            """,
-            cancellationToken
-        );
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT count(*) FROM nodes;";
-        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken), InvariantCulture);
+
+        var sorted = nodes.ToArray();
+        Array.Sort(sorted, StringComparer.Ordinal);
+
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = (DbTransaction)transaction;
+            command.CommandText = "INSERT INTO nodes(sym) VALUES ($s);";
+            var p = AddParam(command, "$s");
+            foreach (var sym in sorted)
+            {
+                p.Value = sym;
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+        }
+        await transaction.CommitAsync(cancellationToken);
+
+        return sorted.Length;
     }
 
     // The derived tables are owned entirely by this routine — index/mine never create or touch them.
@@ -403,10 +436,14 @@ public static class GraphMaterializer
         );
     }
 
+    // `nodes` is populated with every edge endpoint as the rows are inserted (each endpoint is also a node
+    // in the SQL UNION that BuildNodesFromSet replaces) — reusing this loop's iteration so we don't pay a
+    // second AllCallEdges/AllDispatchEdges pass (the latter rebuilds a whole GraphIndex).
     private static async Task<int> InsertCallEdgesAsync(
         DbConnection connection,
         DbTransaction transaction,
         FactGraphData graph,
+        HashSet<string> nodes,
         Action<string>? progress,
         CancellationToken cancellationToken
     )
@@ -439,6 +476,8 @@ public static class GraphMaterializer
             pReceiver.Value = (object?)edge.ReceiverType ?? DBNull.Value;
             pHandoff.Value = (object?)edge.HandoffDispatcher ?? DBNull.Value;
             await command.ExecuteNonQueryAsync(cancellationToken);
+            nodes.Add(edge.From);
+            nodes.Add(edge.To);
             if (++count % InsertBatchSize == 0)
             {
                 progress?.Invoke($"call_edges: {count}");
@@ -452,6 +491,7 @@ public static class GraphMaterializer
         DbConnection connection,
         DbTransaction transaction,
         FactGraphData graph,
+        HashSet<string> nodes,
         Action<string>? progress,
         CancellationToken cancellationToken
     )
@@ -478,6 +518,8 @@ public static class GraphMaterializer
             }
 
             await command.ExecuteNonQueryAsync(cancellationToken);
+            nodes.Add(edge.From);
+            nodes.Add(edge.To);
             if (++count % InsertBatchSize == 0)
             {
                 progress?.Invoke($"dispatch_edges: {count}");
