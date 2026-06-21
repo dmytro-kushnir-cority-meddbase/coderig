@@ -5,312 +5,106 @@ description: Drive the `rig` fact-based .NET code-intelligence CLI to trace entr
 
 # rig — fact-based .NET code intelligence
 
-`rig` extracts rule-agnostic **facts** (declared symbols, references, type relations) from C# source
-into `.rig/rig.db` (SQLite), then answers call-graph and side-effect questions over those facts —
-entry-point-independent, cross-project, with no Roslyn re-run for query/rule changes. Tool repo:
-`C:\git\coderig` (global dotnet tool `rig`).
+`rig` extracts rule-agnostic facts (symbols, references, type relations) from C# into `.rig/rig.db`
+(SQLite), then answers call-graph + side-effect questions over them — cross-project, no Roslyn re-run for
+query/rule changes. Tool repo: `C:\git\coderig` (global tool `rig`).
 
-## Two-phase model
+## Model
+- **Extract** (`index`): runs Roslyn once, writes facts. Expensive — re-run only on source change. `index`
+  is the SOLE extraction command (`--from <entry.csproj>` = entry-scoped closure; the old `mine` is superseded).
+- **Query/derive** (`derive` `reaches` `tree` `callers` `path` `refs` `symbols` `impact` `entrypoints`):
+  read-only over facts. Detectors are JSON rules → new rule = new answer, NO re-extract.
+- **Run every query command from the dir holding `.rig/`** (cwd locates the DB). `--rules <path>`
+  (repeatable) cascades extra rule files over the builtins.
+- **Commit-scoped stores**: `index` writes `.rig/<short-commit>/` + a `LATEST` pointer (reads default to
+  LATEST). Any query (and `impact --base`) takes `--store <ref>` (aliases `--commit`/`--at`) to read a
+  specific commit/id — so two commits sit side by side for diffing. `index` builds the call-graph views at
+  the tail by default (fast SQL path); `--no-graph` opts out.
 
-1. **Extract** (`index`) — runs Roslyn once, writes facts. Expensive. Re-run only when source changes.
-   `index` is the sole extraction command now; for an entry-scoped subset use `index --from <entry.csproj>`
-   (the old `mine` command is superseded — see REFERENCE).
-2. **Query / derive** (`derive`, `reaches`, `tree`, `callers`, `path`, `dead`, `refs`, `symbols`) —
-   read-only over the facts DB. Detectors are **data** (JSON rules), so new rules = new answers, no re-extract.
-
-**Every command except `index` runs from the directory that holds `.rig/`** (the cwd is how rig
-finds the DB). `--rules <path>` (repeatable) cascades extra rule files over the builtin set.
-
-**Commit-scoped stores.** `rig index` writes a per-commit store `.rig/<short-commit>/` (or `<sha>-dirty`,
-or `ts-<stamp>` off-git) + a `.rig/LATEST` pointer; reads default to LATEST. Any query (and `impact --base`)
-takes **`--store <ref>`** (aliases `--commit`/`--at`) to read a specific store by store-id or commit-sha
-prefix — so you can hold two commits' indexes side by side and diff them. `index` also builds the
-call-graph views (`rig graph`) at the tail by default (fast SQL query path); `--no-graph` opts out.
-
-## Quick start
-
+## Commands
 ```bash
-# Extract (from anywhere; `index` builds internally — no external pre-build needed)
-rig index path/to/Solution.slnx --parallelism 16 --reuse-build-cache   # whole solution in ONE call: internal parallel build (cached) + extract
-rig index path/to/Solution.slnx --from Entry.csproj --parallelism 16   # entry-scoped subset: just Entry's transitive ProjectReference closure
-
-# Query (cwd MUST contain .rig/)
-rig reaches "Type.Method"                        # effects reachable from an entry point (synchronous; handoffs NOT crossed)
-rig reaches "Type.Method" --async                 # ALSO walk async handoffs → ⚡cross_thread scheduled reach in a separate bucket
-rig tree "Type.Method"                            # call tree (default: synchronous paths that hit an effect; --full; --async to cross handoffs)
-rig tree "Type.Method" --effects --maxdepth 3     # COMPACT: only effectful methods, no skeleton (escape the 10-screen tree)
-rig tree "Type.Method" --exclude throw            # drop a noisy effect class (see Effect filtering)
-rig tree "Type.Method" --raw                      # bypass codebase render rules (see Tree render rules)
-rig tree "Type.Method" --no-cache                 # bypass the .rig/cache.db forest+effects cache (see below)
-rig tree "Type.Method" --full                      # every node + effect leaf shows its call site (file printed once per change); --files adds definition lines; lambdas labelled λN
-rig callers "Type.Method" --roots                # reverse: no-predecessor candidates that reach it (heuristic; a background callback shows as its OWN root)
-rig callers "Type.Method" --entrypoints           # reverse: the RULE-DETECTED entry points (the `derive` set) that reach it — precise, no unbound-interface noise (but can under-count EPs reached only via interface-dispatch/lambda — cross-check forward with `path`; see Blast-radius section)
-rig path "From.Method" "To.Method" [--async]     # one concrete path between two symbols (synchronous; --async renders the ⤳ handoff hop)
-rig derive                                       # re-derive ALL effects + entry points from facts
-rig entrypoints                                  # JUST the rule-detected entry points, grouped by kind (+ service attribution); --format tsv
-rig dead --root "App.Main"                       # unreachable first-party methods (report-only) — ⚠️ CURRENTLY DISABLED (errors "not matched"; see Finding dead code)
-rig refs "IFoo" / rig symbols "Foo" --kind method
-rig reaches "Type.Method" --store 1a2b3c4d        # query a SPECIFIC commit's store (id / sha-prefix; --commit/--at aliases)
-
-# Blast radius + behavioral diff of a branch vs another commit (needs BOTH commits indexed — see impact section)
-rig impact --base main                            # changed methods → affected entry points (by service) + effect delta
-rig impact --base <sha> --per-ep                  # PER-ENTRY-POINT effect-set diff (what each EP gained/lost) — the precise lens
+rig index Sln.slnx --parallelism 16          # whole solution, ONE call (internal parallel build + extract)
+rig index Sln.slnx --from Entry.csproj       # entry-scoped: Entry's transitive ProjectReference closure
+rig reaches "Type.Method" [--async]          # effects reachable from a node (sync; --async also walks handoffs)
+rig tree "Type.Method" [--full|--effects] [--exclude throw] [--raw] [--no-cache]   # call tree (default: only effectful paths)
+rig callers "Type.Method" [--roots|--entrypoints]  # reverse (roots = no-predecessor origins; entrypoints = rule-detected EPs)
+rig path "From" "To" [--async]               # one concrete path
+rig derive                                   # ALL effects + entry points from facts
+rig entrypoints                              # rule-detected EPs by kind (--format tsv)
+rig refs "IFoo"  |  rig symbols "Foo" --kind method
+rig impact --base <ref> [--per-ep] [--format tsv]   # blast radius + behavioral delta vs another commit
+rig reaches "X" --store <id|sha>             # query a SPECIFIC commit's store
 ```
+**Patterns = case-insensitive substring over DocIDs — use the DOTTED form (`Type.Method`).** The `▶` and
+`callers --entrypoints` lines print the EP ROUTE (`AI/SmartLetter.Send`, with slashes); querying that route
+matches NOTHING — strip to `SmartLetter.Send`. Unexpected empty / "No path" / "0 call edges" → suspect a
+route-form pattern first.
 
-Patterns are case-insensitive substring matches over DocIDs (`M:Ns.Type.Method(args)`) — i.e. the
-**dotted** form (`Type.Method`). The `▶` entry-point lines and `callers --entrypoints` print the EP
-**route** (e.g. `AI/SmartLetter.SendMessage`, with a folder/slash); querying with that route form matches
-**nothing**. Strip the route to the dotted DocID (`SmartLetter.SendMessage`). If a query unexpectedly
-returns "No path"/empty or `tree` shows "0 call edges", suspect a route-form pattern first.
+## Reading output (don't misread it)
+Effects are emoji-tagged `provider:op` (💾write 🔍read 📥fetch 🌐http 📤queue 📣echo 🗃️cache 📦object-store
+📁io ⚠️throw 🧵parallel 🛢️db_command; + EF Core `efcore:*`, raw ADO `db_command|db_connection|db_reader`).
+Per-repo glyphs via `rig.effect-emoji.json`.
+- **N occurrences = N static call-SITES (branches included), NOT N runtime writes** — "places in code," never execution count.
+- **`~heuristic` = INFERRED dispatch** (Roslyn couldn't bind, net48 `!:`; name/arity fallback, ~99% — verify). Unmarked dispatch = exact mined fact, trust it.
+- **Fan-out `×N` = "could be any of these N," NOT "calls all N"** (CHA over-approximation). `reaches` buckets fan-out-only targets as "NOT a real call"; a resolved target is not re-dispatched (one hop).
+- **`derive` totals ≠ reachable**: an effect surfaces in `reaches`/`tree` only if its enclosing id is a call-graph node (`M:`/accessor/lambda/ctor). Effects keyed to `P:`/`F:` show in `derive` but never reach.
+- `tree` children are source-ordered (≈ execution order). Generic labels show the REAL instantiation (monomorphized down the chain), not `<T,U>`.
+- **Filter**: `--only`/`--exclude <list>` (comma/space-sep, repeatable; `provider` or `provider:op`; exclude wins). Headline: `--exclude throw`.
 
-## Reading effect output (don't misread the counts)
+## Async handoffs — SYNC-CUT by default
+A delegate handed to a dispatcher to run later/elsewhere is a `handoff` edge, NOT a call. Default CUT: a
+background registration's callback effects are ABSENT from the registrar's reach; the callback is its OWN
+origin (so `callers --roots` origins + per-EP inventories are the trustworthy sync ones). `--async` walks
+handoffs, tagged (`reaches` splits direct / async-scheduled ⚡ / fan-out; `tree`/`path` mark `⤳ via
+<dispatcher>`). Dispatchers are rule DATA (`handoffDispatchers`; re-run `rig graph` after edits, no
+re-index). Co-location-based; BCL (`Task.Run`)/lambda callbacks fall to the unclassified residual.
 
-`reaches`/`tree`/`derive` annotate methods with effects, each prefixed by an emoji (💾 write, 🔍 read,
-📥 fetch, ☎️ soap, 🌐 http, 📤 queue, 📣 echo, 📡 eventbus, 🗃️ cache, 📦 object-store, 📁 io, ⚠️ throw,
-✅/↩️ tx, 🧵 parallel, 🛢️ db_command). Built-in providers also cover **EF Core** (`efcore:read|commit|
-pending_write|raw_sql|schema|probe` — DbContext/DbSet/queryable ops), **raw ADO** (`db_command:execute|
-query`, `db_connection:open`, `db_reader:row_read`), and **parallel** fan-out (`parallel:fanout` for
-Parallel.For/ForEach, `:run` for Task.Run, `:await_all` for Task.WhenAll). Override the glyph map per-repo
-with `rig.effect-emoji.json` (`{"llblgen:write":"💾",...}`).
+## Detectors & render rules (DATA, query-side, NO re-index)
+- **Add an effect**: append to `effects` in `rig.rules.json` (`{provider, operation, methods:[…],
+  receiverTypes|declaringTypes:[…], resource}`), re-run `derive`/`reaches`. Match the API at its
+  FIRST-PARTY call site — a `receiverTypes` may name an EXTERNAL type (e.g. `StackExchange.Redis.IDatabase`)
+  and rig still tags it where your code calls it. `resource:"argument_name"` captures the key/channel arg
+  (high-signal); others: `receiver_type`/`declaring_type`/`argument_type`/`type_argument`. Gate with the
+  tightest type to avoid same-name misfires.
+- **Tree render rules** (`render`; ships empty, PRESENTATION-only — never affect reach): `collapseSeams
+  {pattern,label}` folds a fan-out HUB into one summary leaf (union of effects + hidden count);
+  `opaqueTypes {pattern,label}` draws a type/namespace as a leaf (anchor a namespace with `M:`). `tree
+  --raw` bypasses them.
 
-- **An effect listed N times = N static call-sites that reach it (branches included), NOT N runtime
-  writes.** An insert-vs-update method shows the same write twice (one per branch); only one fires per
-  call. Read occurrences as "places in code," never as execution multiplicity.
-- **`~heuristic` marks an INFERRED dispatch hop.** Virtual/interface dispatch is resolved from EXACT
-  Roslyn-mined facts (unmarked — trust them); where Roslyn couldn't bind (net48 `!:` partial binding)
-  rig falls back to name/arity matching and marks the hop `~heuristic` (tree: `«impl-dispatch
-  ~heuristic»`, path: `[impl-dispatch (heuristic)]`, reaches: `~heuristic` suffix; TSV: trailing
-  `dispatchBasis` column). ~99% correct — verify before relying on such a path.
-- **Dispatch fan-out is an OVER-APPROXIMATION, not a confirmed call.** A virtual/interface call resolves
-  to a concrete runtime method (**one hop**); CHA can't pick the runtime type, so it lists ALL impls.
-  `reaches` segregates targets reached ONLY via that fan-out into a separate **"dispatch fan-out (NOT a
-  real call)"** bucket; `tree` tags them `«impl-dispatch ×N fan-out»`. Read `×N` as "could be any of these
-  N," never "calls all N." A resolved target is NOT re-dispatched (dispatch is one hop) — so an impl
-  reached via the interface won't drag in its base method's *other* overrides.
-- **`tree` children are in source order** (call-site line ≈ eager-inline execution order), deterministic.
-- **Generic labels show the REAL instantiation, not `<T, U>`.** When a node is reached from a concrete
-  entry, `tree` monomorphizes the declaring-type AND generic-method args down the call chain —
-  `QueryPipeline<PersonDataFieldDefinition, PersonDataFieldDefinitionColumn>.Create<DefinitionAndRangeDto,
-  …>` instead of `QueryPipeline<T, U>.Create<T, U>`. Works through static factories, generic methods, and
-  lambda bodies (`skip: i => Create(…)`). A position stays a placeholder (`T`/`U`) only when its type is
-  genuinely unknown on that path — no concrete entry pinned it, or it crosses an **impl-dispatch** hop
-  (interface→impl dispatch carries no type binding). The arity is always real (`Foo\`2` → `<T, U>`).
-- **Effect filtering** — `--only <list>` keeps just those, `--exclude <list>` drops them (exclude wins).
-  The list is comma- **or** whitespace-separated and repeatable; tokens match `provider` (`throw`) or
-  `provider:operation` (`llblgen:read`). Headline use: **`--exclude throw`** to hide exceptions.
-
-## Async handoffs — SYNC-CUT by default; `--async` to include them
-
-rig is a synchronous reachability tool. A delegate handed to a dispatcher to run LATER / on another
-thread (a background/timer/actor/event scheduler) is an async **handoff**, NOT a plain call — a distinct
-`handoff` edge KIND. By **default it is CUT** (never conflated with a synchronous call), and `--async`
-walks it, tagged. Consequences:
-
-- **`reaches`/`tree`/`path`/`callers` default to sync-cut**: a registration like
-  `new RepeatingBackgroundProcessSchedule(ts, ProcessHealthcodeQueue, ..)` does NOT make the registrar
-  look like it runs `ProcessHealthcodeQueue` — the callback's DB/SOAP effects are absent from the
-  registrar's synchronous reach. Per-entry effect inventories and `callers --roots` origins are the
-  trustworthy synchronous ones; a background callback surfaces as its OWN origin.
-- **`--async`** walks handoff edges, tagged. `reaches --async` splits output into **direct** (real call
-  paths), **async (scheduled)** (⚡, reached across a handoff — `⤳ via <dispatcher>`), and **dispatch
-  fan-out**. `tree --async` marks the hop `⤳handoff via <dispatcher> [cross_thread]`; `path --async`
-  renders it. Use it to ask "what does this scheduler eventually cause", knowing it's cross-thread.
-- `rig derive` lists classified handoffs by kind (background/timer/actor/event) with their dispatcher +
-  registration site, and collapses the unclassified-methodGroup residual to a count (independent of the
-  traversal default).
-- **Dispatchers are rule DATA** — the `handoffDispatchers` section in `rig.rules.json` (per dispatcher:
-  `consumerPatterns` matched against the consuming ctor/method DocID, an EP `kind`, a `repeating` flag).
-  A method-group is classified a handoff only when a curated dispatcher consumes it (recall rail:
-  unmatched method-groups keep synchronous semantics; `dead` keeps ALL method-group/handoff targets as
-  roots regardless). Re-run `rig graph` after editing dispatchers (no re-index needed).
-- **Limits**: classification is co-location-based (the dispatcher consumes the method-group as a
-  same-line argument); BCL dispatchers (`Task.Run`) and lambda callbacks fall into the unclassified
-  residual. Interleaving/ordering/races are out of scope — rig tags, never orders.
-
-## Tree render rules — codebase-specific abstraction (data, not heuristics)
-
-A `rig tree` can explode not because of app branching but because of a *codebase-specific* seam where
-static analysis loses precision — e.g. a reflection/string-keyed service-locator (one virtual call CHA
-must fan out to ALL impls) or an ORM's generic entity-construction factory. These blow-ups are a
-property of the codebase, so the abstraction is **rule DATA**, never a baked-in degree threshold (no
-"collapse if fan-out > N"). The `render` section in `rig.rules.json` (cascaded via `--rules`) carries it;
-ships EMPTY, so a codebase with no curated render rules always sees the raw exact tree.
-
-- **`collapseSeams`** (`{pattern, label}`) — `pattern` is a DocID substring matching a fan-out HUB. Its
-  candidate children are folded into ONE summary leaf: the de-duped **union of effects** reachable
-  through them + a hidden-line count (`⋯ N dispatch targets collapsed [seam: <label>] {effects…} (+M
-  lines hidden)`). The reach is untouched — this is presentation only.
-- **`opaqueTypes`** (`{pattern, label}`) — a node matching the type/namespace pattern is drawn as a
-  leaf (`«opaque: <label>»`): its own effects still print, its subtree does not. For framework/infra
-  you have source for but rarely need to read (e.g. the Echo actor runtime, an ORM's support classes).
-  The pattern matches the DECLARING type only (the DocID with its parameter list stripped), so a
-  namespace pattern like `M:Echo.` hits methods declared in `Echo.*` but NOT an app method that merely
-  takes an `Echo.ProcessId` parameter. Anchor with `M:` for a namespace (`M:Echo.`); a bare type name
-  (`LinqMetaData`) matches anywhere in the declaring type.
-- **`rig tree --raw`** bypasses ALL render rules to print the exact unfiltered tree. Use it to expand a
-  collapsed seam, or to confirm the rules aren't hiding something you need.
-- Render rules NEVER affect `reaches`/`callers`/`path`/`dead` or the reach itself — only what `tree`
-  draws. (MedDBase example: `IService.Startup` ×113 service-locator + `Construct\`2.New` ×49 entity
-  registry collapse a depth-32 `InvoiceMain.MatchPayments` tree from 1970 → ~106 lines.)
-
-## Extending effect coverage — add a detector (data, query-side, NO re-index)
-
-Effects are DATA. To tag an outside-world call rig misses, add an entry to the `effects` array in
-`rig.rules.json` (cascaded via `--rules`), then re-run `rig derive`/`reaches`/`tree` — **no re-index**
-(effects are query-side; only `FactExtractor` changes need re-indexing). Schema (full in REFERENCE):
-`{ provider, operation, methods:[…], receiverTypes | declaringTypes:[…], resource }`.
-
-- **Match the API at its FIRST-PARTY call site — even for an external library.** The socket/IO call lives
-  in the dependency (e.g. `StackExchange.Redis.IDatabase.HashGet`, `System.Web.HttpResponse.Write`), but
-  the call SITE is first-party and the effect keys to the enclosing first-party method. So `receiverTypes`
-  can name an external type; rig still tags it where your code calls it. (Anchor at the real boundary, not
-  a deep wrapper — e.g. tag the Redis API, not just the Echo `ICluster` façade.)
-- **`resource: "argument_name"`** captures the first arg (the key/channel/setting name) as the resource —
-  high-signal (`config:read OpenAiKey`, `redis:read <key>`). Other strategies: `receiver_type`,
-  `declaring_type`, `argument_type`, `type_argument`.
-- **Verify live**: `rig derive --format tsv | awk -F'\t' '$1=="effect"{print $2}' | sort -u` (providers),
-  then `rig reaches <method>` — but **derive totals ≠ reachable**: an effect surfaces from a caller ONLY
-  if its enclosing id is a **call-graph node** (a method/accessor/lambda/ctor `M:`/synthetic id). An effect
-  keyed to a property (`P:`)/field (`F:`) id shows in `derive` totals but never in `reaches`/`tree`.
-- A detector matches by method NAME + receiver/declaring type, so a same-named method on an unrelated type
-  can mis-fire — gate with the tightest `receiverTypes`/`declaringTypes` that still covers the real sites.
-
-## Core workflow — answer a reachability/effect question
-
-1. **Confirm the index is healthy**: `rig runs` (entrypoints/effects/symbols counts). A sane Pages-scale
-   index has thousands of EPs + effects; near-zero EP/effect with healthy symbols = base-type-chain binding flake (see REFERENCE).
-2. **Forward** ("what does X do/touch"): `rig reaches X` (effects) / `rig tree X --full` (call tree).
-3. **Reverse** ("who/what entry points reach X"): `rig callers X --roots`.
-4. **Specific path**: `rig path X Y`.
-5. **Effect/EP inventory**: `rig derive [--rules extra.json]`.
-6. **Dead code**: `rig dead` — ⚠️ currently DISABLED (see below).
-7. **Blast radius / behavioral diff of a change**: `rig impact --base <ref>` — see below.
+## Core workflow
+1. **Health-check**: `rig runs` (EP/effect/symbol counts). Thousands of EPs+effects expected; near-zero with healthy symbols = base-type binding flake (REFERENCE).
+2. Forward "what does X touch": `rig reaches X` / `rig tree X --full`.  Reverse "who reaches X": `rig callers X --roots`.  Path: `rig path X Y`.  Inventory: `rig derive`.  Change blast radius: `rig impact --base <ref>`.
+3. **Validate against SOURCE, not the DB** (it's the fallible Roslyn pass's output): trace from source → replicate with the SHIPPED engine (`reaches`/`path`, never a BFS reimpl) → fix the RULE, not the test.
 
 ## Blast radius & behavioral diff (`rig impact`)
+Diffs the derived graph between two commits (immune to format/rename churn). Needs BOTH commits indexed +
+the source git diff. `--base <ref>` (branch = LATEST store). `--per-ep` = per-entry-point effect-set diff —
+the precise lens; surfaces deltas the global diff masks (one EP losing a sink others still reach; `-` on
+some EPs + `+` on others = a relocation). Three layers: changed set (v1 FILE-granular → over-approx),
+affected EPs (by service), behavioral delta (`±effect`/`+observation`, param-free keyed).
+- **Cross-check surprising deltas against UNBOUNDED `tree`/`reaches` (the oracle), two known gaps:** (a)
+  `--per-ep` reach can be depth-capped while `tree`/`reaches` aren't — a path crossing the cap reports a
+  spurious `±`; verify with `tree "<EP>" --effects --store <head>` vs `<base>`. (b) reverse layers
+  (`callers`/`--roots`/affected-EP) can MISS an EP reached only via interface-dispatch/lambda — confirm
+  forward with `rig path "<EP>" "<target>"`.
+- Setup: index base then branch (each → its own store); `--repo <path>` for a separate source tree.
+  `--per-ep` is minutes on a big store (in-process, parallel — no N shell-outs).
 
-`rig impact` answers "what does this branch/PR change?" by diffing the **derived graph** between two
-commits — so it's immune to formatting/rename churn (reformatting yields identical facts). It needs the
-**source repo's git diff** (to find changed files) AND **both commits indexed** as separate stores.
+## Deployment attribution (`deployments.json`, opt-in)
+Drop `deployments.json` next to `.rig/` → every EP line annotates the hosting service(s) `⟦Service (kind)⟧`.
+`{services:[{name, host:"<entry csproj rel to sln>", kind, provides?:[…]}]}` (JSONC). Maps each service's
+csproj → ProjectReference closure → an EP's file → owning csproj → service. Closure = "loaded-in" (upper
+bound); refine to "active-in" via rule-declared `provides`∩`requires` tokens. Full schema in REFERENCE.
 
-```bash
-# from the dir holding .rig/ ; the branch commit is the LATEST store, the base resolved via --base/--store
-rig impact --base main                  # diff working-tree/HEAD vs `main`
-rig impact --base <sha> --per-ep        # + per-entry-point effect-set diff
-rig impact --base <sha> --format tsv    # machine-readable rows
-```
+## Notes
+- **`rig dead` is currently DISABLED** (unwired in `CommandLine/Root.cs`; errors *"'dead' was not matched"*). Approximate via `callers <m> --roots` on suspected-unused methods, or read source. Model in REFERENCE for when it's re-enabled.
+- **Query cache**: `tree` caches forest+effects in `.rig/cache.db` (auto-invalidated on reindex). `--no-cache` to bypass; safe to delete anytime.
 
-What it reports, in three layers:
-1. **Changed set** — methods in the changed `.cs` files. **v1 is FILE-granular** (every method in a
-   touched file is treated as changed — a 9-line edit in a 5k-line file marks all its methods), so the
-   blast radius is an **over-approximation**; read it as "could be affected," and lean on the per-EP /
-   behavioral layers for precision. (Hunk→symbol precision is deferred — needs a method end-line fact.)
-2. **Affected entry points** — EPs that reverse-reach the changed set, grouped by deployed service
-   (what redeploys / is at risk).
-3. **Behavioral delta** (the real diff): effects/observations reachable FROM the changed methods, branch
-   vs base — `+effect` newly reachable (e.g. a new DB write), `-effect` no longer reachable (e.g. a
-   removed object_store write), `+observation` newly introduced risk (e.g. became an n+1). Keyed
-   param-free (`provider, op, resource, Type.Method`) so signature edits don't churn.
+## Gotchas (full list in REFERENCE)
+- **`index` builds internally — NO external pre-build.** `--parallelism 16` is the safe standard (the internal build no longer clobbers shared `bin/`).
+- **Standalone `index` REPLACES atomically** (write-temp + rename) — no need to delete `.rig` first. Only `index --identity` (multi-solution accumulate) APPENDS.
+- **Index with the global `rig`** (Debug *can* index now MEF deps are pinned, but global is reliable; don't index rig's own repo from its own `bin/` Debug dll — it self-clobbers mid-run).
+- Results are only as good as the rules + what's in scope — see the fundamental static-analysis limits in REFERENCE before trusting a count.
 
-**`--per-ep` is the precise lens** — it forward-reaches EACH entry point present in BOTH commits and diffs
-*that EP's* reachable-effect set. It surfaces deltas the change-level diff MASKS: when a removed call path
-no longer reaches a shared sink that *other* paths still reach, the global set-diff shows nothing, but the
-per-EP diff shows that specific EP losing the effect (e.g. "`EditLive.Save` no longer writes object_store").
-Watch for the same effect subtree showing `-` on one set of EPs and `+` on another — that's a **relocation**
-(the behavior moved EP-to-EP), which the global delta collapses to near-nothing.
-
-**Cross-check a surprising `impact` delta against `tree`/`reaches` — those run UNBOUNDED and are the oracle.**
-`impact` has two systematic gaps the simpler commands don't share (both seen for real on the MedDBase
-healthcode-settings MR), so use `impact` to FIND candidate EPs but confirm each delta before reporting it:
-- **Depth horizon.** `impact --per-ep`'s forward reach can carry a `maxDepth` cap (was 20) while
-  `reaches`/`tree` are unbounded. An effect whose *shortest* reach is deeper than the cap is truncated from
-  the per-EP set, so a change that merely SHORTENS a path across the cap reports a spurious `+effect`
-  (lengthening → spurious `-`). Tell-tale: a `+/-` that two otherwise-identical EPs disagree on, where the
-  deep one churns and the shallow one doesn't. Verdict: diff `rig tree "<EP>" --effects --store <head>` vs
-  `--store <base>` (unbounded, same forward reach) — and read `reaches`'s `dN` depth prefix (an effect at
-  `d20`/`d21` is sitting on the horizon). The per-EP tree-diff between two `--store`s is the trustworthy
-  behavioral delta.
-- **Reverse-dispatch recall.** The reverse layers (`callers`/`--entrypoints`/`--roots`, and impact's
-  "affected EP" grouping) can MISS an entry point that reaches the target only via an interface-dispatched
-  call or an inner-lambda hop. If a reverse result looks suspiciously stable or undercounted, confirm
-  forward with `rig path "<EP>" "<target>"` — forward dispatch is the more complete direction. (530-vs-530
-  identical `callers --entrypoints` across two stores was THIS bug, not "no change".)
-
-**Setup (two indexed commits):** index the base commit, then the branch commit (each lands in its own
-`.rig/<commit>/` store). `--base <ref>` resolves the ref to a commit sha and matches it to a store; or pass
-`--base-store <path>` explicitly. `--repo <path>` points at the source repo for the diff when it's a
-separate tree from the store dir (the common MedDBase layout: cwd = analysis dir, source = app clone).
-Skips with a hint if the base commit isn't indexed. **Cost**: `--per-ep` loads each store once and
-forward-reaches every affected EP in parallel (in-process) — minutes on a 1.6M-edge store, but it does NOT
-shell out N times.
-
-## Deployment attribution — which service hosts an entry point (`deployments.json`)
-
-Optional and opt-in: drop a `deployments.json` next to `.rig/` and every command that renders an entry
-point annotates it with the deployed **service(s)** whose process loads it. Absent the file, output is
-unchanged.
-
-- **Config** (`deployments.json`): `{ "services": [ { "name", "host": "<entry csproj, relative to the
-  solution dir>", "kind": "iis|kube|exe|…", "provides": ["<token>", …]? } ] }`. JSONC (comments + trailing
-  commas OK). Seed it from the build's own artifact manifest (e.g. a NUKE `Build.Artifacts.Spec.cs`),
-  then curate. `kind`/prod-topology is a hand-maintained overlay — the build manifest knows the csproj,
-  not which app-pool/region actually runs it.
-- **How it maps**: each service's entry csproj → transitive `<ProjectReference>` closure (via the indexed
-  solution); an EP's source file → its owning csproj → the service(s) whose closure contains it.
-- **loaded-in vs active-in (capability gate)**: closure membership is "code is *loaded* in service X", an
-  **upper bound** — shared libs fan out to every referencing host. To refine to *active-in*, a service
-  declares opaque tokens it `provides` and a rule (`handoffDispatchers` / entry-point rule in
-  `rig.rules.json`) declares tokens it `requires`; an EP is active-in a loaded service iff
-  `provides ∩ requires ≠ ∅` (ANY). No `requires` ⇒ ungated ⇒ active wherever loaded (output unchanged —
-  the gate is opt-in). Tokens are opaque to rig (a deployment convention, e.g. a startup-set id).
-- **Rendering** (the ▶ custom EP line): `▶ <kind> <route>  ⟦MedDBase (iis)⟧`, with a dim
-  `· N linked-inactive` delta when the EP links into hosts it is gated out of, or `⟦N svcs: A, B, C +k⟧`
-  for a multi-host fan-out. Appears in `derive` (+ a per-service active-in summary, + trailing `service` =
-  loaded and `activeService` = active columns in `--format tsv`), `callers --entrypoints`/`--roots`,
-  `tree` (root AND any EP node in the body), and the `reaches`/`path` From line.
-- **Out of scope**: a single rule gates all its EPs identically — a runtime `if` inside one registrar that
-  starts some actors only on one host is not expressible by rule alone; cluster routing / lazy spawn too.
-  Confirm against config/logs.
-
-## Query cache (`rig tree`)
-
-`rig tree` caches its computed forest + effects in a separate `.rig/cache.db` (the main `rig.db` is opened
-read-only). A repeat query skips the traversal + effect derivation and only re-loads the graph to render —
-identical output, lower latency. **Auto-invalidated on reindex:** the key embeds the rule fingerprint + a
-store identity (`rig.db` size/mtime) that `rig index`/`rig graph` change, and stale rows are purged on
-open, so you never see a result from an old index. It's best-effort (any failure silently recomputes).
-Pass `--no-cache` to bypass it (e.g. when benchmarking). Safe to delete `.rig/cache.db` anytime.
-
-## Finding dead code (`rig dead`)
-
-> ⚠️ **`rig dead` is currently DISABLED** — it's commented out in `CommandLine/Root.cs`, so `rig dead`
-> errors with *"'dead' was not matched"* (not a typo on your part). It ran on the all-hops SQL superset,
-> which the one-hop dispatch engine no longer matches; re-enable once `dead` is moved onto that engine.
-> The model below documents it for when it returns — until then, approximate via `callers <m> --roots`
-> on suspected-unused methods, or read the source.
-
-First-party method not reachable (forward, incl. dispatch) from any root = candidate. Roots = derived
-entry points + handoffs + `Main` + test methods. **Report-only** — confirm against the C# compiler
-(IDE0051/CS0169) or by reading source before removing; facts can't see reflection/DI/serialization.
-- Tiers: private-uncalled = **High** (act on these), internal = Medium, public/protected = **Low** (likely API/reflection; hidden unless `--all`).
-- `--root <pat>` seeds roots facts can't see (top-level `Program.Main` is synthesized → invisible; reflection hosts).
-- `--lib` = library mode (public/protected become roots). `--include-dispatch` also flags unreached overrides/virtuals.
-- A dead method with 0 callers = removable cluster root; >0 = reached only by other dead code.
-
-## Validate a finding (the ground-truth loop)
-
-**Never trust the mined DB as ground truth — it is the fallible Roslyn pass's output.** Validate against
-(a) a synthetic fixture (truth by construction) or (b) the actual source. Loop: pick methods → trace
-from SOURCE by hand/subagent → replicate with rig (`callers --roots`, `reaches`, `tree`) → diff → fix the
-**detector/rule** (not the test) → re-run. Use the SHIPPED engine (`rig reaches/path`), never a BFS reimpl.
-
-## Top gotchas (full list in REFERENCE.md)
-
-- **`rig index` builds internally — no external pre-build.** ONE `rig index <sln> --parallelism 16 --reuse-build-cache` call runs the design-time build itself (parallelised, cached; `--reuse-build-cache` skips the dominant build phase for unchanged projects), then extracts. The old "MSBuild the solution first" step is obsolete.
-- **`index` is the only extraction command** (the old `mine` is superseded; `index --from <entry.csproj>` covers the entry-scoped closure case). `--parallelism 16` is the safe standard setting — the internal build no longer clobbers shared `bin/`.
-- **A standalone `rig index` REPLACES atomically** (write-to-temp + rename) — re-running cleanly overwrites; no need to delete `.rig` first. Only `index --identity` (multi-solution accumulate) APPENDS.
-- **Index with the published global `rig`; query with anything.** (The Roslyn-workspace MEF deps — `System.Composition.*` — are now pinned, so a Debug build *can* index; but the global tool is the reliable path.) Indexing rig's OWN repo from a `bin/`-resident Debug dll self-clobbers that binary's output mid-run — index a copy or use the global tool.
-- Detector results are only as good as the rules + what's in scope — see the **fundamental static-analysis limits** in REFERENCE.md before trusting an effect/EP count.
-
-See **[REFERENCE.md](REFERENCE.md)** for: full command reference, indexing semantics (solution vs
-`--from` closure vs single `.csproj`), the rule/detector model + detector families, recall behaviour (dispatch + dead-code), the
-fundamental limits, and env gotchas.
+See **[REFERENCE.md](REFERENCE.md)** for: full command reference, indexing semantics, the rule/detector
+model + detector families, recall behaviour (dispatch + dead-code), the fundamental limits, and env gotchas.
