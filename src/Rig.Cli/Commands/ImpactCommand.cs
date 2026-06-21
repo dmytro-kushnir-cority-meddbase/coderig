@@ -61,6 +61,15 @@ internal static class ImpactCommand
                 + "changing its behavior). Off by default: the default output lists EPs whose EFFECT set changed (the "
                 + "behavioral signal) plus a one-line structural-only summary. This expands that summary to the full list.",
         };
+        // CI guardrail for behavior-preserving MRs (refactors / framework migrations): exit non-zero if ANY
+        // entry point's reachable EFFECT set changed (the per-EP behavioral delta — the same count the header
+        // reports as "N with a changed behavior"). Structural-only reachable-tree ripple does NOT trip it (a
+        // data-shape change with no new/lost effect is exactly what a refactor is allowed to do). The diff is
+        // formatting/rename-immune, so this gates on behavior, not text.
+        var expectNoEffectChange = new Option<bool>("--expect-no-effect-change")
+        {
+            Description = "CI gate: exit 1 if any entry point's reachable effect set changed (for behavior-preserving MRs).",
+        };
         var cmd = new Command(
             name: "impact",
             description: "Two-store diff: the entry-point + per-EP effect/reach changes between two indexed commits (--base <store> --head <store>)."
@@ -74,6 +83,7 @@ internal static class ImpactCommand
             limit,
             noCache,
             structural,
+            expectNoEffectChange,
         };
         // Both stores are mandatory — impact is a pure two-store diff, there is no working-tree/git fallback
         // and no LATEST default. Error clearly (before opening anything) if either ref is missing.
@@ -102,6 +112,7 @@ internal static class ImpactCommand
                         limit: pr.GetValue(limit),
                         noCache: pr.GetValue(noCache),
                         structural: pr.GetValue(structural),
+                        expectNoEffectChange: pr.GetValue(expectNoEffectChange),
                         output: output,
                         error: error,
                         workingDirectory: workingDirectory
@@ -120,6 +131,7 @@ internal static class ImpactCommand
         int? limit,
         bool noCache,
         bool structural,
+        bool expectNoEffectChange,
         TextWriter output,
         TextWriter error,
         string workingDirectory
@@ -178,7 +190,7 @@ internal static class ImpactCommand
                 structural: structural,
                 max: max
             );
-            return 0;
+            return ExpectNoEffectChangeExit(expectNoEffectChange, art.Diff.PerEp.Count, error);
         }
 
         // Provenance for the header: each store's source branch + short commit (12-char sha), read from its
@@ -298,6 +310,29 @@ internal static class ImpactCommand
             structural: structural,
             max: max
         );
+        return ExpectNoEffectChangeExit(expectNoEffectChange, impactDiff.PerEp.Count, error);
+    }
+
+    // The `--expect-no-effect-change` CI gate. Behavioral change = an entry point present in BOTH commits whose
+    // reachable EFFECT set changed (impactDiff.PerEp — the header's "N with a changed behavior"). Structural-only
+    // reachable-tree ripple is NOT a behavioral change and never trips the gate. The verdict goes to STDERR so a
+    // `--format tsv` run's stdout stays machine-clean; the exit code is the CI signal (1 = changed, 0 = clean).
+    internal static int ExpectNoEffectChangeExit(bool expect, int behavioralEpCount, TextWriter error)
+    {
+        if (!expect)
+        {
+            return 0;
+        }
+
+        if (behavioralEpCount > 0)
+        {
+            error.WriteLine(
+                $"--expect-no-effect-change FAILED: {behavioralEpCount} entry point(s) changed behavior (reachable effect set) — see the per-EP section. exit 1."
+            );
+            return 1;
+        }
+
+        error.WriteLine("--expect-no-effect-change OK: no entry point's effect set changed.");
         return 0;
     }
 
