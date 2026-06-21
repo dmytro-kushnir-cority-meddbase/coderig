@@ -762,4 +762,114 @@ public sealed class FactDerivationTests(AnalyzedPlaygrounds playgrounds)
             .Where(e => e.Provider == "lock")
             .ShouldAllBe(e => e.Observations == null || e.Observations.All(o => o.Type != "lock_held_across_effect"));
     }
+
+    // FR-1(a): an Atom.Swap invocation derives a shared_state:mutate effect via the existing invocation
+    // rule path (method name + receiver-type gate, resource:receiver_type). This is the !10706 culprit
+    // shape (atomic RMW on a shared Atom cell).
+    [Test]
+    public void Atom_swap_invocation_derives_a_shared_state_mutate_effect()
+    {
+        var swap = new FactInvocation(
+            Target: "M:LanguageExt.Atom`1.Swap(System.Func{`0,`0})",
+            Enclosing: "M:App.FieldEntityModel.MarkIntraImportFastPathConflicts",
+            FilePath: "FieldEntityModel.cs",
+            Line: 122,
+            Receiver: "LanguageExt.Atom<A>"
+        );
+
+        var rule = new FactEffectRule(
+            Provider: "shared_state",
+            Operation: "mutate",
+            Methods: new[] { "Swap", "SwapAsync" },
+            DeclaringTypes: Array.Empty<string>(),
+            ReceiverTypes: new[] { "LanguageExt.Atom" },
+            Resource: "receiver_type"
+        );
+
+        var effect = FactEffectDeriver.Derive([swap], [rule]).ShouldHaveSingleItem();
+        effect.Provider.ShouldBe("shared_state");
+        effect.Operation.ShouldBe("mutate");
+        effect.ResourceType.ShouldBe("LanguageExt.Atom<A>");
+        effect.EnclosingSymbolId.ShouldNotBeNull().ShouldContain("MarkIntraImportFastPathConflicts");
+
+        // The name-colliding static helper MMS.Swap.Always (a class literally named "Swap") must NOT match
+        // — the receiver-type gate is what distinguishes the Atom contract from an unrelated method.
+        var collidingHelper = new FactInvocation(
+            Target: "M:MMS.Swap.Always``1(``0@,``0@)",
+            Enclosing: "M:App.Helper.Do",
+            FilePath: "Helper.cs",
+            Line: 1,
+            Receiver: null
+        );
+        FactEffectDeriver.Derive([collidingHelper], [rule]).ShouldBeEmpty();
+    }
+
+    // FR-1(b): a WRITE ref whose target is a STATIC field derives a shared_state:mutate effect keyed to
+    // the writing method, resolved to the field's declaring type.
+    [Test]
+    public void Write_to_a_static_field_derives_a_shared_state_mutate_effect()
+    {
+        var rule = new FactEffectRule(
+            Provider: "shared_state",
+            Operation: "mutate",
+            Methods: Array.Empty<string>(),
+            DeclaringTypes: Array.Empty<string>(),
+            ReceiverTypes: Array.Empty<string>(),
+            MatchFieldWrite: true,
+            Resource: "declaring_type"
+        );
+
+        // The caller (Reads.LoadStaticFieldWriteRefsAsync) pre-filters to STATIC targets; the deriver is
+        // handed only those, so this ref stands for a write to a static field.
+        var staticWrite = new SymbolRef(
+            Target: "F:App.GlobalCache.SharedCounter",
+            Enclosing: "M:App.Importer.Run",
+            FilePath: "Importer.cs",
+            Line: 42
+        );
+
+        var effect = FactEffectDeriver.Derive([], [rule], staticFieldWriteRefs: [staticWrite]).ShouldHaveSingleItem();
+        effect.Provider.ShouldBe("shared_state");
+        effect.Operation.ShouldBe("mutate");
+        effect.ResourceType.ShouldBe("App.GlobalCache");
+        effect.EnclosingSymbolId.ShouldNotBeNull().ShouldContain("Importer.Run");
+
+        // resource:"declaring_type" applies the type gate to the slot's declaring type; a non-matching
+        // namespace gate drops it.
+        var gated = rule with
+        {
+            DeclaringTypes = new[] { "Other.Namespace" },
+        };
+        FactEffectDeriver.Derive([], [gated], staticFieldWriteRefs: [staticWrite]).ShouldBeEmpty();
+    }
+
+    // FR-1(b) negative: a field-write rule fires ONLY on the static write refs it is handed. An
+    // invocation/ctor/throw input never produces a shared_state:mutate from a MatchFieldWrite rule, and
+    // an empty static-write list yields nothing (the instance/local-field case the loader filters out).
+    [Test]
+    public void Field_write_rule_does_not_fire_without_static_write_refs()
+    {
+        var rule = new FactEffectRule(
+            Provider: "shared_state",
+            Operation: "mutate",
+            Methods: Array.Empty<string>(),
+            DeclaringTypes: Array.Empty<string>(),
+            ReceiverTypes: Array.Empty<string>(),
+            MatchFieldWrite: true,
+            Resource: "declaring_type"
+        );
+
+        // No static write refs supplied (an instance/local field write is filtered out upstream) -> none.
+        FactEffectDeriver.Derive([], [rule], staticFieldWriteRefs: []).ShouldBeEmpty();
+
+        // An ordinary invocation must NOT be matched by a field-write rule (the arms are disjoint).
+        var inv = new FactInvocation(
+            Target: "M:App.Foo.Bar(System.Int32)",
+            Enclosing: "M:App.Caller.Do",
+            FilePath: "Caller.cs",
+            Line: 1,
+            Receiver: "App.Foo"
+        );
+        FactEffectDeriver.Derive([inv], [rule], staticFieldWriteRefs: []).ShouldBeEmpty();
+    }
 }

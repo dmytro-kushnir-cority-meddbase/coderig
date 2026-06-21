@@ -30,7 +30,12 @@ public static class FactEffectDeriver
         IReadOnlyList<(string TypeId, string BaseId)>? baseEdges = null,
         IReadOnlyList<SymbolRef>? ctorRefs = null,
         FactObservationRules? observationRules = null,
-        IReadOnlyList<SymbolRef>? throwRefs = null
+        IReadOnlyList<SymbolRef>? throwRefs = null,
+        // FR-1(b): write refs whose TARGET is a STATIC field/auto-property, pre-filtered by the caller
+        // (the static-ness gate lives in the loader's symbol_facts join — the fact layer's only source
+        // of the target's modifiers). Each Target is the written slot's DocID ("F:Ns.Type.field" /
+        // "P:Ns.Type.Prop"); MatchFieldWrite rules consume these. Null/empty when not supplied.
+        IReadOnlyList<SymbolRef>? staticFieldWriteRefs = null
     )
     {
         // Precompute a base-type closure per distinct DeclaringTypeBaseTypes set (e.g. ProxyBase).
@@ -68,7 +73,13 @@ public static class FactEffectDeriver
         // List<string> enumerator for rule.Methods.Contains(name, comparer) — IReadOnlyList has no IList
         // fast path — and string.Join("|", roots) to key the closure cache inside ClosureFor.
         var invocationRules = rules
-            .Where(r => !r.MatchConstructor && !r.MatchThrow && !r.TreatAsDispatch && r.TargetCallsMethods is not { Count: > 0 })
+            .Where(r =>
+                !r.MatchConstructor
+                && !r.MatchThrow
+                && !r.MatchFieldWrite
+                && !r.TreatAsDispatch
+                && r.TargetCallsMethods is not { Count: > 0 }
+            )
             .Select(r => (Rule: r, Methods: new HashSet<string>(r.Methods, StringComparer.Ordinal), Closure: ClosureFor(r)))
             .ToArray();
         // Union of every invocation rule's method names — lets the per-invocation loop reject a target
@@ -82,6 +93,7 @@ public static class FactEffectDeriver
 
         var constructorRules = rules.Where(r => r.MatchConstructor && !r.TreatAsDispatch).ToArray();
         var throwRules = rules.Where(r => r.MatchThrow && !r.TreatAsDispatch).ToArray();
+        var fieldWriteRules = rules.Where(r => r.MatchFieldWrite && !r.TreatAsDispatch).ToArray();
 
         var results = new List<DerivedEffect>();
         foreach (var inv in invocations)
@@ -357,7 +369,79 @@ public static class FactEffectDeriver
             }
         }
 
+        // Static-field-write effects (FR-1(b)): a `StaticType.SharedField = v` assignment. The target's
+        // static-ness is gated UPSTREAM (the loader's symbol_facts join) — a static slot is shared
+        // mutable state independent of any receiver, which is what makes this a sound rule (an instance
+        // field write would be local-vs-shared-ambiguous and is deliberately NOT matched). The target
+        // field/property DocID's declaring TYPE is gated like a declaring type, so a rule can scope to a
+        // namespace/type or fire on every static-slot write; the resource is the declaring type
+        // (resource:"declaring_type", recommended) or the field DocID itself (any other strategy). Keyed
+        // to the write's EnclosingSymbolId — a call-graph node — so it surfaces in reaches/tree.
+        if (fieldWriteRules.Length > 0 && staticFieldWriteRefs is not null)
+        {
+            foreach (var write in staticFieldWriteRefs)
+            {
+                var slot = ParseFieldSlot(write.Target);
+                if (slot is null)
+                {
+                    continue;
+                }
+
+                var (declaringType, _) = slot.Value;
+
+                foreach (var rule in fieldWriteRules)
+                {
+                    if (providerFilter is not null && !string.Equals(rule.Provider, providerFilter, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (!TypeGateMatches(rule, declaringType, receiverType: null, ClosureFor(rule)))
+                    {
+                        continue;
+                    }
+
+                    // resource:"declaring_type" -> the slot's declaring type; anything else -> the slot
+                    // DocID (the precise field), so the resource is never empty for a matched write.
+                    var resource = string.Equals(rule.Resource, "declaring_type", StringComparison.Ordinal) ? declaringType : write.Target;
+
+                    results.Add(
+                        new DerivedEffect(
+                            Provider: rule.Provider,
+                            Operation: rule.Operation,
+                            ResourceType: resource,
+                            EnclosingSymbolId: write.Enclosing,
+                            FilePath: write.FilePath,
+                            Line: write.Line
+                        )
+                    );
+                    break;
+                }
+            }
+        }
+
         return results;
+    }
+
+    // "F:Ns.Type.field" / "P:Ns.Type.Prop" -> ("Ns.Type", "field"). Generic arity markers on the
+    // declaring type are stripped (mirrors ParseMethod) so a rule can gate the open-generic form. Null
+    // when the DocID is not a field/property slot or has no dot before the member name.
+    private static (string DeclaringType, string Member)? ParseFieldSlot(string docId)
+    {
+        if (!docId.StartsWith("F:", StringComparison.Ordinal) && !docId.StartsWith("P:", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var lastDot = docId.LastIndexOf('.');
+        if (lastDot < 2)
+        {
+            return null;
+        }
+
+        var declaring = StripTypeArityMarkers(docId.Substring(startIndex: 2, length: lastDot - 2));
+        var member = docId.Substring(lastDot + 1);
+        return (declaring, member);
     }
 
     // A rule with no type gate matches any receiver. Otherwise the declaring type must match a

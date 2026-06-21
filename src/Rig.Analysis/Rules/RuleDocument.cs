@@ -76,6 +76,11 @@ internal sealed record EffectRule(
     // exception type, and the effect resource is that exception type. Surfaces guard/permission exits
     // (e.g. AccessDeniedException) as effects so a read path that drops its check is visible.
     bool MatchThrow = false,
+    // When true, match WRITE refs whose TARGET is a STATIC field/auto-property (`StaticType.Field = v`,
+    // FR-1(b)) rather than invocations. The type gates apply to the target slot's declaring type; the
+    // resource is the declaring type (resource:"declaring_type") or the slot DocID. Static-ness is what
+    // makes this rule-expressible (a shared mutation regardless of receiver). See FactEffectRule.MatchFieldWrite.
+    bool MatchFieldWrite = false,
     // Wrapper gate: match an invocation whose TARGET method itself calls one of these patterns (e.g.
     // "Echo.Process.ask") — recognizes request/response wrappers from data, no per-type curation. The
     // effect emits at the wrapper's call sites; resource:type_argument yields the caller's concrete

@@ -825,4 +825,32 @@ public static class Reads
 
         return rows;
     }
+
+    // Loads WRITE reference facts (RefKind="write") whose TARGET is a STATIC field/auto-property, for
+    // fact-based shared-state-mutation derivation (FR-1(b)). The field-write fact already exists — the
+    // FactExtractor classifies an assignment LHS as RefKinds.Write — but no deriver arm consumed it; this
+    // surfaces those whose target is STATIC, which is the property that makes a write a SHARED-state
+    // mutation (an instance/local write is local-vs-shared-ambiguous and deliberately excluded). The
+    // target's static-ness is the JOIN to symbol_facts.Modifiers — the fact layer's only source of the
+    // written slot's modifiers (the call graph carries method->method edges only). First-party only
+    // (TargetInSource) and EnclosingSymbolId not null so the effect keys to a call-graph node. Target is
+    // the written slot DocID ("F:Ns.Type.field" / "P:Ns.Type.Prop"); the deriver gates its declaring type.
+    public static async Task<IReadOnlyList<SymbolRef>> LoadStaticFieldWriteRefsAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var rows = await context
+            .ReferenceFacts.AsNoTracking()
+            .Where(r => r.RefKind == RefKinds.Write && r.TargetInSource && r.EnclosingSymbolId != null)
+            .Join(
+                context.SymbolFacts.AsNoTracking().Where(s => s.Modifiers.Contains("static")),
+                r => r.TargetSymbolId,
+                s => s.SymbolId,
+                (r, s) => new SymbolRef(Target: r.TargetSymbolId, Enclosing: r.EnclosingSymbolId, FilePath: r.FilePath, Line: r.Line)
+            )
+            .ToListAsync(cancellationToken);
+
+        return rows.GroupBy(r => (r.FilePath, r.Line, r.Target)).Select(g => g.First()).ToList();
+    }
 }

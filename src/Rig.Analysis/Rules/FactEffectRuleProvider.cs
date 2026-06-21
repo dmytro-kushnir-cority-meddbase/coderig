@@ -23,6 +23,7 @@ internal static class FactEffectRuleProvider
             MatchConstructor: rule.MatchConstructor,
             MinArguments: rule.MinArguments,
             MatchThrow: rule.MatchThrow,
+            MatchFieldWrite: rule.MatchFieldWrite,
             ContainingNamespaces: rule.ContainingNamespaces,
             ContainingTypes: rule.ContainingTypes,
             ContainingMethods: rule.ContainingMethods,

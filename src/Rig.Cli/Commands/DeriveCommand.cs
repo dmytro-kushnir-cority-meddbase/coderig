@@ -89,13 +89,15 @@ internal static class DeriveCommand
         // --- Effects (data-driven over facts) ---
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
+        var staticFieldWriteRefs = await Reads.LoadStaticFieldWriteRefsAsync(context);
         var effects = DeriveEffects(
             effectRules: rules.Effects,
             observationRules: rules.Observations,
             invocations: invocations,
             baseEdges: epData.BaseEdges,
             ctorRefs: epData.CtorRefs,
-            throwRefs: throwRefs
+            throwRefs: throwRefs,
+            staticFieldWriteRefs: staticFieldWriteRefs
         );
         effects = ApplyEffectFilters(effects: effects, only: only, exclude: exclude); // --only / --exclude (e.g. --exclude throw)
 

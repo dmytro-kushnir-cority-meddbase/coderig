@@ -659,6 +659,16 @@ public sealed record FactEffectRule(
     // target type DocID); the resource is that exception type. Surfaces guard/permission exits (e.g.
     // AccessDeniedException) as effects — a read path that drops its check is then visibly missing it.
     bool MatchThrow = false,
+    // When true, match WRITE refs (RefKind="write") whose TARGET is a STATIC field/auto-property — a
+    // `StaticType.SharedField = v` assignment (FR-1(b)). Unlike the invocation/throw arms these are NOT
+    // method calls; the field-write FACT already exists (FactExtractor classifies the assignment LHS as
+    // RefKinds.Write) but no arm consumed it. Static-ness is the gate that makes this expressible as a
+    // rule: a write to a STATIC slot is inherently a shared-state mutation regardless of receiver, so it
+    // does not suffer the local-vs-shared ambiguity that bars a bare instance `.Add`/field-write rule.
+    // The type gates (declaringTypes / declaringTypeNameEndsWith) apply to the TARGET field's declaring
+    // type; the resource is the declaring type (resource:"declaring_type") or the field DocID. The
+    // deriver is handed the pre-filtered static-target write refs by the caller (no method-name gate).
+    bool MatchFieldWrite = false,
     // Enclosing-method gates (P2a) — mirror the Roslyn MatchesContainingNamespace/Type/Method. The
     // effect counts only when the enclosing method's namespace / declaring type / name matches.
     // Parsed from the reference's EnclosingSymbolId DocID; type/namespace matching is equality +

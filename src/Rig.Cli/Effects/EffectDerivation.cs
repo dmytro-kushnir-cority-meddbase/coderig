@@ -14,7 +14,10 @@ internal static class EffectDerivation
         IReadOnlyList<FactInvocation> invocations,
         IReadOnlyList<(string, string)> baseEdges,
         IReadOnlyList<SymbolRef> ctorRefs,
-        IReadOnlyList<SymbolRef> throwRefs
+        IReadOnlyList<SymbolRef> throwRefs,
+        // FR-1(b): static-field/auto-property write refs (whole-store; supplied by `derive`). The bounded
+        // reaches/tree/impact closures do not yet bound these, so they default to none there (a follow-up).
+        IReadOnlyList<SymbolRef>? staticFieldWriteRefs = null
     ) =>
         FactEffectDeriver.Derive(
             invocations,
@@ -23,7 +26,8 @@ internal static class EffectDerivation
             baseEdges: baseEdges,
             ctorRefs: ctorRefs,
             observationRules: observationRules,
-            throwRefs: throwRefs
+            throwRefs: throwRefs,
+            staticFieldWriteRefs: staticFieldWriteRefs
         );
 
     // Effect selection for reaches/tree/derive: --only keeps just the listed effects, --exclude drops
