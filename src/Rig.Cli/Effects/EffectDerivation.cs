@@ -20,9 +20,14 @@ internal static class EffectDerivation
         IReadOnlyList<FactFieldAccess>? staticFieldWriteRefs = null,
         // FR-1 read arm: static-field/auto-property read refs (whole-store; supplied by `derive`), threaded
         // symmetrically to the write refs. Defaults to none for the bounded closures.
-        IReadOnlyList<FactFieldAccess>? staticFieldReadRefs = null
-    ) =>
-        FactEffectDeriver.Derive(
+        IReadOnlyList<FactFieldAccess>? staticFieldReadRefs = null,
+        // Hazard post-pass (race_window read-before-write matcher). Default OFF — like the other field-fed
+        // signals it runs only on the whole-store `derive` path, not the bounded tree/reaches/impact closures
+        // (which don't bound the static-field refs, so a read+write pair would be incomplete there anyway).
+        bool deriveHazards = false
+    )
+    {
+        var effects = FactEffectDeriver.Derive(
             invocations,
             effectRules,
             providerFilter: null,
@@ -33,6 +38,12 @@ internal static class EffectDerivation
             staticFieldWriteRefs: staticFieldWriteRefs,
             staticFieldReadRefs: staticFieldReadRefs
         );
+
+        // Annotate qualifying mutate effects with a race_window observation (read-before-write of the same
+        // shared cell in one method). Pure post-pass over the derived effects — adds observations, drops
+        // nothing.
+        return deriveHazards ? FactHazardDeriver.DeriveRaceWindows(effects) : effects;
+    }
 
     // Effect selection for reaches/tree/derive: --only keeps just the listed effects, --exclude drops
     // them (exclude wins on overlap). Tokens match an effect's `provider` (e.g. "throw") or the precise

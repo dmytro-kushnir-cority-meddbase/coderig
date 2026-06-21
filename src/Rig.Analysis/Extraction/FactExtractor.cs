@@ -151,12 +151,17 @@ internal static class FactExtractor
             // Structural context (enclosing loop / fan-out invocation / try-catch / held-resource scope)
             // feeds the stage-2 observation deriver. The walk root is the invocation node for a call, but a
             // STATIC-FIELD WRITE (`StaticType.Field = v`) also derives a shared_state:mutate effect (FR-1b)
-            // that must carry the SAME observations — a publish under Parallel.ForEach is the highest-value
-            // shape — so a write ref walks from its LHS `name` node (its ancestors include the enclosing
-            // loop / fan-out call / lock). Other ref kinds keep no structural context (no effect consumes it).
+            // and a static-field READ (`= StaticType.Field`) a shared_state:read effect (FR-1 read arm) —
+            // both must carry the SAME observations as an invocation. A publish under Parallel.ForEach is the
+            // highest-value WRITE shape; for the read leg the held-resource scope matters specifically: the
+            // race_window hazard tiers a read-before-write pair DOWN to "verify isolation" only when BOTH the
+            // read and the write are bracketed by a transaction (transaction_spans_effect), so the read ref
+            // must walk its enclosing scopes too. So read AND write walk from their `name` node (its ancestors
+            // include the enclosing loop / fan-out call / lock / using). Other ref kinds keep no structural
+            // context (no effect consumes it).
             SyntaxNode? structuralRoot =
                 refKind == RefKinds.Invocation ? invocation
-                : refKind == RefKinds.Write ? name
+                : refKind is RefKinds.Write or RefKinds.Read ? name
                 : null;
             var structural = StructuralContextOf(structuralRoot, model, symbolCache);
             var delegateConsumer = refKind == RefKinds.MethodGroup ? DelegateConsumerOf(name, model) : null;

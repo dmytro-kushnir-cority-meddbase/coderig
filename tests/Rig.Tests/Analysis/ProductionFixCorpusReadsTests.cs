@@ -11,7 +11,8 @@ namespace Rig.Tests.Analysis;
 public sealed class ProductionFixCorpusReadsTests
 {
     // A read of a STATIC field (`= Cache.Status`) derives exactly one shared_state:read effect keyed to the
-    // reading method, resource naming the cell's declaring type (resource:"declaring_type").
+    // reading method, resource naming the cell's SLOT DocID (resource:"field_slot" — slot-precise, so the
+    // race_window matcher pairs reads/writes on the exact field rather than the declaring type).
     [Test]
     public void Read_of_a_static_field_derives_a_shared_state_read_effect()
     {
@@ -41,7 +42,7 @@ public sealed class ProductionFixCorpusReadsTests
         var read = reads[0];
         read.Provider.ShouldBe("shared_state");
         read.Operation.ShouldBe("read");
-        read.ResourceType.ShouldBe("App.Cache");
+        read.ResourceType.ShouldBe("F:App.Cache.Status");
         read.EnclosingSymbolId.ShouldNotBeNull().ShouldContain("Reader.ReadStatus");
         // A read is never an atomic read-modify-write (the rule leaves Atomic false).
         read.Atomic.ShouldBeFalse();
@@ -82,9 +83,9 @@ public sealed class ProductionFixCorpusReadsTests
         reads.Count.ShouldBe(1);
         mutations.Count.ShouldBe(1);
 
-        // Both halves name the same shared cell's declaring type and are enclosed by the same method.
-        reads[0].ResourceType.ShouldBe("App.Cache");
-        mutations[0].ResourceType.ShouldBe("App.Cache");
+        // Both halves name the same shared cell's SLOT DocID (slot-precise) and are enclosed by the same method.
+        reads[0].ResourceType.ShouldBe("F:App.Cache.Status");
+        mutations[0].ResourceType.ShouldBe("F:App.Cache.Status");
         reads[0].EnclosingSymbolId.ShouldNotBeNull().ShouldContain("Checker.CheckThenAct");
         mutations[0].EnclosingSymbolId.ShouldNotBeNull().ShouldContain("Checker.CheckThenAct");
     }

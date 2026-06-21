@@ -74,6 +74,11 @@ public static class ProductionFixCorpus
         // "n_plus_1" / "looped_effect"). The general form behind SerializationHazardsIn.
         public IReadOnlyList<EffectObservationInfo> ObservationsIn(string enclosingMarker, string observationType) =>
             EffectsIn(enclosingMarker).SelectMany(e => e.Observations ?? []).Where(o => o.Type == observationType).ToList();
+
+        // Every race_window hazard observation attached to a (mutate) effect enclosed by the marker method —
+        // the read-before-write / TOCTOU finding. Sugar over ObservationsIn for the race_window corpus tests.
+        public IReadOnlyList<EffectObservationInfo> RaceWindowsIn(string enclosingMarker) =>
+            ObservationsIn(enclosingMarker, FactHazardDeriver.RaceWindowType);
     }
 
     public static CorpusResult Analyze(string source)
@@ -114,6 +119,10 @@ public static class ProductionFixCorpus
             staticFieldWriteRefs: StaticFieldAccessRefs(result: result, refKind: RefKinds.Write),
             staticFieldReadRefs: StaticFieldAccessRefs(result: result, refKind: RefKinds.Read)
         );
+        // Hazard post-pass: the race_window read-before-write matcher (same enclosing method, same cell).
+        // The whole-store `derive` path runs this too (EffectDerivation.DeriveEffects deriveHazards:true);
+        // the harness mirrors it so the corpus measures the SHIPPED behavior end to end.
+        effects = FactHazardDeriver.DeriveRaceWindows(effects);
         return new CorpusResult(effects);
     }
 

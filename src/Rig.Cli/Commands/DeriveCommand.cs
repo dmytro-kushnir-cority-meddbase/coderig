@@ -99,7 +99,8 @@ internal static class DeriveCommand
             ctorRefs: epData.CtorRefs,
             throwRefs: throwRefs,
             staticFieldWriteRefs: staticFieldWriteRefs,
-            staticFieldReadRefs: staticFieldReadRefs
+            staticFieldReadRefs: staticFieldReadRefs,
+            deriveHazards: true // whole-store path runs the race_window hazard post-pass
         );
         effects = ApplyEffectFilters(effects: effects, only: only, exclude: exclude); // --only / --exclude (e.g. --exclude throw)
 

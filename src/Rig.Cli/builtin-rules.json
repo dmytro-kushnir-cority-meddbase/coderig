@@ -1680,20 +1680,20 @@
       "operation": "mutate",
       "methods": [],
       "matchFieldWrite": true,
-      "resource": "declaring_type",
+      "resource": "field_slot",
       "confidence": "medium",
       "basis": "fact_derived",
-      "reason": "shared_state(static-field-write): an assignment to a STATIC field/auto-property (StaticType.SharedField = v) — shared mutable state published to every caller regardless of receiver, which is what makes it rule-expressible (an instance-field write is local-vs-shared-ambiguous and is NOT matched). Consumes the existing write refs (no re-index); static-ness is gated upstream via the symbol-facts Modifiers join."
+      "reason": "shared_state(static-field-write): an assignment to a STATIC field/auto-property (StaticType.SharedField = v) — shared mutable state published to every caller regardless of receiver, which is what makes it rule-expressible (an instance-field write is local-vs-shared-ambiguous and is NOT matched). Consumes the existing write refs (no re-index); static-ness is gated upstream via the symbol-facts Modifiers join. resource:'field_slot' (any non-'declaring_type' value) resolves to the SLOT DocID (F:Ns.Type.Field), not the declaring type, so the race_window matcher pairs on the exact cell — read TypeX.A / write TypeX.B never falsely pair."
     },
     {
       "provider": "shared_state",
       "operation": "read",
       "methods": [],
       "matchFieldRead": true,
-      "resource": "declaring_type",
+      "resource": "field_slot",
       "confidence": "medium",
       "basis": "fact_derived",
-      "reason": "shared_state(static-field-read): a read of a STATIC field/auto-property (… = StaticType.SharedField) — the symmetric twin of static-field-write. A read of shared mutable state regardless of receiver, which is what makes it rule-expressible (an instance-field read is local-vs-shared-ambiguous and is NOT matched). The 'check' of a shared cell, modeled as an effect so a read-before-write (TOCTOU/lost-update) candidate can pair it with a same-cell write. Consumes the existing read refs (no re-index); static-ness is gated upstream via the symbol-facts Modifiers join."
+      "reason": "shared_state(static-field-read): a read of a STATIC field/auto-property (… = StaticType.SharedField) — the symmetric twin of static-field-write. A read of shared mutable state regardless of receiver, which is what makes it rule-expressible (an instance-field read is local-vs-shared-ambiguous and is NOT matched). The 'check' of a shared cell, modeled as an effect so a read-before-write (TOCTOU/lost-update) candidate can pair it with a same-cell write. Consumes the existing read refs (no re-index); static-ness is gated upstream via the symbol-facts Modifiers join. resource:'field_slot' (any non-'declaring_type' value) resolves to the SLOT DocID (F:Ns.Type.Field) so the race_window matcher pairs reads and writes on the exact cell."
     }
   ],
   "diRegistrations": [
