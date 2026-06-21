@@ -583,11 +583,28 @@ public sealed record FactResourceSpanRule(
     string Context // observation context label, e.g. "transaction" / "lock"
 );
 
+// A serialization-hazard observation rule (FR-6, RCA #1646): an effect that stores/serializes a payload
+// whose generic TYPE ARGUMENT is a serializer-unsupported type yields a `serialization_hazard`
+// observation on that effect. Unlike the other observation rules (which key off STRUCTURAL context —
+// the loop / fan-out / scope around the call), this keys off the effect's OWN payload type at the
+// store/serialize boundary. Providers gates which effect providers count as such a boundary (e.g.
+// "object_store"); empty = any provider. UnsupportedTypePatterns are substrings matched against the
+// call-site generic type arguments (FactInvocation.TypeArguments) — e.g. "LanguageExt.Option" flags a
+// `Store.Save<Option<T>>(value)` whose serializer cannot round-trip Option. Data-driven: the patterns
+// live in the rules JSON, never hardcoded. The classic case is LanguageExt.Option<T> stored into the
+// object store: the serializer writes it but cannot read it back (None must be null), a latent defect
+// invisible until the object is read.
+public sealed record FactSerializationHazardRule(
+    IReadOnlyList<string> Providers, // effect providers this applies to (e.g. "object_store"); empty = any
+    IReadOnlyList<string> UnsupportedTypePatterns // substrings matched against the call's type arguments
+);
+
 public sealed record FactObservationRules(
     IReadOnlyList<FactResilienceRetryRule> ResilienceRetry,
     IReadOnlyList<FactConcurrencyHandledRule> ConcurrencyHandled,
     IReadOnlyList<FactParallelFanoutRule> ParallelFanout,
-    IReadOnlyList<FactResourceSpanRule> ResourceSpan
+    IReadOnlyList<FactResourceSpanRule> ResourceSpan,
+    IReadOnlyList<FactSerializationHazardRule> SerializationHazard
 );
 
 // An entry point re-derived from facts (type_relation_facts BFS + symbol_facts + reference_facts).

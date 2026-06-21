@@ -26,6 +26,8 @@ public static class ProductionFixCorpus
 
     // A minimal LanguageExt.Atom<A> stub with the FQN the shared_state(Atom) rule gates on. Faithful to the
     // !10706 fix surface: Swap(func) is the atomic read-modify-write. Prepended to any snippet that uses it.
+    // Option<A> is the FR-6 (RCA #1646) hazard payload: the object-store serializer can write it but cannot
+    // read it back (None must be null), so a stored Option<T> is a latent serialization-contract defect.
     public const string LanguageExtStub = """
         namespace LanguageExt
         {
@@ -39,6 +41,10 @@ public static class ProductionFixCorpus
             public static class Atom
             {
                 public static Atom<A> Create<A>(A value) => new Atom<A>(value);
+            }
+            public struct Option<A>
+            {
+                public bool IsSome => false;
             }
         }
         """;
@@ -54,6 +60,10 @@ public static class ProductionFixCorpus
             EffectsIn(enclosingMarker).Where(e => e.Provider == "shared_state" && e.Operation == "mutate").ToList();
 
         public bool HasGuardEffectIn(string enclosingMarker) => EffectsIn(enclosingMarker).Any(e => e.Provider is "lock" or "async_lock");
+
+        // Every serialization_hazard observation attached to an effect enclosed by the marker method.
+        public IReadOnlyList<EffectObservationInfo> SerializationHazardsIn(string enclosingMarker) =>
+            EffectsIn(enclosingMarker).SelectMany(e => e.Observations ?? []).Where(o => o.Type == "serialization_hazard").ToList();
     }
 
     public static CorpusResult Analyze(string source)

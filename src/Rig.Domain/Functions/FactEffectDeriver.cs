@@ -190,7 +190,8 @@ public static class FactEffectDeriver
                         catchTypes: FactStructuralContext.DecodeList(inv.CatchTypes),
                         rules: observationRules,
                         provider: rule.Provider,
-                        enclosingScopes: FactStructuralContext.DecodeScopes(inv.EnclosingScopes)
+                        enclosingScopes: FactStructuralContext.DecodeScopes(inv.EnclosingScopes),
+                        typeArguments: inv.TypeArguments
                     );
 
                 results.Add(

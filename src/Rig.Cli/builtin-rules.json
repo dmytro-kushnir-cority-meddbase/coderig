@@ -113,6 +113,25 @@
   },
   "effects": [
     {
+      "provider": "object_store",
+      "operation": "write",
+      "methods": [
+        "Create",
+        "CreateInstance",
+        "UpdateInstance",
+        "Store",
+        "Save",
+        "Serialize"
+      ],
+      "declaringTypeNameEndsWith": [
+        "ObjectStore"
+      ],
+      "resource": "type_argument",
+      "confidence": "medium",
+      "basis": "compilation",
+      "reason": "object_store_write"
+    },
+    {
       "provider": "http",
       "operation": "GET",
       "methods": [
@@ -1853,6 +1872,12 @@
         "excludeProviders": ["lock", "async_lock", "inproc_cache", "app_state", "session_state", "inproc_timer"],
         "observationType": "lock_held_across_effect",
         "context": "lock"
+      }
+    ],
+    "serializationHazard": [
+      {
+        "providers": ["object_store"],
+        "unsupportedTypePatterns": ["LanguageExt.Option", "LanguageExt.Either"]
       }
     ]
   },

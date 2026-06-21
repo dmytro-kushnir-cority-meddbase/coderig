@@ -238,6 +238,7 @@ public static class RuleSetLoader
             ConcurrencyHandled = Concat(a.ConcurrencyHandled, b.ConcurrencyHandled),
             ResilienceRetry = Concat(a.ResilienceRetry, b.ResilienceRetry),
             ResourceSpan = Concat(a.ResourceSpan, b.ResourceSpan),
+            SerializationHazard = Concat(a.SerializationHazard, b.SerializationHazard),
         };
     }
 

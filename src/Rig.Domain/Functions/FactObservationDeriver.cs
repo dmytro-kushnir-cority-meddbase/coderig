@@ -22,7 +22,11 @@ public static class FactObservationDeriver
         IReadOnlyList<string> catchTypes,
         FactObservationRules rules,
         string? provider = null,
-        IReadOnlyList<FactStructuralContext.EnclosingScope>? enclosingScopes = null
+        IReadOnlyList<FactStructuralContext.EnclosingScope>? enclosingScopes = null,
+        // Call-site generic type arguments (comma-joined display FQNs, FactInvocation.TypeArguments).
+        // Feeds serialization_hazard — the payload type at a store/serialize boundary. Null for
+        // non-generic calls / field writes (which carry no payload type argument).
+        string? typeArguments = null
     )
     {
         var observations = new List<EffectObservationInfo>();
@@ -171,6 +175,38 @@ public static class FactObservationDeriver
                         Reason: "effect_inside_held_resource_scope"
                     )
                 );
+            }
+        }
+
+        // serialization_hazard (FR-6, RCA #1646) — the effect stores/serializes a payload whose generic
+        // TYPE ARGUMENT is a serializer-unsupported type (e.g. LanguageExt.Option / Either, which the store
+        // CAN serialize but CANNOT deserialize). Unlike the structural observations above, this keys off the
+        // effect's OWN payload type, not the surrounding code. ANNOTATE-only: it adds a note; the effect is
+        // never removed. Matched against the call-site type arguments; first matching pattern wins per rule.
+        if (provider is not null && !string.IsNullOrEmpty(typeArguments))
+        {
+            foreach (var rule in rules.SerializationHazard)
+            {
+                if (rule.Providers.Count > 0 && !rule.Providers.Contains(provider, StringComparer.Ordinal))
+                {
+                    continue;
+                }
+
+                var matched = rule.UnsupportedTypePatterns.FirstOrDefault(p => typeArguments!.IndexOf(p, StringComparison.Ordinal) >= 0);
+                if (matched is not null)
+                {
+                    observations.Add(
+                        new EffectObservationInfo(
+                            Type: "serialization_hazard",
+                            Context: matched,
+                            Detail: typeArguments!,
+                            Confidence: "high",
+                            Basis: "compilation",
+                            Reason: "serializer_unsupported_payload_type"
+                        )
+                    );
+                    break;
+                }
             }
         }
 

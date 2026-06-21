@@ -157,6 +157,12 @@ internal sealed record ResourceSpanObservationRule(
     string Context
 );
 
+// FR-6 (RCA #1646): flag a store/serialize effect whose payload type argument is a serializer-
+// unsupported type (LanguageExt.Option / Either). `providers` gates which effect providers count as a
+// serialize boundary (empty = any); `unsupportedTypePatterns` are substrings matched against the call's
+// generic type arguments. Projected to FactSerializationHazardRule. Annotate-only.
+internal sealed record SerializationHazardObservationRule(IReadOnlyList<string>? Providers, IReadOnlyList<string> UnsupportedTypePatterns);
+
 internal sealed class AnalysisRulesDocument
 {
     public EntryPointRulesDocument? EntryPoints { get; set; }
@@ -213,6 +219,8 @@ internal sealed class ObservationsSection
     public List<ResilienceRetryObservationRule>? ResilienceRetry { get; set; }
 
     public List<ResourceSpanObservationRule>? ResourceSpan { get; set; }
+
+    public List<SerializationHazardObservationRule>? SerializationHazard { get; set; }
 }
 
 internal sealed class ProjectsSection
