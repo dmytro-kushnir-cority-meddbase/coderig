@@ -433,6 +433,7 @@ internal static class TreeCommand
         // the --files 📄 definition-loc) so the file name shows only when it changes down the tree. Mode-
         // agnostic — always on; it's a no-op when no loc is rendered (default mode). One writer per forest.
         var renderOut = new SourceLocDedupWriter(output);
+        var rendered = 0;
         foreach (var root in roots)
         {
             if (!full && !SubtreeHasEffect(root, effectsByMethod))
@@ -440,6 +441,7 @@ internal static class TreeCommand
                 continue;
             }
 
+            rendered++;
             // Fold single-impl interface/base hops (IFoo.M -> Foo.M when there's exactly one target)
             // into the impl, with a «via IFoo» marker — exact, no info loss. --raw shows the raw hops.
             RenderTreeNode(
@@ -462,6 +464,16 @@ internal static class TreeCommand
                 effectLeavesByMethod: effectLeavesByMethod
             );
         }
+
+        // The default render is EFFECTFUL: branches with no downstream effect are pruned. When the symbol
+        // matched (roots is non-empty — the Count==0 case returned above) but every root pruned away, the
+        // user would otherwise see a blank screen + success exit. Say what happened and point at --full,
+        // instead of leaving them unsure whether the symbol was wrong or the tool failed.
+        if (rendered == 0)
+        {
+            output.WriteLine($"No effects reachable from '{fromPattern}'. Run with --full for the structural call tree.");
+        }
+
         timer.Lap("seam effects + render");
         timer.Total();
         return 0;
