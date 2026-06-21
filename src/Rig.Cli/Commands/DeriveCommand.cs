@@ -2,6 +2,7 @@ using System.CommandLine;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
+using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
 using static Rig.Cli.Effects.EffectDerivation;
@@ -108,12 +109,24 @@ internal static class DeriveCommand
         // effects/entry points against the call graph. `rig derive --format tsv`.
         if (string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase))
         {
+            // TSV column reference (tab-separated; one row per record):
+            //   effect      \t provider \t operation \t resource \t enclosing \t file \t line \t observations(csv of Type)
+            //   hazard      \t type \t confidence \t reason \t cell/context \t enclosing \t file \t line \t detail
+            //   entrypoint  \t kind \t method \t route \t file \t line \t services(csv) \t activeServices(csv)
+            // The `effect` row's observations column keeps the comma-joined Type list (back-compat: existing
+            // consumers); the `hazard` row carries the full per-hazard evidence (confidence / reason / detail)
+            // the effect row can't — one row per hazard observation on an effect (see HazardKinds for the set).
             foreach (var e in effects)
             {
                 var observations = string.Join(',', (e.Observations ?? []).Select(o => o.Type));
                 output.WriteLine(
                     $"effect\t{e.Provider}\t{e.Operation}\t{e.ResourceType}\t{e.EnclosingSymbolId}\t{e.FilePath}\t{e.Line}\t{observations}"
                 );
+            }
+
+            foreach (var h in HazardFindings(effects))
+            {
+                output.WriteLine(HazardTsvRow(h));
             }
 
             var tsvEps = FactEntryPointDeriver.Derive(epData, rules.EntryPoints, rules.ClassInheritance);
@@ -144,9 +157,17 @@ internal static class DeriveCommand
             }
         }
 
-        // --- Observations attached to effects (looped_effect / parallel_fanout / …, P2b) ---
+        // --- Hazards: the higher-order findings that match PATTERNS over effects (race_window / lazy_init_race /
+        //     n_plus_1 / unserializable_payload — see HazardKinds). Promoted out of the generic observations
+        //     block into their own section with per-type, per-confidence counts + sampled sites. ---
+        WriteHazards(output, HazardFindings(effects), limit);
+
+        // --- STRUCTURAL observations attached to effects (looped_effect / parallel_fanout /
+        //     lock_held_across_effect / transaction_spans_effect, P2b) — context facts, NOT hazards. The
+        //     hazard kinds are EXCLUDED here so they're never double-counted (they're in the Hazards section).
         var observationGroups = effects
             .SelectMany(e => e.Observations ?? [])
+            .Where(o => !HazardKinds.IsHazard(o.Type))
             .GroupBy(o => o.Type, StringComparer.Ordinal)
             .OrderByDescending(g => g.Count())
             .ToList();
@@ -210,5 +231,119 @@ internal static class DeriveCommand
         }
 
         return 0;
+    }
+
+    // One hazard finding flattened from an effect: the hazard observation (Type/Confidence/Reason/Context/
+    // Detail) joined to the effect's location (enclosing method + file:line) so it can be rendered or emitted
+    // without re-walking the effect. Context is the hazard's own context (the cell for race_window, the loop
+    // identifier for n_plus_1, the unsupported type for unserializable_payload); Detail is the hazard's detail
+    // (the paired-read site for race_window, the loop detail for n_plus_1, the payload args for serialization).
+    internal sealed record HazardFinding(
+        string Type,
+        string Confidence,
+        string Reason,
+        string Context,
+        string Detail,
+        string Enclosing,
+        string FilePath,
+        int Line
+    );
+
+    // Flatten every HAZARD observation (HazardKinds) across the effects into one finding per (effect,
+    // observation), carrying the effect's site. STRUCTURAL observations are excluded — they stay in the
+    // generic Observations block. Pure + internal so the Hazards view + tsv can be unit-tested without a store.
+    internal static IReadOnlyList<HazardFinding> HazardFindings(IReadOnlyList<DerivedEffect> effects)
+    {
+        var findings = new List<HazardFinding>();
+        foreach (var e in effects)
+        {
+            foreach (var o in e.Observations ?? [])
+            {
+                if (!HazardKinds.IsHazard(o.Type))
+                {
+                    continue;
+                }
+
+                findings.Add(
+                    new HazardFinding(
+                        Type: o.Type,
+                        Confidence: o.Confidence,
+                        Reason: o.Reason,
+                        Context: o.Context,
+                        Detail: o.Detail,
+                        Enclosing: e.EnclosingSymbolId ?? "",
+                        FilePath: e.FilePath,
+                        Line: e.Line
+                    )
+                );
+            }
+        }
+
+        return findings;
+    }
+
+    // The tsv `hazard` row for one finding (see the column reference in RunAsync): the full per-hazard
+    // evidence — type, confidence, reason, cell/context, enclosing, file, line, detail — the comma-joined
+    // `effect`-row observation Type list can't carry. Pure + internal so the column contract is unit-testable.
+    internal static string HazardTsvRow(HazardFinding h) =>
+        $"hazard\t{h.Type}\t{h.Confidence}\t{h.Reason}\t{h.Context}\t{h.Enclosing}\t{h.FilePath}\t{h.Line}\t{h.Detail}";
+
+    // Confidence tiers in disclosure order (high first), so a per-type breakdown reads worst-first.
+    private static readonly string[] ConfidenceOrder = ["high", "medium", "low"];
+
+    // The Hazards section: per hazard type a total + a confidence-tier breakdown, then a capped sample of
+    // sites (cell/context + enclosing method + file:line + reason) with a tsv-for-all hint. Types are ordered
+    // by total count desc (busiest hazard first), ties broken by type name. The tier breakdown parenthetical
+    // is shown UNLESS the only tier present is "high" (the default tier — a bare "(high N)" is noise: see
+    // n_plus_1 / unserializable_payload, which are always high). Pure render over a finding list — internal so
+    // it can be exercised against a synthetic finding set without wiring a full DeriveCommand run.
+    internal static void WriteHazards(TextWriter output, IReadOnlyList<HazardFinding> findings, int limit)
+    {
+        if (findings.Count == 0)
+        {
+            return;
+        }
+
+        output.WriteLine();
+        output.WriteLine($"Hazards (pattern findings over effects): {findings.Count}");
+        var perTypeSample = limit / 8 + 1;
+        var byType = findings
+            .GroupBy(f => f.Type, StringComparer.Ordinal)
+            .OrderByDescending(g => g.Count())
+            .ThenBy(g => g.Key, StringComparer.Ordinal);
+        foreach (var typeGroup in byType)
+        {
+            var tierCounts = typeGroup
+                .GroupBy(f => f.Confidence, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+            var onlyHigh = tierCounts.Count == 1 && tierCounts.ContainsKey("high");
+            var breakdown = onlyHigh
+                ? ""
+                : " ("
+                    + string.Join(
+                        ", ",
+                        ConfidenceOrder
+                            .Where(tierCounts.ContainsKey)
+                            .Select(t => $"{t} {tierCounts[t]}")
+                            // Any non-standard tier (shouldn't happen) is appended after the known ones.
+                            .Concat(
+                                tierCounts
+                                    .Keys.Where(k => !ConfidenceOrder.Contains(k, StringComparer.Ordinal))
+                                    .OrderBy(k => k, StringComparer.Ordinal)
+                                    .Select(k => $"{k} {tierCounts[k]}")
+                            )
+                    )
+                    + ")";
+            output.WriteLine($"{Indent.L1}{typeGroup.Key}: {typeGroup.Count()}{breakdown}");
+
+            foreach (var f in typeGroup.Take(perTypeSample))
+            {
+                output.WriteLine(
+                    $"{Indent.L3}{ShortName(f.Context)}  <- {ShortName(f.Enclosing)}  {ShortenPath(f.FilePath)}:{f.Line}  [{f.Reason}]"
+                );
+            }
+
+            WriteSampleTruncationNote(output, total: typeGroup.Count(), shown: perTypeSample, kind: typeGroup.Key);
+        }
     }
 }
