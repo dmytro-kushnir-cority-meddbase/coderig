@@ -555,8 +555,49 @@ internal static class ImpactCommand
         int BaseEffects,
         IReadOnlyList<(string Provider, string Operation, string Resource, string Enclosing)> Added,
         IReadOnlyList<(string Provider, string Operation, string Resource, string Enclosing)> Removed,
-        IReadOnlyList<EpEffectAmplified> Amplified
+        IReadOnlyList<EpEffectAmplified> Amplified,
+        // FR-1e: true when the BRANCH reach still carries a `shared_state` effect (a mutation of an
+        // inherently-shared cell — ConcurrentDictionary/Atom/ImmutableInterlocked/static-field-write). This
+        // is the bit the Added/Removed lists can't carry: a shared mutation present on BOTH sides is absent
+        // from the set-diff, yet it's exactly what makes a lock/guard ADD or REMOVE on this EP race-relevant.
+        // Defaults false so existing constructions/tests are unaffected.
+        bool SharedMutationOnPath = false
     );
+
+    // The providers that count as a concurrency GUARD (a lock/atomic acquired or released on a path). Used
+    // by the FR-1e guard-delta callout: a guard added/removed on a path that still mutates shared state.
+    private static readonly HashSet<string> GuardProviders = new(StringComparer.Ordinal) { "lock", "async_lock" };
+
+    // FR-1e — the guard delta on a shared-mutation path. From one EP's footprint delta, the lock/async_lock
+    // effects it GAINED (Added) and LOST (Removed), as "provider:operation" labels. Pure + derivable from the
+    // already-computed Added/Removed sets (the guard effects ARE effects), so it needs nothing the diff didn't
+    // already carry. Empty lists when no guard moved. Internal for unit-testing the classification.
+    internal static (IReadOnlyList<string> Added, IReadOnlyList<string> Removed) GuardEffectDelta(EpFootprintDelta d)
+    {
+        static List<string> Guards(IReadOnlyList<(string Provider, string Operation, string Resource, string Enclosing)> keys) =>
+            keys.Where(k => GuardProviders.Contains(k.Provider))
+                .Select(k => $"{k.Provider}:{k.Operation}")
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(s => s, StringComparer.Ordinal)
+                .ToList();
+
+        return (Guards(d.Added), Guards(d.Removed));
+    }
+
+    // FR-1e fires for an EP when a guard (lock/async_lock) was added OR removed on its path AND the branch
+    // path STILL carries a shared_state mutation — i.e. the concurrency protection around an inherently-shared
+    // mutation changed. Both the lost-guard case (mutation now unguarded) and the gained-guard case (a fix) are
+    // flagged for review; the static signal asserts the delta, not a verdict on correctness.
+    internal static bool HasGuardDeltaOnSharedMutation(EpFootprintDelta d)
+    {
+        if (!d.SharedMutationOnPath)
+        {
+            return false;
+        }
+
+        var (added, removed) = GuardEffectDelta(d);
+        return added.Count > 0 || removed.Count > 0;
+    }
 
     // enclosing-method-id -> the distinct effect keys (provider, op, resource, param-free enclosing) declared
     // there, so a per-EP footprint is assembled by unioning the effects of every reachable enclosing node.
@@ -1006,6 +1047,10 @@ internal static class ImpactCommand
             if (added.Count > 0 || removed.Count > 0 || amplified.Count > 0)
             {
                 var site = epByKey.GetValueOrDefault(key);
+                // FR-1e: does the branch path still mutate shared state? (provider == shared_state — an
+                // inherently-concurrent cell). Carried on the delta because an unchanged mutation is absent
+                // from Added/Removed yet is what makes a co-occurring lock/guard delta race-relevant.
+                var sharedMutationOnPath = branchReach.Keys.Any(k => string.Equals(k.Item1, "shared_state", StringComparison.Ordinal));
                 deltas.Add(
                     new EpFootprintDelta(
                         Kind: key.Item1,
@@ -1021,7 +1066,8 @@ internal static class ImpactCommand
                             .ThenBy(a => a.Operation, StringComparer.Ordinal)
                             .ThenBy(a => a.Resource, StringComparer.Ordinal)
                             .ThenBy(a => a.Enclosing, StringComparer.Ordinal)
-                            .ToList()
+                            .ToList(),
+                        SharedMutationOnPath: sharedMutationOnPath
                     )
                 );
             }
@@ -1056,6 +1102,14 @@ internal static class ImpactCommand
                 output.WriteLine(
                     $"ep_effect_amplified\t{d.Kind}\t{d.Route}\t{a.Provider}\t{a.Operation}\t{a.Resource}\t{a.Enclosing}\t{a.BaseCount}\t{a.BranchCount}\t{a.BaseInLoop}\t{a.BranchInLoop}"
                 );
+            }
+
+            // FR-1e: a guard (lock/async_lock) added/removed on a path that still mutates shared state.
+            //  ep_guard_delta  <kind>  <route>  <+guards comma-joined>  <-guards comma-joined>
+            if (HasGuardDeltaOnSharedMutation(d))
+            {
+                var (gAdded, gRemoved) = GuardEffectDelta(d);
+                output.WriteLine($"ep_guard_delta\t{d.Kind}\t{d.Route}\t{string.Join(',', gAdded)}\t{string.Join(',', gRemoved)}");
             }
         }
     }
@@ -1112,6 +1166,21 @@ internal static class ImpactCommand
                     $"{Indent.L3}~ {a.Provider} {a.Operation}{Resource(a.Resource)}  ({AmplifyNote(a)})  ({a.Enclosing})  [review]"
                 );
             }
+
+            // FR-1e: a lock/guard was added or removed on a path that STILL mutates shared state — the
+            // concurrency protection around an inherently-shared cell changed. High-signal: this is the
+            // exact shape of the lock-guarded-class race (a guard lost, or a fix that adds one). Flagged for
+            // review, not a verdict.
+            if (HasGuardDeltaOnSharedMutation(d))
+            {
+                var (gAdded, gRemoved) = GuardEffectDelta(d);
+                var moves = new List<string>();
+                moves.AddRange(gAdded.Select(g => $"+{g}"));
+                moves.AddRange(gRemoved.Select(g => $"-{g}"));
+                output.WriteLine(
+                    $"{Indent.L3}⚠ guard delta on a shared-mutation path: {string.Join(" ", moves)}  (shared_state mutation still reachable)  [review]"
+                );
+            }
         }
 
         static string Resource(string resource) => string.IsNullOrEmpty(resource) ? "" : $" {resource}";
@@ -1159,8 +1228,12 @@ internal static class ImpactCommand
         var behavioralEps = diff.PerEp.Count;
         var added = diff.Ep?.Added.Count ?? 0;
         var removed = diff.Ep?.Removed.Count ?? 0;
+        // FR-1e: count the EPs whose guard (lock/atomic) around a still-reachable shared mutation changed.
+        // Only appended when non-zero so the common (no-guard-change) summary line stays unchanged.
+        var guardEps = diff.PerEp.Count(HasGuardDeltaOnSharedMutation);
+        var guardNote = guardEps > 0 ? $" ⚠ {guardEps} with a guard delta on a shared-mutation path." : "";
         return $"Diff vs '{baseProv.ShortLabel}': {PlusMinus(added: added, removed: removed)} entry point(s)"
-            + $"; {behavioralEps} entry point(s) with a changed behavior, {diff.AffectedEps.Count} with a changed reachable tree.";
+            + $"; {behavioralEps} entry point(s) with a changed behavior, {diff.AffectedEps.Count} with a changed reachable tree.{guardNote}";
     }
 
     private static string PlusMinus(int added, int removed) => $"+{added}/-{removed}";
@@ -1369,6 +1442,7 @@ internal static class ImpactCommand
         //  ep_effect_added    <kind>  <route>  <provider>  <operation>  <resource>  <enclosing>   (an effect KEY newly in the EP's footprint)
         //  ep_effect_removed  <kind>  <route>  <provider>  <operation>  <resource>  <enclosing>   (an effect KEY dropped from the EP's footprint)
         //  ep_effect_amplified  <kind>  <route>  <provider>  <operation>  <resource>  <enclosing>  <baseCount>  <branchCount>  <baseInLoop>  <branchInLoop>   (Feature 1: SAME key on both stores but produced MORE — branchCount>baseCount — and/or MOVED INTO A LOOP — branchInLoop && !baseInLoop. count = # distinct reachable effect-bearing producing nodes. A REVIEW flag, not a verdict: can't tell a hot-cache re-read from a real extra cold call.)
+        //  ep_guard_delta  <kind>  <route>  <+guards>  <-guards>   (FR-1e: a lock/async_lock acquire/release ADDED (+, comma-joined provider:operation) or REMOVED (-) on a path whose branch reach STILL carries a shared_state mutation — the concurrency guard around an inherently-shared cell changed. A REVIEW flag covering both the lost-guard race and the guard-adding fix.)
 
         // Cause per EP: behavioral when its effect set changed (it's in PerEp), else the structural sub-cause.
         var behavioralKeys = diff.PerEp.Select(d => (d.Kind, d.Route)).ToHashSet();

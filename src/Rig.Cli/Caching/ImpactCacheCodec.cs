@@ -191,7 +191,8 @@ internal static class ImpactCacheCodec
             BaseEffects: d.BaseEffects,
             Added: d.Added.Select(MapEffectKey).ToArray(),
             Removed: d.Removed.Select(MapEffectKey).ToArray(),
-            Amplified: d.Amplified.Select(MapAmplified).ToArray()
+            Amplified: d.Amplified.Select(MapAmplified).ToArray(),
+            SharedMutationOnPath: d.SharedMutationOnPath
         );
 
     private static ImpactCommand.EpFootprintDelta UnmapFootprint(FootprintDeltaDto d) =>
@@ -204,7 +205,8 @@ internal static class ImpactCacheCodec
             BaseEffects: d.BaseEffects,
             Added: d.Added.Select(UnmapEffectKey).ToArray(),
             Removed: d.Removed.Select(UnmapEffectKey).ToArray(),
-            Amplified: d.Amplified.Select(UnmapAmplified).ToArray()
+            Amplified: d.Amplified.Select(UnmapAmplified).ToArray(),
+            SharedMutationOnPath: d.SharedMutationOnPath
         );
 
     private static EffectKeyDto MapEffectKey((string Provider, string Operation, string Resource, string Enclosing) k) =>
@@ -277,7 +279,10 @@ internal sealed record FootprintDeltaDto(
     int BaseEffects,
     IReadOnlyList<EffectKeyDto> Added,
     IReadOnlyList<EffectKeyDto> Removed,
-    IReadOnlyList<AmplifiedDto> Amplified
+    IReadOnlyList<AmplifiedDto> Amplified,
+    // FR-1e: round-tripped so the warm (cache-replayed) path renders the guard-delta callout byte-identically
+    // to a cold recompute. Defaulted so an OLD blob (pre-FR-1e schema) still decodes — missing => false.
+    bool SharedMutationOnPath = false
 );
 
 internal sealed record ReachDeltaDto(
