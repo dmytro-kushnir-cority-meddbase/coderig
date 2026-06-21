@@ -95,19 +95,41 @@ public static class SolutionAnalyzer
 
         progress?.Invoke("Building projections");
 
-        List<DiRegistrationInfo> diRegistrations = [];
-        List<SymbolFact> symbolFacts = [];
-        List<ReferenceFact> referenceFacts = [];
-        List<TypeRelationFact> typeRelationFacts = [];
-        List<DispatchFact> dispatchFacts = [];
-
+        // Pre-size the concatenated lists to the exact total (one cheap O(1)-per-result count pass) so the
+        // AddRange below never grows-and-copies — at ~2.5M facts the default doubling churns ~21 backing
+        // arrays per list, the last copies a multi-million-element array to the LOH. Counts are O(1)
+        // (List-backed IReadOnlyLists).
+        var totalDi = 0;
+        var totalSymbols = 0;
+        var totalReferences = 0;
+        var totalRelations = 0;
+        var totalDispatch = 0;
         foreach (var result in extractionResults)
         {
+            totalDi += result.DiRegistrations.Count;
+            totalSymbols += result.Symbols.Count;
+            totalReferences += result.References.Count;
+            totalRelations += result.TypeRelations.Count;
+            totalDispatch += result.Dispatch.Count;
+        }
+
+        List<DiRegistrationInfo> diRegistrations = new(totalDi);
+        List<SymbolFact> symbolFacts = new(totalSymbols);
+        List<ReferenceFact> referenceFacts = new(totalReferences);
+        List<TypeRelationFact> typeRelationFacts = new(totalRelations);
+        List<DispatchFact> dispatchFacts = new(totalDispatch);
+
+        for (var i = 0; i < extractionResults.Length; i++)
+        {
+            var result = extractionResults[i];
             diRegistrations.AddRange(result.DiRegistrations);
             symbolFacts.AddRange(result.Symbols);
             referenceFacts.AddRange(result.References);
             typeRelationFacts.AddRange(result.TypeRelations);
             dispatchFacts.AddRange(result.Dispatch);
+            // Release each per-file result as it is consumed so it can collect DURING the concat, instead of
+            // all per-file arrays staying alive until the loop ends (then co-resident with the merged lists).
+            extractionResults[i] = null!;
         }
 
         // Mine XML service descriptor files (e.g. App_Data/Common/Xml/Services/*.xml) and
