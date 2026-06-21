@@ -190,7 +190,7 @@ internal static class ImpactCommand
                 structural: structural,
                 max: max
             );
-            return ExpectNoEffectChangeExit(expectNoEffectChange, art.Diff.PerEp.Count, error);
+            return ExpectNoEffectChangeExit(expectNoEffectChange, EffectChangedEpCount(art.Diff), error);
         }
 
         // Provenance for the header: each store's source branch + short commit (12-char sha), read from its
@@ -219,13 +219,22 @@ internal static class ImpactCommand
 
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
+        // Hazard delta: impact loads the static-field read/write refs and runs the hazard post-pass on BOTH
+        // stores (mirroring `derive`), so the derived effects carry hazard observations (race_window /
+        // lazy_init_race; n_plus_1 / unserializable_payload ride along via the observation rules). Scoped to
+        // impact — tree/reaches are untouched.
+        var staticFieldWriteRefs = await Reads.LoadStaticFieldWriteRefsAsync(context);
+        var staticFieldReadRefs = await Reads.LoadStaticFieldReadRefsAsync(context);
         var effects = DeriveEffects(
             rules.Effects,
             rules.Observations,
             invocations,
             baseEdges: epData.BaseEdges,
             ctorRefs: epData.CtorRefs,
-            throwRefs: throwRefs
+            throwRefs: throwRefs,
+            staticFieldWriteRefs: staticFieldWriteRefs,
+            staticFieldReadRefs: staticFieldReadRefs,
+            deriveHazards: true
         );
 
         // --- Two-store entry-point diff: EPs added/removed vs the base store, paired on (Kind, Route) —
@@ -272,7 +281,16 @@ internal static class ImpactCommand
         );
 
         var branchFootprints = ComputeFootprints(graph, branchEps, idBySite, EffectKeysByEnclosing(effects), mode);
-        var perEpDeltas = DiffFootprints(branch: branchFootprints, baseStore: baseSide.Footprints, epByKey: epByKey);
+        // The branch's per-EP reachable-hazard set (hazard mirror of the footprint), diffed against the base's
+        // in DiffFootprints so each per-EP delta carries the hazards gained/lost.
+        var branchHazards = ComputeHazardSets(graph, branchEps, idBySite, HazardsByEnclosing(effects), mode);
+        var perEpDeltas = DiffFootprints(
+            branch: branchFootprints,
+            baseStore: baseSide.Footprints,
+            epByKey: epByKey,
+            branchHazards: branchHazards,
+            baseHazards: baseSide.Hazards
+        );
 
         var impactDiff = new ImpactDiff(Ep: epDiff, AffectedEps: affectedEntryPoints, PerEp: perEpDeltas);
 
@@ -310,7 +328,7 @@ internal static class ImpactCommand
             structural: structural,
             max: max
         );
-        return ExpectNoEffectChangeExit(expectNoEffectChange, impactDiff.PerEp.Count, error);
+        return ExpectNoEffectChangeExit(expectNoEffectChange, EffectChangedEpCount(impactDiff), error);
     }
 
     // The `--expect-no-effect-change` CI gate. Behavioral change = an entry point present in BOTH commits whose
@@ -335,6 +353,15 @@ internal static class ImpactCommand
         error.WriteLine("--expect-no-effect-change OK: no entry point's effect set changed.");
         return 0;
     }
+
+    // The count of EPs whose reachable EFFECT SET changed (added / removed / amplified) — the FR-4
+    // behavioral count, and the headline "changed behavior" number. PerEp ALSO contains EPs whose only
+    // delta is a HAZARD gain/loss (race_window / n+1 / …) so they surface in the per-EP section; those must
+    // NOT count here. --expect-no-effect-change is a deterministic effect-set gate — gating CI on a
+    // (often heuristic) hazard belongs to a separate opt-in (e.g. a future --expect-no-hazard-gain), not
+    // this flag. So a behavior-preserving refactor that merely trips a hazard heuristic stays green here.
+    internal static int EffectChangedEpCount(ImpactDiff diff) =>
+        diff.PerEp.Count(d => d.Added.Count > 0 || d.Removed.Count > 0 || d.Amplified.Count > 0);
 
     // The render of a computed impact diff — shared by the cold (just-computed) and warm (cache-replayed)
     // paths so a hit is BYTE-IDENTICAL to a recompute. A pure function of the diff + provenance + deployments
@@ -561,8 +588,40 @@ internal static class ImpactCommand
         // is the bit the Added/Removed lists can't carry: a shared mutation present on BOTH sides is absent
         // from the set-diff, yet it's exactly what makes a lock/guard ADD or REMOVE on this EP race-relevant.
         // Defaults false so existing constructions/tests are unaffected.
-        bool SharedMutationOnPath = false
-    );
+        bool SharedMutationOnPath = false,
+        // HAZARD DELTA: the hazard findings (race_window / lazy_init_race / n_plus_1 / unserializable_payload —
+        // see HazardKinds) this EP's reach GAINED (HazardsAdded — head-only) or LOST (HazardsRemoved —
+        // base-only) between the two stores. A hazard finding is keyed on (Type, Cell, param-free Enclosing)
+        // and carries its confidence tier. This is the hazard mirror of the effect Added/Removed lists — a
+        // refactor that opened a race_window on a path, or a fix that closed one. Defaulted empty so existing
+        // constructions/tests (and OLD cache blobs) are unaffected.
+        IReadOnlyList<HazardFinding>? HazardsAdded = null,
+        IReadOnlyList<HazardFinding>? HazardsRemoved = null
+    )
+    {
+        // Normalized non-null views so callers (ordering, rendering, the cache codec) never NRE on the
+        // defaulted-null hazard lists (a delta with no hazard change, or an OLD cache blob / effect-only test).
+        public IReadOnlyList<HazardFinding> HazardsAddedOrEmpty => HazardsAdded ?? [];
+        public IReadOnlyList<HazardFinding> HazardsRemovedOrEmpty => HazardsRemoved ?? [];
+    }
+
+    // One hazard finding on an EP's reach: a hazard observation (race_window / lazy_init_race / n_plus_1 /
+    // unserializable_payload) on a reachable effect. Keyed on (Type, Cell, param-free Enclosing) so it diffs
+    // line/signature-insensitively, exactly as the effect key does — Cell is the observation's Context (the
+    // shared cell for race_window, the loop identifier for n_plus_1, …), Enclosing the param-free producing
+    // method. Confidence is the disclosed tier (high/medium/low); it rides along for rendering but is DELIBERATELY
+    // EXCLUDED from equality/hash (overridden below) so the diff identity is exactly (Type, Cell, Enclosing) — a
+    // confidence change on the SAME finding is not a gain/loss, and the set-union/Distinct dedup keys on identity.
+    internal sealed record HazardFinding(string Type, string Cell, string Enclosing, string Confidence)
+    {
+        public bool Equals(HazardFinding? other) =>
+            other is not null
+            && string.Equals(Type, other.Type, StringComparison.Ordinal)
+            && string.Equals(Cell, other.Cell, StringComparison.Ordinal)
+            && string.Equals(Enclosing, other.Enclosing, StringComparison.Ordinal);
+
+        public override int GetHashCode() => HashCode.Combine(Type, Cell, Enclosing);
+    }
 
     // The providers that count as a concurrency GUARD (a lock/atomic acquired or released on a path). Used
     // by the FR-1e guard-delta callout: a guard added/removed on a path that still mutates shared state.
@@ -610,6 +669,71 @@ internal static class ImpactCommand
                 g => g.Select(e => (e.Provider, e.Operation, e.ResourceType, StripParams(e.EnclosingSymbolId))).Distinct().ToList(),
                 StringComparer.Ordinal
             );
+
+    // enclosing-method-id -> the distinct HAZARD findings (Type, Cell, param-free enclosing, Confidence)
+    // declared there, so a per-EP hazard set is assembled by unioning the hazards of every reachable enclosing
+    // node — exactly as EffectKeysByEnclosing does for effects. A hazard finding is an EffectObservationInfo
+    // whose Type is in HazardKinds (race_window / lazy_init_race / n_plus_1 / unserializable_payload), found on
+    // an effect's Observations. Cell = the observation's Context (the shared cell / loop identifier / payload
+    // type — the same field the cli renders); Confidence rides along (not part of the diff identity, see the
+    // record). An effect with no hazard observation contributes nothing. Distinct so two effects in one method
+    // bearing the same finding count once.
+    private static Dictionary<string, List<HazardFinding>> HazardsByEnclosing(IReadOnlyList<DerivedEffect> effects) =>
+        effects
+            .Where(e => e.EnclosingSymbolId is not null && e.Observations is not null)
+            .SelectMany(e =>
+                e.Observations!.Where(o => HazardKinds.IsHazard(o.Type))
+                    .Select(o =>
+                        (
+                            Enclosing: e.EnclosingSymbolId!,
+                            Finding: new HazardFinding(
+                                Type: o.Type,
+                                Cell: o.Context,
+                                Enclosing: StripParams(e.EnclosingSymbolId),
+                                Confidence: o.Confidence
+                            )
+                        )
+                    )
+            )
+            .GroupBy(x => x.Enclosing, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Select(x => x.Finding).Distinct().ToList(), StringComparer.Ordinal);
+
+    // The reachable-HAZARD set of each entry point, keyed on (Kind, Route), over an ALREADY-LOADED graph +
+    // hazards-by-enclosing — the hazard mirror of ComputeFootprints. Forward-reaches every EP and unions the
+    // hazard findings of each reachable enclosing node. Same seed/depth/mode contract as ComputeFootprints so
+    // the two are computed over the identical reach. An EP whose reach bears no hazard maps to an empty set.
+    private static Dictionary<(string Kind, string Route), HashSet<HazardFinding>> ComputeHazardSets(
+        FactGraphData graph,
+        IReadOnlyList<DerivedEntryPoint> eps,
+        Dictionary<(string, int), string> idBySite,
+        Dictionary<string, List<HazardFinding>> hazardsByEnclosing,
+        FactPathFinder.TraversalMode mode
+    )
+    {
+        var distinct = eps.GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line)).Select(g => g.Key).ToList();
+        var seedIds = distinct.Select(e => idBySite.TryGetValue((e.FilePath, e.Line), out var id) ? id : "").ToList();
+        var reached = FactPathFinder.ReachesFromEachSeed(graph, seedIds, maxDepth: int.MaxValue, mode: mode);
+
+        var sets = new Dictionary<(string, string), HashSet<HazardFinding>>();
+        for (var i = 0; i < distinct.Count; i++)
+        {
+            var key = (distinct[i].Kind, distinct[i].Route);
+            if (!sets.TryGetValue(key, out var set))
+            {
+                sets[key] = set = new HashSet<HazardFinding>();
+            }
+
+            foreach (var node in reached[i])
+            {
+                if (hazardsByEnclosing.TryGetValue(node, out var findings))
+                {
+                    set.UnionWith(findings);
+                }
+            }
+        }
+
+        return sets;
+    }
 
     // (FilePath, Line) -> the method declared there, so an EP (which carries a declaration site, not an id)
     // can seed a forward reach from its method node.
@@ -953,6 +1077,7 @@ internal static class ImpactCommand
     private static async Task<(
         Dictionary<(string Kind, string Route), HashSet<string>> ReachSets,
         Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>> Footprints,
+        Dictionary<(string Kind, string Route), HashSet<HazardFinding>> Hazards,
         IReadOnlyDictionary<string, string> BodyHashes
     )> ComputeBaseSideAsync(string baseDbPath, RuleSet rules, FactPathFinder.TraversalMode mode)
     {
@@ -968,13 +1093,20 @@ internal static class ImpactCommand
         var idBySite = MethodIdBySite(methods);
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
+        // Hazard delta: derive hazards on the base side too (mirror RunAsync / DeriveCommand) so the base
+        // per-EP hazard set is computed over hazard-bearing effects and the diff compares like-for-like.
+        var staticFieldWriteRefs = await Reads.LoadStaticFieldWriteRefsAsync(context);
+        var staticFieldReadRefs = await Reads.LoadStaticFieldReadRefsAsync(context);
         var effects = DeriveEffects(
             rules.Effects,
             rules.Observations,
             invocations,
             baseEdges: epData.BaseEdges,
             ctorRefs: epData.CtorRefs,
-            throwRefs: throwRefs
+            throwRefs: throwRefs,
+            staticFieldWriteRefs: staticFieldWriteRefs,
+            staticFieldReadRefs: staticFieldReadRefs,
+            deriveHazards: true
         );
 
         // Phase 3: union the base's field/property-access targets into its reach sets too, so the per-EP
@@ -982,12 +1114,13 @@ internal static class ImpactCommand
         var baseRefTargets = RefTargetsByEnclosing(await Reads.LoadFieldAccessRefsAsync(context));
         var reachSets = ComputeReachSets(graph, baseEps, idBySite, mode, refsByEnclosing: baseRefTargets);
         var footprints = ComputeFootprints(graph, baseEps, idBySite, EffectKeysByEnclosing(effects), mode);
+        var hazards = ComputeHazardSets(graph, baseEps, idBySite, HazardsByEnclosing(effects), mode);
 
         // Phase 2: the base body-hash map (guarded — empty on a pre-fact store), so RunAsync can diff it
         // against the branch's WITHOUT a second base load.
         var bodyHashes = await Reads.LoadSymbolBodyHashesAsync(context);
 
-        return (reachSets, footprints, bodyHashes);
+        return (reachSets, footprints, hazards, bodyHashes);
     }
 
     // Diff two stores' per-EP footprints: for every EP present in BOTH (paired on Kind+Route), the effects its
@@ -995,12 +1128,19 @@ internal static class ImpactCommand
     // produced MORE (higher reach multiplicity) or MOVED INTO A LOOP (Feature 1). Returns only EPs whose
     // footprint changed in EITHER way, busiest-delta first. EPs added/removed wholesale are the EP-diff
     // section's job, not this. Internal for unit-testing the pure diff (ImpactAmplificationTests).
+    //
+    // Hazard delta (additive): branchHazards/baseHazards (optional — null for the existing effect-only callers
+    // and tests) are the per-EP reachable-hazard SETS. For each EP present in BOTH stores, the set-diff yields
+    // HazardsAdded (head-only) and HazardsRemoved (base-only). An EP whose ONLY change is a hazard delta —
+    // empty effect Added/Removed/Amplified — still surfaces in the result (so a pure hazard gain isn't missed).
     internal static IReadOnlyList<EpFootprintDelta> DiffFootprints(
         Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>> branch,
         Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>> baseStore,
         // (Kind, Route) -> the EP's site, so each delta carries FilePath/Line for FQN rendering. An EP missing
         // here (shouldn't happen — branch footprints are keyed off the same EPs) falls back to empty site.
-        IReadOnlyDictionary<(string Kind, string Route), EntryPointRef> epByKey
+        IReadOnlyDictionary<(string Kind, string Route), EntryPointRef> epByKey,
+        Dictionary<(string Kind, string Route), HashSet<HazardFinding>>? branchHazards = null,
+        Dictionary<(string Kind, string Route), HashSet<HazardFinding>>? baseHazards = null
     )
     {
         var deltas = new List<EpFootprintDelta>();
@@ -1044,7 +1184,14 @@ internal static class ImpactCommand
                 }
             }
 
-            if (added.Count > 0 || removed.Count > 0 || amplified.Count > 0)
+            // Hazard delta (additive): the set-diff of this EP's reachable hazard findings, head-only = added,
+            // base-only = removed. Empty when no hazard maps were supplied (the effect-only callers/tests) or
+            // when the EP's hazard set is unchanged.
+            var (hazardsAdded, hazardsRemoved) = DiffHazards(key, branchHazards, baseHazards);
+
+            // An EP is listed when its effect footprint changed (set membership or amplification) OR a hazard
+            // was gained/lost — so a PURE hazard gain (no effect-set change) still surfaces in PerEp.
+            if (added.Count > 0 || removed.Count > 0 || amplified.Count > 0 || hazardsAdded.Count > 0 || hazardsRemoved.Count > 0)
             {
                 var site = epByKey.GetValueOrDefault(key);
                 // FR-1e: does the branch path still mutate shared state? (provider == shared_state — an
@@ -1067,16 +1214,54 @@ internal static class ImpactCommand
                             .ThenBy(a => a.Resource, StringComparer.Ordinal)
                             .ThenBy(a => a.Enclosing, StringComparer.Ordinal)
                             .ToList(),
-                        SharedMutationOnPath: sharedMutationOnPath
+                        SharedMutationOnPath: sharedMutationOnPath,
+                        HazardsAdded: hazardsAdded,
+                        HazardsRemoved: hazardsRemoved
                     )
                 );
             }
         }
 
         return deltas
-            .OrderByDescending(d => d.Added.Count + d.Removed.Count + d.Amplified.Count)
+            .OrderByDescending(d =>
+                d.Added.Count + d.Removed.Count + d.Amplified.Count + d.HazardsAddedOrEmpty.Count + d.HazardsRemovedOrEmpty.Count
+            )
             .ThenBy(d => d.Route, StringComparer.Ordinal)
             .ToList();
+    }
+
+    // The per-EP hazard set-diff: head-only findings = added, base-only = removed, both ordered stably. Returns
+    // empty lists when no hazard maps were supplied or the EP is absent on either side (so the diff degrades
+    // silently on a pre-hazard store / the effect-only callers). Pure + ordered so the cache round-trip and the
+    // unit tests see a deterministic list.
+    private static (IReadOnlyList<HazardFinding> Added, IReadOnlyList<HazardFinding> Removed) DiffHazards(
+        (string Kind, string Route) key,
+        Dictionary<(string Kind, string Route), HashSet<HazardFinding>>? branchHazards,
+        Dictionary<(string Kind, string Route), HashSet<HazardFinding>>? baseHazards
+    )
+    {
+        if (branchHazards is null || baseHazards is null)
+        {
+            return ([], []);
+        }
+
+        var branchSet = branchHazards.GetValueOrDefault(key) ?? [];
+        var baseSet = baseHazards.GetValueOrDefault(key) ?? [];
+        if (branchSet.Count == 0 && baseSet.Count == 0)
+        {
+            return ([], []);
+        }
+
+        static List<HazardFinding> Order(IEnumerable<HazardFinding> hs) =>
+            hs.OrderBy(h => h.Type, StringComparer.Ordinal)
+                .ThenBy(h => h.Cell, StringComparer.Ordinal)
+                .ThenBy(h => h.Enclosing, StringComparer.Ordinal)
+                .ThenBy(h => h.Confidence, StringComparer.Ordinal)
+                .ToList();
+
+        var added = Order(branchSet.Where(h => !baseSet.Contains(h)));
+        var removed = Order(baseSet.Where(h => !branchSet.Contains(h)));
+        return (added, removed);
     }
 
     private static void EmitPerEpTsv(TextWriter output, IReadOnlyList<EpFootprintDelta> deltas, Dictionary<(string, int), string> fqnSites)
@@ -1111,6 +1296,18 @@ internal static class ImpactCommand
                 var (gAdded, gRemoved) = GuardEffectDelta(d);
                 output.WriteLine($"ep_guard_delta\t{d.Kind}\t{d.Route}\t{string.Join(',', gAdded)}\t{string.Join(',', gRemoved)}");
             }
+
+            // HAZARD DELTA: one row per hazard finding GAINED / LOST on this EP's reach.
+            //  ep_hazard_added / ep_hazard_removed  <kind>  <route>  <type>  <confidence>  <cell>  <enclosing>
+            foreach (var h in d.HazardsAddedOrEmpty)
+            {
+                output.WriteLine($"ep_hazard_added\t{d.Kind}\t{d.Route}\t{h.Type}\t{h.Confidence}\t{h.Cell}\t{h.Enclosing}");
+            }
+
+            foreach (var h in d.HazardsRemovedOrEmpty)
+            {
+                output.WriteLine($"ep_hazard_removed\t{d.Kind}\t{d.Route}\t{h.Type}\t{h.Confidence}\t{h.Cell}\t{h.Enclosing}");
+            }
         }
     }
 
@@ -1144,8 +1341,11 @@ internal static class ImpactCommand
             // Render the FQN (round-trips into `rig tree`), same as the structural list; falls back to the route.
             var label = FqnForCard(route: d.Route, filePath: d.FilePath, line: d.Line, idBySite: fqnSites);
             var ampPart = d.Amplified.Count > 0 ? $", ~{d.Amplified.Count} amplified" : "";
+            var hazAdded = d.HazardsAddedOrEmpty;
+            var hazRemoved = d.HazardsRemovedOrEmpty;
+            var hazPart = hazAdded.Count > 0 || hazRemoved.Count > 0 ? $", hazards +{hazAdded.Count}/-{hazRemoved.Count}" : "";
             output.WriteLine(
-                $"{Indent.L2}{d.Kind} {label}  (effects {d.BaseEffects}→{d.BranchEffects}, +{d.Added.Count}/-{d.Removed.Count}{ampPart})"
+                $"{Indent.L2}{d.Kind} {label}  (effects {d.BaseEffects}→{d.BranchEffects}, +{d.Added.Count}/-{d.Removed.Count}{ampPart}{hazPart})"
             );
             foreach (var (provider, operation, resource, enclosing) in d.Added.Take(max))
             {
@@ -1181,9 +1381,24 @@ internal static class ImpactCommand
                     $"{Indent.L3}⚠ guard delta on a shared-mutation path: {string.Join(" ", moves)}  (shared_state mutation still reachable)  [review]"
                 );
             }
+
+            // HAZARD DELTA: the hazard findings (race_window / lazy_init_race / n_plus_1 /
+            // unserializable_payload) this EP's reach GAINED (+) or LOST (-) — a refactor that opened a race on
+            // this path, or a fix that closed one. Shown with the confidence tier + the cell/context, mirroring
+            // the effect +/- lines. Flagged for review, not a verdict.
+            foreach (var h in hazAdded.Take(max))
+            {
+                output.WriteLine($"{Indent.L3}+ hazard {h.Type} ({h.Confidence}){Cell(h.Cell)}  ({h.Enclosing})  [review]");
+            }
+
+            foreach (var h in hazRemoved.Take(max))
+            {
+                output.WriteLine($"{Indent.L3}- hazard {h.Type} ({h.Confidence}){Cell(h.Cell)}  ({h.Enclosing})");
+            }
         }
 
         static string Resource(string resource) => string.IsNullOrEmpty(resource) ? "" : $" {resource}";
+        static string Cell(string cell) => string.IsNullOrEmpty(cell) ? "" : $" {cell}";
     }
 
     // The amplification annotation: the count move (×base -> ×branch) and/or a loop-entry note, both when
@@ -1225,15 +1440,21 @@ internal static class ImpactCommand
     // whose behavior (reachable-effect set) changed, and entry points whose reachable tree changed.
     private static string DiffSummary(StoreProvenance baseProv, ImpactDiff diff)
     {
-        var behavioralEps = diff.PerEp.Count;
+        // The "changed behavior" headline counts EFFECT-set changes only; hazard-only EPs are reported by
+        // hazardNote below (PerEp includes them, but they aren't an effect-set change — no double-count).
+        var behavioralEps = EffectChangedEpCount(diff);
         var added = diff.Ep?.Added.Count ?? 0;
         var removed = diff.Ep?.Removed.Count ?? 0;
         // FR-1e: count the EPs whose guard (lock/atomic) around a still-reachable shared mutation changed.
         // Only appended when non-zero so the common (no-guard-change) summary line stays unchanged.
         var guardEps = diff.PerEp.Count(HasGuardDeltaOnSharedMutation);
         var guardNote = guardEps > 0 ? $" ⚠ {guardEps} with a guard delta on a shared-mutation path." : "";
+        // Hazard delta: count the EPs that GAINED or LOST a hazard finding (race_window / n+1 / …). Appended
+        // only when non-zero so the common (no-hazard-change) summary line stays unchanged.
+        var hazardEps = diff.PerEp.Count(d => d.HazardsAddedOrEmpty.Count > 0 || d.HazardsRemovedOrEmpty.Count > 0);
+        var hazardNote = hazardEps > 0 ? $" ⚠ {hazardEps} with a hazard delta." : "";
         return $"Diff vs '{baseProv.ShortLabel}': {PlusMinus(added: added, removed: removed)} entry point(s)"
-            + $"; {behavioralEps} entry point(s) with a changed behavior, {diff.AffectedEps.Count} with a changed reachable tree.{guardNote}";
+            + $"; {behavioralEps} entry point(s) with a changed behavior, {diff.AffectedEps.Count} with a changed reachable tree.{guardNote}{hazardNote}";
     }
 
     private static string PlusMinus(int added, int removed) => $"+{added}/-{removed}";
@@ -1443,6 +1664,8 @@ internal static class ImpactCommand
         //  ep_effect_removed  <kind>  <route>  <provider>  <operation>  <resource>  <enclosing>   (an effect KEY dropped from the EP's footprint)
         //  ep_effect_amplified  <kind>  <route>  <provider>  <operation>  <resource>  <enclosing>  <baseCount>  <branchCount>  <baseInLoop>  <branchInLoop>   (Feature 1: SAME key on both stores but produced MORE — branchCount>baseCount — and/or MOVED INTO A LOOP — branchInLoop && !baseInLoop. count = # distinct reachable effect-bearing producing nodes. A REVIEW flag, not a verdict: can't tell a hot-cache re-read from a real extra cold call.)
         //  ep_guard_delta  <kind>  <route>  <+guards>  <-guards>   (FR-1e: a lock/async_lock acquire/release ADDED (+, comma-joined provider:operation) or REMOVED (-) on a path whose branch reach STILL carries a shared_state mutation — the concurrency guard around an inherently-shared cell changed. A REVIEW flag covering both the lost-guard race and the guard-adding fix.)
+        //  ep_hazard_added    <kind>  <route>  <type>  <confidence>  <cell>  <enclosing>   (a hazard finding — race_window / lazy_init_race / n_plus_1 / unserializable_payload, see HazardKinds — newly present on the EP's reach: a refactor opened it. cell = the observation Context, enclosing = the param-free producing method. A REVIEW flag, not a verdict.)
+        //  ep_hazard_removed  <kind>  <route>  <type>  <confidence>  <cell>  <enclosing>   (a hazard finding that DROPPED from the EP's reach base->head: a fix closed it. Same columns as ep_hazard_added.)
 
         // Cause per EP: behavioral when its effect set changed (it's in PerEp), else the structural sub-cause.
         var behavioralKeys = diff.PerEp.Select(d => (d.Kind, d.Route)).ToHashSet();

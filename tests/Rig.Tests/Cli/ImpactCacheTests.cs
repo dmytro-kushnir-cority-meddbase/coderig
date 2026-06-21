@@ -1,5 +1,7 @@
 using Rig.Cli;
+using Rig.Cli.Caching;
 using Rig.Cli.CommandLine;
+using Rig.Cli.Commands;
 using Rig.Domain.Data;
 using Rig.Storage.Queries;
 using Rig.Storage.Storage;
@@ -140,6 +142,48 @@ public sealed class ImpactCacheTests(AnalyzedPlaygrounds playgrounds)
         {
             TryDelete(wd);
         }
+    }
+
+    // (4) The HAZARD DELTA round-trips through the codec: a per-EP footprint delta carrying HazardsAdded /
+    // HazardsRemoved encodes + decodes to an equal delta, so the warm (cache-replayed) path renders the hazard
+    // lines + headline byte-identically to a cold recompute. Mirrors the SharedMutationOnPath round-trip.
+    [Test]
+    public async Task Hazard_delta_round_trips_through_the_codec()
+    {
+        var prov = new ImpactCommand.StoreProvenance(Branch: "b", ShortCommit: "abc123", Fallback: "id");
+        var delta = new ImpactCommand.EpFootprintDelta(
+            Kind: "http",
+            Route: "x",
+            FilePath: "/x.cs",
+            Line: 1,
+            BranchEffects: 1,
+            BaseEffects: 1,
+            Added: [],
+            Removed: [],
+            Amplified: [],
+            SharedMutationOnPath: false,
+            HazardsAdded:
+            [
+                new ImpactCommand.HazardFinding(Type: "race_window", Cell: "N.T._status", Enclosing: "N.T.M", Confidence: "high"),
+            ],
+            HazardsRemoved: [new ImpactCommand.HazardFinding(Type: "n_plus_1", Cell: "id", Enclosing: "N.T.Q", Confidence: "high")]
+        );
+        var diff = new ImpactCommand.ImpactDiff(Ep: null, AffectedEps: [], PerEp: [delta]);
+
+        var blob = ImpactCacheCodec.Encode(
+            diff: diff,
+            baseProvenance: prov,
+            headProvenance: prov,
+            idBySite: new Dictionary<(string File, int Line), string>()
+        );
+        var art = ImpactCacheCodec.Decode(blob);
+
+        art.ShouldNotBeNull();
+        art!.Diff.PerEp.Count.ShouldBe(1);
+        var rt = art.Diff.PerEp[0];
+        rt.HazardsAddedOrEmpty.ShouldBe(delta.HazardsAdded!);
+        rt.HazardsRemovedOrEmpty.ShouldBe(delta.HazardsRemoved!);
+        await Task.CompletedTask;
     }
 
     private static async Task<(int exit, string output)> RunImpactAsync(

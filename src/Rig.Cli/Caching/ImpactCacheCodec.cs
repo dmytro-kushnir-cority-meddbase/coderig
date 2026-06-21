@@ -192,7 +192,9 @@ internal static class ImpactCacheCodec
             Added: d.Added.Select(MapEffectKey).ToArray(),
             Removed: d.Removed.Select(MapEffectKey).ToArray(),
             Amplified: d.Amplified.Select(MapAmplified).ToArray(),
-            SharedMutationOnPath: d.SharedMutationOnPath
+            SharedMutationOnPath: d.SharedMutationOnPath,
+            HazardsAdded: d.HazardsAddedOrEmpty.Select(MapHazard).ToArray(),
+            HazardsRemoved: d.HazardsRemovedOrEmpty.Select(MapHazard).ToArray()
         );
 
     private static ImpactCommand.EpFootprintDelta UnmapFootprint(FootprintDeltaDto d) =>
@@ -206,8 +208,18 @@ internal static class ImpactCacheCodec
             Added: d.Added.Select(UnmapEffectKey).ToArray(),
             Removed: d.Removed.Select(UnmapEffectKey).ToArray(),
             Amplified: d.Amplified.Select(UnmapAmplified).ToArray(),
-            SharedMutationOnPath: d.SharedMutationOnPath
+            SharedMutationOnPath: d.SharedMutationOnPath,
+            // Defaulted null on an OLD blob (pre-hazard schema) — UnmapHazards maps null -> empty so the warm
+            // path's delta is byte-identical to a cold recompute that found no hazard change.
+            HazardsAdded: (d.HazardsAdded ?? []).Select(UnmapHazard).ToArray(),
+            HazardsRemoved: (d.HazardsRemoved ?? []).Select(UnmapHazard).ToArray()
         );
+
+    private static HazardFindingDto MapHazard(ImpactCommand.HazardFinding h) =>
+        new(Type: h.Type, Cell: h.Cell, Enclosing: h.Enclosing, Confidence: h.Confidence);
+
+    private static ImpactCommand.HazardFinding UnmapHazard(HazardFindingDto h) =>
+        new(Type: h.Type, Cell: h.Cell, Enclosing: h.Enclosing, Confidence: h.Confidence);
 
     private static EffectKeyDto MapEffectKey((string Provider, string Operation, string Resource, string Enclosing) k) =>
         new(Provider: k.Provider, Operation: k.Operation, Resource: k.Resource, Enclosing: k.Enclosing);
@@ -282,8 +294,15 @@ internal sealed record FootprintDeltaDto(
     IReadOnlyList<AmplifiedDto> Amplified,
     // FR-1e: round-tripped so the warm (cache-replayed) path renders the guard-delta callout byte-identically
     // to a cold recompute. Defaulted so an OLD blob (pre-FR-1e schema) still decodes — missing => false.
-    bool SharedMutationOnPath = false
+    bool SharedMutationOnPath = false,
+    // HAZARD DELTA: the per-EP hazard findings gained/lost, round-tripped so the warm path renders the hazard
+    // lines + headline byte-identically to a cold recompute. Defaulted null so an OLD blob (pre-hazard schema)
+    // still decodes — missing => empty (UnmapFootprint maps null -> []).
+    IReadOnlyList<HazardFindingDto>? HazardsAdded = null,
+    IReadOnlyList<HazardFindingDto>? HazardsRemoved = null
 );
+
+internal sealed record HazardFindingDto(string Type, string Cell, string Enclosing, string Confidence);
 
 internal sealed record ReachDeltaDto(
     string Kind,
