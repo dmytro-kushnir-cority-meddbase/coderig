@@ -12,11 +12,13 @@ entry-point-independent, cross-project, with no Roslyn re-run for query/rule cha
 
 ## Two-phase model
 
-1. **Extract** (`index` / `mine`) — runs Roslyn once, writes facts. Expensive. Re-run only when source changes.
+1. **Extract** (`index`) — runs Roslyn once, writes facts. Expensive. Re-run only when source changes.
+   `index` is the sole extraction command now; for an entry-scoped subset use `index --from <entry.csproj>`
+   (the old `mine` command is superseded — see REFERENCE).
 2. **Query / derive** (`derive`, `reaches`, `tree`, `callers`, `path`, `dead`, `refs`, `symbols`) —
    read-only over the facts DB. Detectors are **data** (JSON rules), so new rules = new answers, no re-extract.
 
-**Every command except `index`/`mine` runs from the directory that holds `.rig/`** (the cwd is how rig
+**Every command except `index` runs from the directory that holds `.rig/`** (the cwd is how rig
 finds the DB). `--rules <path>` (repeatable) cascades extra rule files over the builtin set.
 
 **Commit-scoped stores.** `rig index` writes a per-commit store `.rig/<short-commit>/` (or `<sha>-dirty`,
@@ -28,9 +30,9 @@ call-graph views (`rig graph`) at the tail by default (fast SQL query path); `--
 ## Quick start
 
 ```bash
-# Extract (from anywhere; pre-build the target first — see Gotchas)
-rig index path/to/Solution.slnx                 # whole solution: cross-project source in one run
-rig mine Solution.slnx --from Entry.csproj --parallelism 1   # BFS down the dep graph of Entry
+# Extract (from anywhere; `index` builds internally — no external pre-build needed)
+rig index path/to/Solution.slnx --parallelism 16 --reuse-build-cache   # whole solution in ONE call: internal parallel build (cached) + extract
+rig index path/to/Solution.slnx --from Entry.csproj --parallelism 16   # entry-scoped subset: just Entry's transitive ProjectReference closure
 
 # Query (cwd MUST contain .rig/)
 rig reaches "Type.Method"                        # effects reachable from an entry point (synchronous; handoffs NOT crossed)
@@ -42,11 +44,11 @@ rig tree "Type.Method" --raw                      # bypass codebase render rules
 rig tree "Type.Method" --no-cache                 # bypass the .rig/cache.db forest+effects cache (see below)
 rig tree "Type.Method" --full                      # every node + effect leaf shows its call site (file printed once per change); --files adds definition lines; lambdas labelled λN
 rig callers "Type.Method" --roots                # reverse: no-predecessor candidates that reach it (heuristic; a background callback shows as its OWN root)
-rig callers "Type.Method" --entrypoints           # reverse: the RULE-DETECTED entry points (the `derive` set) that reach it — precise, no unbound-interface noise
+rig callers "Type.Method" --entrypoints           # reverse: the RULE-DETECTED entry points (the `derive` set) that reach it — precise, no unbound-interface noise (but can under-count EPs reached only via interface-dispatch/lambda — cross-check forward with `path`; see Blast-radius section)
 rig path "From.Method" "To.Method" [--async]     # one concrete path between two symbols (synchronous; --async renders the ⤳ handoff hop)
 rig derive                                       # re-derive ALL effects + entry points from facts
 rig entrypoints                                  # JUST the rule-detected entry points, grouped by kind (+ service attribution); --format tsv
-rig dead --root "App.Main"                       # unreachable first-party methods (report-only)
+rig dead --root "App.Main"                       # unreachable first-party methods (report-only) — ⚠️ CURRENTLY DISABLED (errors "not matched"; see Finding dead code)
 rig refs "IFoo" / rig symbols "Foo" --kind method
 rig reaches "Type.Method" --store 1a2b3c4d        # query a SPECIFIC commit's store (id / sha-prefix; --commit/--at aliases)
 
@@ -181,7 +183,7 @@ Effects are DATA. To tag an outside-world call rig misses, add an entry to the `
 3. **Reverse** ("who/what entry points reach X"): `rig callers X --roots`.
 4. **Specific path**: `rig path X Y`.
 5. **Effect/EP inventory**: `rig derive [--rules extra.json]`.
-6. **Dead code**: `rig dead` — see below.
+6. **Dead code**: `rig dead` — ⚠️ currently DISABLED (see below).
 7. **Blast radius / behavioral diff of a change**: `rig impact --base <ref>` — see below.
 
 ## Blast radius & behavioral diff (`rig impact`)
@@ -215,6 +217,23 @@ no longer reaches a shared sink that *other* paths still reach, the global set-d
 per-EP diff shows that specific EP losing the effect (e.g. "`EditLive.Save` no longer writes object_store").
 Watch for the same effect subtree showing `-` on one set of EPs and `+` on another — that's a **relocation**
 (the behavior moved EP-to-EP), which the global delta collapses to near-nothing.
+
+**Cross-check a surprising `impact` delta against `tree`/`reaches` — those run UNBOUNDED and are the oracle.**
+`impact` has two systematic gaps the simpler commands don't share (both seen for real on the MedDBase
+healthcode-settings MR), so use `impact` to FIND candidate EPs but confirm each delta before reporting it:
+- **Depth horizon.** `impact --per-ep`'s forward reach can carry a `maxDepth` cap (was 20) while
+  `reaches`/`tree` are unbounded. An effect whose *shortest* reach is deeper than the cap is truncated from
+  the per-EP set, so a change that merely SHORTENS a path across the cap reports a spurious `+effect`
+  (lengthening → spurious `-`). Tell-tale: a `+/-` that two otherwise-identical EPs disagree on, where the
+  deep one churns and the shallow one doesn't. Verdict: diff `rig tree "<EP>" --effects --store <head>` vs
+  `--store <base>` (unbounded, same forward reach) — and read `reaches`'s `dN` depth prefix (an effect at
+  `d20`/`d21` is sitting on the horizon). The per-EP tree-diff between two `--store`s is the trustworthy
+  behavioral delta.
+- **Reverse-dispatch recall.** The reverse layers (`callers`/`--entrypoints`/`--roots`, and impact's
+  "affected EP" grouping) can MISS an entry point that reaches the target only via an interface-dispatched
+  call or an inner-lambda hop. If a reverse result looks suspiciously stable or undercounted, confirm
+  forward with `rig path "<EP>" "<target>"` — forward dispatch is the more complete direction. (530-vs-530
+  identical `callers --entrypoints` across two stores was THIS bug, not "no change".)
 
 **Setup (two indexed commits):** index the base commit, then the branch commit (each lands in its own
 `.rig/<commit>/` store). `--base <ref>` resolves the ref to a commit sha and matches it to a store; or pass
@@ -263,6 +282,12 @@ Pass `--no-cache` to bypass it (e.g. when benchmarking). Safe to delete `.rig/ca
 
 ## Finding dead code (`rig dead`)
 
+> ⚠️ **`rig dead` is currently DISABLED** — it's commented out in `CommandLine/Root.cs`, so `rig dead`
+> errors with *"'dead' was not matched"* (not a typo on your part). It ran on the all-hops SQL superset,
+> which the one-hop dispatch engine no longer matches; re-enable once `dead` is moved onto that engine.
+> The model below documents it for when it returns — until then, approximate via `callers <m> --roots`
+> on suspected-unused methods, or read the source.
+
 First-party method not reachable (forward, incl. dispatch) from any root = candidate. Roots = derived
 entry points + handoffs + `Main` + test methods. **Report-only** — confirm against the C# compiler
 (IDE0051/CS0169) or by reading source before removing; facts can't see reflection/DI/serialization.
@@ -280,12 +305,12 @@ from SOURCE by hand/subagent → replicate with rig (`callers --roots`, `reaches
 
 ## Top gotchas (full list in REFERENCE.md)
 
-- **Pre-build the target before `index`/`mine`** — design-time builds don't emit DLLs; cross-assembly metadata won't bind otherwise.
-- **`mine` at `--parallelism 1`** (>1 can corrupt/deplete shared DLLs); a 100+-project mine depletes net48 bins — rebuild the entry project before any later single-project index.
-- **`rig index` APPENDS** (no run dedup) — delete `.rig` before re-indexing the same project, or facts double.
+- **`rig index` builds internally — no external pre-build.** ONE `rig index <sln> --parallelism 16 --reuse-build-cache` call runs the design-time build itself (parallelised, cached; `--reuse-build-cache` skips the dominant build phase for unchanged projects), then extracts. The old "MSBuild the solution first" step is obsolete.
+- **`index` is the only extraction command** (the old `mine` is superseded; `index --from <entry.csproj>` covers the entry-scoped closure case). `--parallelism 16` is the safe standard setting — the internal build no longer clobbers shared `bin/`.
+- **A standalone `rig index` REPLACES atomically** (write-to-temp + rename) — re-running cleanly overwrites; no need to delete `.rig` first. Only `index --identity` (multi-solution accumulate) APPENDS.
 - **Index with the published global `rig`; query with anything.** (The Roslyn-workspace MEF deps — `System.Composition.*` — are now pinned, so a Debug build *can* index; but the global tool is the reliable path.) Indexing rig's OWN repo from a `bin/`-resident Debug dll self-clobbers that binary's output mid-run — index a copy or use the global tool.
 - Detector results are only as good as the rules + what's in scope — see the **fundamental static-analysis limits** in REFERENCE.md before trusting an effect/EP count.
 
-See **[REFERENCE.md](REFERENCE.md)** for: full command reference, indexing semantics (index vs mine vs
-solution), the rule/detector model + detector families, recall behaviour (dispatch + dead-code), the
+See **[REFERENCE.md](REFERENCE.md)** for: full command reference, indexing semantics (solution vs
+`--from` closure vs single `.csproj`), the rule/detector model + detector families, recall behaviour (dispatch + dead-code), the
 fundamental limits, and env gotchas.
