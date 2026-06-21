@@ -34,10 +34,15 @@ public static class FactEffectDeriver
         // FR-1(b): write refs whose TARGET is a STATIC field/auto-property, pre-filtered by the caller
         // (the static-ness gate lives in the loader's symbol_facts join — the fact layer's only source
         // of the target's modifiers). Each Target is the written slot's DocID ("F:Ns.Type.field" /
-        // "P:Ns.Type.Prop"); MatchFieldWrite rules consume these. The FactFieldWrite carrier also brings
+        // "P:Ns.Type.Prop"); MatchFieldWrite rules consume these. The FactFieldAccess carrier also brings
         // the write's structural context (enclosing loop / fan-out / lock / try-catch) so the field-write
         // effect derives the SAME observations as an invocation. Null/empty when not supplied.
-        IReadOnlyList<FactFieldWrite>? staticFieldWriteRefs = null
+        IReadOnlyList<FactFieldAccess>? staticFieldWriteRefs = null,
+        // FR-1 read arm: READ refs whose TARGET is a STATIC field/auto-property — the symmetric twin of
+        // staticFieldWriteRefs, pre-filtered identically (RefKind=read instead of write). MatchFieldRead
+        // rules consume these and emit a shared_state:read effect, carrying the read's structural context
+        // exactly like the write arm. Null/empty when not supplied.
+        IReadOnlyList<FactFieldAccess>? staticFieldReadRefs = null
     )
     {
         // Precompute a base-type closure per distinct DeclaringTypeBaseTypes set (e.g. ProxyBase).
@@ -79,6 +84,7 @@ public static class FactEffectDeriver
                 !r.MatchConstructor
                 && !r.MatchThrow
                 && !r.MatchFieldWrite
+                && !r.MatchFieldRead
                 && !r.TreatAsDispatch
                 && r.TargetCallsMethods is not { Count: > 0 }
             )
@@ -96,6 +102,7 @@ public static class FactEffectDeriver
         var constructorRules = rules.Where(r => r.MatchConstructor && !r.TreatAsDispatch).ToArray();
         var throwRules = rules.Where(r => r.MatchThrow && !r.TreatAsDispatch).ToArray();
         var fieldWriteRules = rules.Where(r => r.MatchFieldWrite && !r.TreatAsDispatch).ToArray();
+        var fieldReadRules = rules.Where(r => r.MatchFieldRead && !r.TreatAsDispatch).ToArray();
 
         var results = new List<DerivedEffect>();
         foreach (var inv in invocations)
@@ -389,11 +396,32 @@ public static class FactEffectDeriver
         // namespace/type or fire on every static-slot write; the resource is the declaring type
         // (resource:"declaring_type", recommended) or the field DocID itself (any other strategy). Keyed
         // to the write's EnclosingSymbolId — a call-graph node — so it surfaces in reaches/tree.
-        if (fieldWriteRules.Length > 0 && staticFieldWriteRefs is not null)
+        EmitFieldAccessEffects(staticFieldWriteRefs, fieldWriteRules);
+
+        // FR-1 read arm — the symmetric twin of the field-write arm above. A READ of a STATIC field/auto-
+        // property (the "check" of a shared cell) emits a shared_state:read effect keyed to the reading
+        // method, identical resource resolution + structural-context observations to the write arm. Static-
+        // ness is gated upstream (the read loader's symbol_facts join). MatchFieldRead rules carry Atomic
+        // false (a read is never an atomic RMW). This is the raw material the read-before-write TOCTOU
+        // detector pairs with a same-cell write effect.
+        EmitFieldAccessEffects(staticFieldReadRefs, fieldReadRules);
+
+        return results;
+
+        // Shared emitter for both static-field-access arms (read + write differ only by their ref/rule
+        // collections). For each access ref, resolve its slot, then for the first matching rule emit a
+        // DerivedEffect keyed to the access's enclosing call-graph node, with resource resolution and
+        // structural-context observations identical between the arms.
+        void EmitFieldAccessEffects(IReadOnlyList<FactFieldAccess>? accessRefs, FactEffectRule[] accessRules)
         {
-            foreach (var write in staticFieldWriteRefs)
+            if (accessRules.Length == 0 || accessRefs is null)
             {
-                var slot = ParseFieldSlot(write.Target);
+                return;
+            }
+
+            foreach (var access in accessRefs)
+            {
+                var slot = ParseFieldSlot(access.Target);
                 if (slot is null)
                 {
                     continue;
@@ -401,7 +429,7 @@ public static class FactEffectDeriver
 
                 var (declaringType, _) = slot.Value;
 
-                foreach (var rule in fieldWriteRules)
+                foreach (var rule in accessRules)
                 {
                     if (providerFilter is not null && !string.Equals(rule.Provider, providerFilter, StringComparison.OrdinalIgnoreCase))
                     {
@@ -414,27 +442,27 @@ public static class FactEffectDeriver
                     }
 
                     // resource:"declaring_type" -> the slot's declaring type; anything else -> the slot
-                    // DocID (the precise field), so the resource is never empty for a matched write.
-                    var resource = string.Equals(rule.Resource, "declaring_type", StringComparison.Ordinal) ? declaringType : write.Target;
+                    // DocID (the precise field), so the resource is never empty for a matched access.
+                    var resource = string.Equals(rule.Resource, "declaring_type", StringComparison.Ordinal) ? declaringType : access.Target;
 
-                    // Observations from the write's structural context — MIRRORS the invocation arm exactly
-                    // (same observation rules, same decode helpers, same provider). A static-field publish
-                    // under Parallel.ForEach / a loop / a lock now carries parallel_fanout / looped_effect /
-                    // lock_held_across_effect, closing the FR-1 region-join gap for the field-write family.
-                    // The slot's MEMBER name is the methodName analogue (the concurrency_handled commit-method
-                    // gate keys on it); a plain `=` write matches no commit method, so it is inert there.
+                    // Observations from the access's structural context — MIRRORS the invocation arm exactly
+                    // (same observation rules, same decode helpers, same provider). A static-field access
+                    // under Parallel.ForEach / a loop / a lock carries parallel_fanout / looped_effect /
+                    // lock_held_across_effect. The slot's MEMBER name is the methodName analogue (the
+                    // concurrency_handled commit-method gate keys on it); a plain field access matches no
+                    // commit method, so it is inert there.
                     var member = slot.Value.Member;
                     var observations = observationRules is null
                         ? null
                         : FactObservationDeriver.Derive(
                             methodName: member,
-                            loopKind: write.LoopKind,
-                            loopDetail: write.LoopDetail,
-                            enclosingInvocations: FactStructuralContext.DecodeInvocations(write.EnclosingInvocations),
-                            catchTypes: FactStructuralContext.DecodeList(write.CatchTypes),
+                            loopKind: access.LoopKind,
+                            loopDetail: access.LoopDetail,
+                            enclosingInvocations: FactStructuralContext.DecodeInvocations(access.EnclosingInvocations),
+                            catchTypes: FactStructuralContext.DecodeList(access.CatchTypes),
                             rules: observationRules,
                             provider: rule.Provider,
-                            enclosingScopes: FactStructuralContext.DecodeScopes(write.EnclosingScopes)
+                            enclosingScopes: FactStructuralContext.DecodeScopes(access.EnclosingScopes)
                         );
 
                     results.Add(
@@ -442,9 +470,9 @@ public static class FactEffectDeriver
                             Provider: rule.Provider,
                             Operation: rule.Operation,
                             ResourceType: resource,
-                            EnclosingSymbolId: write.Enclosing,
-                            FilePath: write.FilePath,
-                            Line: write.Line,
+                            EnclosingSymbolId: access.Enclosing,
+                            FilePath: access.FilePath,
+                            Line: access.Line,
                             Observations: observations,
                             Atomic: rule.Atomic
                         )
@@ -453,8 +481,6 @@ public static class FactEffectDeriver
                 }
             }
         }
-
-        return results;
     }
 
     // "F:Ns.Type.field" / "P:Ns.Type.Prop" -> ("Ns.Type", "field"). Generic arity markers on the

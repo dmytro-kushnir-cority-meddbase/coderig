@@ -230,14 +230,16 @@ public sealed record MethodRef(
 // resolved enclosing method (most callers filter those out at the query).
 public sealed record SymbolRef(string Target, string? Enclosing, string FilePath, int Line);
 
-// A static-field/auto-property WRITE ref (FR-1(b)) carrying the structural context the SymbolRef shape
-// drops, so the field-write effect arm can derive the SAME observations the invocation arm does. Target is
-// the written slot DocID ("F:Ns.Type.field" / "P:Ns.Type.Prop"); Enclosing keys the effect to a call-graph
-// node. The Enclosing* fields mirror FactInvocation's (decode with FactStructuralContext) and feed
-// FactObservationDeriver — a static-field publish under a loop / Parallel.ForEach / lock / try-catch then
+// A static-field/auto-property ACCESS ref — a WRITE (FR-1(b)) or a READ (FR-1 read arm) — carrying the
+// structural context the SymbolRef shape drops, so the field-access effect arms can derive the SAME
+// observations the invocation arm does. One carrier serves both reads and writes (the kind is determined by
+// the loader: LoadStaticFieldWriteRefsAsync filters RefKind=write, LoadStaticFieldReadRefsAsync RefKind=read).
+// Target is the accessed slot DocID ("F:Ns.Type.field" / "P:Ns.Type.Prop"); Enclosing keys the effect to a
+// call-graph node. The Enclosing* fields mirror FactInvocation's (decode with FactStructuralContext) and feed
+// FactObservationDeriver — a static-field access under a loop / Parallel.ForEach / lock / try-catch then
 // carries looped_effect / parallel_fanout / lock_held_across_effect / concurrency_handled. All structural
-// fields default to null, so a write with no enclosing structure (the common case) carries no observation.
-public sealed record FactFieldWrite(
+// fields default to null, so an access with no enclosing structure (the common case) carries no observation.
+public sealed record FactFieldAccess(
     string Target,
     string? Enclosing,
     string FilePath,
@@ -728,6 +730,15 @@ public sealed record FactEffectRule(
     // type; the resource is the declaring type (resource:"declaring_type") or the field DocID. The
     // deriver is handed the pre-filtered static-target write refs by the caller (no method-name gate).
     bool MatchFieldWrite = false,
+    // When true, match READ refs (RefKind="read") whose TARGET is a STATIC field/auto-property — a read of
+    // `StaticType.SharedField` (the FR-1 read arm, symmetric twin of MatchFieldWrite). This is the "check" of
+    // a shared cell modeled as a queryable effect, so the read-before-write TOCTOU/lost-update detector has
+    // the read to pair with the write. Same expressibility argument: a read of a STATIC slot is unambiguously
+    // a read of shared state regardless of receiver (an instance/local read is local-vs-shared-ambiguous and
+    // is NOT matched). The type gates apply to the TARGET field's declaring type; the resource is the
+    // declaring type (resource:"declaring_type") or the field DocID. The deriver is handed the pre-filtered
+    // static-target read refs by the caller (no method-name gate). A read is never atomic (Atomic stays false).
+    bool MatchFieldRead = false,
     // FR-1(g): this rule's matched calls are ATOMIC read-modify-write operations (a single Atom.Swap /
     // Interlocked / Concurrent* mutator / ImmutableInterlocked call). Propagated onto the DerivedEffect so
     // the FR-1d guard-subtraction triage can exclude already-safe mutations. Purely descriptive — it does

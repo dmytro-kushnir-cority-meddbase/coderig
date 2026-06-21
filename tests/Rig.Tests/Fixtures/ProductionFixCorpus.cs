@@ -59,6 +59,11 @@ public static class ProductionFixCorpus
         public IReadOnlyList<DerivedEffect> SharedStateMutationsIn(string enclosingMarker) =>
             EffectsIn(enclosingMarker).Where(e => e.Provider == "shared_state" && e.Operation == "mutate").ToList();
 
+        // The FR-1 read-arm counterpart of SharedStateMutationsIn: every shared_state:read effect enclosed by
+        // the marker method (a read of a STATIC field/auto-property — the "check" of a shared cell).
+        public IReadOnlyList<DerivedEffect> SharedStateReadsIn(string enclosingMarker) =>
+            EffectsIn(enclosingMarker).Where(e => e.Provider == "shared_state" && e.Operation == "read").ToList();
+
         public bool HasGuardEffectIn(string enclosingMarker) => EffectsIn(enclosingMarker).Any(e => e.Provider is "lock" or "async_lock");
 
         // Every serialization_hazard observation attached to an effect enclosed by the marker method.
@@ -106,7 +111,8 @@ public static class ProductionFixCorpus
             ctorRefs: epData.CtorRefs,
             observationRules: rules.Observations,
             throwRefs: FactProjection.ThrowRefs(result),
-            staticFieldWriteRefs: StaticFieldWriteRefs(result)
+            staticFieldWriteRefs: StaticFieldAccessRefs(result: result, refKind: RefKinds.Write),
+            staticFieldReadRefs: StaticFieldAccessRefs(result: result, refKind: RefKinds.Read)
         );
         return new CorpusResult(effects);
     }
@@ -130,10 +136,11 @@ public static class ProductionFixCorpus
         }
     }
 
-    // Mirror of Reads.LoadStaticFieldWriteRefsAsync over the in-memory facts: write refs whose target is a
-    // STATIC field/auto-property slot (gated via the symbol's modifiers), deduped by site. This is the FR-1(b)
-    // input population — and it only works because the field-emission fix now emits class field symbols.
-    private static IReadOnlyList<FactFieldWrite> StaticFieldWriteRefs(AnalysisResult result)
+    // Mirror of Reads.LoadStaticFieldAccessRefsAsync over the in-memory facts: access refs (read OR write,
+    // selected by refKind) whose target is a STATIC field/auto-property slot (gated via the symbol's
+    // modifiers), deduped by site. This is the FR-1(b) write / FR-1 read input population — and it only works
+    // because the field-emission fix now emits class field symbols.
+    private static IReadOnlyList<FactFieldAccess> StaticFieldAccessRefs(AnalysisResult result, string refKind)
     {
         var staticSlots = (result.Symbols ?? [])
             .Where(s => s.Modifiers.Contains("static", StringComparison.Ordinal))
@@ -141,12 +148,10 @@ public static class ProductionFixCorpus
             .ToHashSet(StringComparer.Ordinal);
 
         return (result.References ?? [])
-            .Where(r =>
-                r.RefKind == RefKinds.Write && r.TargetInSource && r.EnclosingSymbolId != null && staticSlots.Contains(r.TargetSymbolId)
-            )
+            .Where(r => r.RefKind == refKind && r.TargetInSource && r.EnclosingSymbolId != null && staticSlots.Contains(r.TargetSymbolId))
             .GroupBy(r => (r.FilePath, r.Line, r.TargetSymbolId))
             .Select(g => g.First())
-            .Select(r => new FactFieldWrite(
+            .Select(r => new FactFieldAccess(
                 Target: r.TargetSymbolId,
                 Enclosing: r.EnclosingSymbolId,
                 FilePath: r.FilePath,

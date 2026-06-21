@@ -90,6 +90,7 @@ internal static class DeriveCommand
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
         var staticFieldWriteRefs = await Reads.LoadStaticFieldWriteRefsAsync(context);
+        var staticFieldReadRefs = await Reads.LoadStaticFieldReadRefsAsync(context);
         var effects = DeriveEffects(
             effectRules: rules.Effects,
             observationRules: rules.Observations,
@@ -97,7 +98,8 @@ internal static class DeriveCommand
             baseEdges: epData.BaseEdges,
             ctorRefs: epData.CtorRefs,
             throwRefs: throwRefs,
-            staticFieldWriteRefs: staticFieldWriteRefs
+            staticFieldWriteRefs: staticFieldWriteRefs,
+            staticFieldReadRefs: staticFieldReadRefs
         );
         effects = ApplyEffectFilters(effects: effects, only: only, exclude: exclude); // --only / --exclude (e.g. --exclude throw)
 

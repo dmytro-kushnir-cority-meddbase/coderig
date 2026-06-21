@@ -81,6 +81,12 @@ internal sealed record EffectRule(
     // resource is the declaring type (resource:"declaring_type") or the slot DocID. Static-ness is what
     // makes this rule-expressible (a shared mutation regardless of receiver). See FactEffectRule.MatchFieldWrite.
     bool MatchFieldWrite = false,
+    // When true, match READ refs whose TARGET is a STATIC field/auto-property (a read of `StaticType.Field`,
+    // the FR-1 read arm — symmetric twin of MatchFieldWrite). The type gates apply to the target slot's
+    // declaring type; the resource is the declaring type (resource:"declaring_type") or the slot DocID.
+    // Static-ness is what makes this rule-expressible (a shared read regardless of receiver). See
+    // FactEffectRule.MatchFieldRead.
+    bool MatchFieldRead = false,
     // FR-1(g): mark this rule's matched calls as atomic read-modify-write (`"atomic": true`). Carried onto
     // the derived effect for the FR-1d guard-subtraction triage. See FactEffectRule.Atomic.
     bool Atomic = false,

@@ -835,22 +835,39 @@ public static class Reads
     // written slot's modifiers (the call graph carries method->method edges only). First-party only
     // (TargetInSource) and EnclosingSymbolId not null so the effect keys to a call-graph node. Target is
     // the written slot DocID ("F:Ns.Type.field" / "P:Ns.Type.Prop"); the deriver gates its declaring type.
-    public static async Task<IReadOnlyList<FactFieldWrite>> LoadStaticFieldWriteRefsAsync(
+    public static Task<IReadOnlyList<FactFieldAccess>> LoadStaticFieldWriteRefsAsync(
         RigDbContext context,
+        CancellationToken cancellationToken = default
+    ) => LoadStaticFieldAccessRefsAsync(context: context, refKind: RefKinds.Write, cancellationToken: cancellationToken);
+
+    // Loads READ reference facts (RefKind="read") whose TARGET is a STATIC field/auto-property — the FR-1
+    // read arm, the symmetric twin of LoadStaticFieldWriteRefsAsync. A read of `StaticType.SharedField` is
+    // the "check" of a shared cell (the read-before-write TOCTOU/lost-update detector pairs it with the
+    // write). Identical join/dedup/structural projection to the write loader — only RefKind differs.
+    public static Task<IReadOnlyList<FactFieldAccess>> LoadStaticFieldReadRefsAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    ) => LoadStaticFieldAccessRefsAsync(context: context, refKind: RefKinds.Read, cancellationToken: cancellationToken);
+
+    // Shared loader for both static-field-access arms (read vs write differ only by RefKind). Joins the
+    // access ref to symbol_facts on a STATIC target (the fact layer's only source of the target's modifiers),
+    // first-party only (TargetInSource), enclosing non-null (keys the effect to a call-graph node), carries
+    // the access's structural context (mirrors LoadInvocationRefsAsync), and dedups by site.
+    private static async Task<IReadOnlyList<FactFieldAccess>> LoadStaticFieldAccessRefsAsync(
+        RigDbContext context,
+        string refKind,
         CancellationToken cancellationToken = default
     )
     {
         var rows = await context
             .ReferenceFacts.AsNoTracking()
-            .Where(r => r.RefKind == RefKinds.Write && r.TargetInSource && r.EnclosingSymbolId != null)
+            .Where(r => r.RefKind == refKind && r.TargetInSource && r.EnclosingSymbolId != null)
             .Join(
                 context.SymbolFacts.AsNoTracking().Where(s => s.Modifiers.Contains("static")),
                 r => r.TargetSymbolId,
                 s => s.SymbolId,
-                // Carry the write's structural context (mirrors LoadInvocationRefsAsync) so the field-write
-                // effect arm can derive the same observations (parallel_fanout / looped_effect / …, FR-1).
                 (r, s) =>
-                    new FactFieldWrite(
+                    new FactFieldAccess(
                         Target: r.TargetSymbolId,
                         Enclosing: r.EnclosingSymbolId,
                         FilePath: r.FilePath,
