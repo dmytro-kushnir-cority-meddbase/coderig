@@ -382,3 +382,71 @@ Sequencing advice: ship **B1+B2+B4** together (one small PR, biggest wall-time r
 the graph phase), then **A3+A6** (cheap, config-level), then **B3**, then re-profile before committing
 to the big structural items **A1/A2/B6**. Re-baseline `rig derive`/`reaches` edge counts after A1 and
 A4 — neither may *lose* an edge.
+
+---
+
+## Empirical follow-up (2026-06-21) — measured results, kept / parked / rejected
+
+The strategy above was written from profiling + code reading, **before** the changes were run on the
+real target. This section records what happened when they were implemented and timed (`rig index
+--time` on MedDBase, repeated runs). **Read this before re-attempting anything above** — several
+predicted wins did not survive measurement, and the total wall turned out to be **noise-dominated by
+`compile+read` (±~8s run-to-run, intrinsic Roslyn/MSBuild)**, so judge changes by the *stable* phase
+rows (`save`/`graph` diskR/W, `extract` alloc), never by `total`.
+
+### Shipped (kept) — flat on wall, but real waste removed
+- **save fast-write: `mmap_size=4GB` + `cache_size=256MB`** (B2). save diskR 3.8→2.3GB (the
+  post-insert index-rebuild re-scan stopped thrashing a 64MB cache). Clear keeper.
+- **Dropped the two dead composite indexes** `(RunId,SymbolId)` / `(RunId,TargetSymbolId)` — no query
+  filters by `RunId` (cross-run/DocID-keyed surface), so they were write+rebuild overhead only.
+- **FTS5 fed from in-memory facts** + **`PRAGMA analysis_limit=400`** (part of B6/B3): graph diskR
+  2.4→1.6GB by not re-scanning `symbol_facts`/`reference_facts` for the trigram build and capping ANALYZE.
+- **Pre-size + null per-file fact arrays during concat**: removes the AddRange doubling/LOH churn.
+- **DI-registration syntactic prefilter + skip-pass-when-no-rules**: rejects non-DI invocations by
+  call-site name before binding, and `yield break`s the whole pass when the rule set defines no DI
+  registrations (MedDBase's case — skips a 9957-file tree walk). Behaviour-identical (0 regs == 0).
+
+### Parked — `nodes` table from the in-memory set instead of the SQL `UNION` ⏸️
+**Idea:** the `nodes` table (edge endpoints ∪ `symbol_facts WHERE Kind='method'`) was built by a 4-scan
+`INSERT … SELECT … UNION`. Since the materializer holds the edges + `graph.Methods` in RAM, build it
+from a `HashSet` collected during the edge-insert loops instead — avoiding the scans (incl. the big
+`symbol_facts`).
+
+**Why parked:** implemented and measured (commit **`8c285e5c`**, reverted by the commit that adds this
+note). On MedDBase it was **perf-undecidable**: the `graph` phase is noisy (~18.6–21.9s across runs
+regardless of this change), and the change's effect — if any — is ~1s lost in that band. The hoped-for
+diskR win **did not appear** (graph diskR stayed 1.6GB): the four scans it removed were served warm
+from the OS page cache (the tables were just written by `save`), so removing them saved no disk I/O,
+while it *added* managed cost (~1.1M `HashSet.Add` in the hot insert loops + 263k individual
+`ExecuteNonQuery` inserts vs. SQLite's one native `UNION` statement). Node count is exact-parity
+(263590), so it's correct — just not a measurable win here, at the cost of more complexity than the SQL.
+
+**Why it's a real return point (input-set dependent):** the benefit is conditional on the *page cache
+not* holding the fact tables. On a **cold cache**, under **memory pressure** (this pipeline already
+peaks ~9.3GB, and a smaller box would evict `symbol_facts`), or on a **larger store than fits the
+mmap**, those four scans become real disk reads and the in-RAM build wins. So the value is genuinely
+target/environment-dependent — it just doesn't show on this warm-cache, RAM-rich machine.
+
+**To revive:** `git cherry-pick 8c285e5c` (touches only `GraphMaterializer.cs`). Re-measure on a
+cold-cache run (drop the OS file cache first) or a memory-constrained box; keep only if graph diskR
+actually drops.
+
+### Rejected — measured worse, do NOT re-attempt without new evidence
+- **Defer edge-index builds (drop-before / create-after bulk insert)** (B3, for `call_edges`/
+  `dispatch_edges`): graph diskR **+500MB**. The bulk `CREATE INDEX` cold-scans the edge tables to sort
+  keys, *adding* reads; the incremental per-row build kept those pages hot. Net worse. (The save path's
+  drop-then-rebuild is still correct *there* — it operates on much larger tables written with a tiny
+  cache; the lesson is this doesn't generalize to the small, cache-hot edge tables.)
+- **Release the Roslyn graph + forced compacting `GC.Collect` at the extract→save seam** (A6): save
+  peak RAM **unchanged** (8.3→8.3GB). The collect reclaims the dead compilations *logically*, but
+  ServerGC/DATAS does **not** return the segments to the OS, so the working-set peak the profiler
+  reports doesn't move — and the blocking collect adds a pause. Moving this needs a **GC-config** change
+  (`DOTNET_GCConserveMemory` / retain-VM tuning), at a throughput cost — not application code.
+
+### Still un-attempted, and the only live lever
+The index pipeline is at its floor (`compile+read` is intrinsic Roslyn; the I/O phases are tuned or
+cache-masked). The unexplored, *measurable* value is **query-path latency** (interactive `reaches` /
+`callers` / `tree` / `derive`), which needs a query benchmark, not `index --time`. High-confidence
+starters: sort each node's adjacency **once** in `BuildIndex` (not per `Successors` expansion);
+`EntryRootsReaching` builds the index + reverse-maps twice (reuse); `SqlReachability.
+EntryRootsReachingAsync` round-trips the whole closure to re-insert row-by-row (one `INSERT … SELECT`).
