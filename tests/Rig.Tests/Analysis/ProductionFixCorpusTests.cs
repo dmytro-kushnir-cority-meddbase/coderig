@@ -224,12 +224,11 @@ public sealed class ProductionFixCorpusTests
     [Test]
     public void _3024_shared_mutation_under_parallel_fanout_carries_the_region_observation()
     {
-        // NB: the parallel_fanout observation matches the receiver TEXT ("Parallel"), so this uses the
-        // idiomatic `using` form — a fully-qualified System.Threading.Tasks.Parallel.ForEach would be MISSED
-        // (a known syntactic limitation of fanout detection, separate from this fixture's point).
+        // Uses the FULLY-QUALIFIED System.Threading.Tasks.Parallel.ForEach to guard the FQN-matching fix:
+        // fanout detection resolves the receiver TYPE, so the qualified form matches as readily as the
+        // using-imported `Parallel.ForEach`.
         var result = ProductionFixCorpus.Analyze(
             """
-            using System.Threading.Tasks;
             namespace Imports
             {
                 public static class Seen
@@ -241,7 +240,7 @@ public sealed class ProductionFixCorpusTests
                 {
                     // BUG (#3024/#1192): inserts reachable under a parallel region — duplicates when flows interleave.
                     public void Insert_Bug(System.Collections.Generic.IEnumerable<int> ids) =>
-                        Parallel.ForEach(ids, id => Seen.Keys.TryAdd(id, id));
+                        System.Threading.Tasks.Parallel.ForEach(ids, id => Seen.Keys.TryAdd(id, id));
                 }
             }
             """

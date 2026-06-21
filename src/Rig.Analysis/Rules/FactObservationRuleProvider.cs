@@ -11,12 +11,16 @@ namespace Rig.Analysis.Rules;
 // provider, not the Domain deriver, preserves the "detectors are data, Domain is generic" boundary.
 internal static class FactObservationRuleProvider
 {
-    // Task.WhenAll and Parallel.ForEach/ForEachAsync — the fanout wrappers the Roslyn
-    // FindParallelFanoutContext recognizes by receiver text + method name.
+    // Task.WhenAll and Parallel.ForEach/ForEachAsync — the fanout wrappers. Matched by the FQN of the
+    // resolved receiver type (robust to qualification), with the short name kept for the observation context.
     private static readonly IReadOnlyList<FactParallelFanoutRule> ParallelFanout =
     [
-        new FactParallelFanoutRule("Task", ["WhenAll"]),
-        new FactParallelFanoutRule("Parallel", ["ForEach", "ForEachAsync"]),
+        new FactParallelFanoutRule(Receiver: "Task", ReceiverType: "System.Threading.Tasks.Task", Methods: ["WhenAll"]),
+        new FactParallelFanoutRule(
+            Receiver: "Parallel",
+            ReceiverType: "System.Threading.Tasks.Parallel",
+            Methods: ["ForEach", "ForEachAsync"]
+        ),
     ];
 
     internal static FactObservationRules Project(AnalysisRulesDocument doc)

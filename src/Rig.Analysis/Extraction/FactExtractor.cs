@@ -910,6 +910,26 @@ internal static class FactExtractor
     //   * caught exception types of all enclosing try/catch clauses -> concurrency_handled
     // Returns all-null for a null node (non-invocation ref). Generalized to any node so throw
     // operands carry the same loop/try-catch context as invocations.
+    // The FQN type of an enclosing-invocation receiver, for FQN-based structural-context matching (e.g.
+    // parallel_fanout). An INSTANCE receiver (`x.M()`) resolves to the value's type; a STATIC-class receiver
+    // (`Parallel.ForEach`, whose expression has no value type) resolves to the referenced type ITSELF — so a
+    // rule matches the same FQN whether the call was written `Parallel.ForEach` or fully qualified as
+    // `System.Threading.Tasks.Parallel.ForEach`. (Matching the syntactic receiver TEXT missed the qualified form.)
+    private static string EnclosingReceiverType(ExpressionSyntax receiver, SemanticModel model, SymbolStringCache symbolCache)
+    {
+        if (model.GetTypeInfo(receiver).Type is { } valueType)
+        {
+            return symbolCache.TypeDisplay(valueType) ?? "";
+        }
+
+        if (model.GetSymbolInfo(receiver).Symbol is INamedTypeSymbol staticType)
+        {
+            return symbolCache.TypeDisplay(staticType) ?? "";
+        }
+
+        return "";
+    }
+
     private static StructuralContext StructuralContextOf(SyntaxNode? invocation, SemanticModel model, SymbolStringCache symbolCache)
     {
         if (invocation is null)
@@ -951,7 +971,7 @@ internal static class FactExtractor
                     (enclosing ??= []).Add(
                         new FactStructuralContext.EnclosingInvocation(
                             ReceiverText: memberAccess.Expression.ToString(),
-                            ReceiverType: symbolCache.TypeDisplay(model.GetTypeInfo(memberAccess.Expression).Type) ?? "",
+                            ReceiverType: EnclosingReceiverType(memberAccess.Expression, model, symbolCache),
                             MethodName: memberAccess.Name.Identifier.ValueText
                         )
                     );

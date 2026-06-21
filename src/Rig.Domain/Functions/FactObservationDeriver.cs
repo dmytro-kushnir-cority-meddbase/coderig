@@ -46,8 +46,11 @@ public static class FactObservationDeriver
         // the effect. Innermost-first; first match wins (mirrors the Roslyn ancestor walk).
         foreach (var enclosing in enclosingInvocations)
         {
+            // Match on the FQN of the resolved receiver TYPE (robust to how the call was qualified), not the
+            // syntactic receiver text — a fully-qualified `System.Threading.Tasks.Parallel.ForEach` matches
+            // exactly as the using-imported `Parallel.ForEach` does.
             var fanout = rules.ParallelFanout.FirstOrDefault(f =>
-                string.Equals(enclosing.ReceiverText, f.Receiver, StringComparison.Ordinal)
+                string.Equals(enclosing.ReceiverType, f.ReceiverType, StringComparison.Ordinal)
                 && f.Methods.Contains(enclosing.MethodName, StringComparer.Ordinal)
             );
             if (fanout is not null)

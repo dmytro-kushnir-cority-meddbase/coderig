@@ -540,9 +540,11 @@ public sealed record FactResilienceRetryRule(IReadOnlyList<string> WrapperMethod
 
 public sealed record FactConcurrencyHandledRule(IReadOnlyList<string> CommitMethods, IReadOnlyList<string> CatchTypePatterns);
 
-// One fanout wrapper: receiver source text (e.g. "Task"/"Parallel") + the wrapping methods
-// (e.g. "WhenAll" / "ForEach"/"ForEachAsync"). Context = "{Receiver}.{method}".
-public sealed record FactParallelFanoutRule(string Receiver, IReadOnlyList<string> Methods);
+// One fanout wrapper. Receiver = the short display name (e.g. "Task"/"Parallel") used only for the
+// observation Context ("{Receiver}.{method}"); ReceiverType = the FULLY-QUALIFIED type matched against the
+// enclosing invocation's resolved receiver type (e.g. "System.Threading.Tasks.Parallel"), so a fully-qualified
+// call matches as readily as the using-imported short form. Methods = the wrapping methods (e.g. "WhenAll").
+public sealed record FactParallelFanoutRule(string Receiver, string ReceiverType, IReadOnlyList<string> Methods);
 
 // A resource-span observation rule (P2b, ordering/nesting): an effect that occurs LEXICALLY INSIDE a
 // held-resource scope yields an observation proving the resource is held across that effect. The
