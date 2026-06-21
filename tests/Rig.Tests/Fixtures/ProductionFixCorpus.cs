@@ -84,6 +84,11 @@ public static class ProductionFixCorpus
         // heuristic) on a mutate effect enclosed by the marker method. Sugar over ObservationsIn.
         public IReadOnlyList<EffectObservationInfo> LazyInitRacesIn(string enclosingMarker) =>
             ObservationsIn(enclosingMarker, FactHazardDeriver.LazyInitRaceType);
+
+        // FR-8: every dual_write hazard observation on an effect enclosed by the marker method — the
+        // ≥2-distinct-durable-systems-in-one-method finding. Sugar over ObservationsIn.
+        public IReadOnlyList<EffectObservationInfo> DualWritesIn(string enclosingMarker) =>
+            ObservationsIn(enclosingMarker, FactHazardDeriver.DualWriteType);
     }
 
     public static CorpusResult Analyze(string source)
@@ -128,6 +133,9 @@ public static class ProductionFixCorpus
         // The whole-store `derive` path runs this too (EffectDerivation.DeriveEffects deriveHazards:true);
         // the harness mirrors it so the corpus measures the SHIPPED behavior end to end.
         effects = FactHazardDeriver.DeriveRaceWindows(effects);
+        // FR-8 dual_write post-pass: ≥2 distinct durable systems written in one method. Mirrors the shipped
+        // derive path (EffectDerivation.DeriveEffects runs both hazard passes when deriveHazards:true).
+        effects = FactHazardDeriver.DeriveDualWrites(effects);
         return new CorpusResult(effects);
     }
 

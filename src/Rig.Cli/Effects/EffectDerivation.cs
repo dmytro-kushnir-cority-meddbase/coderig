@@ -39,10 +39,19 @@ internal static class EffectDerivation
             staticFieldReadRefs: staticFieldReadRefs
         );
 
-        // Annotate qualifying mutate effects with a race_window observation (read-before-write of the same
-        // shared cell in one method). Pure post-pass over the derived effects — adds observations, drops
-        // nothing.
-        return deriveHazards ? FactHazardDeriver.DeriveRaceWindows(effects) : effects;
+        // Annotate qualifying effects with hazard observations — pure post-passes over the derived effects
+        // that add observations and drop nothing:
+        //   - race_window: a read-before-write of the same shared cell in one method (RMW / TOCTOU);
+        //   - dual_write: durable writes to ≥2 distinct system classes in one method (FR-8, distributed
+        //     consistency — DB + queue / search / cache / external HTTP with no atomicity).
+        if (!deriveHazards)
+        {
+            return effects;
+        }
+
+        effects = FactHazardDeriver.DeriveRaceWindows(effects);
+        effects = FactHazardDeriver.DeriveDualWrites(effects);
+        return effects;
     }
 
     // Effect selection for reaches/tree/derive: --only keeps just the listed effects, --exclude drops
