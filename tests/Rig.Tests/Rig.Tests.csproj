@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Testing.Platform.MSBuild" />
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
     <PackageReference Include="TUnit" />
     <PackageReference Include="Shouldly" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
