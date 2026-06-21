@@ -522,7 +522,12 @@ public sealed record DerivedEffect(
     string? EnclosingSymbolId,
     string FilePath,
     int Line,
-    IReadOnlyList<EffectObservationInfo>? Observations = null
+    IReadOnlyList<EffectObservationInfo>? Observations = null,
+    // FR-1(g): the matched rule declares this an ATOMIC read-modify-write API (Atom.Swap, Interlocked*,
+    // Concurrent* per-call mutators, ImmutableInterlocked). Used by the FR-1d guard-subtraction triage to
+    // drop already-safe shared_state mutations from the unguarded-candidate set (a single atomic call is
+    // not the race — a non-atomic read-then-write PAIR is, which rig cannot yet couple). Default false.
+    bool Atomic = false
 );
 
 // Fact-side projections of the observation rules (the same AnalysisRuleSet.*Observations data the
@@ -669,6 +674,12 @@ public sealed record FactEffectRule(
     // type; the resource is the declaring type (resource:"declaring_type") or the field DocID. The
     // deriver is handed the pre-filtered static-target write refs by the caller (no method-name gate).
     bool MatchFieldWrite = false,
+    // FR-1(g): this rule's matched calls are ATOMIC read-modify-write operations (a single Atom.Swap /
+    // Interlocked / Concurrent* mutator / ImmutableInterlocked call). Propagated onto the DerivedEffect so
+    // the FR-1d guard-subtraction triage can exclude already-safe mutations. Purely descriptive — it does
+    // not change matching. The static-field-write arm is NOT atomic (a plain `=` assignment), so it leaves
+    // this false.
+    bool Atomic = false,
     // Enclosing-method gates (P2a) — mirror the Roslyn MatchesContainingNamespace/Type/Method. The
     // effect counts only when the enclosing method's namespace / declaring type / name matches.
     // Parsed from the reference's EnclosingSymbolId DocID; type/namespace matching is equality +

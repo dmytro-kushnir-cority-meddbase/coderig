@@ -199,7 +199,8 @@ public static class FactEffectDeriver
                         EnclosingSymbolId: inv.Enclosing,
                         FilePath: inv.FilePath,
                         Line: inv.Line,
-                        Observations: observations
+                        Observations: observations,
+                        Atomic: rule.Atomic
                     )
                 );
                 break; // first matching rule wins
@@ -273,7 +274,8 @@ public static class FactEffectDeriver
                             ResourceType: resource!,
                             EnclosingSymbolId: inv.Enclosing,
                             FilePath: inv.FilePath,
-                            Line: inv.Line
+                            Line: inv.Line,
+                            Atomic: rule.Atomic
                         )
                     );
                     break;
@@ -320,7 +322,8 @@ public static class FactEffectDeriver
                             ResourceType: constructedType,
                             EnclosingSymbolId: ctor.Enclosing,
                             FilePath: ctor.FilePath,
-                            Line: ctor.Line
+                            Line: ctor.Line,
+                            Atomic: rule.Atomic
                         )
                     );
                     break;
@@ -361,7 +364,8 @@ public static class FactEffectDeriver
                             ResourceType: exceptionType,
                             EnclosingSymbolId: thrown.Enclosing,
                             FilePath: thrown.FilePath,
-                            Line: thrown.Line
+                            Line: thrown.Line,
+                            Atomic: rule.Atomic
                         )
                     );
                     break;
@@ -412,7 +416,8 @@ public static class FactEffectDeriver
                             ResourceType: resource,
                             EnclosingSymbolId: write.Enclosing,
                             FilePath: write.FilePath,
-                            Line: write.Line
+                            Line: write.Line,
+                            Atomic: rule.Atomic
                         )
                     );
                     break;

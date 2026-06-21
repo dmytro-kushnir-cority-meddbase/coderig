@@ -81,6 +81,9 @@ internal sealed record EffectRule(
     // resource is the declaring type (resource:"declaring_type") or the slot DocID. Static-ness is what
     // makes this rule-expressible (a shared mutation regardless of receiver). See FactEffectRule.MatchFieldWrite.
     bool MatchFieldWrite = false,
+    // FR-1(g): mark this rule's matched calls as atomic read-modify-write (`"atomic": true`). Carried onto
+    // the derived effect for the FR-1d guard-subtraction triage. See FactEffectRule.Atomic.
+    bool Atomic = false,
     // Wrapper gate: match an invocation whose TARGET method itself calls one of these patterns (e.g.
     // "Echo.Process.ask") — recognizes request/response wrappers from data, no per-type curation. The
     // effect emits at the wrapper's call sites; resource:type_argument yields the caller's concrete
