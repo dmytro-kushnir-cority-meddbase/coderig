@@ -385,6 +385,11 @@ public static partial class FactPathFinder
     // own subtree — the precise CLR dispatch target set (orthogonal to WHICH member: it trims runtime
     // TYPES, the mined facts fix the member correspondence). Otherwise (null/interface/error-type/the
     // declaring base itself/an unknown type) it falls back to the full receiver-blind set.
+
+    // Shared empty result for the common case of a node that dispatches nowhere. Returned directly to
+    // Successors, which only reads .Count and enumerates it — never mutated, so a single instance is safe.
+    private static readonly List<(string Node, string Kind, string Basis)> NoTargets = new();
+
     private static List<(string Node, string Kind, string Basis)> DispatchTargets(
         string method,
         GraphIndex index,
@@ -398,8 +403,11 @@ public static partial class FactPathFinder
         IReadOnlyCollection<string>? carriedBinding = null
     )
     {
-        var targets = new List<(string Node, string Kind, string Basis)>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        // Lazily allocated only when a target is actually emitted — a node that dispatches nowhere (the
+        // common case) returns NoTargets having allocated neither the list nor the set. (`visited`/`stack`
+        // in the mined block below are likewise gated on `method` being a mined dispatch source.)
+        List<(string Node, string Kind, string Basis)>? targets = null;
+        HashSet<string>? seen = null;
 
         // 18c delegate seam: a delegate SLOT (field/property/event) dispatches to its bound target(s)
         // via delegate_bind facts — the delegate-as-degenerate-interface hop. Resolved here, BEFORE the
@@ -409,9 +417,9 @@ public static partial class FactPathFinder
         {
             foreach (var (target, kind) in bindings)
             {
-                if (kind == DispatchKinds.DelegateBind && seen.Add(target))
+                if (kind == DispatchKinds.DelegateBind && (seen ??= new(StringComparer.Ordinal)).Add(target))
                 {
-                    targets.Add((target, "delegate-dispatch", "roslyn"));
+                    (targets ??= []).Add((target, "delegate-dispatch", "roslyn"));
                 }
             }
         }
@@ -419,7 +427,7 @@ public static partial class FactPathFinder
         var parsed = ParseMethod(method);
         if (parsed is null)
         {
-            return targets;
+            return targets ?? NoTargets;
         }
 
         // Source method's parameter ARITY — heuristic dispatch is gated on it so an interface/base
@@ -444,7 +452,10 @@ public static partial class FactPathFinder
         // leaves the closure (pre-narrowing) — when true, the member correspondence is known exactly
         // and the CHA fallback (3) is suppressed; narrowing may still trim every target.
         var hasMined = false;
-        if (index.MinedDispatchBySource.Count > 0)
+        // Gate on `method` being a mined source (not just "any mined facts exist"): the closure walk
+        // starts at `method`, so when it isn't a source the loop adds nothing — skipping the block then
+        // is result-equivalent and avoids allocating `visited`/`stack` on every non-dispatching node.
+        if (index.MinedDispatchBySource.ContainsKey(method))
         {
             // Walk the mined-dispatch closure, but NEVER CROSS edge kinds after the root hop. An impl edge
             // resolves an interface method to the concrete method on ONE implementing type; the override
@@ -483,9 +494,9 @@ public static partial class FactPathFinder
 
                     hasMined = true;
                     stack.Push((target, kind)); // walk the closure WITHIN this kind; NarrowByReceiver trims at the end
-                    if (seen.Add(target))
+                    if ((seen ??= new(StringComparer.Ordinal)).Add(target))
                     {
-                        targets.Add((target, kind == DispatchKinds.Impl ? "impl-dispatch" : "override-dispatch", "roslyn"));
+                        (targets ??= []).Add((target, kind == DispatchKinds.Impl ? "impl-dispatch" : "override-dispatch", "roslyn"));
                     }
                 }
             }
@@ -505,10 +516,10 @@ public static partial class FactPathFinder
                     if (
                         string.Equals(concrete.Name, parsed.Value.Name, StringComparison.Ordinal)
                         && ParamArity(concrete.SymbolId) == arity
-                        && seen.Add(concrete.SymbolId)
+                        && (seen ??= new(StringComparer.Ordinal)).Add(concrete.SymbolId)
                     )
                     {
-                        targets.Add((concrete.SymbolId, "impl-dispatch", "heuristic"));
+                        (targets ??= []).Add((concrete.SymbolId, "impl-dispatch", "heuristic"));
                     }
                 }
             }
@@ -555,13 +566,18 @@ public static partial class FactPathFinder
                         m.IsOverride
                         && string.Equals(m.Name, parsed.Value.Name, StringComparison.Ordinal)
                         && ParamArity(m.SymbolId) == arity
-                        && seen.Add(m.SymbolId)
+                        && (seen ??= new(StringComparer.Ordinal)).Add(m.SymbolId)
                     )
                     {
-                        targets.Add((m.SymbolId, "override-dispatch", "heuristic"));
+                        (targets ??= []).Add((m.SymbolId, "override-dispatch", "heuristic"));
                     }
                 }
             }
+        }
+
+        if (targets is null)
+        {
+            return NoTargets;
         }
 
         return NarrowByTypeArguments(
