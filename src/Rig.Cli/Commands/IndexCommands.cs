@@ -547,7 +547,11 @@ internal static class IndexCommands
             context,
             graph,
             rules.Factory,
-            message => output.WriteLine($"Progress: {message}")
+            message => output.WriteLine($"Progress: {message}"),
+            // Feed the FTS search index from the facts we just extracted (still in RAM) instead of
+            // re-scanning symbol_facts / reference_facts off disk — the bulk of the graph phase's reads.
+            symbols: result.Symbols,
+            references: result.References
         );
         output.WriteLine(
             $"Graph: {stats.CallEdges} call edge(s), {stats.DispatchEdges} dispatch edge(s) "

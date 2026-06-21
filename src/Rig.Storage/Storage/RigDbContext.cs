@@ -86,18 +86,28 @@ public sealed class RigDbContext(string databasePath, bool pooling = true, bool 
         {
             entity.ToTable("symbol_facts");
             entity.HasKey(s => new { s.RunId, s.SymbolFactIndex });
+            // Bare single-column indexes back the random-symbol-lookup query surface: SymbolId (reachability
+            // JOIN `SymbolId = r.sym`, EP-deriver StartsWith) and Name (EP-deriver `.Name == ".ctor"`).
             entity.HasIndex(s => s.SymbolId);
             entity.HasIndex(s => s.Name);
-            entity.HasIndex(s => new { s.RunId, s.SymbolId });
+            // NO (RunId, SymbolId) composite: the query surface is cross-run / DocID-keyed (see Reads.cs
+            // "no latest-run concept") — nothing filters by RunId, so a composite led by RunId can never be
+            // seek-used (SymbolId is its second column; the bare SymbolId index serves those lookups). It was
+            // pure write + fast-path-rebuild overhead. Re-add a leading-RunId index only if a run-scoped query
+            // is introduced.
         });
 
         modelBuilder.Entity<ReferenceFactEntity>(entity =>
         {
             entity.ToTable("reference_facts");
             entity.HasKey(r => new { r.RunId, r.ReferenceFactIndex });
+            // Bare single-column indexes back the hot query surface: EnclosingSymbolId (the reachability
+            // recursive-CTE JOIN `r.EnclosingSymbolId = s.sym`) and TargetSymbolId (StartsWith range scans).
             entity.HasIndex(r => r.TargetSymbolId);
             entity.HasIndex(r => r.EnclosingSymbolId);
-            entity.HasIndex(r => new { r.RunId, r.TargetSymbolId });
+            // NO (RunId, TargetSymbolId) composite — same reasoning as symbol_facts above. This one sat on
+            // the ~1.7M-row reference_facts, so dropping it removes a full-table index rebuild from the save
+            // fast-path and shrinks the written store, with zero query impact (no RunId predicate exists).
         });
 
         modelBuilder.Entity<TypeRelationFactEntity>(entity =>
