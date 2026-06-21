@@ -31,7 +31,17 @@ public static partial class FactPathFinder
         public HashSet<string> StrippedReceivers = new(StringComparer.Ordinal);
     }
 
-    private static ReverseMaps BuildReverseMaps(FactGraphData graph, bool narrowDispatch = true, TraversalMode mode = TraversalMode.SyncCut)
+    // descendantsFrom: when the caller already holds an index built from the SAME graph, its
+    // DescendantsCache is shared into the internal index below — the strict-descendant closure is a pure
+    // function of graph.BaseEdges (identical across every index from this graph), so a set cached via one
+    // index is valid for the other. Lets each type's descendants be computed ONCE per command (the dispatch
+    // scan here + the caller's later Predecessors hops) instead of once per index.
+    private static ReverseMaps BuildReverseMaps(
+        FactGraphData graph,
+        bool narrowDispatch = true,
+        TraversalMode mode = TraversalMode.SyncCut,
+        GraphIndex? descendantsFrom = null
+    )
     {
         var rev = new ReverseMaps { NarrowDispatch = narrowDispatch };
         foreach (var edge in graph.CallEdges)
@@ -71,6 +81,13 @@ public static partial class FactPathFinder
         // Reverse dispatch = the forward CHA dispatch edges, inverted. (The receiver-blind superset;
         // ReverseDispatchReaches narrows per hop when narrowing is on.)
         var index = BuildIndex(graph, narrowDispatch: false);
+        // Share the caller's descendant-closure cache (see descendantsFrom note) so the scan below and the
+        // caller's later Descendants() hops compute each type's strict descendants once, not once per index.
+        if (descendantsFrom is not null)
+        {
+            index.DescendantsCache = descendantsFrom.DescendantsCache;
+        }
+
         foreach (var node in index.Nodes)
         foreach (var target in DispatchTargets(node, index, receiverType: null))
         {

@@ -754,7 +754,7 @@ public static partial class FactPathFinder
     )
     {
         var index = BuildIndex(graph, narrowDispatch);
-        var rev = BuildReverseMaps(graph, narrowDispatch, mode);
+        var rev = BuildReverseMaps(graph, narrowDispatch, mode, descendantsFrom: index);
         return ReachedByCore(index, rev, toPattern, maxDepth, maxNodes);
     }
 
@@ -825,7 +825,7 @@ public static partial class FactPathFinder
     )
     {
         var index = BuildIndex(graph, narrowDispatch);
-        var rev = BuildReverseMaps(graph, narrowDispatch, mode);
+        var rev = BuildReverseMaps(graph, narrowDispatch, mode, descendantsFrom: index);
 
         var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
         var queue = new Queue<string>();
@@ -877,7 +877,7 @@ public static partial class FactPathFinder
     )
     {
         var index = BuildIndex(graph);
-        var rev = BuildReverseMaps(graph, narrowDispatch: true, mode);
+        var rev = BuildReverseMaps(graph, narrowDispatch: true, mode, descendantsFrom: index);
         // Reuse the index + reverse maps just built (for the Predecessors root check below) — ReachedByCore
         // takes them prebuilt, so the closure shares this one build instead of ReachedBy rebuilding both.
         var reachable = ReachedByCore(index, rev, toPattern, maxDepth, maxNodes);
