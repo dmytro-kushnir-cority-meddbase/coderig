@@ -586,7 +586,7 @@ public sealed record FactResourceSpanRule(
 );
 
 // A serialization-hazard observation rule (FR-6, RCA #1646): an effect that stores/serializes a payload
-// whose generic TYPE ARGUMENT is a serializer-unsupported type yields a `serialization_hazard`
+// whose generic TYPE ARGUMENT is a serializer-unsupported type yields a `unserializable_payload`
 // observation on that effect. Unlike the other observation rules (which key off STRUCTURAL context —
 // the loop / fan-out / scope around the call), this keys off the effect's OWN payload type at the
 // store/serialize boundary. Providers gates which effect providers count as such a boundary (e.g.
@@ -605,7 +605,7 @@ public sealed record FactSerializationHazardRule(
 // whose KEY ARGUMENT VARIES per iteration yields an `n_plus_1` observation on that effect. This refines
 // the structural `looped_effect` — a read in a loop with a CONSTANT key is hoistable and is NOT an n+1;
 // the discriminator is whether the loop's iteration variable appears in the read's key argument. Like
-// serialization_hazard, this keys off the effect's OWN call (its loop identifier + argument names/
+// unserializable_payload, this keys off the effect's OWN call (its loop identifier + argument names/
 // templates), not the surrounding structure beyond the loop. Providers/Operations gate which effects
 // count as a READ (e.g. http GET, cache/db/repository/llblgen reads) — only reads should fire, a looped
 // WRITE being a different concern. An empty Providers OR Operations list means "any" for that dimension;

@@ -66,9 +66,9 @@ public static class ProductionFixCorpus
 
         public bool HasGuardEffectIn(string enclosingMarker) => EffectsIn(enclosingMarker).Any(e => e.Provider is "lock" or "async_lock");
 
-        // Every serialization_hazard observation attached to an effect enclosed by the marker method.
+        // Every unserializable_payload observation attached to an effect enclosed by the marker method.
         public IReadOnlyList<EffectObservationInfo> SerializationHazardsIn(string enclosingMarker) =>
-            EffectsIn(enclosingMarker).SelectMany(e => e.Observations ?? []).Where(o => o.Type == "serialization_hazard").ToList();
+            EffectsIn(enclosingMarker).SelectMany(e => e.Observations ?? []).Where(o => o.Type == "unserializable_payload").ToList();
 
         // Every observation of the given type attached to an effect enclosed by the marker method (e.g.
         // "n_plus_1" / "looped_effect"). The general form behind SerializationHazardsIn.

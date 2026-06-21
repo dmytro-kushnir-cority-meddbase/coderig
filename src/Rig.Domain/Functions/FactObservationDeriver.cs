@@ -24,7 +24,7 @@ public static class FactObservationDeriver
         string? provider = null,
         IReadOnlyList<FactStructuralContext.EnclosingScope>? enclosingScopes = null,
         // Call-site generic type arguments (comma-joined display FQNs, FactInvocation.TypeArguments).
-        // Feeds serialization_hazard — the payload type at a store/serialize boundary. Null for
+        // Feeds unserializable_payload — the payload type at a store/serialize boundary. Null for
         // non-generic calls / field writes (which carry no payload type argument).
         string? typeArguments = null,
         // The matched rule's effect operation (e.g. "GET"/"read"). Feeds n_plus_1, whose read-gate is
@@ -189,7 +189,7 @@ public static class FactObservationDeriver
             }
         }
 
-        // serialization_hazard (FR-6, RCA #1646) — the effect stores/serializes a payload whose generic
+        // unserializable_payload (FR-6, RCA #1646) — the effect stores/serializes a payload whose generic
         // TYPE ARGUMENT is a serializer-unsupported type (e.g. LanguageExt.Option / Either, which the store
         // CAN serialize but CANNOT deserialize). Unlike the structural observations above, this keys off the
         // effect's OWN payload type, not the surrounding code. ANNOTATE-only: it adds a note; the effect is
@@ -208,7 +208,7 @@ public static class FactObservationDeriver
                 {
                     observations.Add(
                         new EffectObservationInfo(
-                            Type: "serialization_hazard",
+                            Type: "unserializable_payload",
                             Context: matched,
                             Detail: typeArguments!,
                             Confidence: "high",
