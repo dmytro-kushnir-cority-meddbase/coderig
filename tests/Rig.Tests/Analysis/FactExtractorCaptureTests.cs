@@ -696,4 +696,44 @@ public sealed class FactExtractorCaptureTests
         var fetchRefs = result.References.Where(r => r.TargetSymbolId.Contains("Repo.Fetch")).ToList();
         fetchRefs.ShouldAllBe(r => r.RefKind == "nameof");
     }
+
+    [Test]
+    public void Class_fields_are_emitted_as_symbols_with_modifiers_one_per_declarator()
+    {
+        // Regression: a field DECLARATION has no single declared symbol (GetDeclaredSymbol(decl) is null
+        // for `int a, b;`), so the OnDeclaration null gate used to swallow EVERY class field before the
+        // per-variable branch ran — leaving only enum members in the store and orphaning all `F:` write
+        // refs from any symbol (so the static-field-write shared_state rule could never gate on `static`).
+        var source = """
+            namespace App
+            {
+                public sealed class Cache
+                {
+                    public static int Shared;
+                    private readonly int _instance = 1;
+                    public const int Max = 5;
+                    private static int _a, _b;
+                    public event System.Action OnChange;
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        var fields = result.Symbols.Where(s => s.SymbolId.StartsWith("F:App.Cache.", System.StringComparison.Ordinal)).ToList();
+
+        // Shared (static), _instance, Max (const => static), _a, _b — all five, one symbol per declarator.
+        fields.Select(f => f.Name).ShouldBe(["Shared", "_instance", "Max", "_a", "_b"], ignoreOrder: true);
+        fields.ShouldAllBe(f => f.Kind == "field");
+
+        var shared = fields.Single(f => f.Name == "Shared");
+        shared.Modifiers.ShouldContain("static");
+
+        var instance = fields.Single(f => f.Name == "_instance");
+        instance.Modifiers.ShouldNotContain("static");
+
+        // A field-style event (EventFieldDeclarationSyntax is a BaseFieldDeclarationSyntax) is now emitted too.
+        var onChange = result.Symbols.Single(s => s.SymbolId == "E:App.Cache.OnChange");
+        onChange.Kind.ShouldBe("event");
+    }
 }

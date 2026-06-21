@@ -50,13 +50,11 @@ internal static class FactExtractor
         //     for exact member-level dispatch) ---
         void OnDeclaration(MemberDeclarationSyntax decl)
         {
-            var symbol = model.GetDeclaredSymbol(decl);
-            if (symbol is null)
-            {
-                return;
-            }
-
-            // Field/event declarations declare one symbol per variable; handle below.
+            // Field/event declarations declare one symbol PER VARIABLE, so GetDeclaredSymbol(decl) on the
+            // declaration node itself returns null (`int a, b;` has no single declared symbol). Handle them
+            // FIRST — before the null gate below — resolving each variable declarator individually; otherwise
+            // the null return swallows every class field, leaving only enum members (which ARE single-symbol
+            // EnumMemberDeclarationSyntax) in the store and orphaning every `F:` write-ref from its symbol.
             if (decl is BaseFieldDeclarationSyntax fieldDecl)
             {
                 foreach (var variable in fieldDecl.Declaration.Variables)
@@ -66,6 +64,12 @@ internal static class FactExtractor
                         AddSymbol(symbols, fieldSymbol, tree, fileText, variable, symbolCache);
                     }
                 }
+                return;
+            }
+
+            var symbol = model.GetDeclaredSymbol(decl);
+            if (symbol is null)
+            {
                 return;
             }
 
