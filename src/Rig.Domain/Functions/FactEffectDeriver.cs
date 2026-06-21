@@ -201,26 +201,25 @@ public static class FactEffectDeriver
         // Wrappers are identified from data — no per-type curation.
         if (wrapperRules.Length > 0)
         {
-            // Per rule: the set of methods that call any of its target patterns (the wrappers).
-            var wrapperSets = wrapperRules.ToDictionary(
-                rule => rule,
-                rule =>
+            // Per rule: the set of methods that call any of its target patterns (the wrappers). Built in
+            // ONE pass over invocations — the previous per-rule projection re-scanned the whole invocation
+            // list once per wrapper rule. Same membership, R passes collapsed to one.
+            var wrapperSets = wrapperRules.ToDictionary(rule => rule, _ => new HashSet<string>(StringComparer.Ordinal));
+            foreach (var inv in invocations)
+            {
+                if (inv.Enclosing is null)
                 {
-                    var set = new HashSet<string>(StringComparer.Ordinal);
-                    foreach (var inv in invocations)
-                    {
-                        if (
-                            inv.Enclosing is not null
-                            && rule.TargetCallsMethods!.Any(p => inv.Target.IndexOf(p, StringComparison.Ordinal) >= 0)
-                        )
-                        {
-                            set.Add(inv.Enclosing);
-                        }
-                    }
-
-                    return set;
+                    continue;
                 }
-            );
+
+                foreach (var rule in wrapperRules)
+                {
+                    if (rule.TargetCallsMethods!.Any(p => inv.Target.IndexOf(p, StringComparison.Ordinal) >= 0))
+                    {
+                        wrapperSets[rule].Add(inv.Enclosing);
+                    }
+                }
+            }
 
             foreach (var inv in invocations)
             {
