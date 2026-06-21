@@ -1588,6 +1588,77 @@
       "confidence": "medium",
       "basis": "compilation+profile",
       "reason": "inproc_timer_thread_stateless_hazard"
+    },
+    {
+      "provider": "shared_state",
+      "operation": "mutate",
+      "methods": [ "Swap", "SwapAsync" ],
+      "receiverTypes": [ "LanguageExt.Atom", "LanguageExt.AtomAsync" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "shared_state(Atom): LanguageExt Atom/AtomAsync.Swap[Async] is an atomic read-modify-write on an inherently shared mutable cell — by construction concurrency-shared (you reach for an Atom precisely to publish across threads). Gated on the Atom receiver type (NOT method name alone — unrelated static helpers on a class named Swap do not match this gate)."
+    },
+    {
+      "provider": "shared_state",
+      "operation": "mutate",
+      "methods": [ "TryAdd", "AddOrUpdate", "GetOrAdd", "TryRemove", "TryUpdate", "Clear" ],
+      "receiverTypes": [ "System.Collections.Concurrent.ConcurrentDictionary" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "shared_state(ConcurrentDictionary): the concurrent dictionary mutators. ConcurrentDictionary exists ONLY to be shared across threads, so a mutation on it is by-contract a shared-state write — unlike a bare Dictionary.Add (receiver could be local), which is why this is rule-expressible and a plain-collection .Add is not."
+    },
+    {
+      "provider": "shared_state",
+      "operation": "mutate",
+      "methods": [ "Enqueue", "TryDequeue" ],
+      "receiverTypes": [ "System.Collections.Concurrent.ConcurrentQueue", "System.Collections.Concurrent.BlockingCollection" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "shared_state(ConcurrentQueue/BlockingCollection): Enqueue/TryDequeue mutate an inherently-shared producer/consumer queue."
+    },
+    {
+      "provider": "shared_state",
+      "operation": "mutate",
+      "methods": [ "Add", "TryAdd", "TryTake" ],
+      "receiverTypes": [ "System.Collections.Concurrent.ConcurrentBag", "System.Collections.Concurrent.BlockingCollection" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "shared_state(ConcurrentBag/BlockingCollection): Add/TryTake on an inherently-shared bag/blocking collection. Gated on the concurrent receiver type so a local List.Add never matches."
+    },
+    {
+      "provider": "shared_state",
+      "operation": "mutate",
+      "methods": [ "Push", "TryPop" ],
+      "receiverTypes": [ "System.Collections.Concurrent.ConcurrentStack" ],
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "shared_state(ConcurrentStack): Push/TryPop mutate an inherently-shared stack."
+    },
+    {
+      "provider": "shared_state",
+      "operation": "mutate",
+      "methods": [ "AddOrUpdate", "GetOrAdd", "TryAdd", "TryRemove", "TryUpdate", "Update", "Enqueue", "Dequeue", "Push", "Pop", "InterlockedExchange", "InterlockedCompareExchange" ],
+      "receiverTypes": [ "System.Collections.Immutable.ImmutableInterlocked" ],
+      "declaringTypes": [ "System.Collections.Immutable.ImmutableInterlocked" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "shared_state(ImmutableInterlocked): ImmutableInterlocked.* are the lock-free atomic RMW helpers over a shared immutable-collection field (the whole point is concurrent publication). Static helpers (no receiver), so gated/resolved on the declaring type."
+    },
+    {
+      "provider": "shared_state",
+      "operation": "mutate",
+      "methods": [],
+      "matchFieldWrite": true,
+      "resource": "declaring_type",
+      "confidence": "medium",
+      "basis": "fact_derived",
+      "reason": "shared_state(static-field-write): an assignment to a STATIC field/auto-property (StaticType.SharedField = v) — shared mutable state published to every caller regardless of receiver, which is what makes it rule-expressible (an instance-field write is local-vs-shared-ambiguous and is NOT matched). Consumes the existing write refs (no re-index); static-ness is gated upstream via the symbol-facts Modifiers join."
     }
   ],
   "diRegistrations": [
