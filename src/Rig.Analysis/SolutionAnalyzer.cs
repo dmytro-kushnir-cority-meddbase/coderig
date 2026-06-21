@@ -62,6 +62,9 @@ public static class SolutionAnalyzer
         // ONE shared DocID memo across the whole parallel extraction: each symbol's DocID is computed once
         // for the run (not once per reference site), and every fact gets the one shared string instance.
         var symbolCache = new SymbolStringCache();
+        // The DI method-name set, built once for the run so each file's DI pass can syntactically reject
+        // non-registration invocations before paying a semantic bind (see DiRegistrationExtractor).
+        var diMethodNames = DiRegistrationExtractor.BuildMethodNameSet(rules);
 
         Parallel.For(
             fromInclusive: 0,
@@ -69,7 +72,7 @@ public static class SolutionAnalyzer
             new ParallelOptions { MaxDegreeOfParallelism = parallelism ?? Environment.ProcessorCount },
             i =>
             {
-                extractionResults[i] = ExtractSource(sources[i], rules, symbolCache);
+                extractionResults[i] = ExtractSource(sources[i], rules, symbolCache, diMethodNames);
                 var current = Interlocked.Increment(ref extracted);
                 if (ShouldReportProgress(current: current, total: sources.Count))
                 {
@@ -195,12 +198,17 @@ public static class SolutionAnalyzer
         return current == 1 || current == total || current % 100 == 0;
     }
 
-    private static SourceExtractionResult ExtractSource(SourceModel source, RuleSet rules, SymbolStringCache symbolCache)
+    private static SourceExtractionResult ExtractSource(
+        SourceModel source,
+        RuleSet rules,
+        SymbolStringCache symbolCache,
+        IReadOnlySet<string> diMethodNames
+    )
     {
         var facts = FactExtractor.Extract(source, symbolCache);
 
         return new SourceExtractionResult(
-            DiRegistrationExtractor.FindDiRegistrations(source, rules).ToArray(),
+            DiRegistrationExtractor.FindDiRegistrations(source, rules, diMethodNames).ToArray(),
             facts.Symbols,
             facts.References,
             facts.TypeRelations,
