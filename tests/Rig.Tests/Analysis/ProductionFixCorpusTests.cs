@@ -140,4 +140,151 @@ public sealed class ProductionFixCorpusTests
         result.HasGuardEffectIn("Save_Fixed").ShouldBeFalse();
         result.HasGuardEffectIn("RunTransaction").ShouldBeTrue();
     }
+
+    // §#2892 — Pathways 4000 queries/min: a per-iteration read with no cache (an N+1). FR-3 precursor: the
+    // read effect inside a loop carries a `looped_effect` observation (rig sees "read in a loop"); the FIX
+    // (read once, outside the loop) does not. Gap: no quantified per-EP query-count estimate yet (FR-3).
+    [Test]
+    public void _2892_n_plus_1_read_in_a_loop_carries_looped_effect_the_cached_fix_does_not()
+    {
+        var result = ProductionFixCorpus.Analyze(
+            """
+            namespace Pathways
+            {
+                public sealed class Interpreter
+                {
+                    // BUG (#2892): variable definitions read from the source PER ITERATION (missing cache) -> N+1.
+                    public async System.Threading.Tasks.Task ReadVars_Bug(
+                        System.Net.Http.HttpClient client,
+                        System.Collections.Generic.IEnumerable<string> ids)
+                    {
+                        foreach (var id in ids)
+                        {
+                            await client.GetStringAsync("/var/" + id);
+                        }
+                    }
+
+                    // FIX (#2892): read once, outside the loop (cache the definitions).
+                    public async System.Threading.Tasks.Task ReadVars_Fix(System.Net.Http.HttpClient client)
+                    {
+                        await client.GetStringAsync("/vars/all");
+                    }
+                }
+            }
+            """
+        );
+
+        var bug = result.EffectsIn("ReadVars_Bug").Single(e => e.Provider == "http");
+        bug.Observations.ShouldNotBeNull();
+        bug.Observations!.ShouldContain(o => o.Type == "looped_effect");
+
+        var fix = result.EffectsIn("ReadVars_Fix").Single(e => e.Provider == "http");
+        (fix.Observations ?? []).ShouldNotContain(o => o.Type == "looped_effect");
+    }
+
+    // §#2930 — appointment status check-then-set across two users (a lost-update TOCTOU). FR-1(b) surfaces the
+    // WRITE as a shared_state:mutate candidate (narrows where a reviewer looks). _Gap_: the check-then-set
+    // COUPLING (the preceding read of the same cell) is not modeled — rig has no inter-effect dataflow, so the
+    // candidate is a flag, never a TOCTOU verdict.
+    [Test]
+    public void _2930_check_then_set_surfaces_the_write_candidate_but_not_the_toctou_coupling()
+    {
+        var result = ProductionFixCorpus.Analyze(
+            """
+            namespace Appointments
+            {
+                public static class Shared
+                {
+                    public static int Status; // shared appointment status (stand-in for the DB row)
+                }
+
+                public sealed class StatusService
+                {
+                    // BUG (#2930): check-then-set on shared state with a stale read; two sessions race.
+                    public void Arrive_Bug()
+                    {
+                        if (Shared.Status == 0) // read — the stale check (NOT modeled as coupled to the write)
+                        {
+                            Shared.Status = 1; // write — a static-field mutation (FR-1(b) surfaces this)
+                        }
+                    }
+                }
+            }
+            """
+        );
+
+        // The write is surfaced as a shared-state mutation candidate...
+        result.SharedStateMutationsIn("Arrive_Bug").ShouldNotBeEmpty();
+        // ...but nothing couples it to the preceding read of the SAME cell — the TOCTOU itself is invisible.
+    }
+
+    // §#3024 / #1192 — duplicate inserts under parallelism. FR-1 ingredient 1 (mutation under a concurrency
+    // region) IS detected: a shared_state mutation reached inside Parallel.ForEach carries a `parallel_fanout`
+    // observation. Gap: no existence-check / uniqueness-guard analysis (ingredients 2-5), so it's a candidate.
+    [Test]
+    public void _3024_shared_mutation_under_parallel_fanout_carries_the_region_observation()
+    {
+        // NB: the parallel_fanout observation matches the receiver TEXT ("Parallel"), so this uses the
+        // idiomatic `using` form — a fully-qualified System.Threading.Tasks.Parallel.ForEach would be MISSED
+        // (a known syntactic limitation of fanout detection, separate from this fixture's point).
+        var result = ProductionFixCorpus.Analyze(
+            """
+            using System.Threading.Tasks;
+            namespace Imports
+            {
+                public static class Seen
+                {
+                    public static readonly System.Collections.Concurrent.ConcurrentDictionary<int, int> Keys = new();
+                }
+
+                public sealed class Importer
+                {
+                    // BUG (#3024/#1192): inserts reachable under a parallel region — duplicates when flows interleave.
+                    public void Insert_Bug(System.Collections.Generic.IEnumerable<int> ids) =>
+                        Parallel.ForEach(ids, id => Seen.Keys.TryAdd(id, id));
+                }
+            }
+            """
+        );
+
+        var mutate = result.SharedStateMutationsIn("Insert_Bug");
+        mutate.ShouldNotBeEmpty();
+        mutate.ShouldContain(e => e.Observations != null && e.Observations.Any(o => o.Type == "parallel_fanout"));
+    }
+
+    // _Gap_ — the field-write arm carries NO structural context (its input is a plain SymbolRef with no
+    // enclosing-invocations), so a STATIC-FIELD publish reached under Parallel.ForEach fires
+    // shared_state:mutate but gets NO `parallel_fanout` observation. That means FR-1's region-join currently
+    // MISSES the !10706 / latent-publish family (a field publish under fan-out) — the highest-value shape.
+    // Pinned so that wiring structural context into the field-write arm flips this test and proves the fix.
+    [Test]
+    public void field_publish_under_fanout_Gap_fires_mutate_but_misses_the_region_observation()
+    {
+        // Uses the idiomatic `Parallel.ForEach` so the missing parallel_fanout is attributable to the
+        // field-write arm dropping structural context — NOT to the receiver-text artifact.
+        var result = ProductionFixCorpus.Analyze(
+            """
+            using System.Threading.Tasks;
+            namespace Imports
+            {
+                public static class Cache
+                {
+                    public static int LastId; // shared static cell published under fan-out
+                }
+
+                public sealed class Publisher
+                {
+                    public void Publish_Bug(System.Collections.Generic.IEnumerable<int> ids) =>
+                        Parallel.ForEach(ids, id => { Cache.LastId = id; });
+                }
+            }
+            """
+        );
+
+        var mutate = result.SharedStateMutationsIn("Publish_Bug");
+        mutate.ShouldNotBeEmpty(); // FR-1(b) sees the static-field publish
+        // ...but the field-write arm drops structural context, so the under-fanout region is NOT observed
+        // even with the idiomatic receiver — proving the gap is the arm, not the syntactic match.
+        mutate.ShouldAllBe(e => e.Observations == null || e.Observations.All(o => o.Type != "parallel_fanout"));
+    }
 }
