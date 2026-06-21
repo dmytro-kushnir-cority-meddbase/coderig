@@ -81,9 +81,11 @@ public static partial class FactPathFinder
         // of execution order and makes tree/path/reaches read top-to-bottom and reproduce deterministically.
         // (Approximation only: branches/loops/early-return mean lexical order != runtime order.) Each edge
         // carries its ReceiverType forward so the target's dispatch can be narrowed when it is expanded.
+        // The list is pre-sorted ONCE in BuildIndex (this is the innermost loop of every traversal — a
+        // per-expansion OrderBy here re-sorted the same immutable list on every visit), so iterate directly.
         if (index.Adjacency.TryGetValue(current, out var edges))
         {
-            foreach (var edge in edges.OrderBy(e => e.Line).ThenBy(e => e.Callee, StringComparer.Ordinal))
+            foreach (var edge in edges)
             {
                 // Sync-cut: an async handoff edge schedules its callback to run later / elsewhere — it
                 // is NOT a synchronous call, so we don't cross it. --async crosses it, seeding the

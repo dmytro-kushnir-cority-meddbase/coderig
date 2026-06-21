@@ -755,7 +755,22 @@ public static partial class FactPathFinder
     {
         var index = BuildIndex(graph, narrowDispatch);
         var rev = BuildReverseMaps(graph, narrowDispatch, mode);
+        return ReachedByCore(index, rev, toPattern, maxDepth, maxNodes);
+    }
 
+    // The reverse-BFS core, factored out so a caller that ALREADY holds the index + reverse maps can reuse
+    // them instead of rebuilding. EntryRootsReaching builds both for its own no-predecessor root check and
+    // then needs this same closure — calling ReachedBy() rebuilt index + reverse maps a second time, and
+    // BuildReverseMaps does a whole-graph receiver-blind dispatch scan, so that was the dominant cost of
+    // `callers --roots`. Passing the prebuilt pair here halves it.
+    private static IReadOnlyDictionary<string, int> ReachedByCore(
+        GraphIndex index,
+        ReverseMaps rev,
+        string toPattern,
+        int maxDepth,
+        int maxNodes
+    )
+    {
         var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
         var queue = new Queue<string>();
         foreach (var start in index.Nodes.Where(n => Contains(value: n, pattern: toPattern)))
@@ -863,7 +878,9 @@ public static partial class FactPathFinder
     {
         var index = BuildIndex(graph);
         var rev = BuildReverseMaps(graph, narrowDispatch: true, mode);
-        var reachable = ReachedBy(graph, toPattern, maxDepth, maxNodes, narrowDispatch: true, mode);
+        // Reuse the index + reverse maps just built (for the Predecessors root check below) — ReachedByCore
+        // takes them prebuilt, so the closure shares this one build instead of ReachedBy rebuilding both.
+        var reachable = ReachedByCore(index, rev, toPattern, maxDepth, maxNodes);
         var roots = new List<string>();
         foreach (var m in reachable.Keys)
         {

@@ -295,6 +295,22 @@ public static partial class FactPathFinder
             index.Nodes.Add(edge.Callee);
         }
 
+        // Sort each adjacency list ONCE here — by call-site line, then callee for stable ties — so Successors
+        // iterates it directly instead of re-running OrderBy().ThenBy() on every node expansion. Adjacency is
+        // immutable after this build, and BuildIndex finishes single-threaded before any (possibly parallel,
+        // e.g. ReachesFromEachSeed) traversal reads the shared index, so the in-place sort is race-free. Same
+        // order the per-expansion sort produced; see Successors.
+        foreach (var list in index.Adjacency.Values)
+        {
+            list.Sort(
+                static (a, b) =>
+                {
+                    var byLine = a.Line.CompareTo(b.Line);
+                    return byLine != 0 ? byLine : string.CompareOrdinal(a.Callee, b.Callee);
+                }
+            );
+        }
+
         index.MethodsByStrippedType = graph
             .Methods.Where(m => m.ContainingTypeId is not null)
             .GroupBy(m => TypeClosure.StripGeneric(m.ContainingTypeId!), StringComparer.Ordinal)

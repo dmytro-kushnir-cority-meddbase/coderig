@@ -174,18 +174,11 @@ public static class SqlReachability
         var connection = await OpenAsync(context, cancellationToken);
         await ExecNonQueryAsync(connection, "DROP TABLE IF EXISTS reach_set;", null, cancellationToken);
         await ExecNonQueryAsync(connection, "CREATE TEMP TABLE reach_set(sym TEXT PRIMARY KEY);", null, cancellationToken);
-        await using (var insert = connection.CreateCommand())
-        {
-            insert.CommandText = "INSERT OR IGNORE INTO reach_set(sym) VALUES ($s);";
-            var p = insert.CreateParameter();
-            p.ParameterName = "$s";
-            insert.Parameters.Add(p);
-            foreach (var sym in reachable.Keys)
-            {
-                p.Value = sym;
-                await insert.ExecuteNonQueryAsync(cancellationToken);
-            }
-        }
+        // The reverse closure already lives in `reach_depth` — built by ReachedWithDepthAsync above on this
+        // SAME shared connection (temp tables are connection-scoped, and it isn't dropped until the next
+        // ReachedWithDepthAsync). Copy it in ONE set-based statement instead of marshalling every key back to
+        // C# and re-inserting it row-by-row (a synchronous round-trip per closure member — thousands).
+        await ExecNonQueryAsync(connection, "INSERT OR IGNORE INTO reach_set(sym) SELECT sym FROM reach_depth;", null, cancellationToken);
 
         // A no-predecessor root has no incoming SYNCHRONOUS call edge (handoff edges don't count under
         // sync-cut — that's exactly what makes a scheduled callback a background ORIGIN) and no incoming
