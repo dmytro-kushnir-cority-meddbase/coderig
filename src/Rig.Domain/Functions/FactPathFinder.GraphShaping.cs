@@ -147,6 +147,120 @@ public static partial class FactPathFinder
         return added.Count == 0 ? graph : graph with { CallEdges = [.. graph.CallEdges, .. added] };
     }
 
+    // PUBLISH→CONSUMER DELIVERY EDGES (Echo actors). The SECOND resolver in the delivery-edge framework
+    // (events is the first, AddEventDeliveryEdges above). Resolves, by PROCESS NAME, which spawn handler(s)
+    // run when a process is TOLD/ASKED, and ADDS those as handoff edges teller→handler — the edge a
+    // `Process.tell(name, msg)` implies but that no syntactic call records (a tell only records the actor-API
+    // invocation, not the dispatch into the handler the actor framework runs). EDGE-CREATING like the event
+    // resolver, so it MUST be baked into call_edges at graph-build (alongside AddEventDeliveryEdges) or the
+    // SQL bounding walk never pulls the handler's closure into a bounded reach — see GraphMaterializer.
+    //
+    // Modeled as HANDOFF edges (HandoffDispatcher="actor_tell"): delivery is DEFERRED — the handler runs later
+    // on the actor's mailbox, not at the tell site — so sync-cut by default, walked under --async, visible to
+    // cycle detection. UNLIKE events, the identity is a STRING process name (the spawn/tell first-argument
+    // name, which resolves through a static ProcessName field), NOT an exact symbol, so this binding is
+    // ~heuristic: a tell of "P" reaches every handler spawned under the name "P" — over-approximate where two
+    // unrelated processes share a name string. Disclosed accordingly (no exact-symbol guarantee).
+    //
+    // Registrations (spawn) vs producers (tell/ask) are pre-discriminated on the ActorDeliverySite
+    // (IsRegistration); the handler is the `methodGroup` CallEdge CO-LOCATED at a registration site's
+    // (Caller,FilePath,Line) — exactly as AddEventDeliveryEdges joins a subscription's `+= Handler`.
+    public static FactGraphData AddActorDeliveryEdges(FactGraphData graph, IReadOnlyList<ActorDeliverySite> actorSites)
+    {
+        if (actorSites.Count == 0)
+        {
+            return graph;
+        }
+
+        // Method-group handler(s) per call site — the spawn's handler-argument edge already in the graph.
+        var handlersBySite = new Dictionary<(string Caller, string File, int Line), List<string>>();
+        foreach (var e in graph.CallEdges)
+        {
+            if (e.Kind != EdgeKinds.MethodGroup)
+            {
+                continue;
+            }
+
+            var key = (e.Caller, e.FilePath, e.Line);
+            if (!handlersBySite.TryGetValue(key, out var list))
+            {
+                handlersBySite[key] = list = [];
+            }
+            list.Add(e.Callee);
+        }
+
+        // ProcessName -> spawned handlers (from registration sites, joined to the co-located method-group),
+        // and the producer (tell/ask) sites. A registration with no co-located method-group is skipped — the
+        // handler isn't a method-group we can resolve to a node (a lambda subgraph or an unresolved target).
+        var handlersByProcess = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var producers = new List<ActorDeliverySite>();
+        foreach (var site in actorSites)
+        {
+            // PRECISION GATE — join only on a MEMBER-PATH process name (a '.', e.g. `ProcessDns.AccountService`),
+            // the reliable cross-method identity per the actor rule's own rationale. A BARE-variable name
+            // (`tell(pid, …)` / `spawn(name, …)` where the arg is a local/param) is not a stable identity and
+            // collides spuriously: Echo framework internals (`Actor.RunMessageDirective(ProcessId pid, …)`)
+            // would tie to any spawn whose arg is also named "pid". Calibrated on MedDBase (drops ~30 framework
+            // /orphaned false edges, keeps the DNS-table ones). The string identity stays ~heuristic regardless.
+            if (!site.ProcessName.Contains('.'))
+            {
+                continue;
+            }
+
+            if (site.IsRegistration)
+            {
+                if (handlersBySite.TryGetValue((site.Caller, site.FilePath, site.Line), out var handlers))
+                {
+                    if (!handlersByProcess.TryGetValue(site.ProcessName, out var set))
+                    {
+                        handlersByProcess[site.ProcessName] = set = new HashSet<string>(StringComparer.Ordinal);
+                    }
+                    set.UnionWith(handlers);
+                }
+            }
+            else
+            {
+                producers.Add(site);
+            }
+        }
+
+        if (handlersByProcess.Count == 0 || producers.Count == 0)
+        {
+            return graph; // nothing to connect (no spawn handlers, or no tells)
+        }
+
+        // One handoff edge per (teller, handler), at the tell site. Dedup so a method that tells the same
+        // process on several lines doesn't multiply identical edges.
+        var added = new List<CallEdge>();
+        var seen = new HashSet<(string, string)>();
+        foreach (var producer in producers)
+        {
+            if (!handlersByProcess.TryGetValue(producer.ProcessName, out var handlers))
+            {
+                continue;
+            }
+
+            foreach (var handler in handlers)
+            {
+                if (seen.Add((producer.Caller, handler)))
+                {
+                    added.Add(
+                        new CallEdge(
+                            Caller: producer.Caller,
+                            Callee: handler,
+                            Kind: EdgeKinds.Handoff,
+                            FilePath: producer.FilePath,
+                            Line: producer.Line,
+                            HandoffDispatcher: "actor_tell"
+                        )
+                    );
+                }
+            }
+        }
+
+        return added.Count == 0 ? graph : graph with { CallEdges = [.. graph.CallEdges, .. added] };
+    }
+
     // The SINGLE shaping pass for the attribution/traversal commands (reaches/tree/path/callers). Applied
     // once at graph load, direction-agnostic: (1) monomorphize generic-factory edges into the CallEdges,
     // then (2) carry the cut + context-dispatch rules ON the graph so BuildIndex picks them up and BOTH

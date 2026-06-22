@@ -58,7 +58,10 @@ internal static class IndexCommands
                         context,
                         handoffRules: ruleSet.Handoff,
                         progress: message => output.WriteLine($"Progress: {message}"),
-                        factoryRules: ruleSet.Factory
+                        factoryRules: ruleSet.Factory,
+                        // The actor:* effect rules drive the actor publish→consumer delivery edges, threaded
+                        // in like factoryRules (data, not hardcoded) — see GraphMaterializer.
+                        actorRules: ruleSet.Effects
                     );
                     output.WriteLine(
                         $"Graph: {stats.CallEdges} call edge(s), {stats.DispatchEdges} dispatch edge(s) "
@@ -428,7 +431,9 @@ internal static class IndexCommands
             // Feed the FTS search index from the facts we just extracted (still in RAM) instead of
             // re-scanning symbol_facts / reference_facts off disk — the bulk of the graph phase's reads.
             symbols: result.Symbols,
-            references: result.References
+            references: result.References,
+            // The actor:* effect rules drive the actor publish→consumer delivery edges (data, not hardcoded).
+            actorRules: rules.Effects
         );
         output.WriteLine(
             $"Graph: {stats.CallEdges} call edge(s), {stats.DispatchEdges} dispatch edge(s) "

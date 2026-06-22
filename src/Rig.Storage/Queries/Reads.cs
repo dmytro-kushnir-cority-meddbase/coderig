@@ -425,6 +425,128 @@ public static class Reads
             .Select(r => new EventReadSite(Caller: r.EnclosingSymbolId!, FilePath: r.FilePath, Line: r.Line, EventId: r.TargetSymbolId))
             .ToListAsync(cancellationToken);
 
+    // Actor publish/registration SITES carrying the PROCESS NAME (FirstArgumentName) — the input to the
+    // publish→consumer DELIVERY edge for Echo actors (FactPathFinder.AddActorDeliveryEdges, baked into
+    // call_edges at graph build). The SECOND resolver, mirroring LoadEventReadSitesAsync; the difference is
+    // the identity: an actor call's consumer is a process NAME string (resolved through a static ProcessName
+    // field), not an event symbol, so this is ~heuristic. The tell/ask/spawn/register methods are DATA — the
+    // `actor:*` effect rules — NOT hardcoded here, so a deployment can re-point the actor API by editing
+    // rules.json (same as factoryRules flowing into the graph build).
+    //
+    // Identification is rules-driven with a coarse SQL filter + in-memory refine (actor calls are not the bulk
+    // of refs, so the refine is cheap): SQL pulls invocation refs that carry a FirstArgumentName and an
+    // enclosing method and whose target is a method DocID; the in-memory pass keeps only those whose
+    // (declaringType, methodName) matches an actor rule, projecting the rule's Operation to IsRegistration
+    // (spawn/spawnUnit/spawnMany/register = registration; tell/tellSystem/ask/askAsync/askIfAlive = producer).
+    public static async Task<IReadOnlyList<ActorDeliverySite>> LoadActorDeliverySitesAsync(
+        RigDbContext context,
+        IReadOnlyList<FactEffectRule> actorRules,
+        CancellationToken cancellationToken = default
+    )
+    {
+        // (declaringType, methodName) -> isRegistration, from the actor:* rules. A method appearing under
+        // both a registration and producer rule (none today) would resolve to whichever the rules list last.
+        var actorMethods = new Dictionary<(string Type, string Name), bool>();
+        foreach (var rule in actorRules)
+        {
+            if (!string.Equals(rule.Provider, "actor", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var isRegistration = rule.Operation is "spawn" or "spawnUnit" or "spawnMany" or "register";
+            foreach (var declaringType in rule.DeclaringTypes)
+            {
+                foreach (var method in rule.Methods)
+                {
+                    actorMethods[(declaringType, method)] = isRegistration;
+                }
+            }
+        }
+
+        if (actorMethods.Count == 0)
+        {
+            return [];
+        }
+
+        // Coarse SQL filter: actor calls are invocations with a captured first-argument name (the process
+        // name) inside a method, whose target is a method DocID. The in-memory pass below refines by the
+        // declaring-type+method gate — actor calls are few, so the unrefined set is small.
+        var rows = await context
+            .ReferenceFacts.Where(r =>
+                r.EnclosingSymbolId != null
+                && r.FirstArgumentName != null
+                && r.RefKind == RefKinds.Invocation
+                && r.TargetSymbolId.StartsWith("M:")
+            )
+            .Select(r => new
+            {
+                r.EnclosingSymbolId,
+                r.FilePath,
+                r.Line,
+                r.FirstArgumentName,
+                r.TargetSymbolId,
+            })
+            .ToListAsync(cancellationToken);
+
+        var sites = new List<ActorDeliverySite>(rows.Count);
+        foreach (var r in rows)
+        {
+            var parsed = ParseActorTarget(r.TargetSymbolId);
+            if (parsed is not { } method || !actorMethods.TryGetValue(method, out var isRegistration))
+            {
+                continue;
+            }
+
+            sites.Add(
+                new ActorDeliverySite(
+                    Caller: r.EnclosingSymbolId!,
+                    FilePath: r.FilePath,
+                    Line: r.Line,
+                    ProcessName: r.FirstArgumentName!,
+                    IsRegistration: isRegistration
+                )
+            );
+        }
+
+        return sites;
+    }
+
+    // "M:Echo.Process.tell``1(Echo.ProcessId,…)" -> ("Echo.Process", "tell"). Mirrors FactEffectDeriver's
+    // ParseMethod (declaring type's arity markers stripped is unnecessary for the actor types, which are
+    // non-generic, so we keep the declaring type verbatim and only trim the method-level "``N"). Null when
+    // the DocID is not a method id or has no dot before the member name.
+    private static (string DeclaringType, string Name)? ParseActorTarget(string docId)
+    {
+        if (!docId.StartsWith("M:", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var searchEnd = docId.IndexOf('(');
+        if (searchEnd < 0)
+        {
+            searchEnd = docId.Length;
+        }
+
+        var lastDot = docId.LastIndexOf('.', searchEnd - 1);
+        if (lastDot < 2)
+        {
+            return null;
+        }
+
+        var declaring = docId.Substring(startIndex: 2, length: lastDot - 2);
+        var methodStart = lastDot + 1;
+        var backtick = docId.IndexOf('`', startIndex: methodStart, count: searchEnd - methodStart);
+        var methodEnd = backtick >= 0 ? backtick : searchEnd;
+        if (methodEnd <= methodStart)
+        {
+            return null;
+        }
+
+        return (declaring, docId.Substring(startIndex: methodStart, length: methodEnd - methodStart));
+    }
+
     // Loads the exact Roslyn-mined dispatch facts (dispatch_facts) into FactGraphData.MinedDispatch.
     // Probed (not assumed): a store indexed before dispatch facts existed has no table — return null
     // so FactPathFinder degrades to the pre-mining name/arity CHA (flagged heuristic) instead of

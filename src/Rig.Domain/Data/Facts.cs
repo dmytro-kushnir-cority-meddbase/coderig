@@ -282,6 +282,17 @@ public sealed record EventSubscriptionSite(string Caller, string FilePath, int L
 // handler ⇒ a RAISE (Caller delivers to every handler subscribed to EventId). Caller is the enclosing method.
 public sealed record EventReadSite(string Caller, string FilePath, int Line, string EventId);
 
+// An actor publish/registration SITE — the input to the publish→consumer DELIVERY edge for Echo actors
+// (FactPathFinder.AddActorDeliveryEdges, baked into call_edges at graph build). Mirrors EventReadSite, but
+// the consumer identity is a PROCESS NAME (a string — the spawn/tell first-argument name, resolved through a
+// static ProcessName field), not an exact event symbol, so the resulting binding is `~heuristic`. A
+// REGISTRATION site (spawn/spawnUnit/spawnMany/register, IsRegistration=true) co-locates the process name
+// with a method-group handler edge — exactly like an event `+= H` subscription — so the handler is the
+// methodGroup CallEdge at this site's (Caller,FilePath,Line). A PRODUCER site (tell/tellSystem/ask/askAsync/
+// askIfAlive, IsRegistration=false) is the "raise": Caller (the teller) delivers to every handler registered
+// under ProcessName. Loaded by Reads.LoadActorDeliverySitesAsync; the shaping consumer is a Domain function.
+public sealed record ActorDeliverySite(string Caller, string FilePath, int Line, string ProcessName, bool IsRegistration);
+
 // The fact-derived call graph loaded for cross-project path finding (stage 2 over facts).
 public sealed record FactGraphData(
     IReadOnlyList<CallEdge> CallEdges,

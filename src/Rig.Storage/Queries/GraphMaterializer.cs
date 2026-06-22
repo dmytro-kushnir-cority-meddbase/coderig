@@ -34,7 +34,8 @@ public static class GraphMaterializer
         IReadOnlyList<FactHandoffRule>? handoffRules = null,
         Action<string>? progress = null,
         CancellationToken cancellationToken = default,
-        IReadOnlyList<FactGenericFactoryRule>? factoryRules = null
+        IReadOnlyList<FactGenericFactoryRule>? factoryRules = null,
+        IReadOnlyList<FactEffectRule>? actorRules = null
     )
     {
         progress?.Invoke("Loading facts");
@@ -42,7 +43,7 @@ public static class GraphMaterializer
         // table) so the persisted Kind="handoff" + HandoffDispatcher flow to every SQL reader; the
         // in-memory oracle classifies identically by being given the same rules.
         var graph = await Reads.LoadFactGraphAsync(context, handoffRules, cancellationToken);
-        return await BuildFromGraphAsync(context, graph, factoryRules, progress, cancellationToken);
+        return await BuildFromGraphAsync(context, graph, factoryRules, progress, cancellationToken, actorRules: actorRules);
     }
 
     // Materialize the derived tables from a graph ALREADY built in memory (FactGraphProjection.FromAnalysis at
@@ -63,7 +64,8 @@ public static class GraphMaterializer
         Action<string>? progress = null,
         CancellationToken cancellationToken = default,
         IReadOnlyList<SymbolFact>? symbols = null,
-        IReadOnlyList<ReferenceFact>? references = null
+        IReadOnlyList<ReferenceFact>? references = null,
+        IReadOnlyList<FactEffectRule>? actorRules = null
     )
     {
         // Bake generic-factory monomorphization into the persisted edges — the SAME RewriteGenericFactories
@@ -83,6 +85,17 @@ public static class GraphMaterializer
         // already in the store at this point (facts are saved before graph build, on both the index and
         // re-graph paths). Modeled as handoff edges → sync-cut by default, walked under --async.
         graph = FactPathFinder.AddEventDeliveryEdges(graph, await Reads.LoadEventReadSitesAsync(context, cancellationToken));
+
+        // Publish→consumer DELIVERY edges (Echo actors): the SECOND resolver in the delivery-edge framework
+        // (events above is the first). A `Process.tell(name, msg)` delivers to the handler(s) spawned under
+        // that process NAME — an edge no syntactic call records (a tell only records the actor-API call). Same
+        // EDGE-CREATING bake as the event resolver. The actor tell/ask/spawn methods are DATA (the `actor:*`
+        // effect rules), threaded in like factoryRules — NOT hardcoded — so Domain stays codebase-agnostic.
+        // ~heuristic (the consumer identity is a process-name string, not an exact symbol). No-op when null.
+        graph = FactPathFinder.AddActorDeliveryEdges(
+            graph,
+            await Reads.LoadActorDeliverySitesAsync(context, actorRules ?? [], cancellationToken)
+        );
 
         var connection = context.Database.GetDbConnection();
         if (connection.State != ConnectionState.Open)
