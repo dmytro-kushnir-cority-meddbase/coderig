@@ -418,7 +418,7 @@ public sealed class CliApplicationTests
         var text = output.ToString();
         text.ShouldContain("⚠");
         text.ShouldContain("dual_write(medium)");
-        text.ShouldContain("Hazards (pattern findings over effects):");
+        text.ShouldContain("Hazards (pattern findings):");
 
         // The surface is OPT-IN: a plain `tree` of the same method shows no hazard marker. Run AFTER the
         // --hazards query to also prove the augmented effects/seam never polluted the (hazard-free) cache.

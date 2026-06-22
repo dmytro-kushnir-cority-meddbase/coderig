@@ -3,9 +3,12 @@ namespace Rig.Domain.Functions;
 // The catalog of HAZARD finding types — the higher-order findings that match PATTERNS over effects (a
 // read-modify-write window, an N+1 read in a loop, …), as distinct from STRUCTURAL observations
 // (looped_effect / parallel_fanout / lock_held_across_effect / transaction_spans_effect) which are context
-// facts, not hazards. Modeled today as EffectObservationInfo notes on effects; this is the single place that
-// answers "is this observation a hazard?" so the derive Hazards view, the generic-observations exclusion, and
-// the tsv split don't each hard-code the list.
+// facts, not hazards. Most are modeled as EffectObservationInfo notes on effects; the single GRAPH-tier
+// hazard, event_cycle (FactCycleDeriver), is NOT effect-attached — it is a property of the call-graph
+// topology (a feedback cycle closing through a publish→consumer delivery edge), derived over the graph and
+// folded into the same Hazards view as a second source. This is the single place that answers "is this a
+// hazard?" so the derive Hazards view, the generic-observations exclusion, and the tsv split don't each
+// hard-code the list.
 //
 // The type strings are owned by their derivers (race_window / lazy_init_race by FactHazardDeriver;
 // n_plus_1 / unserializable_payload by FactObservationDeriver) and re-stated here as the closed set — this
@@ -25,6 +28,7 @@ public static class HazardKinds
         FactHazardDeriver.LazyInitRaceType,
         FactHazardDeriver.ThreadLocalContextType,
         FactHazardDeriver.DualWriteType,
+        FactCycleDeriver.EventCycleType,
         NPlusOne,
         UnserializablePayload,
     };

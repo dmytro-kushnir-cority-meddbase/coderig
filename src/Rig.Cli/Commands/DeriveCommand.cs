@@ -105,6 +105,24 @@ internal static class DeriveCommand
         );
         effects = ApplyEffectFilters(effects: effects, only: only, exclude: exclude); // --only / --exclude (e.g. --exclude throw)
 
+        // --- event_cycle (the GRAPH-tier hazard): a feedback cycle that closes through ≥1 publish→consumer
+        //     DELIVERY edge (event raise / actor tell). Unlike every other hazard it is NOT an effect-attached
+        //     observation, so it is derived here over the delivery-edge-bearing graph and added as a SECOND
+        //     hazard source — NOT folded into HazardFindings(effects), which is pure-over-effects and shared
+        //     with impact. The graph is built IN-MEMORY mirroring GraphMaterializer.BuildFromGraphAsync (the
+        //     SAME order: handoff-classified load → generic-factory rewrite → event delivery → actor delivery)
+        //     so the cycles it finds are exactly the cycles the materialized call_edges carry. ---
+        var graph = await Reads.LoadFactGraphAsync(context, rules.Handoff);
+        graph = FactPathFinder.RewriteGenericFactories(graph, rules.Factory);
+        graph = FactPathFinder.AddEventDeliveryEdges(graph, await Reads.LoadEventReadSitesAsync(context));
+        graph = FactPathFinder.AddActorDeliveryEdges(graph, await Reads.LoadActorDeliverySitesAsync(context, rules.Effects));
+        var cycleFindings = EventCycleFindings(FactCycleDeriver.DeriveEventCycles(graph));
+
+        // Both hazard sources unioned: the over-effects pattern findings + the graph-tier event_cycle findings.
+        // Fed to BOTH the tsv `hazard` emission AND the rendered Hazards section so neither view misses a source.
+        var allHazards = new List<HazardFinding>(HazardFindings(effects));
+        allHazards.AddRange(cycleFindings);
+
         // Machine-readable mode: emit full-fidelity rows (full DocIDs/paths) for tooling that joins
         // effects/entry points against the call graph. `rig derive --format tsv`.
         if (string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase))
@@ -124,7 +142,7 @@ internal static class DeriveCommand
                 );
             }
 
-            foreach (var h in HazardFindings(effects))
+            foreach (var h in allHazards)
             {
                 output.WriteLine(HazardTsvRow(h));
             }
@@ -160,7 +178,7 @@ internal static class DeriveCommand
         // --- Hazards: the higher-order findings that match PATTERNS over effects (race_window / lazy_init_race /
         //     n_plus_1 / unserializable_payload — see HazardKinds). Promoted out of the generic observations
         //     block into their own section with per-type, per-confidence counts + sampled sites. ---
-        WriteHazards(output, HazardFindings(effects), limit);
+        WriteHazards(output, allHazards, limit);
 
         // --- STRUCTURAL observations attached to effects (looped_effect / parallel_fanout /
         //     lock_held_across_effect / transaction_spans_effect, P2b) — context facts, NOT hazards. The
@@ -282,6 +300,39 @@ internal static class DeriveCommand
         return findings;
     }
 
+    // Map each graph-tier event_cycle into a HazardFinding so it flows through the SAME Hazards view + tsv
+    // split as the over-effects findings. event_cycle is NOT effect-attached, so it has no single owning
+    // effect: the REPRESENTATIVE site is the first delivery edge's Caller / FilePath / Line (the raise that
+    // closes the loop — the most actionable anchor). Context is the cycle size; Detail enumerates every
+    // delivery edge with its dispatcher and site so the full evidence survives into the tsv `hazard` row.
+    // Pure + internal so the mapping is unit-testable without a store.
+    internal static IReadOnlyList<HazardFinding> EventCycleFindings(IReadOnlyList<EventCycle> cycles)
+    {
+        var findings = new List<HazardFinding>(cycles.Count);
+        foreach (var cycle in cycles)
+        {
+            var representative = cycle.DeliveryEdges[0];
+            var detail = string.Join(
+                ", ",
+                cycle.DeliveryEdges.Select(e => $"{e.Caller}->{e.Callee}@{e.FilePath}:{e.Line}[{e.HandoffDispatcher}]")
+            );
+            findings.Add(
+                new HazardFinding(
+                    Type: FactCycleDeriver.EventCycleType,
+                    Confidence: cycle.Confidence,
+                    Reason: "feedback_cycle_over_delivery_edges",
+                    Context: $"{cycle.Members.Count} methods",
+                    Detail: detail,
+                    Enclosing: representative.Caller,
+                    FilePath: representative.FilePath,
+                    Line: representative.Line
+                )
+            );
+        }
+
+        return findings;
+    }
+
     // The tsv `hazard` row for one finding (see the column reference in RunAsync): the full per-hazard
     // evidence — type, confidence, reason, cell/context, enclosing, file, line, detail — the comma-joined
     // `effect`-row observation Type list can't carry. Pure + internal so the column contract is unit-testable.
@@ -305,7 +356,7 @@ internal static class DeriveCommand
         }
 
         output.WriteLine();
-        output.WriteLine($"Hazards (pattern findings over effects): {findings.Count}");
+        output.WriteLine($"Hazards (pattern findings): {findings.Count}");
         var perTypeSample = limit / 8 + 1;
         var byType = findings
             .GroupBy(f => f.Type, StringComparer.Ordinal)

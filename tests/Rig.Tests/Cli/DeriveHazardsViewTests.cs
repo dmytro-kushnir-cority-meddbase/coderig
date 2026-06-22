@@ -84,7 +84,7 @@ public sealed class DeriveHazardsViewTests
         DeriveCommand.WriteHazards(sw, findings, limit: 40);
         var text = sw.ToString();
 
-        text.ShouldContain("Hazards (pattern findings over effects): 183");
+        text.ShouldContain("Hazards (pattern findings): 183");
         // race_window is busiest → first, with its high/medium tier breakdown.
         text.ShouldContain("race_window: 147 (high 121, medium 26)");
         // lazy_init_race shows its (single) low tier — a non-high tier is informative.
