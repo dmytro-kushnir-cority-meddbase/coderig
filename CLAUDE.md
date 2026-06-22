@@ -7,13 +7,26 @@ This file is only the things that aren't obvious from those and that you'd other
 
 ## Orchestration — director → orchestrator → coding agents
 
-The effective workflow here for multi-step work: the USER directs (goals, the load-bearing calls,
-course-correction), YOU orchestrate (scope → prompt → **review → commit**), SUBAGENTS execute one scoped
-build each. The rules that make this produce mergeable code, not plausible diffs:
+The effective workflow here for multi-step work is a LOOP. The USER directs (goals, the load-bearing
+calls, course-correction); YOU are the **orchestrator**; SUBAGENTS do the coding. The loop:
+
+1. **Orchestrator gathers + HOLDS the context** — reads the code, maps the design, runs the calibration
+   queries. The context lives in the orchestrator so dispatching a build doesn't lose it and the review can
+   happen without re-reading.
+2. **Define the task + propose the architecture** — surface genuine forks; recommend, don't survey.
+3. **GATE — coding does not start until either:** the user **approves the architecture in principle** (a
+   fork chosen, a scope OK'd, a "go"), **OR `auto` mode is on** (approval bypass — proceed on your own
+   judgement, still surfacing a fork only if it risks a false negative or is hard to reverse).
+4. **Dispatch the coding to a SUBAGENT** — one scoped build, tightly prompted (below).
+5. **Orchestrator REVIEWS + VALIDATES + COMMITS** — read the diff, confirm the full suite green, run the
+   real-data check (the MedDBase re-graph/derive) yourself; then commit. The subagent never commits.
+
+The rules that make this produce mergeable code, not plausible diffs:
 
 - **Subagents NEVER commit — you review their diff and commit it.** This is the quality gate: treat an
   agent's "done, nothing else changed" as a CLAIM to verify (a real `--expect-no-effect-change` gate
-  regression was caught *only* in review). Independently confirm the suite is green before committing.
+  regression was caught *only* in review). Independently confirm the suite is green AND do the real-data
+  validation (the agent can't touch the MedDBase store) before committing.
 - **Prompt tightly or get the wrong thing.** Each agent task states: the exact problem, a PRECEDENT to
   mirror (e.g. "mirror the existing X machinery"), hard constraints (annotate-only / full suite green / **do
   NOT commit** / don't touch docs), the explicit ACCEPTANCE test, and the gotchas (TUnit filter syntax,
