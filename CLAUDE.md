@@ -5,6 +5,31 @@ effect observations, and deployment attribution live in [README.md](README.md). 
 [docs/ubiquitous-language.md](docs/ubiquitous-language.md). Handover notes: [docs/handover.md](docs/handover.md).
 This file is only the things that aren't obvious from those and that you'd otherwise re-derive.
 
+## Orchestration — director → orchestrator → coding agents
+
+The effective workflow here for multi-step work: the USER directs (goals, the load-bearing calls,
+course-correction), YOU orchestrate (scope → prompt → **review → commit**), SUBAGENTS execute one scoped
+build each. The rules that make this produce mergeable code, not plausible diffs:
+
+- **Subagents NEVER commit — you review their diff and commit it.** This is the quality gate: treat an
+  agent's "done, nothing else changed" as a CLAIM to verify (a real `--expect-no-effect-change` gate
+  regression was caught *only* in review). Independently confirm the suite is green before committing.
+- **Prompt tightly or get the wrong thing.** Each agent task states: the exact problem, a PRECEDENT to
+  mirror (e.g. "mirror the existing X machinery"), hard constraints (annotate-only / full suite green / **do
+  NOT commit** / don't touch docs), the explicit ACCEPTANCE test, and the gotchas (TUnit filter syntax,
+  csharpier-first, named-args, this list).
+- **One agent at a time on shared files** — `FactEffectDeriver`/`FactHazardDeriver`/`builtin-rules.json`/the
+  derive+impact paths all contend; concurrent agents just merge-conflict. Parallel only on disjoint work.
+- **Run code agents in the MAIN checkout, NOT `isolation: worktree`** — worktree isolation branches from a
+  STALE base in this repo (an old `main` merge), so prerequisite files are missing. Bit us twice.
+- **Green + committed before the next unit** — never let agent output stack up uncommitted.
+- **Design first, dispatch second, calibrate after.** Argue the architecture before building; ship each
+  detector/feature with a bug/fix fixture; FP-calibrate a new signal on the real MedDBase store before it
+  goes on-by-default (a structurally-true detector that fires 179× is still noise). Surface genuine forks
+  to the user; autopilot the rest.
+- **Don't dispatch for small/exploratory work** — root-causing, calibration queries, one-file fixes, and
+  doc edits are faster inline. Agents earn their keep only on self-contained builds with a clear acceptance test.
+
 ## Build / test / ship
 
 - **Ship flow is `scripts/mini-ci.ps1`** — csharpier check → `dotnet build -warnaserror` → all tests →
