@@ -359,137 +359,225 @@ internal static class SolutionSourceLoader
         List<ProjectBuildInfo> results;
         if (IsProjectFile(solutionPath))
         {
-#pragma warning disable CS0618
-            var manager = new AnalyzerManager(options);
-            var analyzer = manager.GetProject(solutionPath);
-#pragma warning restore CS0618
-            progress?.Invoke($"MSBuild: running design-time build for {Path.GetFileNameWithoutExtension(solutionPath)}");
-            analyzer!.SetGlobalProperty(key: "DesignTimeBuild", value: "true");
-            analyzer.SetGlobalProperty(key: "BuildingInsideVisualStudio", value: "true");
-            // Prevent the MSBuild compiler server from being shared across parallel processes —
-            // concurrent Buildalyzer calls can corrupt each other's bin/ output if they share
-            // compilation state.
-            analyzer.SetGlobalProperty(key: "UseSharedCompilation", value: "false");
-            var singleWatch = timings is null ? null : Stopwatch.StartNew();
-            var info =
-                BuildOrLoad(Path.GetFullPath(solutionPath), () => analyzer.Build(CompileOnlyOptions()).FirstOrDefault())
-                ?? throw new InvalidOperationException($"Buildalyzer produced no build results for '{solutionPath}'.");
-            if (singleWatch is not null)
-            {
-                timings!.Record("design-time-builds", singleWatch.Elapsed);
-            }
-
-            results = [info];
+            results = BuildSingleProjectResults(solutionPath, progress, options, timings, BuildOrLoad);
         }
         else
         {
-#pragma warning disable CS0618
-            var manager = new AnalyzerManager(solutionPath, options);
-#pragma warning restore CS0618
-            // Select the C# projects to build: skip non-C# projects (sqlproj/fsproj fail to parse)
-            // and, when an entry-closure scope is given, everything outside it (test projects,
-            // unrelated tools) — BEFORE paying for their design-time builds.
-            var toBuild = manager
-                .Projects.Values.Where(pa =>
-                    string.Equals(Path.GetExtension(pa.ProjectFile.Path.ToString()), ".csproj", StringComparison.OrdinalIgnoreCase)
-                )
-                .Where(pa => scopeProjectPaths is null || scopeProjectPaths.Contains(Path.GetFullPath(pa.ProjectFile.Path.ToString())))
-                .Where(pa => !excludeTests || !IsTestProjectPath(pa.ProjectFile.Path.ToString()))
-                .ToList();
-
-            if (scopeProjectPaths is not null)
-            {
-                progress?.Invoke(
-                    $"Scoped to {toBuild.Count} project(s) in the entry closure "
-                        + $"(skipping {manager.Projects.Count - toBuild.Count} out-of-scope / non-C# project(s))"
-                );
-            }
-            else if (excludeTests)
-            {
-                var testCount = manager.Projects.Values.Count(pa => IsTestProjectPath(pa.ProjectFile.Path.ToString()));
-                progress?.Invoke($"Excluding {testCount} test project(s) (--no-tests)");
-            }
-
-            // Design-time builds run out-of-process (MSBuild.exe) with UseSharedCompilation=false and
-            // build only the `Compile` target (CompileOnlyOptions — non-destructive, see below), so they
-            // parallelise safely — and this is the dominant indexing cost, historically run serially.
-            // Parallel.ForEach bounds the concurrent MSBuild processes.
-            var resultsBag = new ConcurrentBag<ProjectBuildInfo>();
-            // Per-project build durations (only when timing). Their SUM is CPU-seconds of building, which
-            // is NOT the phase wall-clock — the builds run in parallel, so wall ≈ sum / effective-parallelism.
-            // The phase metric stays the wall-clock stopwatch below; this is the separate work/distribution view.
-            // (On a cache hit a project's "build" is just the fingerprint + sidecar read, so it shows ~0.)
-            var perProject = timings is null ? null : new ConcurrentBag<(string Name, double Seconds)>();
-            var done = 0;
-            var total = toBuild.Count;
-            var buildsWatch = Stopwatch.StartNew();
-            try
-            {
-                Parallel.ForEach(
-                    toBuild,
-                    new ParallelOptions { MaxDegreeOfParallelism = Math.Max(val1: 1, val2: parallelism) },
-                    projectAnalyzer =>
-                    {
-                        var projectName = projectAnalyzer.ProjectFile.Name;
-                        var current = Interlocked.Increment(ref done);
-                        if (current == 1 || current == total || current % 10 == 0)
-                        {
-                            ReportProgress(progress, $"MSBuild: design-time build {current}/{total}: {projectName}");
-                        }
-
-                        projectAnalyzer.SetGlobalProperty(key: "DesignTimeBuild", value: "true");
-                        projectAnalyzer.SetGlobalProperty(key: "UseSharedCompilation", value: "false");
-                        projectAnalyzer.SetGlobalProperty(key: "BuildingInsideVisualStudio", value: "true");
-                        var projectWatch = perProject is null ? null : Stopwatch.StartNew();
-                        try
-                        {
-                            var info = BuildOrLoad(
-                                Path.GetFullPath(projectAnalyzer.ProjectFile.Path.ToString()),
-                                () => projectAnalyzer.Build(CompileOnlyOptions()).FirstOrDefault()
-                            );
-                            if (info is not null)
-                            {
-                                resultsBag.Add(info);
-                            }
-                        }
-                        catch (Exception ex) when (ex is not DegradedBuildException)
-                        {
-                            // A per-project build failure is non-fatal: skip it and carry on. A DegradedBuildException
-                            // (0 sources after retries) is the EXCEPTION — it's filtered out here so it propagates.
-                            ReportProgress(progress, $"MSBuild: skipping {projectName} — build failed: {ex.Message.Split('\n')[0].Trim()}");
-                        }
-                        finally
-                        {
-                            if (projectWatch is not null)
-                            {
-                                perProject!.Add((projectName, projectWatch.Elapsed.TotalSeconds));
-                            }
-                        }
-                    }
-                );
-            }
-            catch (AggregateException aggregate)
-            {
-                // Parallel.ForEach wraps a thrown DegradedBuildException; surface it UNWRAPPED so the index
-                // aborts with the specific "0 source files" message instead of a generic AggregateException.
-                var fatal = aggregate.Flatten().InnerExceptions.OfType<DegradedBuildException>().FirstOrDefault();
-                if (fatal is not null)
-                {
-                    throw fatal;
-                }
-
-                throw;
-            }
-            buildsWatch.Stop();
-            if (timings is not null)
-            {
-                timings.Record("design-time-builds", buildsWatch.Elapsed); // WALL-CLOCK of the parallel batch
-                ReportBuildSummary(progress, perProject!, buildsWatch.Elapsed, parallelism);
-            }
-
-            results = resultsBag.ToList();
+            results = BuildSolutionProjectResults(
+                solutionPath,
+                progress,
+                options,
+                scopeProjectPaths,
+                parallelism,
+                excludeTests,
+                timings,
+                BuildOrLoad
+            );
         }
 
+        ReportCacheStats(
+            progress,
+            results,
+            cache,
+            verifyBuildCache,
+            verifyMatches,
+            verifyMismatches,
+            verifyNoBaseline,
+            cacheHits,
+            cacheMisses
+        );
+
+        ReportProgress(progress, $"Assembling workspace from {results.Count} project(s)");
+        var assemblyWatch = timings is null ? null : Stopwatch.StartNew();
+        var workspace = BuildWorkspaceFromResults(results, parallelism);
+        if (assemblyWatch is not null)
+        {
+            timings!.Record("workspace-assembly", assemblyWatch.Elapsed);
+        }
+
+        return workspace;
+    }
+
+    // Runs the design-time build for a single .csproj / .fsproj path and returns its one result.
+    // Used when `rig index` is given a project file directly rather than a solution.
+    private static List<ProjectBuildInfo> BuildSingleProjectResults(
+        string projectFilePath,
+        Action<string>? progress,
+        AnalyzerManagerOptions options,
+        PhaseTimings? timings,
+        Func<string, Func<IAnalyzerResult?>, ProjectBuildInfo?> buildOrLoad
+    )
+    {
+#pragma warning disable CS0618
+        var manager = new AnalyzerManager(options);
+        var analyzer = manager.GetProject(projectFilePath);
+#pragma warning restore CS0618
+        progress?.Invoke($"MSBuild: running design-time build for {Path.GetFileNameWithoutExtension(projectFilePath)}");
+        analyzer!.SetGlobalProperty(key: "DesignTimeBuild", value: "true");
+        analyzer.SetGlobalProperty(key: "BuildingInsideVisualStudio", value: "true");
+        // Prevent the MSBuild compiler server from being shared across parallel processes —
+        // concurrent Buildalyzer calls can corrupt each other's bin/ output if they share
+        // compilation state.
+        analyzer.SetGlobalProperty(key: "UseSharedCompilation", value: "false");
+        var singleWatch = timings is null ? null : Stopwatch.StartNew();
+        var info =
+            buildOrLoad(Path.GetFullPath(projectFilePath), () => analyzer.Build(CompileOnlyOptions()).FirstOrDefault())
+            ?? throw new InvalidOperationException($"Buildalyzer produced no build results for '{projectFilePath}'.");
+        if (singleWatch is not null)
+        {
+            timings!.Record("design-time-builds", singleWatch.Elapsed);
+        }
+
+        return [info];
+    }
+
+    // Runs parallel design-time builds for all in-scope C# projects in a solution file.
+    // Filters by scope/test-exclusion before launching builds, then surfaces any DegradedBuildException
+    // unwrapped from the AggregateException Parallel.ForEach produces.
+    private static List<ProjectBuildInfo> BuildSolutionProjectResults(
+        string solutionPath,
+        Action<string>? progress,
+        AnalyzerManagerOptions options,
+        IReadOnlySet<string>? scopeProjectPaths,
+        int parallelism,
+        bool excludeTests,
+        PhaseTimings? timings,
+        Func<string, Func<IAnalyzerResult?>, ProjectBuildInfo?> buildOrLoad
+    )
+    {
+#pragma warning disable CS0618
+        var manager = new AnalyzerManager(solutionPath, options);
+#pragma warning restore CS0618
+        // Select the C# projects to build: skip non-C# projects (sqlproj/fsproj fail to parse)
+        // and, when an entry-closure scope is given, everything outside it (test projects,
+        // unrelated tools) — BEFORE paying for their design-time builds.
+        var toBuild = manager
+            .Projects.Values.Where(pa =>
+                string.Equals(Path.GetExtension(pa.ProjectFile.Path.ToString()), ".csproj", StringComparison.OrdinalIgnoreCase)
+            )
+            .Where(pa => scopeProjectPaths is null || scopeProjectPaths.Contains(Path.GetFullPath(pa.ProjectFile.Path.ToString())))
+            .Where(pa => !excludeTests || !IsTestProjectPath(pa.ProjectFile.Path.ToString()))
+            .ToList();
+
+        ReportScopeProgress(progress, manager, toBuild, scopeProjectPaths, excludeTests);
+
+        // Design-time builds run out-of-process (MSBuild.exe) with UseSharedCompilation=false and
+        // build only the `Compile` target (CompileOnlyOptions — non-destructive, see below), so they
+        // parallelise safely — and this is the dominant indexing cost, historically run serially.
+        // Parallel.ForEach bounds the concurrent MSBuild processes.
+        var resultsBag = new ConcurrentBag<ProjectBuildInfo>();
+        // Per-project build durations (only when timing). Their SUM is CPU-seconds of building, which
+        // is NOT the phase wall-clock — the builds run in parallel, so wall ≈ sum / effective-parallelism.
+        // The phase metric stays the wall-clock stopwatch below; this is the separate work/distribution view.
+        // (On a cache hit a project's "build" is just the fingerprint + sidecar read, so it shows ~0.)
+        var perProject = timings is null ? null : new ConcurrentBag<(string Name, double Seconds)>();
+        var done = 0;
+        var total = toBuild.Count;
+        var buildsWatch = Stopwatch.StartNew();
+        try
+        {
+            Parallel.ForEach(
+                toBuild,
+                new ParallelOptions { MaxDegreeOfParallelism = Math.Max(val1: 1, val2: parallelism) },
+                projectAnalyzer =>
+                {
+                    var projectName = projectAnalyzer.ProjectFile.Name;
+                    var current = Interlocked.Increment(ref done);
+                    if (current == 1 || current == total || current % 10 == 0)
+                    {
+                        ReportProgress(progress, $"MSBuild: design-time build {current}/{total}: {projectName}");
+                    }
+
+                    projectAnalyzer.SetGlobalProperty(key: "DesignTimeBuild", value: "true");
+                    projectAnalyzer.SetGlobalProperty(key: "UseSharedCompilation", value: "false");
+                    projectAnalyzer.SetGlobalProperty(key: "BuildingInsideVisualStudio", value: "true");
+                    var projectWatch = perProject is null ? null : Stopwatch.StartNew();
+                    try
+                    {
+                        var info = buildOrLoad(
+                            Path.GetFullPath(projectAnalyzer.ProjectFile.Path.ToString()),
+                            () => projectAnalyzer.Build(CompileOnlyOptions()).FirstOrDefault()
+                        );
+                        if (info is not null)
+                        {
+                            resultsBag.Add(info);
+                        }
+                    }
+                    catch (Exception ex) when (ex is not DegradedBuildException)
+                    {
+                        // A per-project build failure is non-fatal: skip it and carry on. A DegradedBuildException
+                        // (0 sources after retries) is the EXCEPTION — it's filtered out here so it propagates.
+                        ReportProgress(progress, $"MSBuild: skipping {projectName} — build failed: {ex.Message.Split('\n')[0].Trim()}");
+                    }
+                    finally
+                    {
+                        if (projectWatch is not null)
+                        {
+                            perProject!.Add((projectName, projectWatch.Elapsed.TotalSeconds));
+                        }
+                    }
+                }
+            );
+        }
+        catch (AggregateException aggregate)
+        {
+            // Parallel.ForEach wraps a thrown DegradedBuildException; surface it UNWRAPPED so the index
+            // aborts with the specific "0 source files" message instead of a generic AggregateException.
+            var fatal = aggregate.Flatten().InnerExceptions.OfType<DegradedBuildException>().FirstOrDefault();
+            if (fatal is not null)
+            {
+                throw fatal;
+            }
+
+            throw;
+        }
+        buildsWatch.Stop();
+        if (timings is not null)
+        {
+            timings.Record("design-time-builds", buildsWatch.Elapsed); // WALL-CLOCK of the parallel batch
+            ReportBuildSummary(progress, perProject!, buildsWatch.Elapsed, parallelism);
+        }
+
+        return resultsBag.ToList();
+    }
+
+    // Reports scope filtering decisions to the progress sink: how many projects were narrowed by the
+    // entry-closure scope or by --no-tests, so the user can see what was excluded before builds ran.
+    private static void ReportScopeProgress(
+        Action<string>? progress,
+        AnalyzerManager manager,
+        IReadOnlyList<IProjectAnalyzer> toBuild,
+        IReadOnlySet<string>? scopeProjectPaths,
+        bool excludeTests
+    )
+    {
+        if (scopeProjectPaths is not null)
+        {
+            progress?.Invoke(
+                $"Scoped to {toBuild.Count} project(s) in the entry closure "
+                    + $"(skipping {manager.Projects.Count - toBuild.Count} out-of-scope / non-C# project(s))"
+            );
+        }
+        else if (excludeTests)
+        {
+            var testCount = manager.Projects.Values.Count(pa => IsTestProjectPath(pa.ProjectFile.Path.ToString()));
+            progress?.Invoke($"Excluding {testCount} test project(s) (--no-tests)");
+        }
+    }
+
+    // Emits the cache-hit/miss or verify summary line after all builds complete.
+    private static void ReportCacheStats(
+        Action<string>? progress,
+        IReadOnlyList<ProjectBuildInfo> results,
+        BuildResultCache? cache,
+        bool verifyBuildCache,
+        int verifyMatches,
+        int verifyMismatches,
+        int verifyNoBaseline,
+        int cacheHits,
+        int cacheMisses
+    )
+    {
         if (cache is not null && verifyBuildCache)
         {
             var verdict =
@@ -505,16 +593,6 @@ internal static class SolutionSourceLoader
         {
             ReportProgress(progress, $"build cache: {cacheHits} hit(s), {cacheMisses} miss(es) of {results.Count} project(s)");
         }
-
-        ReportProgress(progress, $"Assembling workspace from {results.Count} project(s)");
-        var assemblyWatch = timings is null ? null : Stopwatch.StartNew();
-        var workspace = BuildWorkspaceFromResults(results, parallelism);
-        if (assemblyWatch is not null)
-        {
-            timings!.Record("workspace-assembly", assemblyWatch.Elapsed);
-        }
-
-        return workspace;
     }
 
     // Per-project design-time-build distribution for --time. The wall-clock (the phase metric) is passed
@@ -647,151 +725,24 @@ internal static class SolutionSourceLoader
                 ? projectIdByPath.GetValueOrDefault(Path.GetFullPath(result.ProjectFilePath!), ProjectId.CreateNewId())
                 : ProjectId.CreateNewId();
 
-            // Language version: read from MSBuild LangVersion property so the parser
-            // handles modern C# syntax (primary constructors, collection expressions, etc.).
-            // Falls back to LanguageVersion.Default if unset or unparseable.
-            LanguageVersion langVersion = LanguageVersion.Default;
-            if (result.Properties.TryGetValue(key: "LangVersion", value: out var lv) && lv is not null)
-            {
-                LanguageVersionFacts.TryParse(lv, out langVersion);
-            }
-
-            // DocumentationMode.None: don't parse `///` XML doc comments into structured trivia and don't
-            // bind/validate them. Fact extraction is doc-comment-AGNOSTIC — symbols, DocIDs
-            // (GetDocumentationCommentId derives from symbol STRUCTURE, not the `///` text), references,
-            // type-relations and dispatch are identical either way; only doc-comment diagnostics depend on
-            // it, and those are discarded. The default (Parse) makes Roslyn build doc-comment trivia and,
-            // via GetDiagnostics, run DocumentationCommentCompiler (~hundreds of MB of churn on MedDBase).
-            // Same principled-and-strictly-less-work rationale as the nullable-off compilation option below.
-            var parseOptions = new CSharpParseOptions(
-                languageVersion: langVersion,
-                preprocessorSymbols: result.PreprocessorSymbols,
-                documentationMode: DocumentationMode.None
+            var parseOptions = BuildParseOptions(result);
+            var compilationOptions = BuildCompilationOptions(result);
+            var (metadataRefs, projectRefs) = ResolveReferences(
+                result,
+                projectIdByPath,
+                directInSetRefsByPath,
+                assemblyNameByPath,
+                Exists,
+                Meta,
+                NonCSharpDlls
             );
-
-            // Compilation options: OutputKind must be Library for class library / web projects
-            // so the compiler doesn't require a Main method (CS5001).  AllowUnsafe and Nullable
-            // are also propagated from the MSBuild properties so method resolution succeeds.
-            var outputType = result.Properties.TryGetValue(key: "OutputType", value: out var ot) ? ot : "Library";
-            var outputKind =
-                outputType.Equals("Exe", StringComparison.OrdinalIgnoreCase)
-                || outputType.Equals("WinExe", StringComparison.OrdinalIgnoreCase)
-                    ? OutputKind.ConsoleApplication
-                    : OutputKind.DynamicallyLinkedLibrary;
-            var allowUnsafe =
-                result.Properties.TryGetValue(key: "AllowUnsafeBlocks", value: out var unsafeStr)
-                && bool.TryParse(unsafeStr, out var unsafeBool)
-                && unsafeBool;
-            // Force nullable context OFF regardless of the project's <Nullable> setting: fact extraction is
-            // nullable-AGNOSTIC (symbol resolution, DocIDs, references, type-relations and dispatch are
-            // identical with or without it; nullable context only governs warnings, which we discard), so
-            // skipping NullableWalker flow analysis is free of facts. NB: measured benefit on MedDBase was
-            // only marginal (~3s / 0.3 GB peak) — a dotnet-trace gc-verbose profile showed the big
-            // `TypeWithAnnotations` churn is Roslyn's UNIVERSAL internal type representation (all overload
-            // resolution / type construction), not nullable-flow-specific, so it allocates either way.
-            // Kept because it's principled and strictly less work, not because it's a major win.
-            const NullableContextOptions nullableContext = NullableContextOptions.Disable;
-            var compilationOptions = new CSharpCompilationOptions(
-                outputKind,
-                allowUnsafe: allowUnsafe,
-                nullableContextOptions: nullableContext
-            );
-
-            var allRefs = result.References;
-
-            // When a net48 project (like MedDBase.Pages) references a netstandard2.0 library
-            // (like MedDBase.DataAccessTier.dll) that was compiled against the netstandard2.0
-            // build of a package (e.g. LLBLGen), but Buildalyzer resolves the net452 build for
-            // the net48 TFM, the base-type chain inside the netstandard2.0 DLL is unresolvable.
-            // To fix this: for every net452 reference we have, also add the netstandard2.0 sibling
-            // if it exists, so both assembly identities are in the compilation.
-            var siblingRefs = allRefs
-                .Where(Exists)
-                .Select(r =>
-                {
-                    var ns20 = r.Replace(
-                        Path.DirectorySeparatorChar + "net452" + Path.DirectorySeparatorChar,
-                        Path.DirectorySeparatorChar + "netstandard2.0" + Path.DirectorySeparatorChar,
-                        StringComparison.OrdinalIgnoreCase
-                    );
-                    return ns20 != r && Exists(ns20) ? ns20 : null;
-                })
-                .Where(r => r is not null)
-                .Select(r => r!);
-
-            // Project-to-project references within the indexed set become Roslyn ProjectReferences
-            // so the semantic model can cross project boundaries (e.g. Pages → MMS.Web.UI).
-            // DLL references whose output path matches an indexed project are dropped — Roslyn
-            // uses the live compilation of the referenced project instead.
-            //
-            // The closure is TRANSITIVE, not just this project's direct refs: Roslyn project
-            // references do not flow transitively, so a project that USES a transitively-referenced
-            // project's types (e.g. Rig.Cli using Rig.Domain via Rig.Storage) would otherwise see
-            // those types only through the metadata DLL — a SECOND assembly identity alongside the live
-            // transitive compilation. That duplicate identity makes any call whose signature mentions
-            // such a type fail to bind, silently dropping the call edge (a recall gap that inflates
-            // dead-code/false-unreachable results). Pulling the whole in-set closure in as live
-            // ProjectReferences (and dropping their DLLs from metadata below) gives one identity.
-            var inWorkspaceProjectPaths = TransitiveInSetClosure(result.ProjectFilePath, directInSetRefsByPath);
-
-            var inWorkspaceAssemblyNames = new HashSet<string>(
-                inWorkspaceProjectPaths.Select(p => assemblyNameByPath[p]),
-                StringComparer.OrdinalIgnoreCase
-            );
-
-            // Non-C# (F#/VB) project references can't be loaded as live C# ProjectReferences (the
-            // workspace only compiles C#), so a C# project that uses their types otherwise hits
-            // CS0012 ("type is defined in an assembly that is not referenced"). Roslyn CAN consume the
-            // referenced project's BUILT OUTPUT DLL as metadata — resolve it and add it. Gathered over
-            // the transitive in-set closure too: e.g. DataServer reaches the F# MedDBase.Pathways.DSL via
-            // the C# MedDBase.Pathways, and Roslyn project refs don't flow metadata transitively.
-            var fsharpRefDlls = inWorkspaceProjectPaths
-                .Append(result.ProjectFilePath is null ? null : Path.GetFullPath(result.ProjectFilePath))
-                .Where(p => p is not null)
-                .SelectMany(p => NonCSharpDlls(p!))
-                .Distinct(StringComparer.OrdinalIgnoreCase);
-
-            var metadataRefs = allRefs
-                .Concat(siblingRefs)
-                .Concat(fsharpRefDlls)
-                .Where(Exists)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                // Skip DLLs whose assembly is provided by a live project reference
-                .Where(path => !inWorkspaceAssemblyNames.Contains(Path.GetFileNameWithoutExtension(path)))
-                .Select(Meta)
-                .ToArray();
-
-            var projectRefs = inWorkspaceProjectPaths.Select(p => new ProjectReference(projectIdByPath[p])).ToArray();
-
-            // Wire up Roslyn source generators/analyzers (e.g. proxy code-gen for ClientPage
-            // subclasses).  Without these the compilation is missing generated types and semantic
-            // analysis fails for files that reference them.
-            // Buildalyzer-reported analyzer refs (package analyzers/generators). The project's
-            // OutputItemType="Analyzer" ProjectReferences (e.g. the ClientPage proxy generator) are NOT
-            // reported here — Buildalyzer drops them — so they're wired separately AFTER the workspace
-            // is built (WireGeneratorAnalyzers), by emitting each generator project's compilation.
-            var analyzerRefs = result
-                .AnalyzerReferences.Where(Exists)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Select(path => (AnalyzerReference)new AnalyzerFileReference(path, HostRedirectingAnalyzerLoader.Instance))
-                .ToArray();
-
-            var documents = result
-                .SourceFiles.Where(Exists)
-                .Select(filePath =>
-                    DocumentInfo.Create(
-                        DocumentId.CreateNewId(projectId),
-                        Path.GetFileName(filePath),
-                        filePath: filePath,
-                        loader: new FileTextLoader(filePath, null)
-                    )
-                )
-                .ToArray();
+            var analyzerRefs = BuildAnalyzerReferences(result, Exists);
+            var documents = BuildDocumentInfos(result, projectId, Exists);
 
             var projectName = result.ProjectFilePath is not null ? Path.GetFileNameWithoutExtension(result.ProjectFilePath) : "Unknown";
             var assemblyName = result.Properties.GetValueOrDefault("AssemblyName", defaultValue: projectName);
 
-            var projectInfo = ProjectInfo.Create(
+            return ProjectInfo.Create(
                 projectId,
                 VersionStamp.Create(),
                 name: projectName,
@@ -805,8 +756,6 @@ internal static class SolutionSourceLoader
                 analyzerReferences: analyzerRefs,
                 documents: documents
             );
-
-            return projectInfo;
         }
 
         // Build the ProjectInfos in parallel (the heavy, disk-bound metadata reads); writing each into its
@@ -826,6 +775,181 @@ internal static class SolutionSourceLoader
 
         workspace.TryApplyChanges(solution);
         return workspace;
+    }
+
+    // Builds the CSharpParseOptions for a project: language version from MSBuild LangVersion property so
+    // the parser handles modern C# syntax, preprocessor symbols, and DocumentationMode.None to skip XML
+    // doc comment trivia that adds churn without affecting fact extraction.
+    private static CSharpParseOptions BuildParseOptions(ProjectBuildInfo result)
+    {
+        // Language version: read from MSBuild LangVersion property so the parser
+        // handles modern C# syntax (primary constructors, collection expressions, etc.).
+        // Falls back to LanguageVersion.Default if unset or unparseable.
+        LanguageVersion langVersion = LanguageVersion.Default;
+        if (result.Properties.TryGetValue(key: "LangVersion", value: out var lv) && lv is not null)
+        {
+            LanguageVersionFacts.TryParse(lv, out langVersion);
+        }
+
+        // DocumentationMode.None: don't parse `///` XML doc comments into structured trivia and don't
+        // bind/validate them. Fact extraction is doc-comment-AGNOSTIC — symbols, DocIDs
+        // (GetDocumentationCommentId derives from symbol STRUCTURE, not the `///` text), references,
+        // type-relations and dispatch are identical either way; only doc-comment diagnostics depend on
+        // it, and those are discarded. The default (Parse) makes Roslyn build doc-comment trivia and,
+        // via GetDiagnostics, run DocumentationCommentCompiler (~hundreds of MB of churn on MedDBase).
+        // Same principled-and-strictly-less-work rationale as the nullable-off compilation option below.
+        return new CSharpParseOptions(
+            languageVersion: langVersion,
+            preprocessorSymbols: result.PreprocessorSymbols,
+            documentationMode: DocumentationMode.None
+        );
+    }
+
+    // Builds the CSharpCompilationOptions for a project: OutputKind from OutputType property,
+    // AllowUnsafe from AllowUnsafeBlocks, and nullable context forced off (fact extraction is
+    // nullable-agnostic; skipping NullableWalker is principled and strictly less work).
+    private static CSharpCompilationOptions BuildCompilationOptions(ProjectBuildInfo result)
+    {
+        // Compilation options: OutputKind must be Library for class library / web projects
+        // so the compiler doesn't require a Main method (CS5001).  AllowUnsafe and Nullable
+        // are also propagated from the MSBuild properties so method resolution succeeds.
+        var outputType = result.Properties.TryGetValue(key: "OutputType", value: out var ot) ? ot : "Library";
+        var outputKind =
+            outputType.Equals("Exe", StringComparison.OrdinalIgnoreCase) || outputType.Equals("WinExe", StringComparison.OrdinalIgnoreCase)
+                ? OutputKind.ConsoleApplication
+                : OutputKind.DynamicallyLinkedLibrary;
+        var allowUnsafe =
+            result.Properties.TryGetValue(key: "AllowUnsafeBlocks", value: out var unsafeStr)
+            && bool.TryParse(unsafeStr, out var unsafeBool)
+            && unsafeBool;
+        // Force nullable context OFF regardless of the project's <Nullable> setting: fact extraction is
+        // nullable-AGNOSTIC (symbol resolution, DocIDs, references, type-relations and dispatch are
+        // identical with or without it; nullable context only governs warnings, which we discard), so
+        // skipping NullableWalker flow analysis is free of facts. NB: measured benefit on MedDBase was
+        // only marginal (~3s / 0.3 GB peak) — a dotnet-trace gc-verbose profile showed the big
+        // `TypeWithAnnotations` churn is Roslyn's UNIVERSAL internal type representation (all overload
+        // resolution / type construction), not nullable-flow-specific, so it allocates either way.
+        // Kept because it's principled and strictly less work, not because it's a major win.
+        const NullableContextOptions nullableContext = NullableContextOptions.Disable;
+        return new CSharpCompilationOptions(outputKind, allowUnsafe: allowUnsafe, nullableContextOptions: nullableContext);
+    }
+
+    // Resolves a project's metadata references and in-workspace project references.
+    // The transitive in-set closure of ProjectReferences is added as live Roslyn ProjectReferences (one
+    // identity per type); their DLLs are dropped from metadata. net452/netstandard2.0 sibling DLLs and
+    // Non-C# (F#/VB) project-output DLLs are added to keep the type graph complete.
+    private static (MetadataReference[] MetadataRefs, ProjectReference[] ProjectRefs) ResolveReferences(
+        ProjectBuildInfo result,
+        IReadOnlyDictionary<string, ProjectId> projectIdByPath,
+        IReadOnlyDictionary<string, string[]> directInSetRefsByPath,
+        IReadOnlyDictionary<string, string> assemblyNameByPath,
+        Func<string, bool> exists,
+        Func<string, MetadataReference> meta,
+        Func<string, string[]> nonCSharpDlls
+    )
+    {
+        var allRefs = result.References;
+
+        // When a net48 project (like MedDBase.Pages) references a netstandard2.0 library
+        // (like MedDBase.DataAccessTier.dll) that was compiled against the netstandard2.0
+        // build of a package (e.g. LLBLGen), but Buildalyzer resolves the net452 build for
+        // the net48 TFM, the base-type chain inside the netstandard2.0 DLL is unresolvable.
+        // To fix this: for every net452 reference we have, also add the netstandard2.0 sibling
+        // if it exists, so both assembly identities are in the compilation.
+        var siblingRefs = allRefs
+            .Where(exists)
+            .Select(r =>
+            {
+                var ns20 = r.Replace(
+                    Path.DirectorySeparatorChar + "net452" + Path.DirectorySeparatorChar,
+                    Path.DirectorySeparatorChar + "netstandard2.0" + Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase
+                );
+                return ns20 != r && exists(ns20) ? ns20 : null;
+            })
+            .Where(r => r is not null)
+            .Select(r => r!);
+
+        // Project-to-project references within the indexed set become Roslyn ProjectReferences
+        // so the semantic model can cross project boundaries (e.g. Pages → MMS.Web.UI).
+        // DLL references whose output path matches an indexed project are dropped — Roslyn
+        // uses the live compilation of the referenced project instead.
+        //
+        // The closure is TRANSITIVE, not just this project's direct refs: Roslyn project
+        // references do not flow transitively, so a project that USES a transitively-referenced
+        // project's types (e.g. Rig.Cli using Rig.Domain via Rig.Storage) would otherwise see
+        // those types only through the metadata DLL — a SECOND assembly identity alongside the live
+        // transitive compilation. That duplicate identity makes any call whose signature mentions
+        // such a type fail to bind, silently dropping the call edge (a recall gap that inflates
+        // dead-code/false-unreachable results). Pulling the whole in-set closure in as live
+        // ProjectReferences (and dropping their DLLs from metadata below) gives one identity.
+        var inWorkspaceProjectPaths = TransitiveInSetClosure(result.ProjectFilePath, directInSetRefsByPath);
+
+        var inWorkspaceAssemblyNames = new HashSet<string>(
+            inWorkspaceProjectPaths.Select(p => assemblyNameByPath[p]),
+            StringComparer.OrdinalIgnoreCase
+        );
+
+        // Non-C# (F#/VB) project references can't be loaded as live C# ProjectReferences (the
+        // workspace only compiles C#), so a C# project that uses their types otherwise hits
+        // CS0012 ("type is defined in an assembly that is not referenced"). Roslyn CAN consume the
+        // referenced project's BUILT OUTPUT DLL as metadata — resolve it and add it. Gathered over
+        // the transitive in-set closure too: e.g. DataServer reaches the F# MedDBase.Pathways.DSL via
+        // the C# MedDBase.Pathways, and Roslyn project refs don't flow metadata transitively.
+        var fsharpRefDlls = inWorkspaceProjectPaths
+            .Append(result.ProjectFilePath is null ? null : Path.GetFullPath(result.ProjectFilePath))
+            .Where(p => p is not null)
+            .SelectMany(p => nonCSharpDlls(p!))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        var metadataRefs = allRefs
+            .Concat(siblingRefs)
+            .Concat(fsharpRefDlls)
+            .Where(exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            // Skip DLLs whose assembly is provided by a live project reference
+            .Where(path => !inWorkspaceAssemblyNames.Contains(Path.GetFileNameWithoutExtension(path)))
+            .Select(meta)
+            .ToArray();
+
+        var projectRefs = inWorkspaceProjectPaths.Select(p => new ProjectReference(projectIdByPath[p])).ToArray();
+
+        return (metadataRefs, projectRefs);
+    }
+
+    // Resolves the project's Buildalyzer-reported analyzer/generator references as Roslyn AnalyzerFileReferences.
+    // OutputItemType="Analyzer" ProjectReferences are NOT included here (Buildalyzer drops them); they are
+    // wired separately after the workspace is built (WireGeneratorAnalyzers).
+    private static AnalyzerReference[] BuildAnalyzerReferences(ProjectBuildInfo result, Func<string, bool> exists)
+    {
+        // Wire up Roslyn source generators/analyzers (e.g. proxy code-gen for ClientPage
+        // subclasses).  Without these the compilation is missing generated types and semantic
+        // analysis fails for files that reference them.
+        // Buildalyzer-reported analyzer refs (package analyzers/generators). The project's
+        // OutputItemType="Analyzer" ProjectReferences (e.g. the ClientPage proxy generator) are NOT
+        // reported here — Buildalyzer drops them — so they're wired separately AFTER the workspace
+        // is built (WireGeneratorAnalyzers), by emitting each generator project's compilation.
+        return result
+            .AnalyzerReferences.Where(exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(path => (AnalyzerReference)new AnalyzerFileReference(path, HostRedirectingAnalyzerLoader.Instance))
+            .ToArray();
+    }
+
+    // Builds Roslyn DocumentInfo records for each existing C# source file in the project.
+    private static DocumentInfo[] BuildDocumentInfos(ProjectBuildInfo result, ProjectId projectId, Func<string, bool> exists)
+    {
+        return result
+            .SourceFiles.Where(exists)
+            .Select(filePath =>
+                DocumentInfo.Create(
+                    DocumentId.CreateNewId(projectId),
+                    Path.GetFileName(filePath),
+                    filePath: filePath,
+                    loader: new FileTextLoader(filePath, null)
+                )
+            )
+            .ToArray();
     }
 
     // Normalised full paths of a project's OutputItemType="Analyzer" ProjectReferences (source

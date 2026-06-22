@@ -43,43 +43,45 @@ internal static class DeriveCommand
                 error,
                 () =>
                     RunAsync(
-                        extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
-                        limit: pr.GetValue(limit),
-                        only: CommonOptions.FilterSet(pr.GetValue(only)),
-                        exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
-                        format: pr.GetValue(format),
-                        output: output,
-                        error: error,
-                        workingDirectory: workingDirectory,
-                        storeRef: pr.GetValue(store)
+                        new Options(
+                            ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                            Limit: pr.GetValue(limit),
+                            Only: CommonOptions.FilterSet(pr.GetValue(only)),
+                            Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
+                            Format: pr.GetValue(format)
+                        ),
+                        new CommandIo(Output: output, Error: error, WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
                     )
             )
         );
         return cmd;
     }
 
-    private static async Task<int> RunAsync(
-        IReadOnlyList<string> extraRules,
-        int limit,
-        HashSet<string> only,
-        HashSet<string> exclude,
-        string? format,
-        TextWriter output,
-        TextWriter error,
-        string workingDirectory,
-        string? storeRef
-    )
+    private sealed record Options(
+        IReadOnlyList<string> ExtraRules,
+        int Limit,
+        HashSet<string> Only,
+        HashSet<string> Exclude,
+        string? Format
+    );
+
+    private static async Task<int> RunAsync(Options opts, CommandIo io)
     {
+        var tsv = CommonOptions.IsTsv(opts.Format);
         // #4: capture the resolved rule paths from the load, so the fingerprint below reuses them instead of
         // re-running the cascade merge (RulesFingerprint.ComputeFromPaths) just to re-discover the same paths.
-        var rules = RuleSetLoader.Load(workingDirectory: workingDirectory, extraRules: extraRules, loadedPaths: out var loadedRulePaths);
+        var rules = RuleSetLoader.Load(
+            workingDirectory: io.WorkingDirectory,
+            extraRules: opts.ExtraRules,
+            loadedPaths: out var loadedRulePaths
+        );
         // F7: use the out-param overload so the resolved store dir is available for the StoreKey computation
         // below without a second ResolveReadStoreDir call (io:read ×7).
-        await using var context = OpenReadContext(workingDirectory: workingDirectory, storeRef: storeRef, storeDir: out var rigDir);
+        await using var context = OpenReadContext(workingDirectory: io.WorkingDirectory, storeRef: io.StoreRef, storeDir: out var rigDir);
 
         // Deployment attribution (opt-in: only when deployments.json sits next to .rig). Empty (no-op) when
         // the config is absent; `error` is the log sink so config problems surface.
-        var deployments = await LoadDeploymentsAsync(context, workingDirectory, error);
+        var deployments = await LoadDeploymentsAsync(context, io.WorkingDirectory, io.Error);
 
         // Shaped graph: built once here and reused for both the handoff-EP classifier (F1 fix: avoids the
         // double-load in DeriveHandoffEntryPointsAsync's fallback path) and the event-cycle deriver below.
@@ -117,7 +119,7 @@ internal static class DeriveCommand
             useCache: true,
             epData: epData // #1b: reuse the EP data loaded above; skip the redundant load on a cache miss.
         );
-        effects = ApplyEffectFilters(effects: effects, only: only, exclude: exclude); // --only / --exclude (e.g. --exclude throw)
+        effects = ApplyEffectFilters(effects: effects, only: opts.Only, exclude: opts.Exclude); // --only / --exclude (e.g. --exclude throw)
 
         // --- event_cycle (the GRAPH-tier hazard): a feedback cycle that closes through ≥1 publish→consumer
         //     DELIVERY edge (event raise / actor tell). Unlike every other hazard it is NOT an effect-attached
@@ -135,7 +137,7 @@ internal static class DeriveCommand
 
         // Machine-readable mode: emit full-fidelity rows (full DocIDs/paths) for tooling that joins
         // effects/entry points against the call graph. `rig derive --format tsv`.
-        if (string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase))
+        if (tsv)
         {
             // TSV column reference (tab-separated; one row per record):
             //   effect      \t provider \t operation \t resource \t enclosing \t file \t line \t observations(csv of Type)
@@ -147,14 +149,14 @@ internal static class DeriveCommand
             foreach (var e in effects)
             {
                 var observations = string.Join(',', (e.Observations ?? []).Select(o => o.Type));
-                output.WriteLine(
+                io.Output.WriteLine(
                     $"effect\t{e.Provider}\t{e.Operation}\t{e.ResourceType}\t{e.EnclosingSymbolId}\t{e.FilePath}\t{e.Line}\t{observations}"
                 );
             }
 
             foreach (var h in allHazards)
             {
-                output.WriteLine(HazardTsvRow(h));
+                io.Output.WriteLine(HazardTsvRow(h));
             }
 
             var tsvEps = FactEntryPointDeriver.Derive(epData, rules.EntryPoints, rules.ClassInheritance);
@@ -166,20 +168,20 @@ internal static class DeriveCommand
             {
                 var loaded = deployments.ServicesForFile(ep.FilePath);
                 var active = deployments.ActiveServices(loadedServices: loaded, requires: ep.Requires);
-                output.WriteLine(
+                io.Output.WriteLine(
                     $"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}\t{string.Join(',', loaded)}\t{string.Join(',', active)}"
                 );
             }
             return 0;
         }
 
-        output.WriteLine($"Effects re-derived from facts: {effects.Count}");
+        io.Output.WriteLine($"Effects re-derived from facts: {effects.Count}");
         foreach (var group in effects.GroupBy(e => (e.Provider, e.Operation)).OrderByDescending(g => g.Count()))
         {
-            output.WriteLine($"{Indent.L1}{group.Key.Provider} {group.Key.Operation}: {group.Count()}");
-            foreach (var e in group.Take(limit / 8 + 1))
+            io.Output.WriteLine($"{Indent.L1}{group.Key.Provider} {group.Key.Operation}: {group.Count()}");
+            foreach (var e in group.Take(opts.Limit / 8 + 1))
             {
-                output.WriteLine(
+                io.Output.WriteLine(
                     $"{Indent.L3}{ShortName(e.ResourceType)}  <- {ShortName(e.EnclosingSymbolId)}  {ShortenPath(e.FilePath)}:{e.Line}"
                 );
             }
@@ -188,7 +190,7 @@ internal static class DeriveCommand
         // --- Hazards: the higher-order findings that match PATTERNS over effects (race_window / lazy_init_race /
         //     n_plus_1 / unserializable_payload — see HazardKinds). Promoted out of the generic observations
         //     block into their own section with per-type, per-confidence counts + sampled sites. ---
-        WriteHazards(output, allHazards, limit);
+        WriteHazards(io.Output, allHazards, opts.Limit);
 
         // --- STRUCTURAL observations attached to effects (looped_effect / parallel_fanout /
         //     lock_held_across_effect / transaction_spans_effect, P2b) — context facts, NOT hazards. The
@@ -202,11 +204,11 @@ internal static class DeriveCommand
 
         if (observationGroups.Count > 0)
         {
-            output.WriteLine();
-            output.WriteLine($"Observations on effects: {observationGroups.Sum(g => g.Count())}");
+            io.Output.WriteLine();
+            io.Output.WriteLine($"Observations on effects: {observationGroups.Sum(g => g.Count())}");
             foreach (var group in observationGroups)
             {
-                output.WriteLine($"{Indent.L1}{group.Key}: {group.Count()}");
+                io.Output.WriteLine($"{Indent.L1}{group.Key}: {group.Count()}");
             }
         }
 
@@ -214,18 +216,18 @@ internal static class DeriveCommand
         // epData was loaded above (shared with the effect deriver's base-type gates).
         var derivedEps = FactEntryPointDeriver.Derive(epData, rules.EntryPoints, rules.ClassInheritance);
 
-        output.WriteLine();
-        output.WriteLine($"Entry points re-derived from facts: {derivedEps.Count}");
-        var perKindSample = limit / 4 + 1;
+        io.Output.WriteLine();
+        io.Output.WriteLine($"Entry points re-derived from facts: {derivedEps.Count}");
+        var perKindSample = opts.Limit / 4 + 1;
         foreach (var kindGroup in derivedEps.GroupBy(e => e.Kind, StringComparer.Ordinal).OrderByDescending(g => g.Count()))
         {
-            output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
+            io.Output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup.Take(perKindSample))
             {
-                WriteEntryPointLine(output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
+                WriteEntryPointLine(io.Output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
             }
 
-            WriteSampleTruncationNote(output, total: kindGroup.Count(), shown: perKindSample, kind: kindGroup.Key);
+            WriteSampleTruncationNote(io.Output, total: kindGroup.Count(), shown: perKindSample, kind: kindGroup.Key);
         }
 
         // --- Classified handoff entry points (Phase 1/3): dispatcher-consumed delegates, promoted to
@@ -233,29 +235,29 @@ internal static class DeriveCommand
         //     registration site. The unclassified-methodGroup residual is collapsed to a count (it was a
         //     4,503-entry firehose). Each emits an `async_handoff` observation at its registration.
         var origins = PromoteHandoffOrigins(classifiedHandoffs, derivedEps);
-        output.WriteLine();
-        output.WriteLine(
+        io.Output.WriteLine();
+        io.Output.WriteLine(
             $"Handoff entry points (classified): {classifiedHandoffs.Count}  "
                 + $"(promoted origins after dedup: {origins.Count}; unclassified methodGroup residual: {unclassifiedHandoffCount})"
         );
         foreach (var kindGroup in classifiedHandoffs.GroupBy(h => h.Kind, StringComparer.Ordinal).OrderByDescending(g => g.Count()))
         {
-            output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
+            io.Output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
             foreach (var h in kindGroup.Take(perKindSample))
             {
                 var tag = deployments.IsEmpty ? "" : $"  {EntryPointRenderer.DeployTag(deployments, h.FilePath, h.Requires)}";
-                output.WriteLine(
+                io.Output.WriteLine(
                     $"{Indent.L3}{ShortName(h.Target)}  ⤳ via {h.Dispatcher}{tag}\n{Indent.L5}registered in {ShortName(h.RegisteredIn)}  {ShortenPath(h.FilePath)}:{h.Line}  [async_handoff]"
                 );
             }
-            WriteSampleTruncationNote(output, total: kindGroup.Count(), shown: perKindSample, kind: kindGroup.Key ?? "");
+            WriteSampleTruncationNote(io.Output, total: kindGroup.Count(), shown: perKindSample, kind: kindGroup.Key ?? "");
         }
 
         // The headline: entry points per deployed service (the summary table). An EP counts in every service
         // whose process loads it (shared libraries fan out to many hosts — see the chip counts).
         if (!deployments.IsEmpty)
         {
-            WriteServiceSummary(derivedEps.Concat(origins).Select(e => (e.Kind, (string?)e.FilePath, e.Requires)), deployments, output);
+            WriteServiceSummary(derivedEps.Concat(origins).Select(e => (e.Kind, (string?)e.FilePath, e.Requires)), deployments, io.Output);
         }
 
         return 0;

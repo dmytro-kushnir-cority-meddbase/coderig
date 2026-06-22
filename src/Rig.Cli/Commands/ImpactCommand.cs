@@ -104,52 +104,57 @@ internal static class ImpactCommand
                 error,
                 () =>
                     RunAsync(
-                        baseRef: pr.GetValue(@base)!,
-                        headRef: pr.GetValue(head)!,
-                        async: pr.GetValue(async),
-                        extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
-                        format: pr.GetValue(format),
-                        limit: pr.GetValue(limit),
-                        noCache: pr.GetValue(noCache),
-                        structural: pr.GetValue(structural),
-                        expectNoEffectChange: pr.GetValue(expectNoEffectChange),
-                        output: output,
-                        error: error,
-                        workingDirectory: workingDirectory
+                        new Options(
+                            BaseRef: pr.GetValue(@base)!,
+                            HeadRef: pr.GetValue(head)!,
+                            Async: pr.GetValue(async),
+                            ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                            Format: pr.GetValue(format),
+                            Limit: pr.GetValue(limit),
+                            NoCache: pr.GetValue(noCache),
+                            Structural: pr.GetValue(structural),
+                            ExpectNoEffectChange: pr.GetValue(expectNoEffectChange)
+                        ),
+                        new CommandIo(Output: output, Error: error, WorkingDirectory: workingDirectory, StoreRef: null)
                     )
             )
         );
         return cmd;
     }
 
-    private static async Task<int> RunAsync(
-        string baseRef,
-        string headRef,
-        bool async,
-        IReadOnlyList<string> extraRules,
-        string? format,
-        int? limit,
-        bool noCache,
-        bool structural,
-        bool expectNoEffectChange,
-        TextWriter output,
-        TextWriter error,
-        string workingDirectory
-    )
+    // Bound option values for `rig impact`. Raw user inputs kept as parsed strings/values; derived locals
+    // (tsv, max, mode) live at the top of RunAsync so cross-flag derivation stays in one place.
+    private sealed record Options(
+        string BaseRef,
+        string HeadRef,
+        bool Async,
+        IReadOnlyList<string> ExtraRules,
+        string? Format,
+        int? Limit,
+        bool NoCache,
+        bool Structural,
+        bool ExpectNoEffectChange
+    );
+
+    private static async Task<int> RunAsync(Options opts, CommandIo io)
     {
-        var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
-        var max = limit ?? int.MaxValue;
-        var mode = CommonOptions.Mode(async); // --async => walk handoff edges (reverse + forward), else sync-cut
+        var tsv = CommonOptions.IsTsv(opts.Format);
+        var max = opts.Limit ?? int.MaxValue;
+        var mode = CommonOptions.Mode(opts.Async); // --async => walk handoff edges (reverse + forward), else sync-cut
         // One rule load for the whole run — rules are working-dir-scoped, so the SAME set serves both stores;
         // threaded into every helper below. F6: capture resolved paths so the fingerprint below reuses them
         // via ComputeFromPaths instead of re-running the cascade merge.
-        var rules = RuleSetLoader.Load(workingDirectory: workingDirectory, extraRules: extraRules, loadedPaths: out var loadedRulePaths);
+        var rules = RuleSetLoader.Load(
+            workingDirectory: io.WorkingDirectory,
+            extraRules: opts.ExtraRules,
+            loadedPaths: out var loadedRulePaths
+        );
 
         // Resolve BOTH per-commit stores up front (sha / short-sha / store-id → store dir). ResolveReadStoreDir
         // throws StoreRefNotFoundException for an unmatched ref → CommandGuard lists what's indexed, so past
         // this point both stores exist and are addressable. The HEAD store dir also hosts the result cache.
-        var headDir = StoreLayout.ResolveReadStoreDir(workingDirectory: workingDirectory, storeRef: headRef);
-        var baseDir = StoreLayout.ResolveReadStoreDir(workingDirectory: workingDirectory, storeRef: baseRef);
+        var headDir = StoreLayout.ResolveReadStoreDir(workingDirectory: io.WorkingDirectory, storeRef: opts.HeadRef);
+        var baseDir = StoreLayout.ResolveReadStoreDir(workingDirectory: io.WorkingDirectory, storeRef: opts.BaseRef);
         var baseDbPath = Path.Combine(baseDir, StoreLayout.DbFileName);
 
         // Query cache (best-effort, opt-out via --no-cache). The impact diff is a PURE function of the two
@@ -160,7 +165,7 @@ internal static class ImpactCommand
         // absent from the key — they re-present the SAME cached diff and must not fragment it.
         var headStoreKey = StoreKey(Path.Combine(headDir, StoreLayout.DbFileName));
         var baseStoreKey = StoreKey(baseDbPath);
-        using var cache = noCache ? null : QueryCache.Open(rigDirectory: headDir, storeKey: headStoreKey);
+        using var cache = opts.NoCache ? null : QueryCache.Open(rigDirectory: headDir, storeKey: headStoreKey);
         var cacheKey = cache is null
             ? null
             : ImpactCacheKey(
@@ -172,18 +177,18 @@ internal static class ImpactCommand
 
         // The HEAD store: opened for the (cheap) deployment-map read on a hit, and the full derivation on a
         // miss. Opening issues no query — the cost is in the graph load + reach a hit skips.
-        await using var context = OpenReadContext(workingDirectory: workingDirectory, storeRef: headRef);
+        await using var context = OpenReadContext(workingDirectory: io.WorkingDirectory, storeRef: opts.HeadRef);
 
         // F4: load the DeploymentMap ONCE here so both the warm-path (cache hit) and cold-path share the
         // same result — eliminates the duplicate LoadDeploymentsAsync that previously appeared in each branch.
-        var deployments = await LoadDeploymentsAsync(context, workingDirectory, error);
+        var deployments = await LoadDeploymentsAsync(context, io.WorkingDirectory, io.Error);
 
         // WARM PATH: a fully-materialized diff + provenance + per-EP FQN subset → render WITHOUT loading the
         // base store or shaping/walking either graph. Deployments are loaded once above for the --structural chips.
         if (cacheKey is not null && cache!.Get(cacheKey) is { } cachedBlob && ImpactCacheCodec.Decode(cachedBlob) is { } art)
         {
             RenderImpact(
-                output: output,
+                output: io.Output,
                 impactDiff: art.Diff,
                 baseProv: art.BaseProvenance,
                 headProv: art.HeadProvenance,
@@ -191,16 +196,16 @@ internal static class ImpactCommand
                 deployments: deployments,
                 fqnSites: art.FqnSites,
                 tsv: tsv,
-                structural: structural,
+                structural: opts.Structural,
                 max: max
             );
-            return ExpectNoEffectChangeExit(expectNoEffectChange, EffectChangedEpCount(art.Diff), error);
+            return ExpectNoEffectChangeExit(opts.ExpectNoEffectChange, EffectChangedEpCount(art.Diff), io.Error);
         }
 
         // Provenance for the header: each store's source branch + short commit (12-char sha), read from its
         // own run row. Falls back to the store-id when a store has no commit/branch provenance.
-        var headProv = await ReadProvenanceAsync(context, headRef);
-        var baseProv = await ResolveBaseProvenanceAsync(baseDbPath, baseRef);
+        var headProv = await ReadProvenanceAsync(context, opts.HeadRef);
+        var baseProv = await ResolveBaseProvenanceAsync(baseDbPath, opts.BaseRef);
 
         // The branch (HEAD) side, computed inline over one whole-store graph that drives the per-EP forward
         // reach. Fully shaped graph: handoff-classified load → ShapeGraph → MarkEventSubscriptionHandoffs →
@@ -320,7 +325,7 @@ internal static class ImpactCommand
         }
 
         RenderImpact(
-            output: output,
+            output: io.Output,
             impactDiff: impactDiff,
             baseProv: baseProv,
             headProv: headProv,
@@ -328,10 +333,10 @@ internal static class ImpactCommand
             deployments: deployments,
             fqnSites: fqnSites,
             tsv: tsv,
-            structural: structural,
+            structural: opts.Structural,
             max: max
         );
-        return ExpectNoEffectChangeExit(expectNoEffectChange, EffectChangedEpCount(impactDiff), error);
+        return ExpectNoEffectChangeExit(opts.ExpectNoEffectChange, EffectChangedEpCount(impactDiff), io.Error);
     }
 
     // The `--expect-no-effect-change` CI gate. Behavioral change = an entry point present in BOTH commits whose

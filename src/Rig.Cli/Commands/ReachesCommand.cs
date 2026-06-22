@@ -48,59 +48,60 @@ internal static class ReachesCommand
                 error,
                 () =>
                     RunAsync(
-                        fromPattern: pr.GetValue(from)!,
-                        async: pr.GetValue(async),
-                        raw: pr.GetValue(raw),
-                        extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
-                        depth: pr.GetValue(depth),
-                        format: pr.GetValue(format),
-                        only: CommonOptions.FilterSet(pr.GetValue(only)),
-                        exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
-                        limit: pr.GetValue(limit),
-                        output: output,
-                        workingDirectory: workingDirectory,
-                        storeRef: pr.GetValue(store)
+                        new Options(
+                            FromPattern: pr.GetValue(from)!,
+                            Async: pr.GetValue(async),
+                            Raw: pr.GetValue(raw),
+                            ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                            Depth: pr.GetValue(depth),
+                            Format: pr.GetValue(format),
+                            Only: CommonOptions.FilterSet(pr.GetValue(only)),
+                            Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
+                            Limit: pr.GetValue(limit)
+                        ),
+                        new CommandIo(Output: output, Error: error, WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
                     )
             )
         );
         return cmd;
     }
 
-    private static async Task<int> RunAsync(
-        string fromPattern,
-        bool async,
-        bool raw,
-        IReadOnlyList<string> extraRules,
-        int? depth,
-        string? format,
-        HashSet<string> only,
-        HashSet<string> exclude,
-        int? limit,
-        TextWriter output,
-        string workingDirectory,
-        string? storeRef
-    )
-    {
-        var maxDepth = CommonOptions.DepthOrUnbounded(depth);
-        var max = limit ?? int.MaxValue; // --limit absent => unbounded
-        var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
-        var mode = CommonOptions.Mode(async);
+    // Bound option values for `rig reaches`. Raw user inputs (Format kept as the parsed string);
+    // the flag derivations (format -> tsv, depth -> maxDepth, etc.) live at the top of RunAsync.
+    private sealed record Options(
+        string FromPattern,
+        bool Async,
+        bool Raw,
+        IReadOnlyList<string> ExtraRules,
+        int? Depth,
+        string? Format,
+        HashSet<string> Only,
+        HashSet<string> Exclude,
+        int? Limit
+    );
 
-        var rules = RuleSetLoader.Load(workingDirectory, extraRules);
+    private static async Task<int> RunAsync(Options opts, CommandIo io)
+    {
+        var maxDepth = CommonOptions.DepthOrUnbounded(opts.Depth);
+        var max = opts.Limit ?? int.MaxValue; // --limit absent => unbounded
+        var tsv = CommonOptions.IsTsv(opts.Format);
+        var mode = CommonOptions.Mode(opts.Async);
+
+        var rules = RuleSetLoader.Load(io.WorkingDirectory, opts.ExtraRules);
         // --raw zeroes cut/context; reaches keeps Factory (it monomorphizes generic factories even under
         // --raw, a long-standing asymmetry vs path/tree/callers).
-        var shaped = raw ? rules with { Cut = [], Context = [] } : rules;
+        var shaped = opts.Raw ? rules with { Cut = [], Context = [] } : rules;
 
-        await using var context = OpenReadContext(workingDirectory, storeRef);
+        await using var context = OpenReadContext(io.WorkingDirectory, io.StoreRef);
 
-        var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, shaped);
+        var inputs = await LoadEffectReachInputsAsync(context, opts.FromPattern, SqlReachability.Direction.Forward, shaped);
         var graph = inputs.Graph;
-        if (!raw)
+        if (!opts.Raw)
         {
             graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
         }
 
-        var reachable = FactPathFinder.ReachesWithFanout(graph, fromPattern, maxDepth, mode: mode);
+        var reachable = FactPathFinder.ReachesWithFanout(graph, opts.FromPattern, maxDepth, mode: mode);
 
         var effects = DeriveEffects(
             rules.Effects,
@@ -110,7 +111,7 @@ internal static class ReachesCommand
             ctorRefs: inputs.CtorRefs,
             throwRefs: inputs.ThrowRefs
         );
-        effects = ApplyEffectFilters(effects, only, exclude); // --only / --exclude (e.g. --exclude throw)
+        effects = ApplyEffectFilters(effects, opts.Only, opts.Exclude); // --only / --exclude (e.g. --exclude throw)
 
         // Effects whose enclosing method is reachable from the entry point. Fanout = looped call
         // edges on the path to the enclosing method (ReachInfo.LoopNesting) + 1 if the effect's OWN
@@ -148,7 +149,7 @@ internal static class ReachesCommand
             // ("roslyn" when all dispatch hops are exact mined facts; empty when no dispatch hop).
             foreach (var h in hits.Take(max))
             {
-                output.WriteLine(
+                io.Output.WriteLine(
                     $"{h.Depth}\t{h.Effect.Provider}\t{h.Effect.Operation}\t{h.Effect.ResourceType}\t{h.Effect.EnclosingSymbolId}\t{ShortenPath(h.Effect.FilePath)}:{h.Effect.Line}\t{h.Fanout}\t{ShortLoop(h.Loop)}\t{h.Via}\t{(h.Via is null ? 0 : h.ViaDegree)}\t{h.HandoffVia}\t{h.Basis}"
                 );
             }
@@ -168,34 +169,36 @@ internal static class ReachesCommand
         // deployments.json; no-op otherwise). The from-root is the depth-0 reachable symbol.
         // F2: thread the EpData the EF-fallback load already carried (null on the SQL path) so
         // BuildEpContextAsync→DeriveEpSiteKindAsync can skip the redundant LoadFactEntryPointDataAsync.
-        var reachDeployments = await LoadDeploymentsAsync(context, workingDirectory);
+        var reachDeployments = await LoadDeploymentsAsync(context, io.WorkingDirectory);
         var reachEpContext = await BuildEpContextAsync(
             context: context,
             graph: graph,
-            workingDirectory: workingDirectory,
-            extraRules: extraRules,
+            workingDirectory: io.WorkingDirectory,
+            extraRules: opts.ExtraRules,
             rules: rules,
             deployments: reachDeployments,
             epData: inputs.EpData
         );
         var reachFromRoot = reachable.Where(kv => kv.Value.Depth == 0).Select(kv => kv.Key).FirstOrDefault();
-        output.WriteLine(
-            $"From: {fromPattern}{(mode == FactPathFinder.TraversalMode.AsyncInclude ? "  (--async: handoffs included)" : "")}"
+        io.Output.WriteLine(
+            $"From: {opts.FromPattern}{(mode == FactPathFinder.TraversalMode.AsyncInclude ? "  (--async: handoffs included)" : "")}"
                 + (reachFromRoot is null ? "" : HeaderSuffix(reachEpContext, reachFromRoot))
         );
-        output.WriteLine($"Reachable methods (<= depth {maxDepth}): {reachable.Count}");
-        output.WriteLine($"Direct effects (real call paths): {direct.Count}  (fanned out under a loop: {direct.Count(h => h.Fanout > 0)})");
+        io.Output.WriteLine($"Reachable methods (<= depth {maxDepth}): {reachable.Count}");
+        io.Output.WriteLine(
+            $"Direct effects (real call paths): {direct.Count}  (fanned out under a loop: {direct.Count(h => h.Fanout > 0)})"
+        );
         foreach (var g in direct.GroupBy(h => (h.Effect.Provider, h.Effect.Operation)).OrderByDescending(g => g.Count()))
         {
-            output.WriteLine($"{Indent.L1}{g.Count(), 4}  {g.Key.Provider} {g.Key.Operation}");
+            io.Output.WriteLine($"{Indent.L1}{g.Count(), 4}  {g.Key.Provider} {g.Key.Operation}");
         }
 
-        output.WriteLine("--- nearest direct effects (depth  provider op  resource  <- method  [loop]) ---");
+        io.Output.WriteLine("--- nearest direct effects (depth  provider op  resource  <- method  [loop]) ---");
         foreach (var h in direct.Take(max))
         {
             var fan = h.Fanout > 0 ? $"  🔁x{h.Fanout} [loop: {ShortLoop(h.Loop)}]" : "";
             var heuristic = h.Basis == "heuristic" ? "  ~heuristic" : "";
-            output.WriteLine(
+            io.Output.WriteLine(
                 $"{Indent.L1}d{h.Depth}  {h.Effect.Provider} {h.Effect.Operation}  {ShortName(h.Effect.ResourceType)}  <- {ShortName(h.Effect.EnclosingSymbolId)}{fan}{SpanTag(h.Effect)}{heuristic}"
             );
         }
@@ -203,19 +206,19 @@ internal static class ReachesCommand
         // this listing isn't a silent false negative.
         if (direct.Count > max)
         {
-            output.WriteLine($"{Indent.L1}… +{direct.Count - max} more direct effect(s) (raise --limit, or --format tsv for all)");
+            io.Output.WriteLine($"{Indent.L1}… +{direct.Count - max} more direct effect(s) (raise --limit, or --format tsv for all)");
         }
 
         if (scheduled.Count > 0)
         {
-            output.WriteLine(
+            io.Output.WriteLine(
                 $"--- async (scheduled) effects ({scheduled.Count}; reached across a handoff boundary — ⚡cross_thread, NOT synchronous) ---"
             );
             foreach (
                 var g in scheduled.GroupBy(h => (h.HandoffVia!, h.Effect.Provider, h.Effect.Operation)).OrderByDescending(g => g.Count())
             )
             {
-                output.WriteLine(
+                io.Output.WriteLine(
                     $"{Indent.L1}⚡x{g.Count(), -4} {g.Key.Provider} {g.Key.Operation}  ⤳ via {ShortName(g.Key.Item1)} [cross_thread]"
                 );
             }
@@ -223,14 +226,14 @@ internal static class ReachesCommand
 
         if (fanned.Count > 0)
         {
-            output.WriteLine(
+            io.Output.WriteLine(
                 $"--- dispatch fan-out ({fanned.Count} effects; reach is base-virtual/interface dispatch, NOT a real call — see A1) ---"
             );
             foreach (var g in fanned.GroupBy(h => (h.Via!, h.Effect.Provider, h.Effect.Operation)).OrderByDescending(g => g.Count()))
             {
                 var degree = g.Max(h => h.ViaDegree);
                 var heuristic = g.Any(h => h.Basis == "heuristic") ? "  ~heuristic" : "";
-                output.WriteLine(
+                io.Output.WriteLine(
                     $"{Indent.L1}x{g.Count(), -5} {g.Key.Provider} {g.Key.Operation}  via {ShortName(g.Key.Item1)} dispatch [fan-out of {degree}]{heuristic}"
                 );
             }

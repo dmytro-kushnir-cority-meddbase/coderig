@@ -63,55 +63,56 @@ internal static class CallersCommand
                 error,
                 () =>
                     RunAsync(
-                        toPattern: pr.GetValue(to)!,
-                        rootsOnly: pr.GetValue(orphans),
-                        entrypointsOnly: pr.GetValue(entrypoints),
-                        async: pr.GetValue(async),
-                        raw: pr.GetValue(raw),
-                        extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
-                        depth: pr.GetValue(depth),
-                        format: pr.GetValue(format),
-                        limit: pr.GetValue(limit),
-                        output: output,
-                        workingDirectory: workingDirectory,
-                        storeRef: pr.GetValue(store)
+                        new Options(
+                            ToPattern: pr.GetValue(to)!,
+                            RootsOnly: pr.GetValue(orphans),
+                            EntrypointsOnly: pr.GetValue(entrypoints),
+                            Async: pr.GetValue(async),
+                            Raw: pr.GetValue(raw),
+                            ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                            Depth: pr.GetValue(depth),
+                            Format: pr.GetValue(format),
+                            Limit: pr.GetValue(limit)
+                        ),
+                        new CommandIo(Output: output, Error: error, WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
                     )
             )
         );
         return cmd;
     }
 
-    private static async Task<int> RunAsync(
-        string toPattern,
-        bool rootsOnly,
-        bool entrypointsOnly,
-        bool async,
-        bool raw,
-        IReadOnlyList<string> extraRules,
-        int? depth,
-        string? format,
-        int? limit,
-        TextWriter output,
-        string workingDirectory,
-        string? storeRef
-    )
+    // Bound option values for `rig callers`. Raw user inputs (Format kept as the parsed string);
+    // the flag derivations (tsv, max, maxDepth, mode) live at the top of RunAsync.
+    private sealed record Options(
+        string ToPattern,
+        bool RootsOnly,
+        bool EntrypointsOnly,
+        bool Async,
+        bool Raw,
+        IReadOnlyList<string> ExtraRules,
+        int? Depth,
+        string? Format,
+        int? Limit
+    );
+
+    private static async Task<int> RunAsync(Options opts, CommandIo io)
     {
-        var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
-        var max = limit ?? int.MaxValue; // --limit absent => unbounded
-        var maxDepth = CommonOptions.DepthOrUnbounded(depth);
-        var mode = CommonOptions.Mode(async);
+        var tsv = CommonOptions.IsTsv(opts.Format);
+        var max = opts.Limit ?? int.MaxValue; // --limit absent => unbounded
+        var maxDepth = CommonOptions.DepthOrUnbounded(opts.Depth);
+        var mode = CommonOptions.Mode(opts.Async);
 
         // --raw bypasses shaping (the exact unfiltered reverse closure); else monomorphize factories + cut +
         // context, honoured symmetrically by the reverse traversal (a cut node yields no successors forward,
         // so it is never a predecessor in reverse).
-        var rules = RuleSetLoader.Load(workingDirectory, extraRules);
-        var shaped = raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
+        var rules = RuleSetLoader.Load(io.WorkingDirectory, opts.ExtraRules);
+        var shaped = opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
 
-        await using var context = OpenReadContext(workingDirectory, storeRef);
+        await using var context = OpenReadContext(io.WorkingDirectory, io.StoreRef);
 
         // One shaped reverse subgraph (bounded when `rig graph` has run, else the full EF graph) drives all
         // three callers modes — the set, the no-predecessor roots, and the rule-detected entrypoints.
-        var graph = await LoadShapedTraversalGraphAsync(context, toPattern, SqlReachability.Direction.Reverse, shaped);
+        var graph = await LoadShapedTraversalGraphAsync(context, opts.ToPattern, SqlReachability.Direction.Reverse, shaped);
 
         // Reclassify event-subscription (`+=`) method-group edges to `handoff` — mirroring reaches/tree
         // (and now path). The handler runs LATER via the event, not synchronously at the `+=` site, so it
@@ -119,17 +120,28 @@ internal static class CallersCommand
         // which is direction-agnostic, so it applies to this REVERSE subgraph the same way. Consequence
         // (intended, matches reaches/tree): a `+=` handler is no longer a synchronous reverse caller, so
         // event handlers surface under --roots/--entrypoints only via --async. `--raw` bypasses shaping.
-        if (!raw)
+        if (!opts.Raw)
         {
             graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
         }
 
-        if (entrypointsOnly)
+        if (opts.EntrypointsOnly)
         {
             // F9: load the DeploymentMap here and pass it into RunEntryPointsAsync, eliminating the
             // LoadDeploymentsAsync call that was inside RunEntryPointsAsync (depth-1 in the call tree).
-            var epDeployments = await LoadDeploymentsAsync(context, workingDirectory);
-            return await RunEntryPointsAsync(context, graph, toPattern, maxDepth, mode, rules, workingDirectory, tsv, output, epDeployments);
+            var epDeployments = await LoadDeploymentsAsync(context, io.WorkingDirectory);
+            return await RunEntryPointsAsync(
+                context,
+                graph,
+                opts.ToPattern,
+                maxDepth,
+                mode,
+                rules,
+                io.WorkingDirectory,
+                tsv,
+                io.Output,
+                epDeployments
+            );
         }
 
         // Deployment/EP context for the from-symbol annotations (opt-in via deployments.json). Only the
@@ -140,20 +152,20 @@ internal static class CallersCommand
             : await BuildEpContextAsync(
                 context,
                 graph,
-                workingDirectory,
-                extraRules,
+                io.WorkingDirectory,
+                opts.ExtraRules,
                 rules,
-                await LoadDeploymentsAsync(context, workingDirectory)
+                await LoadDeploymentsAsync(context, io.WorkingDirectory)
             );
 
-        if (rootsOnly)
+        if (opts.RootsOnly)
         {
-            var roots = FactPathFinder.EntryRootsReaching(graph, toPattern, maxDepth, mode: mode);
+            var roots = FactPathFinder.EntryRootsReaching(graph, opts.ToPattern, maxDepth, mode: mode);
             if (roots.Count == 0)
             {
                 if (!tsv)
                 {
-                    output.WriteLine($"No entry-point candidates reach '{toPattern}' (or no symbol matches).");
+                    io.Output.WriteLine($"No entry-point candidates reach '{opts.ToPattern}' (or no symbol matches).");
                 }
 
                 return 1;
@@ -163,30 +175,30 @@ internal static class CallersCommand
             {
                 foreach (var r in roots.Take(max))
                 {
-                    output.WriteLine(r);
+                    io.Output.WriteLine(r);
                 }
 
                 return 0;
             }
-            output.WriteLine($"Entry-point candidates reaching '{toPattern}': {roots.Count}");
+            io.Output.WriteLine($"Entry-point candidates reaching '{opts.ToPattern}': {roots.Count}");
             foreach (var r in roots.Take(max))
             {
-                output.WriteLine($"{Indent.L1}{r}{HeaderSuffix(epContext, r)}");
+                io.Output.WriteLine($"{Indent.L1}{r}{HeaderSuffix(epContext, r)}");
             }
             if (roots.Count > max)
             {
-                output.WriteLine($"{Indent.L1}… +{roots.Count - max} more (raise --limit)");
+                io.Output.WriteLine($"{Indent.L1}… +{roots.Count - max} more (raise --limit)");
             }
 
             return 0;
         }
 
-        var reachable = FactPathFinder.ReachedBy(graph, toPattern, maxDepth, mode: mode);
+        var reachable = FactPathFinder.ReachedBy(graph, opts.ToPattern, maxDepth, mode: mode);
         if (reachable.Count == 0)
         {
             if (!tsv)
             {
-                output.WriteLine($"No symbol matches '{toPattern}'.");
+                io.Output.WriteLine($"No symbol matches '{opts.ToPattern}'.");
             }
 
             return 1;
@@ -196,19 +208,19 @@ internal static class CallersCommand
         {
             foreach (var kv in reachable.OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).Take(max))
             {
-                output.WriteLine($"{kv.Value}\t{kv.Key}");
+                io.Output.WriteLine($"{kv.Value}\t{kv.Key}");
             }
 
             return 0;
         }
-        output.WriteLine($"Methods that reach '{toPattern}': {reachable.Count}");
+        io.Output.WriteLine($"Methods that reach '{opts.ToPattern}': {reachable.Count}");
         foreach (var kv in reachable.OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).Take(max))
         {
-            output.WriteLine($"{Indent.L1}d{kv.Value}  {ShortName(kv.Key)}");
+            io.Output.WriteLine($"{Indent.L1}d{kv.Value}  {ShortName(kv.Key)}");
         }
         if (reachable.Count > max)
         {
-            output.WriteLine($"{Indent.L1}… +{reachable.Count - max} more (raise --limit, or --format tsv for all)");
+            io.Output.WriteLine($"{Indent.L1}… +{reachable.Count - max} more (raise --limit, or --format tsv for all)");
         }
 
         return 0;
