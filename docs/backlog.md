@@ -127,3 +127,60 @@ immediately visible without any tree traversal.
   `docs/bugs/tree-spurious-seen-footer-for-lambdas.md` for the lambda edge case) — surface it as a column
   instead of suppressing the subtree. This dovetails with the redundant-reload findings the derive call-tree
   surfaced (x-phase duplicates become first-class, greppable rows).
+
+---
+
+## Refactor: single graph-shaping entry point (`LoadShapedGraphAsync`)
+
+### Problem
+
+The reachability-shaped call graph (`classify methodGroup→handoff` → `RewriteGenericFactories` → delivery
+edges) is assembled in **three scattered, partial places**:
+
+- `GraphMaterializer.BuildFromGraphAsync` — bakes classify + factory + delivery into the persisted `call_edges`.
+- `DeriveCommand.RunAsync` — hand-rolls `LoadFactGraphAsync → RewriteGenericFactories → LoadDeliverySites →
+  AddDeliveryEdges` inline (for FR-10 `event_cycle`).
+- `FactPathFinder.ShapeGraph` (used by `impact` + the EF-fallback traversals) — does factory + cut + context
+  but **omits delivery edges entirely**, so `impact`'s per-EP reach and EF-fallback `reaches`/`tree`/`path` do
+  not see publish→consumer delivery at all.
+
+Three definitions that can drift, a real coverage gap (impact/EF-fallback miss delivery edges), and a
+documented-only ordering invariant (the delivery join consumes the classifier's `Kind=handoff` output, so it
+must run after — enforced by comment, not structure).
+
+### Proposed solution
+
+One Storage entry point `Reads.LoadShapedGraphAsync(context, RuleSet rules, ct)` that returns the fully
+in-memory-shaped graph: `LoadFactGraphAsync` (load + classify) → `RewriteGenericFactories` → delivery edges
+(`LoadDeliverySitesAsync` + `AddDeliveryEdges`) → attach cut/context metadata. Every in-memory consumer
+(`derive`, `impact`, EF-fallback traversals) calls it; `GraphMaterializer` persists **exactly its
+edge-creating output** to `call_edges` (cut/context stay traversal-time, as today). Net:
+
+- **Closes the gap**: `impact` per-EP reach + EF-fallback traversals gain delivery edges uniformly.
+- **Resolves review finding #1a**: the graph is loaded + shaped **once** in `derive` and reused by both the
+  handoff-EP derivation and the cycle pass (was loaded twice — `DeriveHandoffEntryPointsAsync` internal +
+  `DeriveCommand:115`).
+- **Dissolves the ordering coupling**: stage order lives inside one function, tested — not a cross-call comment.
+- One shaping definition; `call_edges` becomes purely its materialization.
+
+### Acceptance criteria
+
+- [ ] `derive`, `impact`, EF-fallback traversals, and `GraphMaterializer` all obtain the shaped graph from the
+  one entry point; no hand-rolled `classify→factory→delivery` sequence remains at a call site.
+- [ ] `impact --per-ep` and EF-fallback `reaches`/`tree` now traverse delivery (event/actor) edges (new test).
+- [ ] `derive` loads the graph once (verify via the call tree — no duplicate `LoadFactGraphAsync`).
+- [ ] Behavior otherwise unchanged: `rig derive` output byte-identical; MedDBase `event_cycle` 24/all-high;
+  persisted `call_edges` count unchanged; full suite green.
+- [ ] `dead`'s unshaped-CHA-superset requirement still met (the raw/`--raw` path bypasses delivery shaping).
+
+### Related: parallelise the independent query-side loads
+
+The derive (and impact) commands issue several **data-independent** loads — graph edges, EP data, delivery
+sites, effect inputs — that today run **sequentially** on one `DbContext`. They are temporally decoupled (no
+data dependency), so they are candidates to overlap. The constraint: EF Core's `DbContext` is **not**
+concurrency-safe (a second operation on the same context while one is in flight throws), and a single SQLite
+connection serialises. Parallelising therefore needs **separate read `DbContext`s / connections** (sound — the
+store is opened read-only and SQLite allows concurrent readers), not `Task.WhenAll` on one context. Whether
+it pays is empirical: the big reads (`reference_facts`) are deserialisation- + I/O-bound, so overlapping them
+across connections *may* use multiple cores and overlap I/O — **profile before building**. Sequence after the
+single-entry-point refactor, which first establishes *what* the independent loads are.
