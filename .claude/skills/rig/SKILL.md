@@ -1,6 +1,6 @@
 ---
 name: rig
-description: Drive the `rig` fact-based .NET code-intelligence CLI to trace entry-point→effect call graphs, do reverse reachability ("which entry points reach X"), inventory effects (DB/cache/object-store/throw/messaging/HTTP/EF Core/parallel), diff a branch's blast radius + behavioral delta against another commit (`rig impact`, per-entry-point), find unreachable/dead code, and ground-truth-validate static-analysis findings across multi-project solutions. Use when analysing a .NET/C# codebase's call graph or side effects, answering "what does this reach / who reaches this", auditing a PR/migration's blast radius or per-EP effect changes, finding dead code, or when the user mentions rig, coderig, the `.rig` index, `rig derive/reaches/tree/callers/dead/impact/entrypoints`, commit-scoped stores (`--store`/`--commit`), or effect/entry-point detectors.
+description: Drive the `rig` fact-based .NET code-intelligence CLI to trace entry-point→effect call graphs, do reverse reachability ("which entry points reach X"), inventory effects (DB/cache/object-store/throw/messaging/HTTP/EF Core/parallel), surface operational HAZARDS (TOCTOU/race windows, N+1 reads, dual-writes, serializer-unsafe payloads) as ranked candidates, diff a branch's blast radius + behavioral/hazard delta against another commit (`rig impact`, per-entry-point), find unreachable/dead code, and ground-truth-validate static-analysis findings across multi-project solutions. Use when analysing a .NET/C# codebase's call graph or side effects, answering "what does this reach / who reaches this", hunting concurrency/consistency hazards, auditing a PR/migration's blast radius or per-EP effect/hazard changes, finding dead code, or when the user mentions rig, coderig, the `.rig` index, `rig derive/reaches/tree/callers/dead/impact/entrypoints`, hazards/race_window/dual_write, commit-scoped stores (`--store`/`--commit`), or effect/entry-point/hazard detectors.
 ---
 
 # rig — fact-based .NET code intelligence
@@ -70,6 +70,24 @@ re-index). Co-location-based; BCL (`Task.Run`)/lambda callbacks fall to the uncl
   {pattern,label}` folds a fan-out HUB into one summary leaf (union of effects + hidden count);
   `opaqueTypes {pattern,label}` draws a type/namespace as a leaf (anchor a namespace with `M:`). `tree
   --raw` bypasses them.
+
+## Hazards — pattern findings over effects (CANDIDATES, never verdicts)
+A third layer over effects + reachability: detectors match PATTERNS across the effect graph and emit ranked,
+confidence-tiered findings for an LLM reviewer (suspicion maps, not proofs — **annotate, never suppress**;
+calibrate FP rate before on-by-default). Shipped finding types (catalog: `HazardKinds`): `race_window`
+(read→write of the same cell, same method, no tx — TOCTOU/lost-update; high, medium when tx-bracketed),
+`lazy_init_race` (the lazy-init/do-once shape, low/heuristic), `n_plus_1` (looped read, key varies per
+iteration), `unserializable_payload` (`Option<T>`/etc. into a store/serialize), `dual_write` (≥2 distinct
+durable systems written in one method — db/queue/search/cache/http).
+- **See them**: `rig derive` prints a **Hazards** section (named, counted, per-confidence-tier) + a
+  `hazard` tsv row (`type/confidence/reason/cell/enclosing/file:line`).
+- **Diff them**: `rig impact` reports a per-EP hazard DELTA (`+/- hazard <type>(<conf>)` base→head). NB
+  `--expect-no-effect-change` is effect-set-only and does NOT trip on a hazard-only delta.
+- **Not yet wired**: `rig tree --hazards` inline drill-in (planned); `event_cycle` (blocked on a missing
+  publish→consumer graph edge). Hazards need static field read/write effects → **re-index** after the
+  field-emission/structural-context extraction changes.
+- **Design**: [docs/hazards.md](../../docs/hazards.md) (abstract, in-repo). MedDBase-grounded roadmap + RCA
+  corpus live in `meddbase-analysis/docs/` (backlog-bug-detection.md, rca-corpus-meddbase.md).
 
 ## Core workflow
 1. **Health-check**: `rig runs` (EP/effect/symbol counts). Thousands of EPs+effects expected; near-zero with healthy symbols = base-type binding flake (REFERENCE).
