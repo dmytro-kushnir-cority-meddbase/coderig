@@ -312,18 +312,40 @@ public static partial class FactPathFinder
             index.Nodes.Add(edge.Callee);
         }
 
-        // Sort each adjacency list ONCE here — by call-site line, then callee for stable ties — so Successors
-        // iterates it directly instead of re-running OrderBy().ThenBy() on every node expansion. Adjacency is
-        // immutable after this build, and BuildIndex finishes single-threaded before any (possibly parallel,
-        // e.g. ReachesFromEachSeed) traversal reads the shared index, so the in-place sort is race-free. Same
-        // order the per-expansion sort produced; see Successors.
+        // Sort each adjacency list ONCE here — total order: call-site line (primary, preserves source
+        // order for distinct-line children), then callee SymbolId (first tie-break, ordinal), then edge
+        // Kind (second tie-break), then ReceiverType (final tie-break) — so Successors iterates it
+        // directly instead of re-running OrderBy().ThenBy() on every node expansion. The four-key total
+        // order is store-independent: same-line edges that share even the callee id are distinguished by
+        // Kind/ReceiverType, so a re-index (which reshuffles SQLite rowids) or a parallel-load (which
+        // does not preserve insertion order) cannot change child ordering. Line stays primary, so
+        // distinct-line children are unaffected. Adjacency is immutable after this build, and BuildIndex
+        // finishes single-threaded before any (possibly parallel, e.g. ReachesFromEachSeed) traversal
+        // reads the shared index, so the in-place sort is race-free.
         foreach (var list in index.Adjacency.Values)
         {
             list.Sort(
                 static (a, b) =>
                 {
                     var byLine = a.Line.CompareTo(b.Line);
-                    return byLine != 0 ? byLine : string.CompareOrdinal(a.Callee, b.Callee);
+                    if (byLine != 0)
+                    {
+                        return byLine;
+                    }
+
+                    var byCallee = string.CompareOrdinal(a.Callee, b.Callee);
+                    if (byCallee != 0)
+                    {
+                        return byCallee;
+                    }
+
+                    var byKind = string.CompareOrdinal(a.Kind, b.Kind);
+                    if (byKind != 0)
+                    {
+                        return byKind;
+                    }
+
+                    return string.CompareOrdinal(a.ReceiverType, b.ReceiverType);
                 }
             );
         }
