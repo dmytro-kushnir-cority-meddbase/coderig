@@ -46,7 +46,7 @@ function Note($msg) { Write-Host "  $msg" -ForegroundColor DarkGray }
 # --- 1. Rebuild + reinstall the global tool (the Hazards surfaces are post-last-pack code) -----------
 if (-not $SkipBuild) {
     Section 'Rebuild + reinstall rig from current source (scripts/mini-ci.ps1)'
-    Note 'csharpier + build -warnaserror + all tests + pack + reinstall. ~1-2 min.'
+    Note 'csharpier + build + all tests + pack + reinstall. ~1-2 min.'
     & pwsh -File (Join-Path $RepoDir 'scripts/mini-ci.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'mini-ci failed - fix before demoing.' }
 }

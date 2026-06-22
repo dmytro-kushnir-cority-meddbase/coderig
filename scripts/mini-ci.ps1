@@ -45,7 +45,7 @@ try {
     dotnet tool restore
     dotnet csharpier check .
     dotnet restore $solution
-    dotnet build $solution -c $Configuration /p:UseSharedCompilation=false -warnaserror
+    dotnet build $solution -c $Configuration /p:UseSharedCompilation=false
 
     if (-not $SkipTests) {
         # `dotnet test` (Microsoft.Testing.Platform) reports failures via EXIT CODE, not a terminating

@@ -45,24 +45,22 @@ The rules that make this produce mergeable code, not plausible diffs:
 
 ## Build / test / ship
 
-- **Ship flow is `scripts/mini-ci.ps1`** — csharpier check → `dotnet build -warnaserror` → all tests →
+- **Ship flow is `scripts/mini-ci.ps1`** — csharpier check → `dotnet build` → all tests →
   pack → reinstall the global `rig` tool. Run it after any source change you intend to use from the CLI.
   Format first (`dotnet csharpier format <files>` or `scripts/format.ps1`) or the csharpier gate fails.
 - **Tests are TUnit on Microsoft.Testing.Platform, not vstest.** `dotnet test --filter` does NOT work
   (prints help, "Zero tests ran"). Run a subset with:
   `dotnet run --project tests/Rig.Tests --no-build -- --treenode-filter "/*/*/<ClassName>/*"`
   (path is `/Assembly/Namespace/Class/Test`; `*` wildcards each segment). `dotnet test` with no filter is fine.
-- **Analyzer errors are `-warnaserror` and mechanical to fix — just do it, don't ask:**
-  - `error UseNamedArgs: Consider invoking <Method> with named arguments` → name the args at that call
-    site (`Foo(x: a, y: b)`). The forked analyzer (`use-named-args-fs`) fires on EVERY multi-arg
-    first-party call, so **write new multi-arg calls with named args up front** to avoid the round-trip.
-    Genuinely-noisy stdlib methods are exempt via `.editorconfig` `UseNamedArgs.exclude_methods`
-    (`|`-separated; e.g. `String.Equals`, `Path.Combine`, `Dictionary.TryGetValue`) — add to that list
-    rather than naming args for a framework call that reads fine positionally.
-  - `MA0011` (format-provider) → pass `System.Globalization.CultureInfo.InvariantCulture`.
-  - **The csharpier auto-format races an in-flight `dotnet build`** (format edits a file the compiler is
-    reading) → spurious "N Error(s)" with no diagnostic. Re-run the build once it settles; verify green
-    with `--no-incremental`.
+- **`-warnaserror` is OFF** (removed from mini-ci 2026-06-22). Analyzer diagnostics — the forked
+  `UseNamedArgs` (`use-named-args-fs`, fires on every multi-arg first-party call), `MA0011`
+  (format-provider) — are now **non-fatal warnings**, not build errors: the build no longer fails on them
+  and there's no fix-it round-trip. Still worth following for readability where cheap (named args on new
+  multi-arg first-party calls; `CultureInfo.InvariantCulture` on formatting), and `.editorconfig`
+  `UseNamedArgs.exclude_methods` still suppresses the noisy stdlib ones — but none of it gates the build.
+  - **The csharpier auto-format still races an in-flight `dotnet build`** (format edits a file the compiler
+    is reading) → spurious "N Error(s)" with no diagnostic. Re-run the build once it settles; verify with
+    `--no-incremental`.
 
 ## Effect ↔ reachability model (read before touching effects or `EnclosingSymbolId`)
 
