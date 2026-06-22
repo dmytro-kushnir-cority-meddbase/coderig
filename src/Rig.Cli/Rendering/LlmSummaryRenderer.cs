@@ -5,8 +5,8 @@ using static Rig.Cli.Rendering.SymbolNameFormatter;
 namespace Rig.Cli.Rendering;
 
 // Renders a call-tree forest as a compact, flat TSV optimised for LLM token budgets.
-// One row per included node (full: all reachable nodes; effects: only effect-bearing nodes),
-// DFS pre-order (source order, same walk the tree renderer uses).
+// One row per included node (projection-dependent — see LlmProjection), DFS pre-order (source order,
+// same walk the tree renderer uses).
 //
 // Header + columns:  depth  parent  name  arity  calls  effects  flags
 //   depth   – 0-based nesting depth.
@@ -23,33 +23,50 @@ namespace Rig.Cli.Rendering;
 // loads first-class, greppable rows is the whole point of the format.
 internal static class LlmSummaryRenderer
 {
+    // Projection axis — orthogonal to format. Chosen by the caller based on presence of --full/--effects.
+    internal enum LlmProjection
+    {
+        // Default (no --full / --effects): effectful-paths — only paths that reach an effect, but with
+        // the ancestor spine kept. Every emitted non-root row's parent resolves to a row already emitted
+        // at a shallower depth (reconstructable). Mirrors the terminal default tree prune logic.
+        EffectfulPaths,
+
+        // --full: every reachable node (mirrors terminal --full).
+        Full,
+
+        // --effects: flat list of only the effect-bearing nodes (mirrors terminal --effects flat view).
+        EffectsFlat,
+    }
+
     internal const string Header = "depth\tparent\tname\tarity\tcalls\teffects\tflags";
 
     // effectsByMethod: SymbolId -> list of effect strings in the same form as the tree renderer produces
     // (e.g. "io:read ×3"). Structured differently from the tree-display form: the LLM renderer re-aggregates
     // the raw provider:operation strings rather than inheriting the emoji+text rendering.
-    // structuredEffects: SymbolId -> list of "provider:operation" strings (raw, one per occurrence).
+    // rawEffectsByMethod: SymbolId -> list of "provider:operation" strings (raw, one per occurrence).
     // The caller supplies BOTH because the tree renderer works with pre-formatted display strings while the
     // LLM renderer needs to aggregate provider:operation counts itself (no emoji, no resource names).
+    //
+    // For EffectfulPaths projection: the spine-keeping prune requires a SubtreeHasEffect check, which needs
+    // the same keying as rawEffectsByMethod (presence in the dict = node has an effect).
     internal static void Render(
         IReadOnlyList<TraceNode> roots,
         // Raw provider:operation per occurrence per enclosing symbol, for LLM aggregation.
         IReadOnlyDictionary<string, List<string>> rawEffectsByMethod,
-        bool effectsOnly,
+        LlmProjection projection,
         TextWriter output
     )
     {
         output.WriteLine(Header);
         foreach (var root in roots)
         {
-            WalkNode(
-                node: root,
-                depth: 0,
-                parentName: "",
-                rawEffectsByMethod: rawEffectsByMethod,
-                effectsOnly: effectsOnly,
-                output: output
-            );
+            // EffectfulPaths: prune roots with no downstream effect (same as the terminal default).
+            if (projection == LlmProjection.EffectfulPaths && !SubtreeHasEffect(root, rawEffectsByMethod))
+            {
+                continue;
+            }
+
+            WalkNode(node: root, depth: 0, parentName: "", rawEffectsByMethod: rawEffectsByMethod, projection: projection, output: output);
         }
     }
 
@@ -163,12 +180,32 @@ internal static class LlmSummaryRenderer
     // Uses SymbolNameFormatter.ShortName which takes the last two namespace-segments.
     internal static string LlmName(string symbolId) => ShortName(symbolId);
 
+    // True when this node directly has an effect OR any descendant does (mirrors SubtreeHasEffect in
+    // TreeRenderer — duplicated here to keep the renderer self-contained without a cross-type dependency).
+    private static bool SubtreeHasEffect(TraceNode node, IReadOnlyDictionary<string, List<string>> rawEffectsByMethod)
+    {
+        if (rawEffectsByMethod.ContainsKey(node.SymbolId))
+        {
+            return true;
+        }
+
+        foreach (var c in node.Children)
+        {
+            if (SubtreeHasEffect(c, rawEffectsByMethod))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static void WalkNode(
         TraceNode node,
         int depth,
         string parentName,
         IReadOnlyDictionary<string, List<string>> rawEffectsByMethod,
-        bool effectsOnly,
+        LlmProjection projection,
         TextWriter output
     )
     {
@@ -183,7 +220,7 @@ internal static class LlmSummaryRenderer
                     depth: depth,
                     parentName: parentName,
                     rawEffectsByMethod: rawEffectsByMethod,
-                    effectsOnly: effectsOnly,
+                    projection: projection,
                     output: output
                 );
             }
@@ -193,8 +230,11 @@ internal static class LlmSummaryRenderer
 
         var hasEffect = rawEffectsByMethod.ContainsKey(node.SymbolId);
 
-        // --llm effects: only emit rows for nodes that carry an effect (mirror --effects node selection).
-        if (!effectsOnly || hasEffect)
+        // EffectsFlat: only emit rows for nodes that carry an effect (mirror --effects node selection).
+        // EffectfulPaths: emit this node because the caller already checked the subtree has an effect
+        //   (so the spine is always present), but we don't re-check here — the child walk below prunes.
+        // Full: emit every node unconditionally.
+        if (projection != LlmProjection.EffectsFlat || hasEffect)
         {
             var name = LlmName(node.SymbolId);
             var arity = ParseArity(node.SymbolId).ToString(CultureInfo.InvariantCulture);
@@ -216,16 +256,21 @@ internal static class LlmSummaryRenderer
             return;
         }
 
-        var childName = LlmName(node.SymbolId);
-        // If this node was suppressed above we'd have returned; the name here is safe to use as parent.
+        var childName = IsSuppressed(node.SymbolId) ? parentName : LlmName(node.SymbolId);
         foreach (var child in node.Children)
         {
+            // EffectfulPaths: only descend into children whose subtree reaches an effect (spine prune).
+            if (projection == LlmProjection.EffectfulPaths && !SubtreeHasEffect(child, rawEffectsByMethod))
+            {
+                continue;
+            }
+
             WalkNode(
                 node: child,
                 depth: depth + 1,
                 parentName: childName,
                 rawEffectsByMethod: rawEffectsByMethod,
-                effectsOnly: effectsOnly,
+                projection: projection,
                 output: output
             );
         }

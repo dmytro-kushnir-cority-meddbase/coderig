@@ -41,10 +41,6 @@ internal static class TreeCommand
         {
             Description = "Drop box-drawing connectors (├─ └─ │) for pure indentation — diff-friendly.",
         };
-        var llm = new Option<string?>("--llm")
-        {
-            Description = "Emit a compact LLM-optimised flat TSV: 'full' (every reachable node) or 'effects' (effect-bearing nodes only).",
-        };
         var rules = CommonOptions.Rules();
         var depth = CommonOptions.Depth();
         var only = CommonOptions.Only();
@@ -65,7 +61,6 @@ internal static class TreeCommand
             files,
             signatures,
             plain,
-            llm,
             rules,
             depth,
             only,
@@ -75,19 +70,12 @@ internal static class TreeCommand
             format,
             store,
         };
-        // --full / --summary / --effects / --llm are distinct projections of the same tree; only one applies.
+        // --full / --summary / --effects are distinct projections of the same tree; only one applies.
+        // --format llm is compatible with default/--full/--effects but not with --summary or --hazards.
         cmd.Validators.Add(result =>
         {
-            var llmValue = result.GetValue(llm);
-            if (
-                llmValue is not null
-                && !string.Equals(llmValue, "full", StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(llmValue, "effects", StringComparison.OrdinalIgnoreCase)
-            )
-            {
-                result.AddError($"--llm must be 'full' or 'effects', got '{llmValue}'.");
-                return;
-            }
+            var formatValue = result.GetValue(format);
+            var isLlmFormat = string.Equals(formatValue, "llm", StringComparison.OrdinalIgnoreCase);
 
             var present = new List<string>();
             if (result.GetValue(full))
@@ -105,14 +93,29 @@ internal static class TreeCommand
                 present.Add("--effects");
             }
 
-            if (llmValue is not null)
-            {
-                present.Add("--llm");
-            }
-
             if (present.Count > 1)
             {
                 result.AddError($"Options {string.Join(" and ", present)} can't be combined for 'rig tree'.");
+            }
+
+            // --format llm is incompatible with --summary (different output shape) and --hazards (distinct rendering).
+            if (isLlmFormat)
+            {
+                var incompatible = new List<string>();
+                if (result.GetValue(summary))
+                {
+                    incompatible.Add("--summary");
+                }
+
+                if (result.GetValue(hazards))
+                {
+                    incompatible.Add("--hazards");
+                }
+
+                if (incompatible.Count > 0)
+                {
+                    result.AddError($"--format llm can't be combined with {string.Join(" and ", incompatible)} for 'rig tree'.");
+                }
             }
         });
         cmd.SetAction(pr =>
@@ -131,7 +134,6 @@ internal static class TreeCommand
                         files: pr.GetValue(files),
                         signatures: pr.GetValue(signatures),
                         plain: pr.GetValue(plain),
-                        llm: pr.GetValue(llm),
                         extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                         depth: pr.GetValue(depth),
                         only: CommonOptions.FilterSet(pr.GetValue(only)),
@@ -160,7 +162,6 @@ internal static class TreeCommand
         bool files,
         bool signatures,
         bool plain,
-        string? llm,
         IReadOnlyList<string> extraRules,
         int? depth,
         HashSet<string> only,
@@ -175,6 +176,7 @@ internal static class TreeCommand
     )
     {
         var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
+        var llmFormat = string.Equals(format, "llm", StringComparison.OrdinalIgnoreCase);
         var maxDepth = CommonOptions.DepthOrUnbounded(depth);
         var mode = CommonOptions.Mode(async);
 
@@ -387,9 +389,10 @@ internal static class TreeCommand
 
         effects = ApplyEffectFilters(effects, only, exclude); // --only / --exclude (e.g. --exclude throw)
 
-        // --llm full|effects: compact flat TSV for LLM consumption. Emitted before the normal render path
+        // --format llm: compact flat TSV for LLM consumption. Emitted before the normal render path
         // (skips the deployment map, seam, and box-drawing chrome — those are token waste for a model).
-        if (llm is not null)
+        // Projection determined by the EXISTING flags: default → EffectfulPaths; --full → Full; --effects → EffectsFlat.
+        if (llmFormat)
         {
             // Raw provider:operation per occurrence, keyed by enclosing symbol — the LLM renderer
             // aggregates counts itself (no emoji, no resource names).
@@ -401,8 +404,11 @@ internal static class TreeCommand
                     elementSelector: g => g.Select(e => $"{e.Provider}:{e.Operation}").ToList(),
                     comparer: StringComparer.Ordinal
                 );
-            var llmEffectsOnly = string.Equals(llm, "effects", StringComparison.OrdinalIgnoreCase);
-            Render(roots: roots, rawEffectsByMethod: rawEffectsForLlm, effectsOnly: llmEffectsOnly, output: output);
+            var projection =
+                full ? LlmProjection.Full
+                : effectsOnly ? LlmProjection.EffectsFlat
+                : LlmProjection.EffectfulPaths;
+            Render(roots: roots, rawEffectsByMethod: rawEffectsForLlm, projection: projection, output: output);
             timer.Total();
             return 0;
         }

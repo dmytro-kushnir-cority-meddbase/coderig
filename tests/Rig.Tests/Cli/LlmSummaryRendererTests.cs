@@ -30,14 +30,14 @@ public sealed class LlmSummaryRendererTests
     private static string Render(
         IReadOnlyList<TraceNode> roots,
         IReadOnlyDictionary<string, List<string>>? rawEffects = null,
-        bool effectsOnly = false
+        LlmSummaryRenderer.LlmProjection projection = LlmSummaryRenderer.LlmProjection.Full
     )
     {
         var sw = new StringWriter();
         LlmSummaryRenderer.Render(
             roots: roots,
             rawEffectsByMethod: rawEffects ?? new Dictionary<string, List<string>>(StringComparer.Ordinal),
-            effectsOnly: effectsOnly,
+            projection: projection,
             output: sw
         );
         return sw.ToString();
@@ -223,15 +223,15 @@ public sealed class LlmSummaryRendererTests
         lines.ShouldContain(l => l.Contains("Repo.Save"));
     }
 
-    // ── effectsOnly mode mirrors --effects node selection ────────────────────────────────────────
+    // ── EffectsFlat projection mirrors --effects node selection ─────────────────────────────────
 
     [Test]
-    public void EffectsOnly_emits_only_effect_bearing_nodes()
+    public void EffectsFlat_emits_only_effect_bearing_nodes()
     {
         var root = Node("M:App.Svc.RunAsync()", callSites: 1, Node("M:App.Repo.Load()"), Node("M:App.Repo.Save()"));
         var rawEffects = RawEffects(("M:App.Repo.Save()", ["efcore:commit"]));
 
-        var lines = Lines(Render([root], rawEffects, effectsOnly: true));
+        var lines = Lines(Render([root], rawEffects, LlmSummaryRenderer.LlmProjection.EffectsFlat));
         // header + Save only (root and Load have no effects)
         lines.Count.ShouldBe(2);
         // Check the name column (index 2) for Repo.Save, and that no row has Svc.RunAsync or Repo.Load as the name.
@@ -242,14 +242,91 @@ public sealed class LlmSummaryRendererTests
     }
 
     [Test]
-    public void EffectsOnly_false_emits_all_reachable_nodes()
+    public void Full_projection_emits_all_reachable_nodes()
     {
         var root = Node("M:App.Svc.RunAsync()", callSites: 1, Node("M:App.Repo.Load()"), Node("M:App.Repo.Save()"));
         var rawEffects = RawEffects(("M:App.Repo.Save()", ["efcore:commit"]));
 
-        var lines = Lines(Render([root], rawEffects, effectsOnly: false));
+        var lines = Lines(Render([root], rawEffects, LlmSummaryRenderer.LlmProjection.Full));
         // header + root + Load + Save = 4
         lines.Count.ShouldBe(4);
+    }
+
+    // ── EffectfulPaths projection — spine-keeping default ────────────────────────────────────────
+
+    [Test]
+    public void EffectfulPaths_keeps_spine_to_effectful_nodes()
+    {
+        // Tree:  Root -> A (no effect) -> B (has effect)
+        //             -> C (no effect, no descendants with effects)
+        var b = Node("M:App.Svc.B()");
+        var a = Node("M:App.Svc.A()", callSites: 1, b);
+        var c = Node("M:App.Svc.C()");
+        var root = Node("M:App.Svc.Root()", callSites: 1, a, c);
+        var rawEffects = RawEffects(("M:App.Svc.B()", ["io:read"]));
+
+        var lines = Lines(Render([root], rawEffects, LlmSummaryRenderer.LlmProjection.EffectfulPaths));
+        // Should include: Root (spine), A (spine), B (effect-bearing); NOT C (effectless subtree).
+        var names = lines.Skip(1).Select(l => l.Split('\t')[2]).ToList();
+        names.ShouldContain("Svc.Root");
+        names.ShouldContain("Svc.A");
+        names.ShouldContain("Svc.B");
+        names.ShouldNotContain("Svc.C");
+    }
+
+    [Test]
+    public void EffectfulPaths_prunes_entire_subtree_with_no_effects()
+    {
+        // A root with two branches: one with an effect, one completely effectless.
+        var effectful = Node("M:App.Repo.Save()");
+        var branchA = Node("M:App.Svc.Branch1()", callSites: 1, effectful);
+        var branchB = Node("M:App.Svc.Branch2()", callSites: 1, Node("M:App.Svc.Inner()"));
+        var root = Node("M:App.Svc.Root()", callSites: 1, branchA, branchB);
+        var rawEffects = RawEffects(("M:App.Repo.Save()", ["efcore:commit"]));
+
+        var lines = Lines(Render([root], rawEffects, LlmSummaryRenderer.LlmProjection.EffectfulPaths));
+        var names = lines.Skip(1).Select(l => l.Split('\t')[2]).ToList();
+        names.ShouldContain("Svc.Root");
+        names.ShouldContain("Svc.Branch1");
+        names.ShouldContain("Repo.Save");
+        names.ShouldNotContain("Svc.Branch2");
+        names.ShouldNotContain("Svc.Inner");
+    }
+
+    [Test]
+    public void EffectfulPaths_output_is_reconstructable_every_parent_resolves_to_earlier_row()
+    {
+        // Build a tree with a multi-level spine: Root -> Svc -> Repo (effect)
+        //                                               -> Util (no effect)
+        var repo = Node("M:App.Data.Repo.Fetch()");
+        var svc = Node("M:App.Services.Svc.Process()", callSites: 1, repo, Node("M:App.Utils.Util.NoOp()"));
+        var root = Node("M:App.Api.Controller.Handle()", callSites: 1, svc);
+        var rawEffects = RawEffects(("M:App.Data.Repo.Fetch()", ["efcore:read"]));
+
+        var lines = Lines(Render([root], rawEffects, LlmSummaryRenderer.LlmProjection.EffectfulPaths));
+        // Collect emitted names in order (excluding header).
+        var emittedNames = lines.Skip(1).Select(l => l.Split('\t')[2]).ToList();
+
+        // Every non-root row's parent column must name a row already emitted at a shallower depth.
+        var emittedSoFar = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var dataLine in lines.Skip(1))
+        {
+            var cols = dataLine.Split('\t');
+            var parent = cols[1];
+            var name = cols[2];
+            if (!string.IsNullOrEmpty(parent))
+            {
+                emittedSoFar.ShouldContain(
+                    parent,
+                    $"Row '{name}' has parent '{parent}' but that name was not yet emitted — output is not reconstructable."
+                );
+            }
+
+            emittedSoFar.Add(name);
+        }
+
+        // Sanity: Util (effectless) should be pruned.
+        emittedNames.ShouldNotContain("Util.NoOp");
     }
 
     // ── parent column ────────────────────────────────────────────────────────────────────────────
@@ -368,62 +445,89 @@ public sealed class LlmSummaryRendererTests
     }
 }
 
-// CLI-level tests for --llm: verify the option parses, mutual exclusion works, and output has the right shape.
+// CLI-level tests for --format llm: verify the option parses, mutual exclusion works, and output has the right shape.
 public sealed class LlmSummaryCliTests
 {
     [Test]
-    public async Task Llm_full_rejects_combined_with_full_option()
+    public async Task Format_llm_with_full_is_accepted()
+    {
+        // --full --format llm is a valid combination (Full projection).
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        // No index exists, but it should fail with "No symbol matches" (exit 1) not a validation error.
+        // We only check that the CLI does NOT emit a "can't be combined" validation error.
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--full", "--format", "llm"], output, error);
+
+        // May fail for "no index" reasons, but not for a validation/parse error.
+        error.ToString().ShouldNotContain("can't be combined");
+        error.ToString().ShouldNotContain("--format llm");
+    }
+
+    [Test]
+    public async Task Format_llm_with_effects_is_accepted()
     {
         var output = new StringWriter();
         var error = new StringWriter();
 
-        var exitCode = await CliApplication.RunAsync(["tree", "X", "--llm", "full", "--full"], output, error);
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--effects", "--format", "llm"], output, error);
+
+        error.ToString().ShouldNotContain("can't be combined");
+    }
+
+    [Test]
+    public async Task Format_llm_alone_is_accepted()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--format", "llm"], output, error);
+
+        error.ToString().ShouldNotContain("can't be combined");
+    }
+
+    [Test]
+    public async Task Format_llm_combined_with_summary_is_rejected()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--format", "llm", "--summary"], output, error);
 
         exitCode.ShouldBe(1);
         error.ToString().ShouldContain("can't be combined");
-        error.ToString().ShouldContain("--llm");
+        error.ToString().ShouldContain("--summary");
+    }
+
+    [Test]
+    public async Task Format_llm_combined_with_hazards_is_rejected()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--format", "llm", "--hazards"], output, error);
+
+        exitCode.ShouldBe(1);
+        error.ToString().ShouldContain("can't be combined");
+        error.ToString().ShouldContain("--hazards");
+    }
+
+    [Test]
+    public async Task Full_and_effects_together_are_still_rejected()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--full", "--effects"], output, error);
+
+        exitCode.ShouldBe(1);
+        error.ToString().ShouldContain("can't be combined");
         error.ToString().ShouldContain("--full");
+        error.ToString().ShouldContain("--effects");
     }
 
     [Test]
-    public async Task Llm_effects_rejects_combined_with_effects_option()
-    {
-        var output = new StringWriter();
-        var error = new StringWriter();
-
-        var exitCode = await CliApplication.RunAsync(["tree", "X", "--llm", "effects", "--effects"], output, error);
-
-        exitCode.ShouldBe(1);
-        error.ToString().ShouldContain("can't be combined");
-    }
-
-    [Test]
-    public async Task Llm_rejects_invalid_value()
-    {
-        var output = new StringWriter();
-        var error = new StringWriter();
-
-        var exitCode = await CliApplication.RunAsync(["tree", "X", "--llm", "banana"], output, error);
-
-        exitCode.ShouldBe(1);
-        error.ToString().ShouldContain("--llm must be 'full' or 'effects'");
-        error.ToString().ShouldContain("banana");
-    }
-
-    [Test]
-    public async Task Llm_combined_with_summary_is_rejected()
-    {
-        var output = new StringWriter();
-        var error = new StringWriter();
-
-        var exitCode = await CliApplication.RunAsync(["tree", "X", "--llm", "full", "--summary"], output, error);
-
-        exitCode.ShouldBe(1);
-        error.ToString().ShouldContain("can't be combined");
-    }
-
-    [Test]
-    public async Task Llm_effects_emits_header_and_correct_shape_on_real_index()
+    public async Task Format_llm_effects_emits_header_and_correct_shape_on_real_index()
     {
         using var playground = await Rig.Tests.Fixtures.TempPlayground.CreateEntryPointEffectsAsync();
         var workingDirectory = System.IO.Path.Combine(playground.RootDirectory, "workspace");
@@ -436,7 +540,7 @@ public sealed class LlmSummaryCliTests
         sw.GetStringBuilder().Clear();
         (
             await CliApplication.RunAsync(
-                ["tree", "PaymentGatewayCaller.Dispatch", "--llm", "effects", "--rules", rulesPath],
+                ["tree", "PaymentGatewayCaller.Dispatch", "--effects", "--format", "llm", "--rules", rulesPath],
                 sw,
                 err,
                 workingDirectory
@@ -459,7 +563,7 @@ public sealed class LlmSummaryCliTests
     }
 
     [Test]
-    public async Task Llm_full_emits_more_rows_than_llm_effects()
+    public async Task Full_format_llm_emits_more_rows_than_effects_format_llm()
     {
         using var playground = await Rig.Tests.Fixtures.TempPlayground.CreateEntryPointEffectsAsync();
         var workingDirectory = System.IO.Path.Combine(playground.RootDirectory, "workspace");
@@ -472,7 +576,7 @@ public sealed class LlmSummaryCliTests
         sw.GetStringBuilder().Clear();
         (
             await CliApplication.RunAsync(
-                ["tree", "PaymentGatewayCaller.Dispatch", "--llm", "full", "--rules", rulesPath],
+                ["tree", "PaymentGatewayCaller.Dispatch", "--full", "--format", "llm", "--rules", rulesPath],
                 sw,
                 err,
                 workingDirectory
@@ -483,7 +587,7 @@ public sealed class LlmSummaryCliTests
         sw.GetStringBuilder().Clear();
         (
             await CliApplication.RunAsync(
-                ["tree", "PaymentGatewayCaller.Dispatch", "--llm", "effects", "--rules", rulesPath],
+                ["tree", "PaymentGatewayCaller.Dispatch", "--effects", "--format", "llm", "--rules", rulesPath],
                 sw,
                 err,
                 workingDirectory
@@ -491,7 +595,100 @@ public sealed class LlmSummaryCliTests
         ).ShouldBe(0);
         var effectsLines = sw.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
 
-        // --llm full has at least as many rows as --llm effects (effects is the subset)
+        // --full --format llm has at least as many rows as --effects --format llm (effects is the subset)
         fullLines.ShouldBeGreaterThanOrEqualTo(effectsLines);
+    }
+
+    [Test]
+    public async Task Default_format_llm_row_count_is_between_full_and_effects_flat()
+    {
+        using var playground = await Rig.Tests.Fixtures.TempPlayground.CreateEntryPointEffectsAsync();
+        var workingDirectory = System.IO.Path.Combine(playground.RootDirectory, "workspace");
+        var rulesPath = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(playground.SolutionPath)!, "rig.rules.json");
+        var sw = new StringWriter();
+        var err = new StringWriter();
+
+        (await CliApplication.RunAsync(["index", playground.SolutionPath], sw, err, workingDirectory)).ShouldBe(0);
+
+        sw.GetStringBuilder().Clear();
+        (
+            await CliApplication.RunAsync(
+                ["tree", "PaymentGatewayCaller.Dispatch", "--full", "--format", "llm", "--rules", rulesPath],
+                sw,
+                err,
+                workingDirectory
+            )
+        ).ShouldBe(0);
+        var fullLines = sw.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
+
+        sw.GetStringBuilder().Clear();
+        (
+            await CliApplication.RunAsync(
+                ["tree", "PaymentGatewayCaller.Dispatch", "--format", "llm", "--rules", rulesPath],
+                sw,
+                err,
+                workingDirectory
+            )
+        ).ShouldBe(0);
+        var defaultLines = sw.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
+
+        sw.GetStringBuilder().Clear();
+        (
+            await CliApplication.RunAsync(
+                ["tree", "PaymentGatewayCaller.Dispatch", "--effects", "--format", "llm", "--rules", rulesPath],
+                sw,
+                err,
+                workingDirectory
+            )
+        ).ShouldBe(0);
+        var effectsLines = sw.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
+
+        // full >= default (effectful-paths with spine) >= effects-flat
+        fullLines.ShouldBeGreaterThanOrEqualTo(defaultLines);
+        defaultLines.ShouldBeGreaterThanOrEqualTo(effectsLines);
+    }
+
+    [Test]
+    public async Task Default_format_llm_output_is_reconstructable()
+    {
+        using var playground = await Rig.Tests.Fixtures.TempPlayground.CreateEntryPointEffectsAsync();
+        var workingDirectory = System.IO.Path.Combine(playground.RootDirectory, "workspace");
+        var rulesPath = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(playground.SolutionPath)!, "rig.rules.json");
+        var sw = new StringWriter();
+        var err = new StringWriter();
+
+        (await CliApplication.RunAsync(["index", playground.SolutionPath], sw, err, workingDirectory)).ShouldBe(0);
+
+        sw.GetStringBuilder().Clear();
+        (
+            await CliApplication.RunAsync(
+                ["tree", "PaymentGatewayCaller.Dispatch", "--format", "llm", "--rules", rulesPath],
+                sw,
+                err,
+                workingDirectory
+            )
+        ).ShouldBe(0);
+
+        var lines = sw.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r')).ToList();
+        lines[0].ShouldBe("depth\tparent\tname\tarity\tcalls\teffects\tflags");
+
+        // Reconstructability: for every non-root data row, the parent column must name a row already emitted.
+        var emittedNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var dataLine in lines.Skip(1))
+        {
+            var cols = dataLine.Split('\t');
+            cols.Length.ShouldBe(7);
+            var parent = cols[1];
+            var name = cols[2];
+            if (!string.IsNullOrEmpty(parent))
+            {
+                emittedNames.ShouldContain(
+                    parent,
+                    $"Row '{name}' has parent '{parent}' but that name was not yet emitted (output not reconstructable)."
+                );
+            }
+
+            emittedNames.Add(name);
+        }
     }
 }
