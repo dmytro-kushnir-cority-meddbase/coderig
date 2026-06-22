@@ -141,39 +141,11 @@ internal static class ImpactCommand
         var tsv = CommonOptions.IsTsv(opts.Format);
         var max = opts.Limit ?? int.MaxValue;
         var mode = CommonOptions.Mode(opts.Async); // --async => walk handoff edges (reverse + forward), else sync-cut
-        // One rule load for the whole run — rules are working-dir-scoped, so the SAME set serves both stores;
-        // threaded into every helper below. F6: capture resolved paths so the fingerprint below reuses them
-        // via ComputeFromPaths instead of re-running the cascade merge.
-        var rules = RuleSetLoader.Load(
-            workingDirectory: io.WorkingDirectory,
-            extraRules: opts.ExtraRules,
-            loadedPaths: out var loadedRulePaths
-        );
 
-        // Resolve BOTH per-commit stores up front (sha / short-sha / store-id → store dir). ResolveReadStoreDir
-        // throws StoreRefNotFoundException for an unmatched ref → CommandGuard lists what's indexed, so past
-        // this point both stores exist and are addressable. The HEAD store dir also hosts the result cache.
-        var headDir = StoreLayout.ResolveReadStoreDir(workingDirectory: io.WorkingDirectory, storeRef: opts.HeadRef);
-        var baseDir = StoreLayout.ResolveReadStoreDir(workingDirectory: io.WorkingDirectory, storeRef: opts.BaseRef);
-        var baseDbPath = Path.Combine(baseDir, StoreLayout.DbFileName);
-
-        // Query cache (best-effort, opt-out via --no-cache). The impact diff is a PURE function of the two
-        // IMMUTABLE per-commit stores + rule fingerprint + traversal mode, so a repeat run skips BOTH store
-        // loads and BOTH per-EP reach computations and renders from the blob. cache.db lives in the HEAD store
-        // dir (keyed by the head store identity for its purge column); the cache KEY folds in BOTH store
-        // identities, so reindexing either side misses. Render-only flags (--structural/--format/--limit) are
-        // absent from the key — they re-present the SAME cached diff and must not fragment it.
-        var headStoreKey = StoreKey(Path.Combine(headDir, StoreLayout.DbFileName));
-        var baseStoreKey = StoreKey(baseDbPath);
-        using var cache = opts.NoCache ? null : QueryCache.Open(rigDirectory: headDir, storeKey: headStoreKey);
-        var cacheKey = cache is null
-            ? null
-            : ImpactCacheKey(
-                baseStoreKey: baseStoreKey,
-                headStoreKey: headStoreKey,
-                rulesHash: RulesFingerprint.ComputeFromPaths(loadedRulePaths), // F6: reuse paths Load resolved.
-                mode: mode
-            );
+        // One rule load for the whole run — rules are working-dir-scoped, so the SAME set serves both stores.
+        var (rules, baseDbPath, cacheRaw, cacheKey) = ResolveStoresAndCache(opts, io, mode);
+        // cache is IDisposable — using ensures it's closed even when the cold path throws.
+        using var cache = cacheRaw;
 
         // The HEAD store: opened for the (cheap) deployment-map read on a hit, and the full derivation on a
         // miss. Opening issues no query — the cost is in the graph load + reach a hit skips.
@@ -207,22 +179,109 @@ internal static class ImpactCommand
         var headProv = await ReadProvenanceAsync(context, opts.HeadRef);
         var baseProv = await ResolveBaseProvenanceAsync(baseDbPath, opts.BaseRef);
 
-        // The branch (HEAD) side, computed inline over one whole-store graph that drives the per-EP forward
-        // reach. Fully shaped graph: handoff-classified load → ShapeGraph → MarkEventSubscriptionHandoffs →
-        // AddDeliveryEdges. Impact now walks the delivery-edge-bearing graph, so per-EP --async reach includes
-        // event/actor delivery paths.
+        // HEAD (branch) side: load and shape the full graph, derive entry points + effects. All reads are
+        // done once and threaded into the per-EP computations below.
+        var headData = await LoadHeadSideDataAsync(context, rules);
+
+        // Branch-side per-EP outputs: the EP-set diff vs base, the reach sets, the epByKey site map, the
+        // effect footprints, and the hazard sets — all over the HEAD graph loaded above.
+        var branchSide = await ComputeBranchSideAsync(baseDbPath: baseDbPath, rules: rules, mode: mode, headData: headData);
+
+        // Assemble the proven store-vs-store ImpactDiff: load the base store ONCE, diff reach sets +
+        // footprints/hazards against the branch, and wrap the three signals into ImpactDiff.
+        var impactDiff = await AssembleImpactDiffAsync(
+            baseDbPath: baseDbPath,
+            rules: rules,
+            mode: mode,
+            headData: headData,
+            branchSide: branchSide
+        );
+
+        // (FilePath, Line) -> method DocID, in-RAM (no store I/O) — lets the affected-EP card render each EP's
+        // fully-qualified dotted name (FqnForCard), which round-trips into `rig tree`, instead of the path route.
+        var fqnSites = branchSide.IdBySite;
+
+        // Cache the proven diff + both sides' provenance + the diff-site FQN subset (best-effort) so a re-run —
+        // including one that only changes render flags — replays it instead of reloading both stores. Stored
+        // UNTRUNCATED (--limit is a render concern), so every --limit value renders correctly from one blob.
+        TrySaveDiffToCache(cache, cacheKey, impactDiff, baseProv, headProv, fqnSites);
+
+        RenderImpact(
+            output: io.Output,
+            impactDiff: impactDiff,
+            baseProv: baseProv,
+            headProv: headProv,
+            mode: mode,
+            deployments: deployments,
+            fqnSites: fqnSites,
+            tsv: tsv,
+            structural: opts.Structural,
+            max: max
+        );
+        return ExpectNoEffectChangeExit(opts.ExpectNoEffectChange, EffectChangedEpCount(impactDiff), io.Error);
+    }
+
+    // Resolve BOTH per-commit stores up front (sha / short-sha / store-id → store dir), load the rule set,
+    // and open the query cache. ResolveReadStoreDir throws StoreRefNotFoundException for an unmatched ref —
+    // CommandGuard lists what's indexed, so past this point both stores exist and are addressable. The HEAD
+    // store dir hosts the result cache; the cache KEY folds in BOTH store identities so reindexing either
+    // side misses. Render-only flags (--structural/--format/--limit) are absent — they re-present the SAME
+    // diff and must not fragment it. F6: LoadedRulePaths are passed to ComputeFromPaths so the fingerprint
+    // reuses the already-resolved paths instead of re-running the cascade merge.
+    private static (RuleSet Rules, string BaseDbPath, QueryCache? Cache, string? CacheKey) ResolveStoresAndCache(
+        Options opts,
+        CommandIo io,
+        FactPathFinder.TraversalMode mode
+    )
+    {
+        var rules = RuleSetLoader.Load(
+            workingDirectory: io.WorkingDirectory,
+            extraRules: opts.ExtraRules,
+            loadedPaths: out var loadedRulePaths
+        );
+        var headDir = StoreLayout.ResolveReadStoreDir(workingDirectory: io.WorkingDirectory, storeRef: opts.HeadRef);
+        var baseDir = StoreLayout.ResolveReadStoreDir(workingDirectory: io.WorkingDirectory, storeRef: opts.BaseRef);
+        var baseDbPath = Path.Combine(baseDir, StoreLayout.DbFileName);
+        var headStoreKey = StoreKey(Path.Combine(headDir, StoreLayout.DbFileName));
+        var baseStoreKey = StoreKey(baseDbPath);
+        var cache = opts.NoCache ? null : QueryCache.Open(rigDirectory: headDir, storeKey: headStoreKey);
+        var cacheKey = cache is null
+            ? null
+            : ImpactCacheKey(
+                baseStoreKey: baseStoreKey,
+                headStoreKey: headStoreKey,
+                rulesHash: RulesFingerprint.ComputeFromPaths(loadedRulePaths), // F6: reuse paths Load resolved.
+                mode: mode
+            );
+        return (rules, baseDbPath, cache, cacheKey);
+    }
+
+    // The HEAD (branch) store data needed by the per-EP computations: the shaped graph, the entry points,
+    // the derived effects, the method-id-by-site index, the body hashes, and the field-access ref targets.
+    // Loaded once and threaded into ComputeBranchSideAsync and AssembleImpactDiffAsync so no second open is
+    // needed for the branch store. Hazard delta: F8 combined single-kind scan mirrors `derive` / the base side.
+    private sealed record HeadSideData(
+        FactGraphData Graph,
+        IReadOnlyList<DerivedEntryPoint> DerivedEps,
+        IReadOnlyList<DerivedEntryPoint> PromotedEps,
+        IReadOnlyList<DerivedEffect> Effects,
+        Dictionary<(string, int), string> IdBySite,
+        IReadOnlyDictionary<string, string> BodyHashes,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> RefTargets
+    );
+
+    private static async Task<HeadSideData> LoadHeadSideDataAsync(RigDbContext context, RuleSet rules)
+    {
         var methods = await Reads.LoadDeadCodeMethodsAsync(context);
         // The branch's per-symbol declaration body hashes (guarded — empty on a pre-fact store). Diffed against
         // the base's (loaded once in ComputeBaseSideAsync) to find in-place body edits the reach-set diff misses.
         var branchBodyHashes = await Reads.LoadSymbolBodyHashesAsync(context);
-
+        // Fully shaped graph: handoff-classified load → ShapeGraph → MarkEventSubscriptionHandoffs →
+        // AddDeliveryEdges. Impact walks the delivery-edge-bearing graph, so per-EP --async reach includes
+        // event/actor delivery paths.
         var graph = await Reads.LoadShapedGraphAsync(context: context, rules: rules);
-
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
         var epSet = await DeriveEntryPointsAsync(context, epData, rules);
-        var derivedEps = epSet.Derived;
-        var promoted = epSet.PromotedOrigins;
-
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
         // Hazard delta: impact loads the static-field read/write refs and runs the hazard post-pass on BOTH
@@ -244,23 +303,49 @@ internal static class ImpactCommand
             deriveHazards: true,
             threadStaticCells: threadStaticCells
         );
+        // The branch's enclosing→field/property-access-targets lookup, built ONCE so ComputeReachSets can union
+        // each reachable method's read/write targets as degenerate `R:` nodes at O(reach) cost.
+        var refTargets = RefTargetsByEnclosing(await Reads.LoadFieldAccessRefsAsync(context));
+        return new HeadSideData(
+            Graph: graph,
+            DerivedEps: epSet.Derived,
+            PromotedEps: epSet.PromotedOrigins,
+            Effects: effects,
+            IdBySite: MethodIdBySite(methods),
+            BodyHashes: branchBodyHashes,
+            RefTargets: refTargets
+        );
+    }
 
+    // The branch-side per-EP outputs computed over the already-loaded HEAD data: the entry-point set diff
+    // vs the base, the branch reach sets, the (Kind, Route) → EP-ref site map, the effect footprints, and
+    // the hazard sets. Bundled so AssembleImpactDiffAsync can consume them without re-opening the HEAD store.
+    private sealed record BranchSideData(
+        EpDiff EpDiff,
+        Dictionary<(string Kind, string Route), HashSet<string>> ReachSets,
+        Dictionary<(string Kind, string Route), EntryPointRef> EpByKey,
+        Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>> Footprints,
+        Dictionary<(string Kind, string Route), HashSet<HazardFinding>> Hazards,
+        Dictionary<(string, int), string> IdBySite
+    );
+
+    private static async Task<BranchSideData> ComputeBranchSideAsync(
+        string baseDbPath,
+        RuleSet rules,
+        FactPathFinder.TraversalMode mode,
+        HeadSideData headData
+    )
+    {
         // --- Two-store entry-point diff: EPs added/removed vs the base store, paired on (Kind, Route) —
         // line/param-free, so formatting + signature edits don't churn the diff.
-        var branchEps = derivedEps.Concat(promoted).ToList();
+        var branchEps = headData.DerivedEps.Concat(headData.PromotedEps).ToList();
         var epDiff = await ComputeEpDiffAsync(baseDbPath, branchEps, rules);
 
-        // --- The per-EP store-vs-store diff. The AFFECTED ENTRY POINTS are computed STRUCTURALLY: per EP, diff
+        // --- Per-EP store-vs-store diff. The AFFECTED ENTRY POINTS are computed STRUCTURALLY: per EP, diff
         // its full reachable symbol set branch vs base ("two trees, diffed") — an EP is affected iff WHAT IT
         // REACHES changed, regardless of whether an effect rule fired. This catches the obj→sql kind of
         // migration the effect-set diff collapses (same key, different symbols), and excludes false positives.
-        // The per-EP effect FOOTPRINT diff (the primary behavioral view) rides along. The base store is loaded
-        // ONCE for all; the branch reuses the graph already built above.
-        var idBySite = MethodIdBySite(methods);
-        // The branch's enclosing→field/property-access-targets lookup, built ONCE so ComputeReachSets can union
-        // each reachable method's read/write targets as degenerate `R:` nodes at O(reach) cost.
-        var branchRefTargets = RefTargetsByEnclosing(await Reads.LoadFieldAccessRefsAsync(context));
-        var branchReachSets = ComputeReachSets(graph, branchEps, idBySite, mode, refsByEnclosing: branchRefTargets);
+        var branchReachSets = ComputeReachSets(headData.Graph, branchEps, headData.IdBySite, mode, refsByEnclosing: headData.RefTargets);
         var epByKey = branchEps
             .GroupBy(e => (e.Kind, e.Route))
             .ToDictionary(
@@ -273,70 +358,83 @@ internal static class ImpactCommand
                     Requires: g.First().Requires
                 )
             );
+        var branchFootprints = ComputeFootprints(
+            headData.Graph,
+            branchEps,
+            headData.IdBySite,
+            EffectKeysByEnclosing(headData.Effects),
+            mode
+        );
+        // The branch's per-EP reachable-hazard set (hazard mirror of the footprint), diffed against the base's
+        // in DiffFootprints so each per-EP delta carries the hazards gained/lost.
+        var branchHazards = ComputeHazardSets(headData.Graph, branchEps, headData.IdBySite, HazardsByEnclosing(headData.Effects), mode);
+        return new BranchSideData(
+            EpDiff: epDiff,
+            ReachSets: branchReachSets,
+            EpByKey: epByKey,
+            Footprints: branchFootprints,
+            Hazards: branchHazards,
+            IdBySite: headData.IdBySite
+        );
+    }
 
+    // Load the base store ONCE (via ComputeBaseSideAsync), diff the branch reach sets and footprints against
+    // it, and assemble the three signals (EP-set diff, structural affected EPs, per-EP behavioral deltas) into
+    // one ImpactDiff. The branch store is represented by headData + branchSide — no second HEAD open needed.
+    private static async Task<ImpactDiff> AssembleImpactDiffAsync(
+        string baseDbPath,
+        RuleSet rules,
+        FactPathFinder.TraversalMode mode,
+        HeadSideData headData,
+        BranchSideData branchSide
+    )
+    {
         var baseSide = await ComputeBaseSideAsync(baseDbPath: baseDbPath, rules: rules, mode: mode);
 
         // The symbols whose declaration BODY changed base↔branch (differing/one-sided hash). An EP whose reach
         // intersects this set is affected IN-PLACE even when its structural reach-set diff is empty. Both maps
         // empty (pre-fact store on either side) => BodyChangedSymbols returns empty and the signal degrades
-        // silently. branchBodyHashes is loaded once from the branch context above.
-        var bodyChanged = BodyChangedSymbols(branchHashes: branchBodyHashes, baseHashes: baseSide.BodyHashes);
+        // silently. branchBodyHashes is loaded once from the branch context above (headData.BodyHashes).
+        var bodyChanged = BodyChangedSymbols(branchHashes: headData.BodyHashes, baseHashes: baseSide.BodyHashes);
         var affectedEntryPoints = DiffReachSets(
-            branch: branchReachSets,
+            branch: branchSide.ReachSets,
             baseStore: baseSide.ReachSets,
-            epByKey: epByKey,
+            epByKey: branchSide.EpByKey,
             bodyChanged: bodyChanged
         );
-
-        var branchFootprints = ComputeFootprints(graph, branchEps, idBySite, EffectKeysByEnclosing(effects), mode);
-        // The branch's per-EP reachable-hazard set (hazard mirror of the footprint), diffed against the base's
-        // in DiffFootprints so each per-EP delta carries the hazards gained/lost.
-        var branchHazards = ComputeHazardSets(graph, branchEps, idBySite, HazardsByEnclosing(effects), mode);
         var perEpDeltas = DiffFootprints(
-            branch: branchFootprints,
+            branch: branchSide.Footprints,
             baseStore: baseSide.Footprints,
-            epByKey: epByKey,
-            branchHazards: branchHazards,
+            epByKey: branchSide.EpByKey,
+            branchHazards: branchSide.Hazards,
             baseHazards: baseSide.Hazards
         );
+        return new ImpactDiff(Ep: branchSide.EpDiff, AffectedEps: affectedEntryPoints, PerEp: perEpDeltas);
+    }
 
-        var impactDiff = new ImpactDiff(Ep: epDiff, AffectedEps: affectedEntryPoints, PerEp: perEpDeltas);
-
-        // (FilePath, Line) -> method DocID, in-RAM (no store I/O) — lets the affected-EP card render each EP's
-        // fully-qualified dotted name (FqnForCard), which round-trips into `rig tree`, instead of the path route.
-        var fqnSites = idBySite;
-
-        // Cache the proven diff + both sides' provenance + the diff-site FQN subset (best-effort) so a re-run —
-        // including one that only changes render flags — replays it instead of reloading both stores. Stored
-        // UNTRUNCATED (--limit is a render concern), so every --limit value renders correctly from one blob.
-        if (cacheKey is not null)
+    // Write the proven diff + both sides' provenance + the diff-site FQN subset to the cache (best-effort).
+    // Stored UNTRUNCATED (--limit is a render concern), so every --limit value renders correctly from one blob.
+    // No-ops when caching is disabled (cacheKey is null).
+    private static void TrySaveDiffToCache(
+        QueryCache? cache,
+        string? cacheKey,
+        ImpactDiff impactDiff,
+        StoreProvenance baseProv,
+        StoreProvenance headProv,
+        Dictionary<(string, int), string> fqnSites
+    )
+    {
+        if (cacheKey is null)
         {
-            TryCache(() =>
-                cache!.Put(
-                    key: cacheKey,
-                    payload: ImpactCacheCodec.Encode(
-                        diff: impactDiff,
-                        baseProvenance: baseProv,
-                        headProvenance: headProv,
-                        idBySite: fqnSites
-                    )
-                )
-            );
+            return;
         }
 
-        RenderImpact(
-            output: io.Output,
-            impactDiff: impactDiff,
-            baseProv: baseProv,
-            headProv: headProv,
-            mode: mode,
-            deployments: deployments,
-            fqnSites: fqnSites,
-            tsv: tsv,
-            structural: opts.Structural,
-            max: max
+        TryCache(() =>
+            cache!.Put(
+                key: cacheKey,
+                payload: ImpactCacheCodec.Encode(diff: impactDiff, baseProvenance: baseProv, headProvenance: headProv, idBySite: fqnSites)
+            )
         );
-        return ExpectNoEffectChangeExit(opts.ExpectNoEffectChange, EffectChangedEpCount(impactDiff), io.Error);
     }
 
     // The `--expect-no-effect-change` CI gate. Behavioral change = an entry point present in BOTH commits whose
