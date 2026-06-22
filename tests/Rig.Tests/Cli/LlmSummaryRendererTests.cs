@@ -49,9 +49,22 @@ public sealed class LlmSummaryRendererTests
     // ── header ───────────────────────────────────────────────────────────────────────────────────
 
     [Test]
-    public void Output_starts_with_the_header_row()
+    public void Output_starts_with_the_header_row_reconstructable_projections_have_6_columns()
     {
-        var output = Render([Node("M:App.Svc.Do()")]);
+        // EffectfulPaths and Full: no parent column — depth+order encodes the linkage.
+        var outputFull = Render([Node("M:App.Svc.Do()")], projection: LlmSummaryRenderer.LlmProjection.Full);
+        var outputEfp = Render([Node("M:App.Svc.Do()")], projection: LlmSummaryRenderer.LlmProjection.EffectfulPaths);
+
+        Lines(outputFull)[0].ShouldBe("depth\tname\tarity\tcalls\teffects\tflags");
+        Lines(outputEfp)[0].ShouldBe("depth\tname\tarity\tcalls\teffects\tflags");
+    }
+
+    [Test]
+    public void Output_starts_with_the_header_row_effects_flat_has_7_columns_with_parent()
+    {
+        // EffectsFlat: includes parent-name column (parent row may be absent in the gappy flat view).
+        var rawEffects = RawEffects(("M:App.Svc.Do()", ["io:read"]));
+        var output = Render([Node("M:App.Svc.Do()")], rawEffects, LlmSummaryRenderer.LlmProjection.EffectsFlat);
 
         Lines(output)[0].ShouldBe("depth\tparent\tname\tarity\tcalls\teffects\tflags");
     }
@@ -61,27 +74,29 @@ public sealed class LlmSummaryRendererTests
     [Test]
     public void Name_strips_namespace_leaving_TypeName_MethodName()
     {
+        // Full projection: 6-column header (depth name arity calls effects flags) — name is at index 1.
         var output = Render([Node("M:My.Namespace.Service.DoSomething(System.String,System.Int32)")]);
 
         var data = Lines(output)[1];
-        // name column is at index 2 (0-based: depth, parent, name, …)
         var cols = data.Split('\t');
-        cols[2].ShouldBe("Service.DoSomething");
+        cols[1].ShouldBe("Service.DoSomething");
     }
 
     [Test]
     public void Name_has_no_parameter_types_in_the_name_column()
     {
+        // Full projection: name at index 1.
         var output = Render([Node("M:App.Repo.Save(App.Entity,System.Int32)")]);
 
         var data = Lines(output)[1];
         var cols = data.Split('\t');
-        cols[2].ShouldNotContain("App.Entity");
-        cols[2].ShouldNotContain("System.Int32");
-        cols[2].ShouldBe("Repo.Save");
+        cols[1].ShouldNotContain("App.Entity");
+        cols[1].ShouldNotContain("System.Int32");
+        cols[1].ShouldBe("Repo.Save");
     }
 
     // ── arity ────────────────────────────────────────────────────────────────────────────────────
+    // Full projection: 6-column header (depth name arity calls effects flags) — arity at index 2.
 
     [Test]
     public void Arity_is_parameter_count_not_type_names()
@@ -90,7 +105,7 @@ public sealed class LlmSummaryRendererTests
         var output = Render([Node("M:App.Svc.Create(System.String,System.Int32,App.Context)")]);
 
         var cols = Lines(output)[1].Split('\t');
-        cols[3].ShouldBe("3"); // arity column
+        cols[2].ShouldBe("3"); // arity column
     }
 
     [Test]
@@ -99,7 +114,7 @@ public sealed class LlmSummaryRendererTests
         var output = Render([Node("M:App.Svc.Init()")]);
 
         var cols = Lines(output)[1].Split('\t');
-        cols[3].ShouldBe("0");
+        cols[2].ShouldBe("0");
     }
 
     [Test]
@@ -108,10 +123,11 @@ public sealed class LlmSummaryRendererTests
         var output = Render([Node("M:App.Svc.Load(System.Int32)")]);
 
         var cols = Lines(output)[1].Split('\t');
-        cols[3].ShouldBe("1");
+        cols[2].ShouldBe("1");
     }
 
     // ── calls ────────────────────────────────────────────────────────────────────────────────────
+    // Full projection: 6-column header (depth name arity calls effects flags) — calls at index 3.
 
     [Test]
     public void Calls_column_reflects_CallSites()
@@ -121,10 +137,11 @@ public sealed class LlmSummaryRendererTests
         var lines = Lines(Render([root]));
         // line[1] = root, line[2] = child
         var childCols = lines[2].Split('\t');
-        childCols[4].ShouldBe("3"); // calls column
+        childCols[3].ShouldBe("3"); // calls column
     }
 
     // ── effects aggregation ──────────────────────────────────────────────────────────────────────
+    // Full projection: 6-column header (depth name arity calls effects flags) — effects at index 4.
 
     [Test]
     public void Single_effect_occurrence_has_no_count_suffix()
@@ -133,7 +150,7 @@ public sealed class LlmSummaryRendererTests
         var rawEffects = RawEffects(("M:App.Svc.Do()", ["io:read"]));
 
         var cols = Lines(Render([root], rawEffects))[1].Split('\t');
-        cols[5].ShouldBe("io:read");
+        cols[4].ShouldBe("io:read");
     }
 
     [Test]
@@ -143,7 +160,7 @@ public sealed class LlmSummaryRendererTests
         var rawEffects = RawEffects(("M:App.Svc.Do()", ["io:read", "io:read", "io:read"]));
 
         var cols = Lines(Render([root], rawEffects))[1].Split('\t');
-        cols[5].ShouldBe("io:read ×3");
+        cols[4].ShouldBe("io:read ×3");
     }
 
     [Test]
@@ -154,7 +171,7 @@ public sealed class LlmSummaryRendererTests
 
         var cols = Lines(Render([root], rawEffects))[1].Split('\t');
         // first-seen order: io:read then efcore:read
-        cols[5].ShouldBe("io:read ×3, efcore:read ×2");
+        cols[4].ShouldBe("io:read ×3, efcore:read ×2");
     }
 
     [Test]
@@ -163,7 +180,7 @@ public sealed class LlmSummaryRendererTests
         var root = Node("M:App.Svc.Do()");
 
         var cols = Lines(Render([root]))[1].Split('\t');
-        cols[5].ShouldBe("");
+        cols[4].ShouldBe("");
     }
 
     // ── x-phase (Truncated = elided/seen) ───────────────────────────────────────────────────────
@@ -267,7 +284,8 @@ public sealed class LlmSummaryRendererTests
 
         var lines = Lines(Render([root], rawEffects, LlmSummaryRenderer.LlmProjection.EffectfulPaths));
         // Should include: Root (spine), A (spine), B (effect-bearing); NOT C (effectless subtree).
-        var names = lines.Skip(1).Select(l => l.Split('\t')[2]).ToList();
+        // EffectfulPaths: 6-column header (no parent) — name is at index 1.
+        var names = lines.Skip(1).Select(l => l.Split('\t')[1]).ToList();
         names.ShouldContain("Svc.Root");
         names.ShouldContain("Svc.A");
         names.ShouldContain("Svc.B");
@@ -285,7 +303,8 @@ public sealed class LlmSummaryRendererTests
         var rawEffects = RawEffects(("M:App.Repo.Save()", ["efcore:commit"]));
 
         var lines = Lines(Render([root], rawEffects, LlmSummaryRenderer.LlmProjection.EffectfulPaths));
-        var names = lines.Skip(1).Select(l => l.Split('\t')[2]).ToList();
+        // EffectfulPaths: 6-column header (no parent) — name is at index 1.
+        var names = lines.Skip(1).Select(l => l.Split('\t')[1]).ToList();
         names.ShouldContain("Svc.Root");
         names.ShouldContain("Svc.Branch1");
         names.ShouldContain("Repo.Save");
@@ -294,60 +313,88 @@ public sealed class LlmSummaryRendererTests
     }
 
     [Test]
-    public void EffectfulPaths_output_is_reconstructable_every_parent_resolves_to_earlier_row()
+    public void EffectfulPaths_output_is_reconstructable_via_depth_and_order()
     {
         // Build a tree with a multi-level spine: Root -> Svc -> Repo (effect)
-        //                                               -> Util (no effect)
+        //                                               -> Util (no effect, pruned)
+        // In the no-parent 6-column format, reconstructability is: every non-root row has a
+        // preceding row at depth-1 (that is the derivable parent).
         var repo = Node("M:App.Data.Repo.Fetch()");
         var svc = Node("M:App.Services.Svc.Process()", callSites: 1, repo, Node("M:App.Utils.Util.NoOp()"));
         var root = Node("M:App.Api.Controller.Handle()", callSites: 1, svc);
         var rawEffects = RawEffects(("M:App.Data.Repo.Fetch()", ["efcore:read"]));
 
         var lines = Lines(Render([root], rawEffects, LlmSummaryRenderer.LlmProjection.EffectfulPaths));
-        // Collect emitted names in order (excluding header).
-        var emittedNames = lines.Skip(1).Select(l => l.Split('\t')[2]).ToList();
+        // EffectfulPaths: 6-column header — name at index 1, no parent column.
+        var emittedNames = lines.Skip(1).Select(l => l.Split('\t')[1]).ToList();
 
-        // Every non-root row's parent column must name a row already emitted at a shallower depth.
-        var emittedSoFar = new HashSet<string>(StringComparer.Ordinal);
+        // Every non-root row must have a preceding row at depth-1 (the derivable parent).
+        // Track the most-recently-seen row at each depth level.
+        var lastAtDepth = new Dictionary<int, string>(capacity: 8);
         foreach (var dataLine in lines.Skip(1))
         {
             var cols = dataLine.Split('\t');
-            var parent = cols[1];
-            var name = cols[2];
-            if (!string.IsNullOrEmpty(parent))
+            cols.Length.ShouldBe(6, $"Expected 6 columns (no parent) for EffectfulPaths; got {cols.Length} on: {dataLine}");
+            var depth = int.Parse(cols[0], System.Globalization.CultureInfo.InvariantCulture);
+            var name = cols[1];
+            if (depth > 0)
             {
-                emittedSoFar.ShouldContain(
-                    parent,
-                    $"Row '{name}' has parent '{parent}' but that name was not yet emitted — output is not reconstructable."
+                lastAtDepth.ShouldContainKey(
+                    depth - 1,
+                    $"Row '{name}' at depth {depth} has no preceding row at depth {depth - 1} — output is not reconstructable by depth+order."
                 );
             }
 
-            emittedSoFar.Add(name);
+            lastAtDepth[depth] = name;
         }
 
         // Sanity: Util (effectless) should be pruned.
         emittedNames.ShouldNotContain("Util.NoOp");
     }
 
-    // ── parent column ────────────────────────────────────────────────────────────────────────────
+    // ── parent column (EffectsFlat only) ────────────────────────────────────────────────────────
+    // Reconstructable projections (Full, EffectfulPaths) have no parent column — depth+order suffice.
+    // EffectsFlat keeps the parent-name column because the parent row may be absent in the gappy view.
 
     [Test]
-    public void Root_node_has_empty_parent_column()
+    public void EffectsFlat_root_has_empty_parent_column()
     {
-        var root = Node("M:App.Svc.Do()");
-
-        var cols = Lines(Render([root]))[1].Split('\t');
-        cols[1].ShouldBe(""); // parent
+        // Root nodes have no caller — parent column must be empty.
+        var rawEffects = RawEffects(("M:App.Svc.Do()", ["io:read"]));
+        var cols = Lines(Render([Node("M:App.Svc.Do()")], rawEffects, LlmSummaryRenderer.LlmProjection.EffectsFlat))[1].Split('\t');
+        cols[1].ShouldBe(""); // parent empty for roots
     }
 
     [Test]
-    public void Child_node_parent_column_is_the_caller_short_name()
+    public void EffectsFlat_child_has_parent_name_column()
     {
+        // EffectsFlat: parent-name column is at index 1 (7-column header).
+        var root = Node("M:App.Svc.Do()", callSites: 1, Node("M:App.Repo.Load()"));
+        var rawEffects = RawEffects(("M:App.Repo.Load()", ["efcore:read"]));
+
+        var lines = Lines(Render([root], rawEffects, LlmSummaryRenderer.LlmProjection.EffectsFlat));
+        // header + Load row only (root has no effect)
+        var childCols = lines[1].Split('\t');
+        childCols[1].ShouldBe("Svc.Do"); // parent = short name of caller
+        childCols[2].ShouldBe("Repo.Load"); // name column
+    }
+
+    [Test]
+    public void Full_projection_has_no_parent_column()
+    {
+        // Full: 6-column header — depth name arity calls effects flags. Index 1 is the name, not the parent.
         var root = Node("M:App.Svc.Do()", callSites: 1, Node("M:App.Repo.Load()"));
 
         var lines = Lines(Render([root]));
-        var childCols = lines[2].Split('\t');
-        childCols[1].ShouldBe("Svc.Do"); // parent = short name of caller
+        // Every row has exactly 6 columns.
+        foreach (var line in lines.Skip(1))
+        {
+            line.Split('\t').Length.ShouldBe(6);
+        }
+
+        // Index 1 is the name, not a parent field.
+        lines[1].Split('\t')[1].ShouldBe("Svc.Do");
+        lines[2].Split('\t')[1].ShouldBe("Repo.Load");
     }
 
     // ── depth column ─────────────────────────────────────────────────────────────────────────────
@@ -548,7 +595,7 @@ public sealed class LlmSummaryCliTests
         ).ShouldBe(0);
 
         var lines = sw.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r')).ToList();
-        // Header must be the LLM header
+        // --effects → EffectsFlat projection: 7-column header (with parent-name column).
         lines[0].ShouldBe("depth\tparent\tname\tarity\tcalls\teffects\tflags");
         // At least one data row (effects exist: gateway_ask, gateway_tell)
         lines.Count.ShouldBeGreaterThan(1);
@@ -670,25 +717,26 @@ public sealed class LlmSummaryCliTests
         ).ShouldBe(0);
 
         var lines = sw.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r')).ToList();
-        lines[0].ShouldBe("depth\tparent\tname\tarity\tcalls\teffects\tflags");
+        // Default projection → EffectfulPaths: 6-column header (no parent column — depth+order encode linkage).
+        lines[0].ShouldBe("depth\tname\tarity\tcalls\teffects\tflags");
 
-        // Reconstructability: for every non-root data row, the parent column must name a row already emitted.
-        var emittedNames = new HashSet<string>(StringComparer.Ordinal);
+        // Reconstructability via depth+order: every non-root row must have a preceding row at depth-1.
+        var lastAtDepth = new Dictionary<int, string>(capacity: 8);
         foreach (var dataLine in lines.Skip(1))
         {
             var cols = dataLine.Split('\t');
-            cols.Length.ShouldBe(7);
-            var parent = cols[1];
-            var name = cols[2];
-            if (!string.IsNullOrEmpty(parent))
+            cols.Length.ShouldBe(6, $"Expected 6 columns (no parent) for default/EffectfulPaths; got {cols.Length} on: {dataLine}");
+            var depth = int.Parse(cols[0], System.Globalization.CultureInfo.InvariantCulture);
+            var name = cols[1];
+            if (depth > 0)
             {
-                emittedNames.ShouldContain(
-                    parent,
-                    $"Row '{name}' has parent '{parent}' but that name was not yet emitted (output not reconstructable)."
+                lastAtDepth.ShouldContainKey(
+                    depth - 1,
+                    $"Row '{name}' at depth {depth} has no preceding row at depth {depth - 1} — not reconstructable by depth+order."
                 );
             }
 
-            emittedNames.Add(name);
+            lastAtDepth[depth] = name;
         }
     }
 }

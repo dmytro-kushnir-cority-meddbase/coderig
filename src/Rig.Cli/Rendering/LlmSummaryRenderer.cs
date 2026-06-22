@@ -8,9 +8,25 @@ namespace Rig.Cli.Rendering;
 // One row per included node (projection-dependent — see LlmProjection), DFS pre-order (source order,
 // same walk the tree renderer uses).
 //
-// Header + columns:  depth  parent  name  arity  calls  effects  flags
-//   depth   – 0-based nesting depth.
-//   parent  – TypeName.MethodName of the direct caller; empty for roots.
+// Two header shapes, depending on projection:
+//
+//   Reconstructable projections (EffectfulPaths, Full):
+//     depth  name  arity  calls  effects  flags   (6 columns — NO parent)
+//   The rows are DFS pre-order with a 0-based depth counter, so the parent of any row is the
+//   nearest preceding row at depth-1 — fully derivable. Omitting the parent column eliminates
+//   the redundancy, shrinks token count, and avoids ambiguity when two methods share a short name
+//   (depth+order is the unambiguous link; a name-based parent column would be wrong on collisions).
+//   No id column is needed because there are no dangling refs: every row's parent is guaranteed to
+//   already appear in the output (spine-kept for EffectfulPaths; all nodes for Full).
+//
+//   Flat projection (EffectsFlat):
+//     depth  parent  name  arity  calls  effects  flags   (7 columns — WITH parent name)
+//   The flat view has gaps — intermediate spine rows are pruned — so depth+order cannot recover the
+//   parent. A surrogate id would dangle (the parent row may not appear at all), so the parent
+//   name is used instead. It stays informative even when the parent row is absent.
+//
+//   depth   – 0-based nesting depth in the original tree.
+//   parent  – (EffectsFlat only) TypeName.MethodName of the direct caller; empty for roots.
 //   name    – TypeName.MethodName — no namespace, no parameter types.
 //   arity   – parameter count (overload disambiguation without listing types).
 //   calls   – number of call sites from the parent (TraceNode.CallSites).
@@ -38,7 +54,12 @@ internal static class LlmSummaryRenderer
         EffectsFlat,
     }
 
-    internal const string Header = "depth\tparent\tname\tarity\tcalls\teffects\tflags";
+    // Reconstructable projections (EffectfulPaths, Full) omit the parent column — depth+order suffice.
+    // EffectsFlat keeps it because the parent row may be absent (gappy flat view).
+    internal static string Header(LlmProjection projection) =>
+        projection == LlmProjection.EffectsFlat
+            ? "depth\tparent\tname\tarity\tcalls\teffects\tflags"
+            : "depth\tname\tarity\tcalls\teffects\tflags";
 
     // effectsByMethod: SymbolId -> list of effect strings in the same form as the tree renderer produces
     // (e.g. "io:read ×3"). Structured differently from the tree-display form: the LLM renderer re-aggregates
@@ -57,7 +78,7 @@ internal static class LlmSummaryRenderer
         TextWriter output
     )
     {
-        output.WriteLine(Header);
+        output.WriteLine(Header(projection));
         foreach (var root in roots)
         {
             // EffectfulPaths: prune roots with no downstream effect (same as the terminal default).
@@ -245,9 +266,18 @@ internal static class LlmSummaryRenderer
             // Flags: x-phase (Truncated = seen/elided marker), cycle is a special edge kind.
             var flags = BuildFlags(node);
 
-            output.WriteLine(
-                $"{depth.ToString(CultureInfo.InvariantCulture)}\t{parentName}\t{name}\t{arity}\t{calls}\t{effectsStr}\t{flags}"
-            );
+            // EffectsFlat includes the parent name (parent row may be absent in the gappy flat view).
+            // Reconstructable projections (EffectfulPaths, Full) omit it — depth+order already encode linkage.
+            if (projection == LlmProjection.EffectsFlat)
+            {
+                output.WriteLine(
+                    $"{depth.ToString(CultureInfo.InvariantCulture)}\t{parentName}\t{name}\t{arity}\t{calls}\t{effectsStr}\t{flags}"
+                );
+            }
+            else
+            {
+                output.WriteLine($"{depth.ToString(CultureInfo.InvariantCulture)}\t{name}\t{arity}\t{calls}\t{effectsStr}\t{flags}");
+            }
         }
 
         // x-phase (Truncated) nodes do NOT expand their children (the tree already chose not to).

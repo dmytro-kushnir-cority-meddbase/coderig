@@ -21,6 +21,15 @@ namespace Rig.Cli.Commands;
 // call-site leaf nodes; --summary prints the effect-count rollup; --effects collapses to one line per
 // effectful method. Forest + effects are query-cached (the dominant cost); a render sidecar lets a warm
 // query skip the graph load entirely.
+//
+// --format llm: compact TSV for LLM consumption. Composes with the projection flags:
+//   default       → EffectfulPaths — effectful-paths with the ancestor spine kept; reconstructable from
+//                   depth+order (6-column header: depth name arity calls effects flags).
+//   --full        → Full — every reachable node (same 6-column header, no parent column).
+//   --effects     → EffectsFlat — flat effect-bearing list (7-column header adds a parent-name column
+//                   because the parent row may be absent in this gappy view).
+// --format llm is rejected when combined with --summary (different output shape) or --hazards
+// (distinct rendering).
 internal static class TreeCommand
 {
     internal static Command Build(TextWriter output, TextWriter error, string workingDirectory)
