@@ -69,6 +69,7 @@ extraction add (re-index):
 | `nameof` | `nameof(X)` → the simple name | free (small extraction note; mostly captured) |
 | `enum-member` | the enum member symbol | ✚ capture enum-member refs |
 | `field-literal` | a referenced `const`/`static readonly` field's **initializer literal** | ✚ capture field-initializer literals |
+| `route-template` | a URL/route string **normalised** so an interpolated client URL (`$"/api/accounts/{id}"`) matches a server template (`api/accounts/{id}`) modulo `{param}`/interpolation holes | free — `~heuristic` (cross-service RPC) |
 | `path` | the raw member-path expression (today's crude actor behaviour) | free — fallback rung, low confidence |
 
 `field-literal` is the rung that gets the actor resolver **off** the MedDBase static-registry convention: a
@@ -127,9 +128,29 @@ The two coded resolvers collapse into builtin rule entries on the same engine:
 ```
 
 > `http-route` (the documented but undeveloped cross-repo/RPC contract item) is a future entry: producer =
-> the client call with `identity.from: arg[N], resolve: literal` (the URL/route string), registration = the
-> route attribute / mapping with the same token. `confidence: heuristic` (interpolated client URL vs route
+> the client call with `identity.from: arg[N], resolve: route-template` (the URL/route string), registration =
+> the route attribute / mapping with the same token. `confidence: heuristic` (interpolated client URL vs route
 > template) — exactly the conjecture's http row.
+
+### Cross-solution RPC — captured, with a same-store constraint
+
+The mechanism generalises to RPC across solutions: an HTTP/gRPC/bus call in solution A and the
+controller/handler in solution B become a producer↔consumer pair joined on the route/topic/contract token,
+emitted as a `handoff` delivery edge. Once the edge exists, **FR-10 cycle detection and `--async`
+reachability span the service boundary** — a request loop across services becomes visible.
+
+| RPC flavour | Producer identity | Consumer identity | resolver |
+|---|---|---|---|
+| HTTP / REST | client URL string | server route template (`[Route]`/mapping) | `route-template` (`~heuristic`) |
+| message-bus RPC | publish topic / queue name | subscribe topic / queue name | `literal` / `field-literal` |
+| typed / gRPC | service+method on a shared contract | the contract impl | `symbol` / `type` (exact) |
+
+**The constraint: both sides must live in ONE fact store.** `AddDeliveryEdges` joins in-memory over a single
+store's `CallEdges`; it does not reach across two independently-indexed `.rig` stores. The supported path is
+**multi-solution accumulate** (`index --identity`, see [multi-solution-storage.md](multi-solution-storage.md)) —
+co-index A and B into the same store and the cross-solution edges resolve. Genuinely separate stores need a
+different feature (a cross-store contract registry: export each store's producer/consumer tokens, match
+out-of-band) — **out of scope** for this generalisation.
 
 ## The engine join (the one coded mechanism)
 
