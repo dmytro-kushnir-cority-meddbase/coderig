@@ -35,7 +35,7 @@ public static class GraphMaterializer
         Action<string>? progress = null,
         CancellationToken cancellationToken = default,
         IReadOnlyList<FactGenericFactoryRule>? factoryRules = null,
-        IReadOnlyList<FactEffectRule>? actorRules = null
+        IReadOnlyList<DeliveryRule>? deliveryRules = null
     )
     {
         progress?.Invoke("Loading facts");
@@ -43,7 +43,7 @@ public static class GraphMaterializer
         // table) so the persisted Kind="handoff" + HandoffDispatcher flow to every SQL reader; the
         // in-memory oracle classifies identically by being given the same rules.
         var graph = await Reads.LoadFactGraphAsync(context, handoffRules, cancellationToken);
-        return await BuildFromGraphAsync(context, graph, factoryRules, progress, cancellationToken, actorRules: actorRules);
+        return await BuildFromGraphAsync(context, graph, factoryRules, progress, cancellationToken, deliveryRules: deliveryRules);
     }
 
     // Materialize the derived tables from a graph ALREADY built in memory (FactGraphProjection.FromAnalysis at
@@ -65,7 +65,7 @@ public static class GraphMaterializer
         CancellationToken cancellationToken = default,
         IReadOnlyList<SymbolFact>? symbols = null,
         IReadOnlyList<ReferenceFact>? references = null,
-        IReadOnlyList<FactEffectRule>? actorRules = null
+        IReadOnlyList<DeliveryRule>? deliveryRules = null
     )
     {
         // Bake generic-factory monomorphization into the persisted edges — the SAME RewriteGenericFactories
@@ -85,12 +85,12 @@ public static class GraphMaterializer
         // blinding cycle detection). The event reads / actor calls are already in the store at this point
         // (facts are saved before graph build, on both the index and re-graph paths). Both frameworks feed the
         // ONE framework-blind join (events identity-EXACT on the `E:` symbol; actors ~heuristic on a process-
-        // name string — Tag namespaces them so they never cross). The actor tell/ask/spawn methods are DATA
-        // (the `actor:*` effect rules), threaded in like factoryRules. Modeled as handoff edges → sync-cut by
-        // default, walked under --async. No-op when there are no sites.
-        var eventSites = await Reads.LoadEventDeliverySitesAsync(context, cancellationToken);
-        var actorSites = await Reads.LoadActorDeliverySitesAsync(context, actorRules ?? [], cancellationToken);
-        graph = FactPathFinder.AddDeliveryEdges(graph, [.. eventSites, .. actorSites]);
+        // name string — Tag namespaces them so they never cross). Each delivery MECHANISM is DATA (the
+        // `deliveryRules` rule section), threaded in like factoryRules; the single rule-driven loader returns
+        // BOTH event + actor sites. Modeled as handoff edges → sync-cut by default, walked under --async.
+        // No-op when there are no sites.
+        var sites = await Reads.LoadDeliverySitesAsync(context, deliveryRules ?? [], cancellationToken);
+        graph = FactPathFinder.AddDeliveryEdges(graph, sites);
 
         var connection = context.Database.GetDbConnection();
         if (connection.State != ConnectionState.Open)

@@ -10,7 +10,7 @@ namespace Rig.Domain.Data;
 // is the only layer that can read the JSON authoring model. Construct it there; everyone else receives it.
 //
 // Slices fall in two families. The Fact* slices (Handoff/Factory/Cut/Context/Effects/Observations/
-// EntryPoints/ClassInheritance/Render) are the fact-matchable projections the Domain matchers consume. The
+// EntryPoints/ClassInheritance/Render/Delivery) are the fact-matchable projections the Domain matchers consume. The
 // remaining slices (DiRegistrations/File*/TestProjectPatterns/ProjectExcludePatterns/StaticDiMappings/
 // XmlDiFiles) are consumed by the index/extraction pass in their authoring form.
 public sealed record RuleSet
@@ -24,6 +24,7 @@ public sealed record RuleSet
     public IReadOnlyList<FactEntryPointRule> EntryPoints { get; init; } = [];
     public IReadOnlyList<FactClassInheritanceRule> ClassInheritance { get; init; } = [];
     public FactRenderRules Render { get; init; } = new(CollapseSeams: [], OpaqueTypes: []);
+    public IReadOnlyList<DeliveryRule> Delivery { get; init; } = [];
     public IReadOnlyDictionary<string, string> EffectEmoji { get; init; } =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 

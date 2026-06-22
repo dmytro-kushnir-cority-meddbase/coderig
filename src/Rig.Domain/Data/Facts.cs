@@ -303,8 +303,28 @@ public enum DeliveryRole
 // emitted edge's HandoffDispatcher ("event_raise" / "actor_tell"), so an event raise never joins an actor
 // tell even if their tokens collide. Role (above) decides producer vs registration. Caller is the enclosing
 // method; (Caller, FilePath, Line) is the co-location key the join uses to find a registration's handler.
-// Loaded by Reads.LoadEventDeliverySitesAsync / LoadActorDeliverySitesAsync.
+// Loaded by Reads.LoadDeliverySitesAsync (rule-driven over RuleSet.Delivery).
 public sealed record DeliverySite(string Caller, string FilePath, int Line, string IdentityToken, string Tag, DeliveryRole Role);
+
+// A publish→consumer DELIVERY rule — declares one mechanism (C# events, Echo actors, …) by composing the
+// engine's identity primitives, so a codebase marks its use case in DATA rather than a coded resolver.
+// Projected from the `deliveryRules` JSON section; consumed by Reads.LoadDeliverySitesAsync, which emits the
+// uniform DeliverySite the framework-blind FactPathFinder.AddDeliveryEdges joins. Tag becomes the emitted
+// handoff's HandoffDispatcher; Confidence (exact|heuristic) is disclosure that feeds the FR-10 cycle tier.
+public sealed record DeliveryRule(string Id, string Tag, string Confidence, DeliveryEndpoint Producer, DeliveryEndpoint Registration);
+
+// One side of a delivery rule. Source selects which facts the loader scans + how the channel identity is
+// found: "event-symbol" = C# event reads (target E:), identity is the event DocID, Role=ByColocation (the
+// join decides subscribe-vs-raise, so an event rule's two endpoints are identical). "arg" = invocation refs
+// whose (declaringType, method) match Methods×DeclaringTypes; identity is arg[ArgumentIndex] resolved per
+// Resolve ("path" = the member-path argument name, gated to a member path; "symbol" = the target symbol).
+public sealed record DeliveryEndpoint(
+    string Source,
+    string Resolve,
+    int ArgumentIndex = 0,
+    IReadOnlyList<string>? Methods = null,
+    IReadOnlyList<string>? DeclaringTypes = null
+);
 
 // The fact-derived call graph loaded for cross-project path finding (stage 2 over facts).
 public sealed record FactGraphData(

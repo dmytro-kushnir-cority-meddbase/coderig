@@ -1794,6 +1794,35 @@
       "reason": "msdi_servicedescriptor_singleton"
     }
   ],
+  "deliveryRules": [
+    {
+      "id": "csharp-event",
+      "tag": "event_raise",
+      "confidence": "exact",
+      "producer": { "source": "event-symbol", "resolve": "symbol" },
+      "registration": { "source": "event-symbol", "resolve": "symbol" }
+    },
+    {
+      "id": "echo-actor",
+      "tag": "actor_tell",
+      "confidence": "heuristic",
+      "_reason": "Echo actors as a publish→consumer DELIVERY mechanism: a spawn/register binds a name to a handler, a tell/ask publishes to that name. The method lists deliberately DUPLICATE those in the actor:* EFFECT rules — different consumers (delivery edges here vs effect derivation + the dual_write hazard there), so the two are kept independent rather than one inferred from the other.",
+      "producer": {
+        "source": "arg",
+        "resolve": "path",
+        "argumentIndex": 0,
+        "methods": ["tell", "tellSystem", "ask", "askAsync", "askIfAlive"],
+        "declaringTypes": ["Echo.Process"]
+      },
+      "registration": {
+        "source": "arg",
+        "resolve": "path",
+        "argumentIndex": 0,
+        "methods": ["spawn", "spawnUnit", "spawnMany", "register"],
+        "declaringTypes": ["Echo.Process"]
+      }
+    }
+  ],
   "files": {
     "exclude": [
       {

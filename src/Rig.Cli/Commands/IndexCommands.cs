@@ -59,9 +59,9 @@ internal static class IndexCommands
                         handoffRules: ruleSet.Handoff,
                         progress: message => output.WriteLine($"Progress: {message}"),
                         factoryRules: ruleSet.Factory,
-                        // The actor:* effect rules drive the actor publish→consumer delivery edges, threaded
-                        // in like factoryRules (data, not hardcoded) — see GraphMaterializer.
-                        actorRules: ruleSet.Effects
+                        // The `deliveryRules` section drives the publish→consumer delivery edges (events +
+                        // actors), threaded in like factoryRules (data, not hardcoded) — see GraphMaterializer.
+                        deliveryRules: ruleSet.Delivery
                     );
                     output.WriteLine(
                         $"Graph: {stats.CallEdges} call edge(s), {stats.DispatchEdges} dispatch edge(s) "
@@ -432,8 +432,8 @@ internal static class IndexCommands
             // re-scanning symbol_facts / reference_facts off disk — the bulk of the graph phase's reads.
             symbols: result.Symbols,
             references: result.References,
-            // The actor:* effect rules drive the actor publish→consumer delivery edges (data, not hardcoded).
-            actorRules: rules.Effects
+            // The `deliveryRules` section drives the publish→consumer delivery edges (data, not hardcoded).
+            deliveryRules: rules.Delivery
         );
         output.WriteLine(
             $"Graph: {stats.CallEdges} call edge(s), {stats.DispatchEdges} dispatch edge(s) "

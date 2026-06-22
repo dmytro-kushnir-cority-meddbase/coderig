@@ -58,6 +58,7 @@ public static class RuleSetLoader
             EntryPoints = FactEntryPointRuleProvider.ProjectTypeEntryPoints(doc),
             ClassInheritance = FactEntryPointRuleProvider.ProjectClassInheritance(doc),
             Render = FactRenderRuleProvider.Project(doc),
+            Delivery = FactDeliveryRuleProvider.Project(doc),
             EffectEmoji = doc.EffectEmoji is not null
                 ? new Dictionary<string, string>(doc.EffectEmoji, StringComparer.OrdinalIgnoreCase)
                 : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
@@ -166,6 +167,7 @@ public static class RuleSetLoader
         acc.Effects = Concat(acc.Effects, next.Effects);
         acc.DiRegistrations = Concat(acc.DiRegistrations, next.DiRegistrations);
         acc.HandoffDispatchers = Concat(acc.HandoffDispatchers, next.HandoffDispatchers);
+        acc.DeliveryRules = Concat(acc.DeliveryRules, next.DeliveryRules);
         acc.StaticDiMappings = Concat(acc.StaticDiMappings, next.StaticDiMappings);
         acc.XmlDiFiles = ConcatDistinct(acc.XmlDiFiles, next.XmlDiFiles);
         acc.GenericFactories = Concat(acc.GenericFactories, next.GenericFactories);

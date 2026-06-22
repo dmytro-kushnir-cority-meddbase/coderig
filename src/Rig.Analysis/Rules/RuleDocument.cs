@@ -145,6 +145,29 @@ internal sealed record GenericFactoryRule(
 // Codebase-specific; projected to FactContextDispatchRule. `Reason`/`Id` are documentation only.
 internal sealed record ContextDispatchRule(string Interface, string BindingBase, string? Reason = null, string? Id = null);
 
+// A publish→consumer DELIVERY rule (JSON authoring shape of `deliveryRules`): declares one delivery
+// mechanism (C# events / Echo actors) by composing the identity primitives, so the loader is generic over
+// it rather than inferring the actor case from the actor:* effect rules. Projected to FactPathFinder's
+// DeliveryRule. `confidence` (exact|heuristic) is disclosure carried onto the emitted handoff.
+internal sealed record DeliveryRuleDocument(
+    string Id,
+    string Tag,
+    string Confidence,
+    DeliveryEndpointDocument Producer,
+    DeliveryEndpointDocument Registration
+);
+
+// One side of a delivery rule. `source` selects which facts the loader scans ("event-symbol" | "arg") and
+// `resolve` how the channel identity is found ("symbol" | "path"); `methods`/`declaringTypes` gate the
+// invocation target for "arg" sources; `argumentIndex` selects which argument carries the identity.
+internal sealed record DeliveryEndpointDocument(
+    string Source,
+    string Resolve,
+    int ArgumentIndex = 0,
+    IReadOnlyList<string>? Methods = null,
+    IReadOnlyList<string>? DeclaringTypes = null
+);
+
 internal sealed record ReadBeforeCommitObservationRule(
     IReadOnlyList<string> CommitMethods,
     IReadOnlyList<string> ReadMethods,
@@ -184,6 +207,9 @@ internal sealed class AnalysisRulesDocument
     public List<DiRegistrationRule>? DiRegistrations { get; set; }
 
     public List<HandoffDispatcherRule>? HandoffDispatchers { get; set; }
+
+    // Top-level key "deliveryRules": list of publish→consumer delivery mechanisms (events, actors).
+    public List<DeliveryRuleDocument>? DeliveryRules { get; set; }
 
     public List<StaticDiMapping>? StaticDiMappings { get; set; }
 

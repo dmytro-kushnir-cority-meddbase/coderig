@@ -114,9 +114,8 @@ internal static class DeriveCommand
         //     so the cycles it finds are exactly the cycles the materialized call_edges carry. ---
         var graph = await Reads.LoadFactGraphAsync(context, rules.Handoff);
         graph = FactPathFinder.RewriteGenericFactories(graph, rules.Factory);
-        var eventSites = await Reads.LoadEventDeliverySitesAsync(context);
-        var actorSites = await Reads.LoadActorDeliverySitesAsync(context, rules.Effects);
-        graph = FactPathFinder.AddDeliveryEdges(graph, [.. eventSites, .. actorSites]);
+        var sites = await Reads.LoadDeliverySitesAsync(context, rules.Delivery);
+        graph = FactPathFinder.AddDeliveryEdges(graph, sites);
         var cycleFindings = EventCycleFindings(FactCycleDeriver.DeriveEventCycles(graph));
 
         // Both hazard sources unioned: the over-effects pattern findings + the graph-tier event_cycle findings.
