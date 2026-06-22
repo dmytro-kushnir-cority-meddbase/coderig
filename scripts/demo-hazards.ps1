@@ -12,7 +12,8 @@
      query-side code committed AFTER the last `mini-ci` pack, so a stale tool won't render them.
   2. Runs `rig derive` against the indexed MedDBase store and shows the Hazards summary + sample sites,
      computed from the machine-readable `hazard` tsv rows.
-  3. Optionally runs the per-EP `rig impact` hazard-delta if two store refs are supplied.
+  3. Drills into ONE representative finding with `rig tree <ep> --hazards` (the inline per-EP surface).
+  4. Optionally runs the per-EP `rig impact` hazard-delta if two store refs are supplied.
 
   Hazards are an over-approximation: they narrow where a human/agent looks, they do not prove a bug.
 
@@ -112,7 +113,26 @@ try {
         }
     }
 
-    # --- 5. Optional: per-EP hazard delta between two indexed commits (the CI surface) ----------------
+    # --- 5. Drill into ONE entry point: the inline tree surface (the 'full deal' for one EP) ----------
+    Section 'rig tree <ep> --hazards — inline drill-in for one entry point'
+    # Pick a representative race_window (else any) finding and reduce its enclosing DocID to the dotted
+    # Type.Method pattern `tree` matches (strip the `M:` kind prefix + the parameter list, keep the last
+    # two dotted segments). The drill-in re-derives THIS closure with the static-field refs threaded in,
+    # so it shows the field-fed shared_state:read/mutate effects a plain `tree` omits.
+    $drill = ($hazards | Where-Object Type -eq 'race_window' | Select-Object -First 1)
+    if (-not $drill) { $drill = $hazards | Select-Object -First 1 }
+    if ($drill -and $drill.Enclosing) {
+        $sig = $drill.Enclosing -replace '^M:', '' -replace '\(.*$', ''
+        $parts = $sig -split '\.'
+        $pattern = if ($parts.Count -ge 2) { ($parts[-2..-1]) -join '.' } else { $sig }
+        Note "drilling into '$pattern' (carries a $($drill.Type)); ⚠ marks each hazard-bearing node + a summary follows"
+        rig tree $pattern --hazards 2>$null | Select-Object -First 12
+    }
+    else {
+        Note 'No finding with an enclosing method to drill into.'
+    }
+
+    # --- 6. Optional: per-EP hazard delta between two indexed commits (the CI surface) ----------------
     Section 'rig impact — per-EP hazard delta (base -> head)'
     if ($ImpactBase -and $ImpactHead) {
         Note "diffing $ImpactBase -> $ImpactHead (hazard +/- lines below; full effect/structural diff omitted)"
