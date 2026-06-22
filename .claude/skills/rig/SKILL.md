@@ -42,7 +42,7 @@ route-form pattern first.
 
 ## Reading output (don't misread it)
 Effects are emoji-tagged `provider:op` (💾write 🔍read 📥fetch 🌐http 📤queue 📣echo 🗃️cache 📦object-store
-📁io ⚠️throw 🧵parallel 🛢️db_command; + EF Core `efcore:*`, raw ADO `db_command|db_connection|db_reader`).
+📁io ↯throw 🧵parallel 🛢️db_command; + EF Core `efcore:*`, raw ADO `db_command|db_connection|db_reader`).
 Per-repo glyphs via `rig.effect-emoji.json`.
 - **N occurrences = N static call-SITES (branches included), NOT N runtime writes** — "places in code," never execution count.
 - **`~heuristic` = INFERRED dispatch** (Roslyn couldn't bind, net48 `!:`; name/arity fallback, ~99% — verify). Unmarked dispatch = exact mined fact, trust it.
