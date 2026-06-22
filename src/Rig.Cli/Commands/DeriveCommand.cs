@@ -92,6 +92,7 @@ internal static class DeriveCommand
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
         var staticFieldWriteRefs = await Reads.LoadStaticFieldWriteRefsAsync(context);
         var staticFieldReadRefs = await Reads.LoadStaticFieldReadRefsAsync(context);
+        var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
         var effects = DeriveEffects(
             effectRules: rules.Effects,
             observationRules: rules.Observations,
@@ -101,7 +102,8 @@ internal static class DeriveCommand
             throwRefs: throwRefs,
             staticFieldWriteRefs: staticFieldWriteRefs,
             staticFieldReadRefs: staticFieldReadRefs,
-            deriveHazards: true // whole-store path runs the race_window hazard post-pass
+            deriveHazards: true, // whole-store path runs the race_window hazard post-pass
+            threadStaticCells: threadStaticCells // reroute [ThreadStatic] RMW → thread_local_context
         );
         effects = ApplyEffectFilters(effects: effects, only: only, exclude: exclude); // --only / --exclude (e.g. --exclude throw)
 

@@ -273,6 +273,55 @@ public sealed class ProductionFixCorpusRaceWindowTests
         races[0].Confidence.ShouldBe("high");
     }
 
+    // REROUTE — a [ThreadStatic] cell: the SAME read→write RMW shape that would otherwise be a race_window,
+    // but the cell is thread-confined (each thread owns its copy), so it CANNOT be a cross-thread race. It is
+    // reclassified (not suppressed) to a thread_local_context candidate — the FR-2 context-propagation surface
+    // (the production-reverted !10208 ThreadStatic→AsyncLocal migration: a value silently lost across an await
+    // when the continuation resumes on a different thread). Disclosed at low confidence. This mirrors the live
+    // MedDBase finding on Transaction.transactionsInThisThread.
+    [Test]
+    public void Read_before_write_of_a_thread_static_cell_is_rerouted_to_thread_local_context_not_race_window()
+    {
+        var result = ProductionFixCorpus.Analyze(
+            """
+            using System;
+
+            namespace App
+            {
+                public static class AmbientContext
+                {
+                    [ThreadStatic]
+                    private static int depth;
+
+                    public static void Enter()
+                    {
+                        if (depth == 0)
+                        {
+                            depth = 1;
+                        }
+                    }
+                }
+            }
+            """
+        );
+
+        // The mutate still fires (annotate-only — nothing suppressed).
+        result.SharedStateMutationsIn("AmbientContext.Enter").Count.ShouldBe(1);
+
+        // NOT a race (thread-confined) and NOT lazy-init: rerouted to thread_local_context.
+        result.RaceWindowsIn("AmbientContext.Enter").ShouldBeEmpty();
+        result.LazyInitRacesIn("AmbientContext.Enter").ShouldBeEmpty();
+
+        var contexts = result.ThreadLocalContextsIn("AmbientContext.Enter");
+        contexts.Count.ShouldBe(1);
+        var context = contexts[0];
+        context.Type.ShouldBe("thread_local_context");
+        context.Context.ShouldBe("F:App.AmbientContext.depth");
+        context.Confidence.ShouldBe("low");
+        context.Reason.ShouldBe("thread_static_state_may_be_lost_across_async_boundary");
+        context.Detail.ShouldStartWith("Corpus.cs:");
+    }
+
     // TASK A guard: a READ of a static READONLY cell is immutable ⇒ cannot be a TOCTOU check ⇒ the read arm
     // must not emit it. The write to a separate mutable cell still fires but pairs with no read → no finding.
     [Test]

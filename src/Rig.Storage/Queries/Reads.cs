@@ -904,4 +904,28 @@ public static class Reads
 
         return rows.GroupBy(r => (r.FilePath, r.Line, r.Target)).Select(g => g.First()).ToList();
     }
+
+    // The set of field/auto-property DocIDs carrying a [ThreadStatic] attribute. No dedicated attribute fact
+    // is needed: an attribute application is a constructor invocation (`new ThreadStaticAttribute()`), so it
+    // already lands as a `ctor` reference whose ENCLOSING is the decorated field's DocID and whose TARGET is
+    // the attribute's ctor — exactly the join below. A [ThreadStatic] cell is THREAD-CONFINED (each thread
+    // owns its copy) so it cannot have a cross-thread shared-state race; the hazard layer uses this set to
+    // reroute such read→write pairs from race_window to the FR-2 thread_local_context candidate (see
+    // FactHazardDeriver.ThreadLocalContextType). Matched on the exact ctor DocID, which is index-seekable on
+    // the TargetSymbolId index; the rarer form where the attribute name binds to the type (not the ctor) is
+    // not covered — accepted, it is uncommon for [ThreadStatic].
+    public static async Task<IReadOnlySet<string>> LoadThreadStaticFieldIdsAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        const string threadStaticCtor = "M:System.ThreadStaticAttribute.#ctor";
+        var ids = await context
+            .ReferenceFacts.AsNoTracking()
+            .Where(r => r.RefKind == RefKinds.Ctor && r.TargetSymbolId == threadStaticCtor && r.EnclosingSymbolId != null)
+            .Select(r => r.EnclosingSymbolId!)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+        return ids.ToHashSet(StringComparer.Ordinal);
+    }
 }

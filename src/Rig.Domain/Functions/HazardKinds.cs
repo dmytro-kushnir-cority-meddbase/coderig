@@ -23,6 +23,7 @@ public static class HazardKinds
     {
         FactHazardDeriver.RaceWindowType,
         FactHazardDeriver.LazyInitRaceType,
+        FactHazardDeriver.ThreadLocalContextType,
         FactHazardDeriver.DualWriteType,
         NPlusOne,
         UnserializablePayload,

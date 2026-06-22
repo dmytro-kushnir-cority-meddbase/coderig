@@ -317,6 +317,9 @@ internal static class TreeCommand
             var fieldReadRefs = (await Reads.LoadStaticFieldReadRefsAsync(context))
                 .Where(f => f.Enclosing is not null && treeMethods.Contains(f.Enclosing))
                 .ToList();
+            // [ThreadStatic] cells (whole-store, small) — reroutes a thread-confined RMW from race_window to
+            // thread_local_context; no need to bound (a Contains check against the tree's cells).
+            var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
             effects = DeriveEffects(
                 effectRules: rules.Effects,
                 observationRules: rules.Observations,
@@ -326,7 +329,8 @@ internal static class TreeCommand
                 throwRefs: hzInputs.ThrowRefs,
                 staticFieldWriteRefs: fieldWriteRefs,
                 staticFieldReadRefs: fieldReadRefs,
-                deriveHazards: true
+                deriveHazards: true,
+                threadStaticCells: threadStaticCells
             );
             // Findings on the tree's own methods (the field refs are already bounded; this also drops any
             // invocation-effect finding on a method reachable in the closure but pruned from the forest).

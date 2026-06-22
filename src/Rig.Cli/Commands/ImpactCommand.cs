@@ -225,6 +225,7 @@ internal static class ImpactCommand
         // impact — tree/reaches are untouched.
         var staticFieldWriteRefs = await Reads.LoadStaticFieldWriteRefsAsync(context);
         var staticFieldReadRefs = await Reads.LoadStaticFieldReadRefsAsync(context);
+        var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
         var effects = DeriveEffects(
             rules.Effects,
             rules.Observations,
@@ -234,7 +235,8 @@ internal static class ImpactCommand
             throwRefs: throwRefs,
             staticFieldWriteRefs: staticFieldWriteRefs,
             staticFieldReadRefs: staticFieldReadRefs,
-            deriveHazards: true
+            deriveHazards: true,
+            threadStaticCells: threadStaticCells
         );
 
         // --- Two-store entry-point diff: EPs added/removed vs the base store, paired on (Kind, Route) —
@@ -1097,6 +1099,7 @@ internal static class ImpactCommand
         // per-EP hazard set is computed over hazard-bearing effects and the diff compares like-for-like.
         var staticFieldWriteRefs = await Reads.LoadStaticFieldWriteRefsAsync(context);
         var staticFieldReadRefs = await Reads.LoadStaticFieldReadRefsAsync(context);
+        var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
         var effects = DeriveEffects(
             rules.Effects,
             rules.Observations,
@@ -1106,7 +1109,8 @@ internal static class ImpactCommand
             throwRefs: throwRefs,
             staticFieldWriteRefs: staticFieldWriteRefs,
             staticFieldReadRefs: staticFieldReadRefs,
-            deriveHazards: true
+            deriveHazards: true,
+            threadStaticCells: threadStaticCells
         );
 
         // Phase 3: union the base's field/property-access targets into its reach sets too, so the per-EP

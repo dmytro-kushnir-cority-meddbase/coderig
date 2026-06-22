@@ -24,7 +24,11 @@ internal static class EffectDerivation
         // Hazard post-pass (race_window read-before-write matcher). Default OFF — like the other field-fed
         // signals it runs only on the whole-store `derive` path, not the bounded tree/reaches/impact closures
         // (which don't bound the static-field refs, so a read+write pair would be incomplete there anyway).
-        bool deriveHazards = false
+        bool deriveHazards = false,
+        // [ThreadStatic] cell DocIDs (Reads.LoadThreadStaticFieldIdsAsync). A read→write on one is rerouted
+        // from race_window to thread_local_context (thread-confined ⇒ not a race, but the FR-2 surface).
+        // Null/empty leaves the legacy race_window classification unchanged.
+        IReadOnlySet<string>? threadStaticCells = null
     )
     {
         var effects = FactEffectDeriver.Derive(
@@ -49,7 +53,7 @@ internal static class EffectDerivation
             return effects;
         }
 
-        effects = FactHazardDeriver.DeriveRaceWindows(effects);
+        effects = FactHazardDeriver.DeriveRaceWindows(effects, threadStaticCells);
         effects = FactHazardDeriver.DeriveDualWrites(effects);
         return effects;
     }

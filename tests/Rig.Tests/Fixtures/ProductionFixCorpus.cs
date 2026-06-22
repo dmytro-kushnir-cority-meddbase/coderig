@@ -89,6 +89,11 @@ public static class ProductionFixCorpus
         // ≥2-distinct-durable-systems-in-one-method finding. Sugar over ObservationsIn.
         public IReadOnlyList<EffectObservationInfo> DualWritesIn(string enclosingMarker) =>
             ObservationsIn(enclosingMarker, FactHazardDeriver.DualWriteType);
+
+        // FR-2: every thread_local_context observation on an effect enclosed by the marker method — the
+        // [ThreadStatic] reroute of an RMW (thread-confined ⇒ not a race, but a context-propagation candidate).
+        public IReadOnlyList<EffectObservationInfo> ThreadLocalContextsIn(string enclosingMarker) =>
+            ObservationsIn(enclosingMarker, FactHazardDeriver.ThreadLocalContextType);
     }
 
     public static CorpusResult Analyze(string source)
@@ -131,8 +136,10 @@ public static class ProductionFixCorpus
         );
         // Hazard post-pass: the race_window read-before-write matcher (same enclosing method, same cell).
         // The whole-store `derive` path runs this too (EffectDerivation.DeriveEffects deriveHazards:true);
-        // the harness mirrors it so the corpus measures the SHIPPED behavior end to end.
-        effects = FactHazardDeriver.DeriveRaceWindows(effects);
+        // the harness mirrors it so the corpus measures the SHIPPED behavior end to end — including the
+        // [ThreadStatic] reroute (thread-confined RMW → thread_local_context), fed the same way the shipped
+        // path is (Reads.LoadThreadStaticFieldIdsAsync): the field DocIDs decorated with [ThreadStatic].
+        effects = FactHazardDeriver.DeriveRaceWindows(effects, ThreadStaticCells(result));
         // FR-8 dual_write post-pass: ≥2 distinct durable systems written in one method. Mirrors the shipped
         // derive path (EffectDerivation.DeriveEffects runs both hazard passes when deriveHazards:true).
         effects = FactHazardDeriver.DeriveDualWrites(effects);
@@ -157,6 +164,17 @@ public static class ProductionFixCorpus
             catch (IOException) { }
         }
     }
+
+    // Mirror of Reads.LoadThreadStaticFieldIdsAsync over the in-memory facts: the field DocIDs carrying a
+    // [ThreadStatic] attribute, recovered from the ctor reference the attribute application emits (enclosing =
+    // the field, target = the attribute ctor). Feeds the race_window [ThreadStatic] reroute.
+    private static IReadOnlySet<string> ThreadStaticCells(AnalysisResult result) =>
+        (result.References ?? [])
+            .Where(r =>
+                r.RefKind == RefKinds.Ctor && r.EnclosingSymbolId is not null && r.TargetSymbolId == "M:System.ThreadStaticAttribute.#ctor"
+            )
+            .Select(r => r.EnclosingSymbolId!)
+            .ToHashSet(StringComparer.Ordinal);
 
     // Mirror of Reads.LoadStaticFieldAccessRefsAsync over the in-memory facts: access refs (read OR write,
     // selected by refKind) whose target is a STATIC field/auto-property slot (gated via the symbol's

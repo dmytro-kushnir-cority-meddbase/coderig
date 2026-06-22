@@ -52,6 +52,20 @@ public static class FactHazardDeriver
     private const string ReasonLazyInitHeuristic = "lazy_init_heuristic";
     private const string ConfidenceLow = "low";
 
+    // The [ThreadStatic] REROUTE. A read→write on a `[ThreadStatic]` cell is NOT a cross-thread race — each
+    // thread owns its own copy, so the read/write can never interleave across threads (suppressing the
+    // race_window/lazy_init_race FALSE POSITIVE that thread-confined lazy-init/RMW shapes would otherwise
+    // produce). But it IS the canonical FR-2 context-propagation surface: a `[ThreadStatic]` value is
+    // silently lost when an async continuation resumes on a DIFFERENT thread (the production-reverted
+    // !10208 ThreadStatic→AsyncLocal migration — transaction context, perf loggers — is exactly this).
+    // So we RECLASSIFY (not suppress) to a disclosed thread_local_context candidate. Confidence is LOW: we
+    // cannot prove the read actually crosses an await/thread boundary (that needs flow modeling, FR-2
+    // tier-3) — the value is corpus-grounding, not a per-path proof. The set of [ThreadStatic] cell DocIDs
+    // is supplied by the caller (derived from the existing `[ThreadStatic]`-attribute ctor references —
+    // Reads.LoadThreadStaticFieldIdsAsync); empty/null disables the reroute (legacy callers unchanged).
+    public const string ThreadLocalContextType = "thread_local_context";
+    private const string ReasonThreadStaticContext = "thread_static_state_may_be_lost_across_async_boundary";
+
     // The span observation whose presence on BOTH legs downgrades the race_window to the "in a transaction,
     // verify isolation" tier. Mirrors FactResourceSpanRule's emitted ObservationType for a using(tx) scope.
     private const string TransactionSpanType = "transaction_spans_effect";
@@ -63,6 +77,10 @@ public static class FactHazardDeriver
     // is not mutated; effects without a new finding are returned by reference.
     public static IReadOnlyList<DerivedEffect> DeriveRaceWindows(
         IReadOnlyList<DerivedEffect> effects,
+        // Cell DocIDs (static field/auto-property slots) carrying [ThreadStatic]. A read→write on one of
+        // these is rerouted from race_window/lazy_init_race to thread_local_context (see ThreadLocalContextType).
+        // Null/empty = no reroute (every pair classifies as race_window/lazy_init_race, the pre-reroute behavior).
+        IReadOnlySet<string>? threadStaticCells = null,
         string readProvider = DefaultReadProvider,
         string readOperation = DefaultReadOperation,
         string writeProvider = DefaultWriteProvider,
@@ -150,7 +168,20 @@ public static class FactHazardDeriver
             // isolation. Both are observations added to the SAME mutate effect — classification, not suppression.
             var singleWrite = !writeCountByCell.TryGetValue((e.EnclosingSymbolId!, e.ResourceType), out var writeCount) || writeCount == 1;
             EffectObservationInfo observation;
-            if (LooksLikeLazyInit(enclosingId: e.EnclosingSymbolId!, cell: e.ResourceType, singleWrite: singleWrite))
+            if (threadStaticCells is not null && threadStaticCells.Contains(e.ResourceType))
+            {
+                // THREAD-CONFINED cell — not a cross-thread race (suppress the race_window/lazy_init_race FP);
+                // reroute to the disclosed FR-2 context-propagation candidate. See ThreadLocalContextType.
+                observation = new EffectObservationInfo(
+                    Type: ThreadLocalContextType,
+                    Context: e.ResourceType,
+                    Detail: $"{pairedRead.FilePath}:{pairedRead.Line}",
+                    Confidence: ConfidenceLow,
+                    Basis: Basis,
+                    Reason: ReasonThreadStaticContext
+                );
+            }
+            else if (LooksLikeLazyInit(enclosingId: e.EnclosingSymbolId!, cell: e.ResourceType, singleWrite: singleWrite))
             {
                 observation = new EffectObservationInfo(
                     Type: LazyInitRaceType,
