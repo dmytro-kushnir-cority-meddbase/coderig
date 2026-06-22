@@ -84,6 +84,39 @@ Backlog detectors:
   field-*type* signal, not an attribute, and not an RMW reroute — its state lives behind `.Value`); deferred
   until AsyncLocal is back in scope to calibrate against (the grounding migration, !10208, was reverted).
 
+## Delivery edges — producer→consumer by identity (the FR-10 prerequisite)
+
+The graph layer the cycle/cascade detectors stand on. **Conjecture:** a producer→consumer relation (and,
+separately, a read→write relation) is resolved by a shared **identity**, and that identity is *keyed on
+different things by mechanism* — sometimes a symbol, sometimes a type, **often a call-site parameter value**:
+
+| Mechanism | Identity | Keyed on | Join precision |
+|---|---|---|---|
+| C# event raise → subscribers | the event | a **symbol** (`E:` DocID) | exact |
+| MediatR publish/send → handler | the message | a **type** (arg-0 type, `argument_type`) | exact (type-relation) |
+| Echo actor tell/ask → spawn handler | the process | a **parameter** (process name, arg-0 `argument_name`) | `~heuristic` (resolves through a static field) |
+| HTTP / arbitrary RPC → endpoint | the route | a **parameter** (route/URL string, `string_argument`) | `~heuristic` (interpolated client URL vs route template) |
+| db / io / cache write ↔ read | the cell | a **parameter** (table / path / key) | `~heuristic` |
+
+rig already captures these identities as effect **resources** (`argument_name` / `string_argument` /
+`argument_type` / `type_argument`) — the param-keyed cases are exactly the ones that are *sometimes* a
+value and therefore fuzzy (`~heuristic`), vs the symbol/type cases which bind exactly.
+
+**The load-bearing split — delivery vs coupling:**
+- **Delivery** (the runtime *causes* the consumer to run): event / actor / mediatr / http-RPC. These become
+  **call (handoff) edges** — raiser→handler — so reachability and cycle detection traverse them. Modeled as
+  handoffs: sync-cut by default, walked under `--async`, cycle-visible.
+- **Coupling** (two independent flows touch the same cell; nothing is delivered): db / io / cache same-cell
+  write↔read. This is a **correlation, NOT a call edge** — folding it into reachability would make every
+  writer "reach" every reader and destroy the graph's meaning. It stays in the same-cell / consistency
+  layer (FR-1 race_window, dual_write), and the row/object-level keying it needs is **FR-1f**.
+
+**Status:** events shipped (`AddEventDeliveryEdges`, exact symbol join, baked into `call_edges` at `rig
+graph`/`index`); actors next (process-name param join, `~heuristic`). http-route (the documented but
+undeveloped *cross-repo contract / rpc* item) and mediatr are drop-in delivery resolvers on the same
+machinery. Once the edges exist, **event/cascade cycle (FR-10)** and the **cache-invalidation cycle (FR-7)**
+are a DFS over the enriched graph.
+
 ## How a Hazard reaches the consumer (surfaces)
 
 The same "summary → react → full deal" model on every surface:
