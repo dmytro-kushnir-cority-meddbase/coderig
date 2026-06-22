@@ -27,15 +27,25 @@ namespace Rig.Cli.Rendering;
 //
 //   depth   – 0-based nesting depth in the original tree.
 //   parent  – (EffectsFlat only) TypeName.MethodName of the direct caller; empty for roots.
-//   name    – TypeName.MethodName — no namespace, no parameter types.
+//   name    – TypeName.MethodName — no namespace, no parameter types, no Roslyn arity markers.
 //   arity   – parameter count (overload disambiguation without listing types).
 //   calls   – number of call sites from the parent (TraceNode.CallSites).
-//   effects – deduplicated + counted: "io:read ×3, efcore:read ×2"; single: "io:read"; empty: "".
-//   flags   – pipe-separated subset of "cycle", "x-phase", "elided", "lambda"; empty when none.
+//   effects – deduplicated + counted: "io:read*3,efcore:read*2"; single: "io:read"; empty: "".
+//             ASCII only, whitespace-free: count suffix is "*N", distinct effects joined by ",".
+//   flags   – pipe-separated subset of "cycle", "seen", "elided", "lambda"; empty when none.
+//             "seen" = Truncated node (already expanded elsewhere or depth/budget cap hit).
+//             Note: the TraceNode.Truncated flag conflates two causes — (a) already expanded
+//             elsewhere (genuine re-reach) and (b) depth/budget cap; they are not distinguishable
+//             from the current model without a TruncationCause field on TraceNode.
 //
-// Lambda rows (DocID containing "~λ") are suppressed.
-// Compiler-generated type names ("<>c", "d__N") are suppressed.
-// X-phase (Truncated) nodes ARE emitted with their effects and flags=x-phase — making redundant
+// Lambda rows (DocID containing "~λ") are suppressed by default (see SuppressSet).
+// Compiler-generated type names ("<>c", "d__N") are suppressed by default.
+// Constructor rows (.#ctor/.#cctor) are suppressed by default.
+// Suppressed nodes are walked through at the parent's depth/parent; their own direct effects
+// (if any) are rolled up onto the nearest non-suppressed ancestor's row — no effect is lost.
+// Use SuppressSet.None to disable all suppression.
+//
+// Seen (Truncated) nodes ARE emitted with their effects and flags=seen — making redundant
 // loads first-class, greppable rows is the whole point of the format.
 internal static class LlmSummaryRenderer
 {
@@ -54,6 +64,19 @@ internal static class LlmSummaryRenderer
         EffectsFlat,
     }
 
+    // Which node kinds to suppress (row omitted; children walked through at parent depth; direct effects
+    // rolled up to nearest non-suppressed ancestor). Comma-separated when specified via --suppress.
+    [Flags]
+    internal enum SuppressSet
+    {
+        None = 0,
+        Lambdas = 1,
+        Ctors = 2,
+
+        // Default for --format llm: suppress both lambdas and ctors.
+        Default = Lambdas | Ctors,
+    }
+
     // Reconstructable projections (EffectfulPaths, Full) omit the parent column — depth+order suffice.
     // EffectsFlat keeps it because the parent row may be absent (gappy flat view).
     internal static string Header(LlmProjection projection) =>
@@ -62,7 +85,7 @@ internal static class LlmSummaryRenderer
             : "depth\tname\tarity\tcalls\teffects\tflags";
 
     // effectsByMethod: SymbolId -> list of effect strings in the same form as the tree renderer produces
-    // (e.g. "io:read ×3"). Structured differently from the tree-display form: the LLM renderer re-aggregates
+    // (e.g. "io:read*3"). Structured differently from the tree-display form: the LLM renderer re-aggregates
     // the raw provider:operation strings rather than inheriting the emoji+text rendering.
     // rawEffectsByMethod: SymbolId -> list of "provider:operation" strings (raw, one per occurrence).
     // The caller supplies BOTH because the tree renderer works with pre-formatted display strings while the
@@ -75,7 +98,8 @@ internal static class LlmSummaryRenderer
         // Raw provider:operation per occurrence per enclosing symbol, for LLM aggregation.
         IReadOnlyDictionary<string, List<string>> rawEffectsByMethod,
         LlmProjection projection,
-        TextWriter output
+        TextWriter output,
+        SuppressSet suppress = SuppressSet.Default
     )
     {
         output.WriteLine(Header(projection));
@@ -87,42 +111,108 @@ internal static class LlmSummaryRenderer
                 continue;
             }
 
-            WalkNode(node: root, depth: 0, parentName: "", rawEffectsByMethod: rawEffectsByMethod, projection: projection, output: output);
+            WalkNode(
+                node: root,
+                depth: 0,
+                parentName: "",
+                rawEffectsByMethod: rawEffectsByMethod,
+                projection: projection,
+                output: output,
+                suppress: suppress
+            );
         }
     }
 
-    // Checks whether a SymbolId is a lambda or compiler-generated node that should be suppressed.
-    internal static bool IsSuppressed(string symbolId)
+    // Parse --suppress value: comma-separated list of "ctors","lambdas","none".
+    // "none" overrides everything → SuppressSet.None. Unknown tokens are silently skipped.
+    internal static SuppressSet ParseSuppressSet(string? value)
     {
-        // Lambda nodes: DocID contains ~λ
-        if (symbolId.Contains("~λ", StringComparison.Ordinal))
+        if (string.IsNullOrWhiteSpace(value))
         {
-            return true;
+            return SuppressSet.Default;
         }
 
-        // Compiler-generated types: <>c (anonymous class), d__N (state machine), <>c__DisplayClassN
-        // Detect them via the declaring-type segment of the DocID.
-        // DocID form: M:Namespace.TypeName.MethodName(params) or M:TypeName.MethodName(params)
-        // The type segment is everything between "M:" and the last dot before "(" (ShortName handles this).
-        // We look for the type-segment containing "<>" patterns.
-        var paren = symbolId.IndexOf('(');
-        var head = paren >= 0 ? symbolId.AsSpan(0, paren) : symbolId.AsSpan();
-        var lastDot = head.LastIndexOf('.');
-        var typeSegment = lastDot >= 0 ? head.Slice(0, lastDot) : head;
-        // The type may itself be qualified; take the last segment.
-        var prevDot = typeSegment.LastIndexOf('.');
-        var simpleName = prevDot >= 0 ? typeSegment.Slice(prevDot + 1) : typeSegment;
-
-        if (
-            simpleName.StartsWith("<>c", StringComparison.Ordinal)
-            || simpleName.StartsWith("<>d__", StringComparison.Ordinal)
-            || simpleName.Contains("d__", StringComparison.Ordinal)
-        )
+        var result = SuppressSet.None;
+        foreach (var token in value.Split(','))
         {
-            return true;
+            var t = token.Trim();
+            if (string.Equals(t, "none", StringComparison.OrdinalIgnoreCase))
+            {
+                return SuppressSet.None;
+            }
+
+            if (string.Equals(t, "lambdas", StringComparison.OrdinalIgnoreCase))
+            {
+                result |= SuppressSet.Lambdas;
+            }
+            else if (string.Equals(t, "ctors", StringComparison.OrdinalIgnoreCase))
+            {
+                result |= SuppressSet.Ctors;
+            }
+        }
+
+        return result;
+    }
+
+    // Checks whether a SymbolId is a lambda or compiler-generated node that should be suppressed
+    // under the given SuppressSet.
+    internal static bool IsSuppressed(string symbolId, SuppressSet suppress = SuppressSet.Default)
+    {
+        if (suppress == SuppressSet.None)
+        {
+            return false;
+        }
+
+        if ((suppress & SuppressSet.Lambdas) != 0)
+        {
+            // Lambda nodes: DocID contains ~λ
+            if (symbolId.Contains("~λ", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            // Compiler-generated types: <>c (anonymous class), d__N (state machine), <>c__DisplayClassN
+            // Detect them via the declaring-type segment of the DocID.
+            // DocID form: M:Namespace.TypeName.MethodName(params) or M:TypeName.MethodName(params)
+            // The type segment is everything between "M:" and the last dot before "(" (ShortName handles this).
+            // We look for the type-segment containing "<>" patterns.
+            var paren = symbolId.IndexOf('(');
+            var head = paren >= 0 ? symbolId.AsSpan(0, paren) : symbolId.AsSpan();
+            var lastDot = head.LastIndexOf('.');
+            var typeSegment = lastDot >= 0 ? head.Slice(0, lastDot) : head;
+            // The type may itself be qualified; take the last segment.
+            var prevDot = typeSegment.LastIndexOf('.');
+            var simpleName = prevDot >= 0 ? typeSegment.Slice(prevDot + 1) : typeSegment;
+
+            if (
+                simpleName.StartsWith("<>c", StringComparison.Ordinal)
+                || simpleName.StartsWith("<>d__", StringComparison.Ordinal)
+                || simpleName.Contains("d__", StringComparison.Ordinal)
+            )
+            {
+                return true;
+            }
+        }
+
+        if ((suppress & SuppressSet.Ctors) != 0)
+        {
+            // Constructor nodes: DocID method segment is .#ctor or .#cctor
+            if (IsCtorSymbol(symbolId))
+            {
+                return true;
+            }
         }
 
         return false;
+    }
+
+    // True when the DocID method segment is .#ctor or .#cctor (constructor / static constructor).
+    internal static bool IsCtorSymbol(string symbolId)
+    {
+        // Strip parameter list for the check.
+        var paren = symbolId.IndexOf('(');
+        var head = paren >= 0 ? symbolId.AsSpan(0, paren) : symbolId.AsSpan();
+        return head.EndsWith(".#ctor", StringComparison.Ordinal) || head.EndsWith(".#cctor", StringComparison.Ordinal);
     }
 
     // Parse the parameter count from a DocID. Returns 0 for no-arg or no parameter list.
@@ -168,8 +258,9 @@ internal static class LlmSummaryRenderer
         return count;
     }
 
-    // Format the raw effects list: aggregate by "provider:operation", emit "provider:operation ×N"
-    // (N > 1) or "provider:operation" (N == 1), comma-separated in first-seen order.
+    // Format the raw effects list: aggregate by "provider:operation", emit "provider:operation*N"
+    // (N > 1) or "provider:operation" (N == 1), comma-joined (no space) in first-seen order.
+    // Result is ASCII-only and whitespace-free: "*" instead of " ×", "," instead of ", ".
     internal static string FormatEffects(IReadOnlyList<string> rawEffects)
     {
         if (rawEffects.Count == 0)
@@ -193,13 +284,74 @@ internal static class LlmSummaryRenderer
             }
         }
 
-        var parts = order.Select(e => counts[e] > 1 ? $"{e} ×{counts[e].ToString(CultureInfo.InvariantCulture)}" : e);
-        return string.Join(", ", parts);
+        var parts = order.Select(e => counts[e] > 1 ? $"{e}*{counts[e].ToString(CultureInfo.InvariantCulture)}" : e);
+        return string.Join(",", parts);
     }
 
-    // The LLM-format short name: TypeName.MethodName — no namespace, no parameter types.
-    // Uses SymbolNameFormatter.ShortName which takes the last two namespace-segments.
-    internal static string LlmName(string symbolId) => ShortName(symbolId);
+    // Strip Roslyn DocID arity markers from a SHORT name (after namespace stripping).
+    // Roslyn uses `N (type arity) and ``N (method arity). These appear as trailing suffixes on
+    // name segments: "Concat``1" -> "Concat", "Foo`2.Bar``1" -> "Foo.Bar".
+    // The arity column already carries the parameter count; the marker is noise for LLM consumption.
+    // Only the trailing ``N / `N marker on each dot-segment is stripped — other characters untouched.
+    // E.g. "Construct`2.New``1" -> "Construct.New" (both type and method arity markers stripped).
+    internal static string StripArityMarkers(string name)
+    {
+        if (name.IndexOf('`') < 0)
+        {
+            return name;
+        }
+
+        // Process segment by segment (split on '.', strip trailing `N / ``N from each).
+        var sb = new System.Text.StringBuilder(name.Length);
+        var start = 0;
+        for (var i = 0; i <= name.Length; i++)
+        {
+            var isEnd = i == name.Length;
+            var isDot = !isEnd && name[i] == '.';
+            if (!isEnd && !isDot)
+            {
+                continue;
+            }
+
+            // Segment is name[start..i].
+            var segEnd = i;
+            // Walk back past digits, then past one or two backticks.
+            var j = segEnd;
+            while (j > start && char.IsDigit(name[j - 1]))
+            {
+                j--;
+            }
+
+            // Must have consumed at least one digit to strip.
+            if (j < segEnd)
+            {
+                // Now expect one or two backticks just before the digits.
+                if (j > start + 1 && name[j - 1] == '`' && name[j - 2] == '`')
+                {
+                    segEnd = j - 2; // strip ``N
+                }
+                else if (j > start && name[j - 1] == '`')
+                {
+                    segEnd = j - 1; // strip `N
+                }
+            }
+
+            if (sb.Length > 0)
+            {
+                sb.Append('.');
+            }
+
+            sb.Append(name, start, segEnd - start);
+            start = i + 1; // skip the dot
+        }
+
+        return sb.ToString();
+    }
+
+    // The LLM-format short name: TypeName.MethodName — no namespace, no parameter types, no arity markers.
+    // Uses SymbolNameFormatter.ShortName which takes the last two namespace-segments, then strips
+    // Roslyn generic arity markers (e.g. `N / ``N) from the result.
+    internal static string LlmName(string symbolId) => StripArityMarkers(ShortName(symbolId));
 
     // True when this node directly has an effect OR any descendant does (mirrors SubtreeHasEffect in
     // TreeRenderer — duplicated here to keep the renderer self-contained without a cross-type dependency).
@@ -221,72 +373,168 @@ internal static class LlmSummaryRenderer
         return false;
     }
 
+    // Collect all direct effects from a suppressed node and its suppressed-chain descendants,
+    // appending into `acc`. Used to roll up effects from suppressed nodes onto the nearest
+    // non-suppressed ancestor's row before that row is emitted.
+    // A suppressed Truncated node contributes its own effects but not its children (same rule
+    // as non-suppressed Truncated nodes — the subtree is not expanded).
+    private static void CollectSuppressedEffects(
+        TraceNode node,
+        IReadOnlyDictionary<string, List<string>> rawEffectsByMethod,
+        SuppressSet suppress,
+        List<string> acc
+    )
+    {
+        // This node's own direct effects.
+        if (rawEffectsByMethod.TryGetValue(node.SymbolId, out var ownEffects))
+        {
+            acc.AddRange(ownEffects);
+        }
+
+        if (node.Truncated)
+        {
+            return; // do not expand children of a truncated node
+        }
+
+        // Recurse only into suppressed children (non-suppressed children are handled by the main walk).
+        foreach (var child in node.Children)
+        {
+            if (IsSuppressed(child.SymbolId, suppress))
+            {
+                CollectSuppressedEffects(child, rawEffectsByMethod, suppress, acc);
+            }
+        }
+    }
+
     private static void WalkNode(
         TraceNode node,
         int depth,
         string parentName,
         IReadOnlyDictionary<string, List<string>> rawEffectsByMethod,
         LlmProjection projection,
-        TextWriter output
+        TextWriter output,
+        SuppressSet suppress
     )
     {
-        // Suppress lambdas and compiler-generated types.
-        if (IsSuppressed(node.SymbolId))
+        // Determine whether this node is suppressed.
+        if (IsSuppressed(node.SymbolId, suppress))
         {
-            // Still walk children; they may be non-suppressed (e.g. lambda wrapping a named method).
+            // Suppressed node is transparent: walk its non-truncated children at the same depth
+            // and parentName. (Truncated suppressed nodes have no children to walk.)
+            if (node.Truncated)
+            {
+                return;
+            }
+
             foreach (var child in node.Children)
             {
+                // EffectfulPaths: only descend into children whose subtree reaches an effect (spine prune).
+                if (projection == LlmProjection.EffectfulPaths && !SubtreeHasEffect(child, rawEffectsByMethod))
+                {
+                    continue;
+                }
+
                 WalkNode(
                     node: child,
                     depth: depth,
                     parentName: parentName,
                     rawEffectsByMethod: rawEffectsByMethod,
                     projection: projection,
-                    output: output
+                    output: output,
+                    suppress: suppress
                 );
             }
 
             return;
+        }
+
+        // Non-suppressed node: collect effects from any immediately-suppressed direct children
+        // (roll-up) BEFORE emitting this row, so the row can include those effects.
+        // Only collect from suppressed children (non-suppressed children emit their own rows).
+        List<string>? rolledUp = null;
+        if (suppress != SuppressSet.None)
+        {
+            foreach (var child in node.Children)
+            {
+                if (IsSuppressed(child.SymbolId, suppress))
+                {
+                    rolledUp ??= new List<string>();
+                    CollectSuppressedEffects(child, rawEffectsByMethod, suppress, rolledUp);
+                }
+            }
         }
 
         var hasEffect = rawEffectsByMethod.ContainsKey(node.SymbolId);
 
         // EffectsFlat: only emit rows for nodes that carry an effect (mirror --effects node selection).
+        // Also emit if there are rolled-up effects from suppressed children (so effects are not lost).
         // EffectfulPaths: emit this node because the caller already checked the subtree has an effect
         //   (so the spine is always present), but we don't re-check here — the child walk below prunes.
         // Full: emit every node unconditionally.
-        if (projection != LlmProjection.EffectsFlat || hasEffect)
+        var hasRolledUp = rolledUp is { Count: > 0 };
+        if (projection != LlmProjection.EffectsFlat || hasEffect || hasRolledUp)
         {
             var name = LlmName(node.SymbolId);
             var arity = ParseArity(node.SymbolId).ToString(CultureInfo.InvariantCulture);
             var calls = node.CallSites.ToString(CultureInfo.InvariantCulture);
-            var rawEffects = hasEffect ? rawEffectsByMethod[node.SymbolId] : [];
-            var effectsStr = FormatEffects(rawEffects);
 
-            // Flags: x-phase (Truncated = seen/elided marker), cycle is a special edge kind.
-            var flags = BuildFlags(node);
-
-            // EffectsFlat includes the parent name (parent row may be absent in the gappy flat view).
-            // Reconstructable projections (EffectfulPaths, Full) omit it — depth+order already encode linkage.
-            if (projection == LlmProjection.EffectsFlat)
+            // Merge this node's own effects with any rolled-up effects from suppressed children.
+            List<string> rawEffects;
+            if (hasEffect && hasRolledUp)
             {
-                output.WriteLine(
-                    $"{depth.ToString(CultureInfo.InvariantCulture)}\t{parentName}\t{name}\t{arity}\t{calls}\t{effectsStr}\t{flags}"
-                );
+                var ownEffects = rawEffectsByMethod[node.SymbolId];
+                rawEffects = new List<string>(capacity: ownEffects.Count + rolledUp!.Count);
+                rawEffects.AddRange(ownEffects);
+                rawEffects.AddRange(rolledUp!);
+            }
+            else if (hasEffect)
+            {
+                rawEffects = rawEffectsByMethod[node.SymbolId];
+            }
+            else if (hasRolledUp)
+            {
+                rawEffects = rolledUp!;
             }
             else
             {
-                output.WriteLine($"{depth.ToString(CultureInfo.InvariantCulture)}\t{name}\t{arity}\t{calls}\t{effectsStr}\t{flags}");
+                rawEffects = [];
+            }
+
+            var effectsStr = FormatEffects(rawEffects);
+
+            // Flags: "seen" for a Truncated node (the "⋯elided" marker in the tree renderer).
+            // NOTE: TraceNode.Truncated conflates two distinct causes:
+            //   (a) already expanded elsewhere (genuine re-reach redundancy signal), and
+            //   (b) depth/budget cap was hit (not redundancy).
+            // These are not distinguishable from the current model; splitting would require a
+            // TruncationCause field on TraceNode and plumbing through BuildTree. Until then, "seen"
+            // is used as the single flag (more accurate than "x-phase" for the common case (a),
+            // and avoids the misleading cross-phase implication for case (b)).
+            var flags = BuildFlags(node);
+
+            // Emit the row: fixed column count, no trailing tab.
+            // Each projection has a fixed column count (paths/full = 6, effects = 7); empty fields
+            // are empty strings. The row ends at the last column — no trailing tab, even when the
+            // last column (flags) is empty.
+            if (projection == LlmProjection.EffectsFlat)
+            {
+                // 7-column row: depth parent name arity calls effects flags
+                EmitRow(output, depth.ToString(CultureInfo.InvariantCulture), parentName, name, arity, calls, effectsStr, flags);
+            }
+            else
+            {
+                // 6-column row: depth name arity calls effects flags
+                EmitRow(output, depth.ToString(CultureInfo.InvariantCulture), name, arity, calls, effectsStr, flags);
             }
         }
 
-        // x-phase (Truncated) nodes do NOT expand their children (the tree already chose not to).
+        // seen (Truncated) nodes do NOT expand their children (the tree already chose not to).
         if (node.Truncated)
         {
             return;
         }
 
-        var childName = IsSuppressed(node.SymbolId) ? parentName : LlmName(node.SymbolId);
+        var childName = LlmName(node.SymbolId);
         foreach (var child in node.Children)
         {
             // EffectfulPaths: only descend into children whose subtree reaches an effect (spine prune).
@@ -301,19 +549,28 @@ internal static class LlmSummaryRenderer
                 parentName: childName,
                 rawEffectsByMethod: rawEffectsByMethod,
                 projection: projection,
-                output: output
+                output: output,
+                suppress: suppress
             );
         }
     }
 
+    // Emit a TSV row with NO trailing tab: fields are joined by '\t' without a trailing separator.
+    // Variadic params — number of fields determines the projection column count.
+    private static void EmitRow(TextWriter output, params string[] fields)
+    {
+        output.WriteLine(string.Join("\t", fields));
+    }
+
     private static string BuildFlags(TraceNode node)
     {
-        // x-phase: a Truncated node — the "⋯elided" marker in the tree renderer.
-        // This covers both "already-seen" and depth-cap truncation.
+        // "seen": a Truncated node — the "⋯elided" marker in the tree renderer.
+        // Covers both "already-seen" (re-reach) and depth/budget-cap truncation; the cause is not
+        // distinguishable from the current model (TraceNode.Truncated is a single bool).
         var parts = new List<string>();
         if (node.Truncated)
         {
-            parts.Add("x-phase");
+            parts.Add("seen");
         }
 
         if (node.EdgeKind == "cycle")

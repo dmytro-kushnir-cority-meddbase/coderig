@@ -38,7 +38,8 @@ internal static class TreeCommand
         var from = CommonOptions.Pattern(name: "from", description: "Entry-point method pattern.");
         var view = new Option<string>("--view")
         {
-            Description = "Projection view: paths (default) — effectful-paths tree; full — every reachable method with effects/unresolved calls as leaf nodes; effects — flat list of effectful methods; summary — effect-count rollup; hazards — tree with pattern hazards (race_window/dual_write/…) inline. --format llm composes with paths/full/effects; summary and hazards are rejected with --format llm.",
+            Description =
+                "Projection view: paths (default) — effectful-paths tree; full — every reachable method with effects/unresolved calls as leaf nodes; effects — flat list of effectful methods; summary — effect-count rollup; hazards — tree with pattern hazards (race_window/dual_write/…) inline. --format llm composes with paths/full/effects; summary and hazards are rejected with --format llm.",
             DefaultValueFactory = _ => "paths",
         };
         var async = CommonOptions.Async();
@@ -57,6 +58,11 @@ internal static class TreeCommand
         var time = CommonOptions.Time();
         var format = CommonOptions.Format();
         var store = CommonOptions.Store();
+        var suppress = new Option<string>("--suppress")
+        {
+            Description =
+                "Comma-separated list of node kinds to suppress in --format llm output: ctors, lambdas, none. Default when --format llm: ctors,lambdas. Use none to disable all suppression. Ignored for other formats.",
+        };
         var cmd = new Command(name: "tree", description: "Print the first-party call tree from an entry point, annotated with effects.")
         {
             from,
@@ -74,6 +80,7 @@ internal static class TreeCommand
             time,
             format,
             store,
+            suppress,
         };
         // --view selects one of five mutually-exclusive projections (paths/full/effects/summary/hazards).
         // --format llm is compatible with paths/full/effects but not with summary or hazards.
@@ -116,6 +123,12 @@ internal static class TreeCommand
                 () =>
                 {
                     var viewValue = (pr.GetValue(view) ?? "paths").ToLowerInvariant();
+                    var formatValue = pr.GetValue(format);
+                    var isLlmFmt = string.Equals(formatValue, "llm", StringComparison.OrdinalIgnoreCase);
+                    // --suppress is only meaningful for --format llm; parse it when llm, else no-op.
+                    var suppressSet = isLlmFmt
+                        ? LlmSummaryRenderer.ParseSuppressSet(pr.GetValue(suppress))
+                        : LlmSummaryRenderer.SuppressSet.Default;
                     return RunAsync(
                         fromPattern: pr.GetValue(from)!,
                         full: viewValue == "full",
@@ -133,7 +146,8 @@ internal static class TreeCommand
                         exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
                         noCache: pr.GetValue(noCache),
                         time: pr.GetValue(time),
-                        format: pr.GetValue(format),
+                        format: formatValue,
+                        suppressSet: suppressSet,
                         output: output,
                         error: error,
                         workingDirectory: workingDirectory,
@@ -163,6 +177,7 @@ internal static class TreeCommand
         bool noCache,
         bool time,
         string? format,
+        LlmSummaryRenderer.SuppressSet suppressSet,
         TextWriter output,
         TextWriter error,
         string workingDirectory,
@@ -402,7 +417,7 @@ internal static class TreeCommand
                 full ? LlmProjection.Full
                 : effectsOnly ? LlmProjection.EffectsFlat
                 : LlmProjection.EffectfulPaths;
-            Render(roots: roots, rawEffectsByMethod: rawEffectsForLlm, projection: projection, output: output);
+            Render(roots: roots, rawEffectsByMethod: rawEffectsForLlm, projection: projection, output: output, suppress: suppressSet);
             timer.Total();
             return 0;
         }

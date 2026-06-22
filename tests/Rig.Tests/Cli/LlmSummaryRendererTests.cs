@@ -5,8 +5,8 @@ using Shouldly;
 
 namespace Rig.Tests.Cli;
 
-// Unit tests for LlmSummaryRenderer: header, name shortening, arity, effect aggregation, x-phase,
-// lambda suppression, determinism. Uses synthetic TraceNode forests — no DB, no graph.
+// Unit tests for LlmSummaryRenderer: header, name shortening, arity, effect aggregation, seen flag,
+// lambda suppression, ctor suppression, determinism. Uses synthetic TraceNode forests — no DB, no graph.
 public sealed class LlmSummaryRendererTests
 {
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────
@@ -30,7 +30,8 @@ public sealed class LlmSummaryRendererTests
     private static string Render(
         IReadOnlyList<TraceNode> roots,
         IReadOnlyDictionary<string, List<string>>? rawEffects = null,
-        LlmSummaryRenderer.LlmProjection projection = LlmSummaryRenderer.LlmProjection.Full
+        LlmSummaryRenderer.LlmProjection projection = LlmSummaryRenderer.LlmProjection.Full,
+        LlmSummaryRenderer.SuppressSet suppress = LlmSummaryRenderer.SuppressSet.None
     )
     {
         var sw = new StringWriter();
@@ -38,7 +39,8 @@ public sealed class LlmSummaryRendererTests
             roots: roots,
             rawEffectsByMethod: rawEffects ?? new Dictionary<string, List<string>>(StringComparer.Ordinal),
             projection: projection,
-            output: sw
+            output: sw,
+            suppress: suppress
         );
         return sw.ToString();
     }
@@ -95,6 +97,36 @@ public sealed class LlmSummaryRendererTests
         cols[1].ShouldBe("Repo.Save");
     }
 
+    // ── arity markers stripped from name ─────────────────────────────────────────────────────────
+
+    [Test]
+    public void Name_strips_method_arity_marker()
+    {
+        // Roslyn DocID: method-level arity marker ``N on the method segment.
+        // "M:App.Loader.Concat``1(System.String)" -> name should be "Loader.Concat" (not "Loader.Concat``1")
+        var output = Render([Node("M:App.Loader.Concat``1(System.String)")]);
+        var cols = Lines(output)[1].Split('\t');
+        cols[1].ShouldBe("Loader.Concat");
+    }
+
+    [Test]
+    public void Name_strips_type_arity_marker()
+    {
+        // "M:App.Foo`2.Bar()" -> name should be "Foo.Bar" (type arity marker `2 stripped)
+        var output = Render([Node("M:App.Foo`2.Bar()")]);
+        var cols = Lines(output)[1].Split('\t');
+        cols[1].ShouldBe("Foo.Bar");
+    }
+
+    [Test]
+    public void Name_strips_both_type_and_method_arity_markers()
+    {
+        // "M:App.Construct`2.New``1()" -> name should be "Construct.New"
+        var output = Render([Node("M:App.Construct`2.New``1()")]);
+        var cols = Lines(output)[1].Split('\t');
+        cols[1].ShouldBe("Construct.New");
+    }
+
     // ── arity ────────────────────────────────────────────────────────────────────────────────────
     // Full projection: 6-column header (depth name arity calls effects flags) — arity at index 2.
 
@@ -140,8 +172,9 @@ public sealed class LlmSummaryRendererTests
         childCols[3].ShouldBe("3"); // calls column
     }
 
-    // ── effects aggregation ──────────────────────────────────────────────────────────────────────
+    // ── effects aggregation — ASCII, whitespace-free ─────────────────────────────────────────────
     // Full projection: 6-column header (depth name arity calls effects flags) — effects at index 4.
+    // Count suffix is "*N" (ASCII), distinct effects joined by "," (no space).
 
     [Test]
     public void Single_effect_occurrence_has_no_count_suffix()
@@ -154,24 +187,29 @@ public sealed class LlmSummaryRendererTests
     }
 
     [Test]
-    public void Multiple_occurrences_of_same_effect_are_aggregated_with_count()
+    public void Multiple_occurrences_of_same_effect_are_aggregated_with_ascii_count()
     {
         var root = Node("M:App.Svc.Do()");
         var rawEffects = RawEffects(("M:App.Svc.Do()", ["io:read", "io:read", "io:read"]));
 
         var cols = Lines(Render([root], rawEffects))[1].Split('\t');
-        cols[4].ShouldBe("io:read ×3");
+        // ASCII "*N", no space before count, no × character
+        cols[4].ShouldBe("io:read*3");
+        cols[4].ShouldNotContain("×");
+        cols[4].ShouldNotContain(" ");
     }
 
     [Test]
-    public void Multiple_distinct_effects_are_comma_separated_with_per_kind_counts()
+    public void Multiple_distinct_effects_are_comma_joined_no_space()
     {
         var root = Node("M:App.Svc.Do()");
         var rawEffects = RawEffects(("M:App.Svc.Do()", ["io:read", "efcore:read", "io:read", "efcore:read", "io:read"]));
 
         var cols = Lines(Render([root], rawEffects))[1].Split('\t');
-        // first-seen order: io:read then efcore:read
-        cols[4].ShouldBe("io:read ×3, efcore:read ×2");
+        // first-seen order: io:read then efcore:read; comma without space
+        cols[4].ShouldBe("io:read*3,efcore:read*2");
+        cols[4].ShouldNotContain(" ");
+        cols[4].ShouldNotContain("×");
     }
 
     [Test]
@@ -183,10 +221,76 @@ public sealed class LlmSummaryRendererTests
         cols[4].ShouldBe("");
     }
 
-    // ── x-phase (Truncated = elided/seen) ───────────────────────────────────────────────────────
+    // ── fixed column count ────────────────────────────────────────────────────────────────────────
+    // Every row in a given projection has exactly that projection's column count:
+    //   paths/full = 6: depth name arity calls effects flags
+    //   effects-flat = 7: depth parent name arity calls effects flags
+    // Empty trailing fields are still present (tab-separated), so the field count is always fixed.
+    // The "no trailing tab" guarantee means: no EXTRA columns beyond the defined projection column
+    // count. When the last field (flags) is empty, the row ends with the tab before it (standard
+    // TSV: tab is a separator, so N fields have N-1 separators, and the Nth field can be empty).
 
     [Test]
-    public void X_phase_node_is_emitted_with_x_phase_flag()
+    public void Full_projection_rows_have_exactly_6_columns()
+    {
+        // Node with no effects and no flags — every row in full projection must have 6 fields.
+        var root = Node("M:App.Svc.Do()", callSites: 1, Node("M:App.Repo.Load()"));
+        var lines = Lines(Render([root]));
+        foreach (var line in lines.Skip(1))
+        {
+            var cols = line.Split('\t');
+            cols.Length.ShouldBe(6, $"Expected 6 columns for Full; got {cols.Length} on: {line}");
+        }
+    }
+
+    [Test]
+    public void EffectsFlat_rows_have_exactly_7_columns()
+    {
+        var root = Node("M:App.Svc.Do()", callSites: 1, Node("M:App.Repo.Load()"));
+        var rawEffects = RawEffects(("M:App.Repo.Load()", ["io:read"]));
+        var lines = Lines(Render([root], rawEffects, LlmSummaryRenderer.LlmProjection.EffectsFlat));
+        foreach (var line in lines.Skip(1))
+        {
+            var cols = line.Split('\t');
+            cols.Length.ShouldBe(7, $"Expected 7 columns for EffectsFlat; got {cols.Length} on: {line}");
+        }
+    }
+
+    [Test]
+    public void Row_with_empty_effects_and_empty_flags_has_correct_field_count()
+    {
+        // A node with NO effects and NO flags still has 6 columns; the last two are empty strings.
+        // The row may end with tabs (the two empty trailing fields are still present).
+        var root = Node("M:App.Svc.DoEmpty()");
+        var lines = Lines(Render([root]));
+        var dataLine = lines[1];
+        var cols = dataLine.Split('\t');
+        cols.Length.ShouldBe(6, $"Expected 6 columns; got {cols.Length} on: {dataLine}");
+        // effects (index 4) and flags (index 5) are both empty
+        cols[4].ShouldBe("");
+        cols[5].ShouldBe("");
+    }
+
+    [Test]
+    public void Row_with_flags_does_not_have_extra_column_after_flags()
+    {
+        // A row with flags set must not have a 7th column (for Full projection) — no trailing tab
+        // beyond the defined projection column count.
+        var root = Node("M:App.Svc.Do()", callSites: 1, Truncated("M:App.Repo.Load()"));
+        var lines = Lines(Render([root]));
+        // The truncated child gets flags="seen"; its row must have exactly 6 columns.
+        var truncatedLine = lines[2]; // depth 1
+        var cols = truncatedLine.Split('\t');
+        cols.Length.ShouldBe(6, $"Expected 6 columns for truncated row; got {cols.Length} on: {truncatedLine}");
+        cols[5].ShouldBe("seen");
+    }
+
+    // ── "seen" flag (Truncated = elided/seen; was "x-phase") ────────────────────────────────────
+    // NOTE: TraceNode.Truncated conflates "already expanded elsewhere" and "depth/budget cap" —
+    // both emit flags="seen". The causes are not distinguishable from the current model.
+
+    [Test]
+    public void Seen_node_is_emitted_with_seen_flag()
     {
         // An already-expanded node appears again as Truncated — the elided marker.
         var root = Node("M:App.Svc.Do()", callSites: 1, Truncated("M:App.Repo.Load()"));
@@ -194,19 +298,20 @@ public sealed class LlmSummaryRendererTests
 
         var lines = Lines(Render([root], rawEffects));
         // line[2] = the truncated child
-        var xphaseLine = lines[2];
-        xphaseLine.ShouldContain("x-phase");
-        // Must include its effects even though Truncated
-        xphaseLine.ShouldContain("efcore:read ×2");
+        var seenLine = lines[2];
+        seenLine.ShouldContain("seen");
+        seenLine.ShouldNotContain("x-phase");
+        // Must include its effects even though Truncated; ASCII format
+        seenLine.ShouldContain("efcore:read*2");
     }
 
     [Test]
-    public void X_phase_node_is_NOT_suppressed()
+    public void Seen_node_is_NOT_suppressed()
     {
         var root = Node("M:App.Svc.Do()", callSites: 1, Truncated("M:App.Repo.Load()"));
 
         var lines = Lines(Render([root]));
-        // header + root + x-phase child = 3 lines
+        // header + root + seen child = 3 lines
         lines.Count.ShouldBe(3);
         lines[2].ShouldContain("Repo.Load");
     }
@@ -214,15 +319,26 @@ public sealed class LlmSummaryRendererTests
     // ── lambda suppression ───────────────────────────────────────────────────────────────────────
 
     [Test]
-    public void Lambda_node_is_suppressed()
+    public void Lambda_node_is_suppressed_when_suppress_includes_lambdas()
     {
         var lambdaId = "M:App.Svc.Do()~λ0";
         var root = Node("M:App.Caller.Go()", callSites: 1, Node(lambdaId));
 
-        var lines = Lines(Render([root]));
+        var lines = Lines(Render([root], suppress: LlmSummaryRenderer.SuppressSet.Lambdas));
         // header + Caller.Go only — lambda is gone
         lines.Count.ShouldBe(2);
         lines.ShouldNotContain(l => l.Contains("~λ") || l.Contains("λ0"));
+    }
+
+    [Test]
+    public void Lambda_node_is_NOT_suppressed_when_suppress_is_none()
+    {
+        var lambdaId = "M:App.Svc.Do()~λ0";
+        var root = Node("M:App.Caller.Go()", callSites: 1, Node(lambdaId));
+
+        var lines = Lines(Render([root], suppress: LlmSummaryRenderer.SuppressSet.None));
+        // header + root + lambda row
+        lines.Count.ShouldBe(3);
     }
 
     [Test]
@@ -234,10 +350,80 @@ public sealed class LlmSummaryRendererTests
         var lambdaNode = Node(lambdaId, callSites: 1, namedChild);
         var root = Node("M:App.Caller.Go()", callSites: 1, lambdaNode);
 
-        var lines = Lines(Render([root]));
+        var lines = Lines(Render([root], suppress: LlmSummaryRenderer.SuppressSet.Lambdas));
         // header + Caller.Go + Repo.Save (lambda skipped but its child emitted at same depth)
         lines.Count.ShouldBe(3);
         lines.ShouldContain(l => l.Contains("Repo.Save"));
+    }
+
+    // ── ctor suppression ─────────────────────────────────────────────────────────────────────────
+
+    [Test]
+    public void Ctor_node_is_suppressed_by_default()
+    {
+        // .#ctor rows are omitted when SuppressSet includes Ctors (the default).
+        var ctor = Node("M:App.Repo.Repository.#ctor(App.Db.DbContext)");
+        var root = Node("M:App.Svc.Do()", callSites: 1, ctor);
+
+        // Default suppress = Default (includes Ctors)
+        var lines = Lines(Render([root], suppress: LlmSummaryRenderer.SuppressSet.Default));
+        // header + Svc.Do only — ctor is gone
+        lines.Count.ShouldBe(2);
+        lines.ShouldNotContain(l => l.Contains("#ctor") || l.Contains(".ctor"));
+    }
+
+    [Test]
+    public void Ctor_node_is_NOT_suppressed_when_suppress_is_none()
+    {
+        var ctor = Node("M:App.Repo.Repository.#ctor(App.Db.DbContext)");
+        var root = Node("M:App.Svc.Do()", callSites: 1, ctor);
+
+        var lines = Lines(Render([root], suppress: LlmSummaryRenderer.SuppressSet.None));
+        // header + root + ctor row
+        lines.Count.ShouldBe(3);
+    }
+
+    [Test]
+    public void Ctor_effects_are_rolled_up_to_nearest_non_suppressed_ancestor()
+    {
+        // Ctor that has direct effects: those effects must surface on the calling method's row.
+        var ctorId = "M:App.Repo.Repository.#ctor(App.Db.DbContext)";
+        var ctor = Node(ctorId, callSites: 1);
+        var root = Node("M:App.Svc.Do()", callSites: 1, ctor);
+        var rawEffects = RawEffects(("M:App.Svc.Do()", ["efcore:read"]), (ctorId, ["efcore:commit"]));
+
+        var lines = Lines(Render([root], rawEffects, suppress: LlmSummaryRenderer.SuppressSet.Default));
+        // Ctor row suppressed; its efcore:commit should appear on Svc.Do's row.
+        lines.Count.ShouldBe(2); // header + Svc.Do only
+        var dataCols = lines[1].Split('\t');
+        // effects at index 4: should contain both efcore:read (own) and efcore:commit (rolled up from ctor)
+        dataCols[4].ShouldContain("efcore:read");
+        dataCols[4].ShouldContain("efcore:commit");
+    }
+
+    [Test]
+    public void Ctor_children_are_still_walked_after_suppression()
+    {
+        // A ctor wrapping a named method — the named method should still surface.
+        var ctorId = "M:App.Repo.Repository.#ctor(App.Db.DbContext)";
+        var namedChild = Node("M:App.Cache.Cache.Warm()");
+        var ctor = Node(ctorId, callSites: 1, namedChild);
+        var root = Node("M:App.Svc.Do()", callSites: 1, ctor);
+
+        var lines = Lines(Render([root], suppress: LlmSummaryRenderer.SuppressSet.Ctors));
+        // header + Svc.Do + Cache.Warm (ctor skipped but its child emitted at same depth as ctor)
+        lines.Count.ShouldBe(3);
+        lines.ShouldContain(l => l.Contains("Cache.Warm"));
+    }
+
+    [Test]
+    public void Static_ctor_cctor_is_also_suppressed_by_default()
+    {
+        var cctor = Node("M:App.Config.AppConfig.#cctor()");
+        var root = Node("M:App.Svc.Do()", callSites: 1, cctor);
+
+        var lines = Lines(Render([root], suppress: LlmSummaryRenderer.SuppressSet.Default));
+        lines.Count.ShouldBe(2); // header + Svc.Do only
     }
 
     // ── EffectsFlat projection mirrors --effects node selection ─────────────────────────────────
@@ -256,6 +442,23 @@ public sealed class LlmSummaryRendererTests
         dataCols[2].ShouldBe("Repo.Save");
         lines.Skip(1).ShouldNotContain(l => l.Split('\t')[2] == "Svc.RunAsync");
         lines.Skip(1).ShouldNotContain(l => l.Split('\t')[2] == "Repo.Load");
+    }
+
+    [Test]
+    public void EffectsFlat_consistency_ascii_effects_and_correct_column_count()
+    {
+        // EffectsFlat must have the same ASCII effects format as Full, and 7 columns per row.
+        var root = Node("M:App.Svc.RunAsync()", callSites: 1, Node("M:App.Repo.Load()"));
+        var rawEffects = RawEffects(("M:App.Repo.Load()", ["efcore:read", "efcore:read"]));
+
+        var lines = Lines(Render([root], rawEffects, LlmSummaryRenderer.LlmProjection.EffectsFlat));
+        lines.Count.ShouldBe(2); // header + Load
+        var dataCols = lines[1].Split('\t');
+        dataCols.Length.ShouldBe(7);
+        // effects column (index 5 in EffectsFlat) must be ASCII, whitespace-free
+        dataCols[5].ShouldBe("efcore:read*2");
+        dataCols[5].ShouldNotContain("×");
+        dataCols[5].ShouldNotContain(" ");
     }
 
     [Test]
@@ -441,17 +644,36 @@ public sealed class LlmSummaryRendererTests
     // ── IsSuppressed helper ───────────────────────────────────────────────────────────────────────
 
     [Test]
-    public void IsSuppressed_returns_true_for_lambda_ids()
+    public void IsSuppressed_returns_true_for_lambda_ids_when_lambdas_in_suppress_set()
     {
-        LlmSummaryRenderer.IsSuppressed("M:App.Svc.Do()~λ0").ShouldBeTrue();
-        LlmSummaryRenderer.IsSuppressed("M:App.Svc.Do()~λ3").ShouldBeTrue();
+        LlmSummaryRenderer.IsSuppressed("M:App.Svc.Do()~λ0", LlmSummaryRenderer.SuppressSet.Lambdas).ShouldBeTrue();
+        LlmSummaryRenderer.IsSuppressed("M:App.Svc.Do()~λ3", LlmSummaryRenderer.SuppressSet.Lambdas).ShouldBeTrue();
+    }
+
+    [Test]
+    public void IsSuppressed_returns_false_for_lambda_ids_when_suppress_is_none()
+    {
+        LlmSummaryRenderer.IsSuppressed("M:App.Svc.Do()~λ0", LlmSummaryRenderer.SuppressSet.None).ShouldBeFalse();
+    }
+
+    [Test]
+    public void IsSuppressed_returns_true_for_ctor_when_ctors_in_suppress_set()
+    {
+        LlmSummaryRenderer.IsSuppressed("M:App.Repo.Repository.#ctor(System.String)", LlmSummaryRenderer.SuppressSet.Ctors).ShouldBeTrue();
+        LlmSummaryRenderer.IsSuppressed("M:App.Config.AppConfig.#cctor()", LlmSummaryRenderer.SuppressSet.Ctors).ShouldBeTrue();
+    }
+
+    [Test]
+    public void IsSuppressed_returns_false_for_ctor_when_suppress_is_none()
+    {
+        LlmSummaryRenderer.IsSuppressed("M:App.Repo.Repository.#ctor(System.String)", LlmSummaryRenderer.SuppressSet.None).ShouldBeFalse();
     }
 
     [Test]
     public void IsSuppressed_returns_false_for_normal_ids()
     {
-        LlmSummaryRenderer.IsSuppressed("M:App.Svc.DoSomething()").ShouldBeFalse();
-        LlmSummaryRenderer.IsSuppressed("M:App.Repo.Save(App.Entity)").ShouldBeFalse();
+        LlmSummaryRenderer.IsSuppressed("M:App.Svc.DoSomething()", LlmSummaryRenderer.SuppressSet.Default).ShouldBeFalse();
+        LlmSummaryRenderer.IsSuppressed("M:App.Repo.Save(App.Entity)", LlmSummaryRenderer.SuppressSet.Default).ShouldBeFalse();
     }
 
     // ── ParseArity helper ─────────────────────────────────────────────────────────────────────────
@@ -480,15 +702,69 @@ public sealed class LlmSummaryRendererTests
     }
 
     [Test]
-    public void FormatEffects_multiple_occurrences_get_count()
+    public void FormatEffects_multiple_occurrences_ascii_asterisk_count()
     {
-        LlmSummaryRenderer.FormatEffects(["io:write", "io:write"]).ShouldBe("io:write ×2");
+        LlmSummaryRenderer.FormatEffects(["io:write", "io:write"]).ShouldBe("io:write*2");
     }
 
     [Test]
-    public void FormatEffects_multiple_kinds_comma_separated()
+    public void FormatEffects_multiple_kinds_comma_joined_no_space()
     {
-        LlmSummaryRenderer.FormatEffects(["io:read", "efcore:read", "io:read"]).ShouldBe("io:read ×2, efcore:read");
+        LlmSummaryRenderer.FormatEffects(["io:read", "efcore:read", "io:read"]).ShouldBe("io:read*2,efcore:read");
+    }
+
+    [Test]
+    public void FormatEffects_result_is_ascii_and_whitespace_free()
+    {
+        var result = LlmSummaryRenderer.FormatEffects(["io:read", "efcore:read", "io:read", "efcore:read"]);
+        result.ShouldNotContain("×");
+        result.ShouldNotContain(" ");
+        result.ShouldBe("io:read*2,efcore:read*2");
+    }
+
+    // ── StripArityMarkers helper ──────────────────────────────────────────────────────────────────
+
+    [Test]
+    public void StripArityMarkers_strips_method_arity()
+    {
+        LlmSummaryRenderer.StripArityMarkers("Concat``1").ShouldBe("Concat");
+        LlmSummaryRenderer.StripArityMarkers("Load``2").ShouldBe("Load");
+    }
+
+    [Test]
+    public void StripArityMarkers_strips_type_arity()
+    {
+        LlmSummaryRenderer.StripArityMarkers("Foo`2.Bar").ShouldBe("Foo.Bar");
+        LlmSummaryRenderer.StripArityMarkers("Cache`1.Get``1").ShouldBe("Cache.Get");
+    }
+
+    [Test]
+    public void StripArityMarkers_strips_both_type_and_method_arity()
+    {
+        LlmSummaryRenderer.StripArityMarkers("Construct`2.New``1").ShouldBe("Construct.New");
+    }
+
+    [Test]
+    public void StripArityMarkers_no_markers_is_identity()
+    {
+        LlmSummaryRenderer.StripArityMarkers("Repo.Save").ShouldBe("Repo.Save");
+        LlmSummaryRenderer.StripArityMarkers("Svc.DoSomething").ShouldBe("Svc.DoSomething");
+    }
+
+    // ── IsCtorSymbol helper ───────────────────────────────────────────────────────────────────────
+
+    [Test]
+    public void IsCtorSymbol_returns_true_for_ctor_and_cctor()
+    {
+        LlmSummaryRenderer.IsCtorSymbol("M:App.Repo.Repository.#ctor(System.String)").ShouldBeTrue();
+        LlmSummaryRenderer.IsCtorSymbol("M:App.Config.AppConfig.#cctor()").ShouldBeTrue();
+    }
+
+    [Test]
+    public void IsCtorSymbol_returns_false_for_regular_methods()
+    {
+        LlmSummaryRenderer.IsCtorSymbol("M:App.Svc.DoSomething()").ShouldBeFalse();
+        LlmSummaryRenderer.IsCtorSymbol("M:App.Repo.Save(App.Entity)").ShouldBeFalse();
     }
 }
 
@@ -604,6 +880,12 @@ public sealed class LlmSummaryCliTests
             cols.Length.ShouldBe(7);
             // name column (index 2) must not contain full CLR namespace prefixes
             cols[2].ShouldNotContain("System.");
+            // effects column (index 5) must be ASCII, no × character, no internal spaces
+            if (cols[5].Length > 0)
+            {
+                cols[5].ShouldNotContain("×");
+                cols[5].ShouldNotContain(" ");
+            }
         }
     }
 
