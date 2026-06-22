@@ -56,9 +56,7 @@ app.MapGet(
     (string? csv) =>
     {
         var csvPath = string.IsNullOrWhiteSpace(csv) ? DefaultCsvPath : csv;
-        return File.Exists(csvPath) 
-            ? Results.Text(File.ReadAllText(csvPath), "text/csv") 
-            : Results.NotFound($"No CSV at {csvPath}");
+        return File.Exists(csvPath) ? Results.Text(File.ReadAllText(csvPath), "text/csv") : Results.NotFound($"No CSV at {csvPath}");
     }
 );
 
