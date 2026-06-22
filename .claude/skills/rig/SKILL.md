@@ -83,9 +83,13 @@ durable systems written in one method — db/queue/search/cache/http).
   `hazard` tsv row (`type/confidence/reason/cell/enclosing/file:line`).
 - **Diff them**: `rig impact` reports a per-EP hazard DELTA (`+/- hazard <type>(<conf>)` base→head). NB
   `--expect-no-effect-change` is effect-set-only and does NOT trip on a hazard-only delta.
-- **Not yet wired**: `rig tree --hazards` inline drill-in (planned); `event_cycle` (blocked on a missing
-  publish→consumer graph edge). Hazards need static field read/write effects → **re-index** after the
-  field-emission/structural-context extraction changes.
+- **Drill into one EP**: `rig tree <ep> --hazards` — a ⚠ marker per hazard-bearing node (`type(conf)`, ×N
+  for repeats) + a summary section + `--format tsv` `hazard` rows. Re-derives the EP's bounded closure with
+  the static-field refs threaded in + the hazard post-pass; the augmented effects aren't cached, so a plain
+  `tree` is unaffected. This is the surface that shows the field-fed `shared_state:read/mutate` effects a
+  plain `tree` omits (it doesn't thread field refs).
+- **Not yet wired**: `event_cycle` (blocked on a missing publish→consumer graph edge). Hazards need static
+  field read/write effects → **re-index** after the field-emission/structural-context extraction changes.
 - **Design**: [docs/hazards.md](../../docs/hazards.md) (abstract, in-repo). MedDBase-grounded roadmap + RCA
   corpus live in `meddbase-analysis/docs/` (backlog-bug-detection.md, rca-corpus-meddbase.md).
 

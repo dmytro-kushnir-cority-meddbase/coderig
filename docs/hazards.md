@@ -89,7 +89,10 @@ The same "summary → react → full deal" model on every surface:
   gate. (Note: `--expect-no-effect-change` is a *deterministic effect-set* gate and must NOT trip on a
   hazard-only delta — a heuristic hazard gain on a behaviour-preserving refactor stays green; a separate
   opt-in would gate hazards.)
-- **`rig tree <ep>`** — hazards inline on one entry point's reachable tree (drill-in). *Planned.*
+- **`rig tree <ep> --hazards`** — hazards inline on one entry point's reachable tree (drill-in): a ⚠ marker
+  per hazard-bearing node + a summary section + `--format tsv` `hazard` rows. Re-derives the EP's bounded
+  closure with the static-field refs threaded in + the hazard post-pass; the augmented effects are not cached
+  (the hazard-free caches are untouched), so a plain `tree` is unaffected.
 
 A detector is modeled as an observation on an effect; adding its type to the hazard catalog
 (`HazardKinds`) flows it through the derive view and the impact delta automatically.

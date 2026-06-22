@@ -64,7 +64,7 @@ All commands except `index`/`mine` are read-only and run from the directory that
 | `rig runs` | List indexed runs (entry-point / effect / symbol counts) |
 | `rig derive [--rules <p>...] [--only <p,..>] [--exclude <p,..>]` | Stage-2 pass over facts: re-derive effects + entry points + classified handoffs. `--exclude throw` drops exceptions |
 | `rig reaches <pat> [--async] [--only/--exclude <p,..>] [--maxdepth <n>] [--format tsv]` | Effects reachable from an entry point (synchronous by default; `--async` also walks handoffs into a separate ⚡ bucket) |
-| `rig tree <pat> [--full\|--summary\|--effects] [--async] [--only/--exclude <p,..>] [--raw] [--maxdepth <n>]` | Call tree from an entry point. Default prunes to effect-reaching paths; `--effects` lists only effectful methods; `--raw` bypasses render rules |
+| `rig tree <pat> [--full\|--summary\|--effects] [--hazards] [--async] [--only/--exclude <p,..>] [--raw] [--maxdepth <n>]` | Call tree from an entry point. Default prunes to effect-reaching paths; `--effects` lists only effectful methods; `--hazards` marks pattern hazards (race_window/dual_write/…) inline + a summary section; `--raw` bypasses render rules |
 | `rig callers <pat> [--roots\|--entrypoints] [--async] [--raw] [--maxdepth <n>]` | Reverse reachability: who reaches this method. `--entrypoints` = the rule-detected entry points; `--roots` = no-predecessor candidates |
 | `rig path <fromPat> <toPat> [--async] [--raw] [--maxdepth <n>]` | One concrete path between two symbols |
 | `rig dead [--lib] [--include-dispatch] [--all] [--root <pat>...] [--format tsv]` | Unreachable first-party methods (report-only — compiler-confirm before removing) |
