@@ -216,12 +216,12 @@ the rest are the same patterns in other commands, still open. Severity = the cos
 | F1 | `LoadFactGraphAsync` (efcore:read ×4) loaded inside `DeriveHandoffEntryPointsAsync` AND again directly | Derive | **open** — the clean fix is the `LoadShapedGraphAsync` consolidation (load+shape once, reuse) |
 | F2 | `LoadFactEntryPointDataAsync` (efcore:read ×5) loaded top-level AND again inside a derivation callee | Derive ✓, **Reaches/Tree/Callers/Path/Impact open** | derive fixed (epData threaded in); other EPs reload it inside `TraversalGraphLoader.LoadReachInputsFromRowsAsync` + `EntryPointContext.DeriveEpSiteKindAsync` |
 | F3 | `LoadFactGraphAsync` HEAD + BASE in Impact; each opens a fresh ADO conn via `LoadDispatchFactsAsync` | Impact | conn-reuse part FIXED in `LoadFactGraphAsync`; the base/head double-load is **intentional** (different stores) |
-| F4 | `LoadDeploymentsAsync` (io:read ×3, slnx+projrefs parse) runs **twice** (`calls=2`) | Impact | **open** — cache the `DeploymentMap` on the command, reuse across both sites |
+| F4 | `LoadDeploymentsAsync` (io:read ×3, slnx+projrefs parse) runs **twice** (`calls=2`) | Impact | **FIXED** (`78dbe9c2`) — hoisted before the cache branch, reused on both paths |
 | F5 | `EffectDerivation.DeriveEffects` (full effect-match loop) runs twice on cold cache | Tree/Reaches/Derive | **open** — `DeriveHazardEffectsAsync` should take the already-derived effects rather than re-deriving |
 | F6 | `RuleSetLoader.LoadMergedDocument` re-run for fingerprinting (4× total per command) | ALL 9 | derive fixed (`ComputeFromPaths` reuses resolved paths); **other 8 EPs open** (still call `RulesFingerprint.Compute` which re-merges) |
-| F7 | `StoreLayout.ResolveReadStoreDir` (io:read ×7) resolved in `OpenReadContext` AND again for `StoreKey` | Derive | **open** — pass the resolved dir from `OpenReadContext` to the cache-key computation |
-| F8 | `LoadStaticField{Write,Read}RefsAsync` — two reads, identical base query | Derive ✓, **Impact/Tree open** | derive fixed (combined `…AccessRefsByKindAsync`); Impact/Tree still call the two single-kind loaders |
-| F9 | `LoadDeploymentsAsync` (io:read ×3) loaded in `RunEntryPointsAsync` AND again at depth-1 | Callers | **open** — pass the loaded `DeploymentMap` into `BuildEpContextAsync` |
+| F7 | `StoreLayout.ResolveReadStoreDir` (io:read ×7) resolved in `OpenReadContext` AND again for `StoreKey` | Derive | **FIXED** (`78dbe9c2`) — `OpenReadContext` surfaces the dir via out-param, reused for `StoreKey` |
+| F8 | `LoadStaticField{Write,Read}RefsAsync` — two reads, identical base query | **FIXED** (Derive + Impact) | derive + impact (both sides) use the combined `…AccessRefsByKindAsync` (`78dbe9c2`); Tree already routes through the shared `DeriveHazardEffectsAsync` (combined) |
+| F9 | `LoadDeploymentsAsync` (io:read ×3) loaded in `RunEntryPointsAsync` AND again at depth-1 | Callers | **FIXED** (`78dbe9c2`) — `DeploymentMap` loaded at the call site, threaded into `RunEntryPointsAsync` |
 
 Cross-EP heavy shared methods (benign at once-per-command, the F1–F9 cases are the >once ones):
 `LoadFactGraphAsync` (7/9 EPs), `LoadFactEntryPointDataAsync` (7/9), `LoadDeploymentsAsync` (7/9),
