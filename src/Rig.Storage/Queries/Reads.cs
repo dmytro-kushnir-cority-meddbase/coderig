@@ -426,11 +426,12 @@ public static class Reads
     //     per such rule (normally one event rule).
     //   - arg rules (Producer.Source == "arg"): invocation refs whose (declaringType, method) match a rule's
     //     Registration or Producer endpoint Methods×DeclaringTypes. The channel identity is the argument the
-    //     rule's `resolve` selects — "path" uses the FirstArgumentName GATED to a member path (Contains('.'):
-    //     a bare-variable name like `tell(pid, …)` is not a stable cross-method identity and collides
-    //     spuriously with Echo framework internals, so it is skipped — this gate is now the `path` resolver's
-    //     behaviour, no longer Echo-specific). An invocation matching a Registration endpoint gets Role=
-    //     Registration; a Producer endpoint, Role=Producer. The process-name string identity is ~heuristic.
+    //     rule's `resolve` selects, both GATED to a member path (Contains('.'): a bare-variable name like
+    //     `tell(pid, …)` is not a stable cross-method identity and collides spuriously, so it is skipped):
+    //     "path" keeps the full member path; "leaf" keeps the LAST segment (bridging parallel registries that
+    //     share a leaf but differ by class prefix — e.g. tell `ProcessDns.X` ↔ spawn `ProcessNames.X`). An
+    //     invocation matching a Registration endpoint gets Role=Registration; a Producer endpoint, Role=
+    //     Producer. The process-name string identity is ~heuristic (more so for leaf).
     //
     // ArgumentIndex > 0 is not yet supported by the facts (only FirstArgumentName/arg0 is captured), so a
     // "path" rule with ArgumentIndex != 0 falls back to arg0 — see the in-memory pass below.
@@ -481,7 +482,7 @@ public static class Reads
         //     invocation-ref scan serves every actor-shaped mechanism. The Registration endpoint's
         //     Methods×DeclaringTypes map to Role=Registration; the Producer endpoint's to Role=Producer. A
         //     method appearing under both (none today) resolves to whichever rule is listed last. ---
-        var argMethods = new Dictionary<(string Type, string Name), (string Tag, DeliveryRole Role)>();
+        var argMethods = new Dictionary<(string Type, string Name), (string Tag, DeliveryRole Role, string Resolve)>();
         foreach (var rule in deliveryRules)
         {
             AddArgEndpoint(argMethods, rule.Tag, rule.Registration, DeliveryRole.Registration);
@@ -518,20 +519,29 @@ public static class Reads
                     continue;
                 }
 
-                // `path` resolver: the FirstArgumentName GATED to a member path (contains a '.', e.g.
-                // `ProcessDns.AccountService`) — the reliable cross-method identity. A bare-variable name is not
-                // a stable identity and collides spuriously, so it never becomes a delivery site.
+                // Both arg resolvers GATE to a member path (contains a '.', e.g. `ProcessDns.AccountService`):
+                // a bare-variable name (`tell(pid, …)`) is not a stable cross-method identity and collides
+                // spuriously with framework internals, so it never becomes a delivery site.
                 if (!r.FirstArgumentName!.Contains('.', StringComparison.Ordinal))
                 {
                     continue;
                 }
+
+                // `path` keeps the full member path (`ProcessDns.AccountService`); `leaf` takes the LAST segment
+                // (`AccountService`) — the bridge across PARALLEL registries that share a leaf but differ by
+                // class prefix (e.g. a tell through `ProcessDns.X` and the spawn through `ProcessNames.X` name
+                // the same process X). `leaf` is more ~heuristic — a leaf shared by two unrelated channels
+                // over-joins — so it is opt-in per rule (the resolve field), calibrated, and disclosed.
+                var token = string.Equals(tagRole.Resolve, "leaf", StringComparison.Ordinal)
+                    ? r.FirstArgumentName![(r.FirstArgumentName!.LastIndexOf('.') + 1)..]
+                    : r.FirstArgumentName!;
 
                 sites.Add(
                     new DeliverySite(
                         Caller: r.EnclosingSymbolId!,
                         FilePath: r.FilePath,
                         Line: r.Line,
-                        IdentityToken: r.FirstArgumentName!,
+                        IdentityToken: token,
                         Tag: tagRole.Tag,
                         Role: tagRole.Role
                     )
@@ -548,7 +558,7 @@ public static class Reads
     // always reads arg0; an endpoint declaring ArgumentIndex != 0 is treated as arg0 (no crash) — an
     // extraction limitation to lift when nth-argument names are captured.
     private static void AddArgEndpoint(
-        Dictionary<(string Type, string Name), (string Tag, DeliveryRole Role)> map,
+        Dictionary<(string Type, string Name), (string Tag, DeliveryRole Role, string Resolve)> map,
         string tag,
         DeliveryEndpoint endpoint,
         DeliveryRole role
@@ -563,7 +573,7 @@ public static class Reads
         {
             foreach (var name in endpoint.Methods ?? [])
             {
-                map[(declaringType, name)] = (tag, role);
+                map[(declaringType, name)] = (tag, role, endpoint.Resolve);
             }
         }
     }
