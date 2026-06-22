@@ -1043,7 +1043,8 @@ public sealed class LlmSummaryCliTests
         var exitCode = await CliApplication.RunAsync(["tree", "X", "--view", "invalid"], output, error);
 
         exitCode.ShouldBe(1);
-        error.ToString().ShouldContain("Unknown --view 'invalid'");
+        error.ToString().ShouldContain("invalid");
+        error.ToString().ShouldContain("not recognized");
     }
 
     [Test]

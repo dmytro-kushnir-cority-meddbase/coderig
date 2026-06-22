@@ -47,6 +47,7 @@ internal static class TreeCommand
                 "Projection view: paths (default) — effectful-paths tree; full — every reachable method with effects/unresolved calls as leaf nodes; effects — flat list of effectful methods; summary — effect-count rollup; hazards — tree with pattern hazards (race_window/dual_write/…) inline. --format llm/llm-ids composes with paths/full/effects; summary and hazards are rejected with --format llm/llm-ids.",
             DefaultValueFactory = _ => "paths",
         };
+        view.AcceptOnlyFromAmong("paths", "full", "effects", "summary", "hazards");
         var async = CommonOptions.Async();
         var raw = CommonOptions.Raw();
         var files = CommonOptions.Files();
@@ -61,12 +62,15 @@ internal static class TreeCommand
         var exclude = CommonOptions.Exclude();
         var noCache = CommonOptions.NoCache();
         var time = CommonOptions.Time();
-        var format = CommonOptions.Format();
+        var format = CommonOptions.Format(
+            description: "Output format: tsv — machine-readable DFS rows; llm — compact LLM TSV (6-col); llm-ids — LLM TSV with explicit id/parent_id linkage (8-col). llm and llm-ids compose with --view paths/full/effects only.",
+            allowedValues: ["tsv", "llm", "llm-ids"]
+        );
         var store = CommonOptions.Store();
         var suppress = new Option<string>("--suppress")
         {
             Description =
-                "Comma-separated list of node kinds to suppress in --format llm/llm-ids output: ctors, lambdas, none. Default when --format llm/llm-ids: ctors,lambdas. Use none to disable all suppression. Ignored for other formats.",
+                "Comma-separated subset of {ctors,lambdas} to suppress in --format llm/llm-ids output, or none to disable all suppression. Default: ctors,lambdas. Ignored for other formats.",
         };
         var cmd = new Command(name: "tree", description: "Print the first-party call tree from an entry point, annotated with effects.")
         {
@@ -87,20 +91,22 @@ internal static class TreeCommand
             store,
             suppress,
         };
-        // --view selects one of five mutually-exclusive projections (paths/full/effects/summary/hazards).
         // --format llm and --format llm-ids are compatible with paths/full/effects but not with summary or hazards.
+        // --suppress tokens must each be one of: ctors, lambdas, none.
+        // (--view closed-set validation is handled by AcceptOnlyFromAmong above.)
         cmd.Validators.Add(result =>
         {
-            var viewValue = result.GetValue(view) ?? "paths";
-            var formatValue = result.GetValue(format);
+            // Read --view via raw token so this validator doesn't throw when AcceptOnlyFromAmong already
+            // flagged the value as invalid (GetValue would throw InvalidOperationException in that case).
+            var viewResult = result.GetResult(view);
+            var viewValue = viewResult?.Tokens.Count > 0 ? viewResult.Tokens[0].Value : "paths";
+            // Read --format via raw token for the SAME reason as --view: GetValue throws
+            // InvalidOperationException when AcceptOnlyFromAmong has already flagged the value invalid
+            // (e.g. `--format xml`), which would surface as an UNHANDLED exception instead of a clean error.
+            var formatResult = result.GetResult(format);
+            var formatValue = formatResult?.Tokens.Count > 0 ? formatResult.Tokens[0].Value : null;
             var isLlmFormat = string.Equals(formatValue, "llm", StringComparison.OrdinalIgnoreCase);
             var isLlmIdsFormat = string.Equals(formatValue, "llm-ids", StringComparison.OrdinalIgnoreCase);
-
-            var validViews = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "paths", "full", "effects", "summary", "hazards" };
-            if (!validViews.Contains(viewValue))
-            {
-                result.AddError($"Unknown --view '{viewValue}'. Valid values: paths, full, effects, summary, hazards.");
-            }
 
             // --format llm and --format llm-ids are incompatible with summary (different output shape) and hazards (distinct rendering).
             if (isLlmFormat || isLlmIdsFormat)
@@ -122,6 +128,23 @@ internal static class TreeCommand
                     result.AddError($"{formatName} can't be combined with {string.Join(" and ", incompatible)} for 'rig tree'.");
                 }
             }
+
+            // --suppress is a comma-separated subset of {ctors,lambdas} or none; validate each token.
+            var suppressValue = result.GetValue(suppress);
+            if (suppressValue is not null)
+            {
+                var validSuppressTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "ctors", "lambdas", "none" };
+                var badTokens = suppressValue
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Where(t => !validSuppressTokens.Contains(t))
+                    .ToList();
+                if (badTokens.Count > 0)
+                {
+                    result.AddError(
+                        $"--suppress: unrecognized token(s) '{string.Join(", ", badTokens)}'. Valid values: ctors, lambdas, none."
+                    );
+                }
+            }
         });
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -134,10 +157,7 @@ internal static class TreeCommand
                     var isLlmFmt = string.Equals(formatValue, "llm", StringComparison.OrdinalIgnoreCase);
                     var isLlmIdsFmt = string.Equals(formatValue, "llm-ids", StringComparison.OrdinalIgnoreCase);
                     // --suppress is only meaningful for --format llm / llm-ids; parse it when either, else no-op.
-                    var suppressSet =
-                        isLlmFmt || isLlmIdsFmt
-                            ? LlmSummaryRenderer.ParseSuppressSet(pr.GetValue(suppress))
-                            : LlmSummaryRenderer.SuppressSet.Default;
+                    var suppressSet = isLlmFmt || isLlmIdsFmt ? ParseSuppressSet(pr.GetValue(suppress)) : SuppressSet.Default;
                     return RunAsync(
                         fromPattern: pr.GetValue(from)!,
                         full: viewValue == "full",
@@ -188,7 +208,7 @@ internal static class TreeCommand
         bool time,
         string? format,
         bool llmIds,
-        LlmSummaryRenderer.SuppressSet suppressSet,
+        SuppressSet suppressSet,
         TextWriter output,
         TextWriter error,
         string workingDirectory,

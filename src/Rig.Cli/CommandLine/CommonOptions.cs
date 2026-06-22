@@ -49,7 +49,16 @@ internal static class CommonOptions
                     .ToArray(),
         };
 
-    internal static Option<string?> Format() => new("--format") { Description = "Output format; `tsv` for machine-readable rows." };
+    internal static Option<string?> Format(string? description = null, string[]? allowedValues = null)
+    {
+        var opt = new Option<string?>("--format") { Description = description ?? "Output format; `tsv` for machine-readable rows." };
+        if (allowedValues is not null)
+        {
+            opt.AcceptOnlyFromAmong(allowedValues);
+        }
+
+        return opt;
+    }
 
     // --store <ref> (aliases --commit/--at): read from a specific per-commit store instead of the latest
     // index. The ref is a store-id or a commit sha (full or short) — resolved by StoreLayout.DbPathForRef.

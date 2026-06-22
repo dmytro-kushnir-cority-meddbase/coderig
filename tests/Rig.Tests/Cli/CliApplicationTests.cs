@@ -86,8 +86,8 @@ public sealed class CliApplicationTests
         error.ToString().ShouldContain($"Unrecognized command or argument '{flag}'");
     }
 
-    // Unknown --view values are rejected up front (validation runs before any store access,
-    // so these fail cleanly without a store).
+    // Unknown --view values are rejected up front (AcceptOnlyFromAmong validation runs before any store
+    // access, so these fail cleanly without a store).
     [Test]
     public async Task Tree_rejects_unknown_view_value()
     {
@@ -97,7 +97,24 @@ public sealed class CliApplicationTests
         var exitCode = await CliApplication.RunAsync(["tree", "X", "--view", "bogus"], output, error);
 
         exitCode.ShouldBe(1);
-        error.ToString().ShouldContain("Unknown --view 'bogus'");
+        error.ToString().ShouldContain("bogus");
+        error.ToString().ShouldContain("not recognized");
+    }
+
+    // Regression: an invalid --format value must be a CLEAN validation error, not an unhandled
+    // InvalidOperationException — the cross-flag validator must read --format via raw token (GetValue
+    // throws once AcceptOnlyFromAmong has flagged the value).
+    [Test]
+    public async Task Tree_rejects_unknown_format_value()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--format", "xml"], output, error);
+
+        exitCode.ShouldBe(1);
+        error.ToString().ShouldContain("xml");
+        error.ToString().ShouldContain("not recognized");
     }
 
     [Test]
@@ -412,7 +429,9 @@ public sealed class CliApplicationTests
 
         // Text mode: the dual_write is marked inline on the CreateTeamAsync node AND named in the section.
         output.GetStringBuilder().Clear();
-        (await CliApplication.RunAsync(["tree", "TeamWorkflow.CreateTeamAsync", "--view", "hazards"], output, error, workingDirectory)).ShouldBe(0);
+        (
+            await CliApplication.RunAsync(["tree", "TeamWorkflow.CreateTeamAsync", "--view", "hazards"], output, error, workingDirectory)
+        ).ShouldBe(0);
         var text = output.ToString();
         text.ShouldContain("⚠");
         text.ShouldContain("dual_write(medium)");
