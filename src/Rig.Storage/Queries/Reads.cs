@@ -388,7 +388,10 @@ public static class Reads
         var methods = methodRows.GroupBy(m => m.SymbolId, StringComparer.Ordinal).Select(g => g.First()).ToList();
 
         var classifiedEdges = HandoffClassifier.Classify(callEdges, handoffRules);
-        var minedDispatch = await LoadDispatchFactsAsync(context, cancellationToken);
+        // #2: hand the (now-open) EF connection to the dispatch-facts loader so it neither re-resolves it nor
+        // re-applies the read pragmas — the single sqlite_master existence probe is the only irreducible cost.
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        var minedDispatch = await LoadDispatchFactsAsync(context, connection, cancellationToken);
         return new FactGraphData(classifiedEdges, implEdges, methods, baseEdges, minedDispatch);
     }
 
@@ -622,10 +625,14 @@ public static class Reads
     // throwing "no such table" on a read-only connection that can't migrate.
     private static async Task<IReadOnlyList<DispatchFact>?> LoadDispatchFactsAsync(
         RigDbContext context,
+        DbConnection? connection,
         CancellationToken cancellationToken
     )
     {
-        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        // Reuse the caller's already-open connection when supplied (the LoadFactGraphAsync hot path); otherwise
+        // open it here. Either way the dispatch_facts existence probe runs once — a store predating the table
+        // returns null so FactPathFinder degrades to name/arity CHA instead of throwing on the read-only conn.
+        connection ??= await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         if (!await StorageProbes.TableExistsAsync(connection, "dispatch_facts", cancellationToken))
         {
             return null;
@@ -1069,6 +1076,65 @@ public static class Reads
             enclosingScope: enclosingScope,
             cancellationToken: cancellationToken
         );
+
+    // Combined loader for BOTH static-field-access arms in ONE query (the derive path needs both, back-to-back).
+    // Runs a single scan with (RefKind == write || RefKind == read) and partitions client-side into (Writes,
+    // Reads) — eliminating one of the two reference_facts round-trips LoadStaticField{Write,Read}RefsAsync made
+    // separately. Semantics are EXACTLY the union of the two single-kind loaders: same static-target gate,
+    // TargetInSource, EnclosingSymbolId != null, same structural projection, same per-partition dedup by
+    // (FilePath, Line, Target). The one asymmetry the single-kind loaders carry is the `readonly` drop — only
+    // the READ arm excludes readonly static targets (an immutable cell can't be a TOCTOU "check"; ~99k logger
+    // reads of noise), while the WRITE arm keeps them. So the join keeps BOTH static-and-readonly and
+    // static-and-mutable rows (gated on `static`), tags each row with its readonly-ness, and the client-side
+    // partition applies the readonly drop to the READ side only — reproducing each loader's row set exactly.
+    public static async Task<(
+        IReadOnlyList<FactFieldAccess> Writes,
+        IReadOnlyList<FactFieldAccess> Reads
+    )> LoadStaticFieldAccessRefsByKindAsync(RigDbContext context, CancellationToken cancellationToken = default)
+    {
+        var rows = await context
+            .ReferenceFacts.AsNoTracking()
+            .Where(r => (r.RefKind == RefKinds.Write || r.RefKind == RefKinds.Read) && r.TargetInSource && r.EnclosingSymbolId != null)
+            .Join(
+                context.SymbolFacts.AsNoTracking().Where(s => s.Modifiers.Contains("static")),
+                r => r.TargetSymbolId,
+                s => s.SymbolId,
+                (r, s) =>
+                    new
+                    {
+                        Access = new FactFieldAccess(
+                            Target: r.TargetSymbolId,
+                            Enclosing: r.EnclosingSymbolId,
+                            FilePath: r.FilePath,
+                            Line: r.Line,
+                            LoopKind: r.EnclosingLoopKind,
+                            LoopDetail: r.EnclosingLoopDetail,
+                            EnclosingInvocations: r.EnclosingInvocations,
+                            CatchTypes: r.EnclosingCatchTypes,
+                            EnclosingScopes: r.EnclosingScopes
+                        ),
+                        r.RefKind,
+                        IsReadonly = s.Modifiers.Contains("readonly"),
+                    }
+            )
+            .ToListAsync(cancellationToken);
+
+        // Partition by kind, then dedup each partition by (FilePath, Line, Target) — mirroring each single-kind
+        // loader's tail. The READ arm drops readonly targets (the `excludeReadonly: true` the read loader sets);
+        // the WRITE arm keeps them.
+        var writes = rows.Where(x => string.Equals(x.RefKind, RefKinds.Write, StringComparison.Ordinal))
+            .Select(x => x.Access)
+            .GroupBy(r => (r.FilePath, r.Line, r.Target))
+            .Select(g => g.First())
+            .ToList();
+        var reads = rows.Where(x => string.Equals(x.RefKind, RefKinds.Read, StringComparison.Ordinal) && !x.IsReadonly)
+            .Select(x => x.Access)
+            .GroupBy(r => (r.FilePath, r.Line, r.Target))
+            .Select(g => g.First())
+            .ToList();
+
+        return (writes, reads);
+    }
 
     // Shared loader for both static-field-access arms (read vs write differ only by RefKind). Joins the
     // access ref to symbol_facts on a STATIC target (the fact layer's only source of the target's modifiers),

@@ -70,7 +70,9 @@ internal static class DeriveCommand
         string? storeRef
     )
     {
-        var rules = RuleSetLoader.Load(workingDirectory, extraRules);
+        // #4: capture the resolved rule paths from the load, so the fingerprint below reuses them instead of
+        // re-running the cascade merge (RulesFingerprint.ComputeFromPaths) just to re-discover the same paths.
+        var rules = RuleSetLoader.Load(workingDirectory: workingDirectory, extraRules: extraRules, loadedPaths: out var loadedRulePaths);
         await using var context = OpenReadContext(workingDirectory, storeRef);
 
         // Deployment attribution (opt-in: only when deployments.json sits next to .rig). Empty (no-op) when
@@ -94,14 +96,15 @@ internal static class DeriveCommand
         //     misses the cache and recomputes, so hazards stay query-side data. ---
         var rigDir = StoreLayout.ResolveReadStoreDir(workingDirectory, storeRef);
         var storeKey = StoreKey(Path.Combine(rigDir, StoreLayout.DbFileName));
-        var rulesHash = RulesFingerprint.Compute(workingDirectory, extraRules);
+        var rulesHash = RulesFingerprint.ComputeFromPaths(loadedRulePaths); // #4: reuse the paths Load resolved.
         var effects = await LoadOrDeriveHazardEffectsAsync(
             context: context,
             rigDirectory: rigDir,
             storeKey: storeKey,
             rulesHash: rulesHash,
             rules: rules,
-            useCache: true
+            useCache: true,
+            epData: epData // #1b: reuse the EP data loaded above; skip the redundant load on a cache miss.
         );
         effects = ApplyEffectFilters(effects: effects, only: only, exclude: exclude); // --only / --exclude (e.g. --exclude throw)
 

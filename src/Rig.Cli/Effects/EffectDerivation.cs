@@ -66,13 +66,20 @@ internal static class EffectDerivation
     // `derive` computes. EP-independent and traversal-mode-independent (an effect is a per-method fact), so
     // `tree --hazards` filters this to its reachable methods instead of re-deriving a bounded slice per EP.
     // Uncached; the cached wrapper is LoadOrDeriveHazardEffectsAsync.
-    internal static async Task<IReadOnlyList<DerivedEffect>> DeriveHazardEffectsAsync(RigDbContext context, RuleSet rules)
+    internal static async Task<IReadOnlyList<DerivedEffect>> DeriveHazardEffectsAsync(
+        RigDbContext context,
+        RuleSet rules,
+        // Perf (#1b): the caller (DeriveCommand) has already loaded the EP data for its own base-type gates;
+        // thread it through to skip the redundant LoadFactEntryPointDataAsync here. Null = load it ourselves
+        // (back-compat for callers that don't have it — e.g. the uncached cache-miss path triggered elsewhere).
+        FactEntryPointDeriver.FactEntryPointData? epData = null
+    )
     {
-        var epData = await Reads.LoadFactEntryPointDataAsync(context);
+        epData ??= await Reads.LoadFactEntryPointDataAsync(context);
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
-        var staticFieldWriteRefs = await Reads.LoadStaticFieldWriteRefsAsync(context);
-        var staticFieldReadRefs = await Reads.LoadStaticFieldReadRefsAsync(context);
+        // Perf (#3): one reference_facts scan for both the write and read static-field arms (was two).
+        var (staticFieldWriteRefs, staticFieldReadRefs) = await Reads.LoadStaticFieldAccessRefsByKindAsync(context);
         var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
         return DeriveEffects(
             effectRules: rules.Effects,
@@ -98,12 +105,15 @@ internal static class EffectDerivation
         string storeKey,
         string rulesHash,
         RuleSet rules,
-        bool useCache
+        bool useCache,
+        // Perf (#1b): the already-loaded EP data, threaded into DeriveHazardEffectsAsync on a cache MISS so it
+        // need not reload it. Unused on a cache HIT (derivation is skipped). Null = derivation loads its own.
+        FactEntryPointDeriver.FactEntryPointData? epData = null
     )
     {
         if (!useCache)
         {
-            return await DeriveHazardEffectsAsync(context, rules);
+            return await DeriveHazardEffectsAsync(context, rules, epData);
         }
 
         using var cache = QueryCache.Open(rigDirectory: rigDirectory, storeKey: storeKey);
@@ -113,7 +123,7 @@ internal static class EffectDerivation
             return hit;
         }
 
-        var derived = await DeriveHazardEffectsAsync(context, rules);
+        var derived = await DeriveHazardEffectsAsync(context, rules, epData);
         if (key is not null)
         {
             TryCache(() => cache!.Put(key, HazardEffectsCodec.Encode(derived)));

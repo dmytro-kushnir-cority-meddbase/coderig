@@ -26,6 +26,17 @@ public static class RuleSetLoader
         return Project(merged);
     }
 
+    // Load variant that ALSO surfaces the files the cascade resolved (built-in + global + local + extras), in
+    // load order — the SAME list ResolveLoadedPaths returns. A caller needing both the projected RuleSet AND
+    // the fingerprint paths (e.g. `rig derive`) takes this overload to avoid a second cascade merge just to
+    // re-resolve the paths. Pass `loadedPaths` to RulesFingerprint.ComputeFromPaths.
+    public static RuleSet Load(string workingDirectory, IReadOnlyList<string>? extraRules, out IReadOnlyList<string> loadedPaths)
+    {
+        var merged = LoadMergedDocument(Anchor(workingDirectory), extraRules, out var paths);
+        loadedPaths = paths;
+        return Project(merged);
+    }
+
     // Load rooted at a real solution/project path (rather than the working dir): the cascade keys rule
     // discovery off the path's directory, and a .csproj/.fsproj anchor walks ancestors for rig.rules.json.
     // Used where the caller holds the actual solution path (e.g. profile validation), as the old
