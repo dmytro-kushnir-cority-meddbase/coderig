@@ -177,29 +177,36 @@ internal static class TreeCommand
             : TreeCacheKey(storeKey: storeKey, rulesHash: rulesHash, fromPattern: fromPattern, maxDepth: maxDepth, mode: mode, raw: raw);
 
         var cached = cacheKey is not null && cache!.Get(cacheKey) is { } blob ? TreeCacheCodec.Decode(blob) : null;
-        // Render sidecar: everything render needs from the graph (seam effects + locations), keyed by the
-        // forest key PLUS the effect filters. Seam effects are derived from the FILTERED effects, and filters
-        // are absent from the forest key (effects cached unfiltered, re-filtered per query), so the sidecar
-        // must key on them — else a differently-filtered warm query would render stale seam summaries.
-        var sidecarKey = cacheKey is null ? null : cacheKey + ":sidecar:" + EffectFilterSignature(only, exclude);
-        var sidecar =
-            cached is not null && sidecarKey is not null && cache!.Get(sidecarKey) is { } scBlob ? RenderSidecarCodec.Decode(scBlob) : null;
-        timer.Lap($"cache lookup (forest={cached is not null}, sidecar={sidecar is not null})");
+        // Render data the graph would otherwise be reloaded to produce, split by filter-dependence so the
+        // filter-independent half isn't duplicated across --only/--exclude combos:
+        //   - locations (method DocID -> file:line) are filter- AND hazard-independent → keyed by the forest
+        //     key alone (`:loc`);
+        //   - seam summaries are derived from the FILTERED effects → keyed by the forest key + the filter
+        //     signature (`:seam:<sig>`), since filters are absent from the forest key.
+        var locKey = cacheKey is null ? null : cacheKey + ":loc";
+        var seamKey = cacheKey is null ? null : cacheKey + ":seam:" + EffectFilterSignature(only, exclude);
+        var cachedLocations =
+            cached is not null && locKey is not null && cache!.Get(locKey) is { } locBlob ? LocationsCodec.Decode(locBlob) : null;
+        var cachedSeam =
+            cached is not null && seamKey is not null && cache!.Get(seamKey) is { } seamBlob ? SeamCodec.Decode(seamBlob) : null;
+        // A render with NO graph load needs the forest + BOTH render halves cached.
+        var fullHit = cached is not null && cachedLocations is not null && cachedSeam is not null;
+        timer.Lap($"cache lookup (forest={cached is not null}, render={fullHit})");
 
-        FactGraphData? graph = null; // stays null on a full hit (forest + sidecar) — the graph is never loaded
+        FactGraphData? graph = null; // stays null on a full hit (forest + render data) — the graph is never loaded
         IReadOnlyList<TraceNode> roots;
         IReadOnlyList<DerivedEffect> effects;
-        if (cached is not null && sidecar is not null)
+        if (fullHit)
         {
-            // FULL HIT: forest + effects + render sidecar all cached → render without touching the graph.
-            roots = cached.Forest;
+            // FULL HIT: forest + effects + locations + seam all cached → render without touching the graph.
+            roots = cached!.Forest;
             effects = cached.Effects;
-            timer.Lap("forest + sidecar hit (no graph load)");
+            timer.Lap("forest + render-data hit (no graph load)");
         }
         else if (cached is not null)
         {
-            // Forest hit but no sidecar (a pre-sidecar entry, or first run under this filter): load the
-            // shaped graph to render — the sidecar is written below so the NEXT query is a full hit.
+            // Forest hit but missing render data (a pre-cache entry, or first run under this filter): load the
+            // shaped graph to render — locations/seam are written below so the NEXT query is a full hit.
             roots = cached.Forest;
             effects = cached.Effects;
             graph = await LoadShapedTraversalGraphAsync(
@@ -303,10 +310,11 @@ internal static class TreeCommand
 
         // Deployment attribution (opt-in via deployments.json) + EP-site lookup, so tree nodes that are
         // themselves entry points get the ▶ kind + service chip. Null when unconfigured (default tree).
-        // Locations (method DocID -> file:line): from the sidecar on a full hit, else from the graph.
-        // One map serves both the EP-chip site lookup and `--files` links.
+        // Locations (method DocID -> file:line): from the cache when present (even when a graph was loaded
+        // for the seam — they're identical), else from the graph. One map serves the EP-chip site lookup
+        // AND `--files` links.
         IReadOnlyDictionary<string, (string? File, int Line)> locations =
-            sidecar?.Locations
+            cachedLocations
             ?? graph!
                 .Methods.GroupBy(m => m.SymbolId, StringComparer.Ordinal)
                 .ToDictionary(g => g.Key, g => (g.First().FilePath, g.First().Line), StringComparer.Ordinal);
@@ -383,7 +391,19 @@ internal static class TreeCommand
             }
 
             var effectSites = effects.Where(e => e.EnclosingSymbolId is not null).Select(e => (e.EnclosingSymbolId!, e.Line)).ToHashSet();
-            var libCalls = await Reads.LoadLibraryCallSitesAsync(context, treeMethods);
+            // Library-call sites are a pure function of the forest's method set → cache under the forest key
+            // (`:libcalls`), recomputed only when the forest changes, not on every --full run.
+            var libCallsKey = cacheKey is null ? null : cacheKey + ":libcalls";
+            var libCalls = libCallsKey is not null && cache!.Get(libCallsKey) is { } lcBlob ? LibCallsCodec.Decode(lcBlob) : null;
+            if (libCalls is null)
+            {
+                var loaded = await Reads.LoadLibraryCallSitesAsync(context, treeMethods);
+                libCalls = loaded;
+                if (libCallsKey is not null)
+                {
+                    TryCache(() => cache!.Put(libCallsKey, LibCallsCodec.Encode(loaded)));
+                }
+            }
             foreach (
                 var c in libCalls
                     .Where(c => c.Enclosing is not null && !effectSites.Contains((c.Enclosing!, c.Line)))
@@ -443,15 +463,15 @@ internal static class TreeCommand
             return 0;
         }
 
-        // Seam effects: from the sidecar on a full hit, else computed from the (filtered) effects + graph.
-        // Under --hazards we still REUSE the cached sidecar seam: the seam is a collapsed-fan-out provider:op
-        // rollup, and whether it includes the few field-fed shared_state effects is cosmetic — not worth a
-        // graph load to recompute. (The WRITE below stays gated on !hazards so a cold --hazards run, which
-        // computes seam from the augmented effects, never caches that augmented seam.)
+        // Seam effects: from the cache when present, else computed from the (filtered) effects + graph.
+        // Under --hazards we still REUSE a cached seam: the seam is a collapsed-fan-out provider:op rollup,
+        // and whether it includes the few field-fed shared_state effects is cosmetic — not worth a graph load
+        // to recompute. (The WRITE below stays gated on !hazards so a cold --hazards run, which computes seam
+        // from the augmented effects, never caches that augmented seam.)
         IReadOnlyDictionary<string, List<string>> seamEffects;
-        if (sidecar is not null)
+        if (cachedSeam is not null)
         {
-            seamEffects = sidecar.Value.SeamEffects;
+            seamEffects = cachedSeam;
         }
         else
         {
@@ -470,13 +490,20 @@ internal static class TreeCommand
             );
         }
 
-        // `--files`: per-node definition location (relpath:line) for source links. Populate the render
-        // sidecar (best-effort) so the next warm query renders with NO graph load — only when a graph was
-        // actually loaded (cold or sidecar-miss) and caching is on.
+        // `--files`: per-node definition location (relpath:line) for source links. Populate the render data
+        // (best-effort) so the next warm query renders with NO graph load — only when a graph was actually
+        // loaded (cold or render-miss) and caching is on. Locations are filter- AND hazard-independent, so
+        // they cache under the forest key always; the seam is filter-dependent and NOT cached under --hazards
+        // (the augmented effects would taint the rollup that a plain `tree` would later read).
         var locById = files ? locations : null;
-        if (graph is not null && sidecarKey is not null && !hazards)
+        if (graph is not null && locKey is not null)
         {
-            TryCache(() => cache!.Put(sidecarKey, RenderSidecarCodec.Encode(seamEffects, locations)));
+            TryCache(() => cache!.Put(locKey, LocationsCodec.Encode(locations)));
+        }
+
+        if (graph is not null && seamKey is not null && !hazards)
+        {
+            TryCache(() => cache!.Put(seamKey, SeamCodec.Encode(seamEffects)));
         }
 
         // Print-order source-loc dedup: collapse a repeated trailing path (the --full call-site/leaf locs AND

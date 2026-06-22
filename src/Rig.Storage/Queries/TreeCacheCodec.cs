@@ -121,34 +121,124 @@ public static class EpSiteCacheCodec
     }
 }
 
-// The RENDER sidecar: everything a `rig tree` render needs from the bounded graph that ISN'T already in
-// the forest/effects payload — so a forest cache hit can render WITHOUT reloading + shaping the graph (the
-// ~5.4s warm-query floor). Two maps, both a pure function of the same (store + rules + pattern + depth +
-// mode) the forest is keyed by, so they share the forest's invalidation:
-//   - SeamEffects: collapse-hub DocID -> the formatted effect-union lines (ComputeSeamEffects output).
-//   - Locations:   method DocID -> (file, line); serves BOTH the EP-chip site map and `--files` links.
-// Stored next to the forest under a sibling key; written on the cold/miss render path (graph in hand),
-// read on the warm path to skip the graph load entirely.
+// The RENDER sidecar data a `rig tree` render needs from the bounded graph that ISN'T in the forest/effects
+// payload — so a forest cache hit renders WITHOUT reloading + shaping the graph. Split into TWO sibling
+// cache entries by filter-dependence, so the filter-independent half isn't duplicated across --only/--exclude
+// combos:
+//   - Locations (method DocID -> (file, line); serves the EP-chip site map AND `--files` links) are
+//     filter-INDEPENDENT — keyed by the forest key alone (`:loc`). LocationsCodec.
+//   - SeamEffects (collapse-hub DocID -> formatted effect-union lines) are derived from the FILTERED effects
+//     — keyed by the forest key + the filter signature (`:seam:<sig>`). SeamCodec.
+// Both share the forest's (store+rules+pattern+depth+mode) invalidation. Written on the cold/miss render
+// path (graph in hand), read on the warm path. Locations are also hazard-independent, so they cache even
+// under --hazards (only the seam rollup is gated off there).
 public sealed record LocationEntry(string Symbol, string? File, int Line);
 
-public sealed record RenderSidecarPayload(Dictionary<string, string[]> SeamEffects, LocationEntry[] Locations);
+public sealed record LocationsPayload(LocationEntry[] Locations);
 
-public static class RenderSidecarCodec
+public static class LocationsCodec
 {
     private static readonly TreeCacheJsonContext Context = new(
         new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull }
     );
 
-    public static byte[] Encode(
-        IReadOnlyDictionary<string, List<string>> seamEffects,
-        IReadOnlyDictionary<string, (string? File, int Line)> locations
-    )
+    public static byte[] Encode(IReadOnlyDictionary<string, (string? File, int Line)> locations)
     {
-        var payload = new RenderSidecarPayload(
-            seamEffects.ToDictionary(kv => kv.Key, kv => kv.Value.ToArray(), StringComparer.Ordinal),
+        var payload = new LocationsPayload(
             locations.Select(kv => new LocationEntry(Symbol: kv.Key, File: kv.Value.File, Line: kv.Value.Line)).ToArray()
         );
-        var json = JsonSerializer.SerializeToUtf8Bytes(payload, Context.RenderSidecarPayload);
+        return RenderCodecGzip.Zip(JsonSerializer.SerializeToUtf8Bytes(payload, Context.LocationsPayload));
+    }
+
+    public static Dictionary<string, (string? File, int Line)>? Decode(byte[] blob)
+    {
+        try
+        {
+            var payload = JsonSerializer.Deserialize(RenderCodecGzip.Unzip(blob), Context.LocationsPayload);
+            if (payload is null)
+            {
+                return null;
+            }
+
+            var loc = new Dictionary<string, (string? File, int Line)>(StringComparer.Ordinal);
+            foreach (var e in payload.Locations)
+            {
+                loc[e.Symbol] = (e.File, e.Line);
+            }
+
+            return loc;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or JsonException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+}
+
+public sealed record SeamPayload(Dictionary<string, string[]> SeamEffects);
+
+public static class SeamCodec
+{
+    private static readonly TreeCacheJsonContext Context = new(
+        new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull }
+    );
+
+    public static byte[] Encode(IReadOnlyDictionary<string, List<string>> seamEffects) =>
+        RenderCodecGzip.Zip(
+            JsonSerializer.SerializeToUtf8Bytes(
+                new SeamPayload(seamEffects.ToDictionary(kv => kv.Key, kv => kv.Value.ToArray(), StringComparer.Ordinal)),
+                Context.SeamPayload
+            )
+        );
+
+    public static Dictionary<string, List<string>>? Decode(byte[] blob)
+    {
+        try
+        {
+            var payload = JsonSerializer.Deserialize(RenderCodecGzip.Unzip(blob), Context.SeamPayload);
+            return payload?.SeamEffects.ToDictionary(kv => kv.Key, kv => kv.Value.ToList(), StringComparer.Ordinal);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or JsonException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+}
+
+// `tree --full`'s unresolved library-call sites — invocations to a referenced-assembly target that matched
+// no effect rule, bounded to the rendered tree's methods. A pure function of the forest (the tree's method
+// set), so cached under the forest key (`:libcalls`) and recomputed only when the forest itself changes —
+// instead of re-querying reference_facts on every --full run.
+public sealed record LibCallsPayload(IReadOnlyList<SymbolRef> Calls);
+
+public static class LibCallsCodec
+{
+    private static readonly TreeCacheJsonContext Context = new(
+        new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull }
+    );
+
+    public static byte[] Encode(IReadOnlyList<SymbolRef> calls) =>
+        RenderCodecGzip.Zip(JsonSerializer.SerializeToUtf8Bytes(new LibCallsPayload(calls), Context.LibCallsPayload));
+
+    public static IReadOnlyList<SymbolRef>? Decode(byte[] blob)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize(RenderCodecGzip.Unzip(blob), Context.LibCallsPayload)?.Calls;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or JsonException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+}
+
+// Shared GZip helpers for the render-data codecs (Locations/Seam/LibCalls) — same GZip-over-source-gen-JSON
+// approach the forest/effect payloads inline; factored here since three small codecs share it.
+file static class RenderCodecGzip
+{
+    public static byte[] Zip(byte[] json)
+    {
         using var output = new MemoryStream();
         using (var gzip = new GZipStream(output, CompressionLevel.Optimal))
         {
@@ -158,37 +248,14 @@ public static class RenderSidecarCodec
         return output.ToArray();
     }
 
-    // (seamEffects, locations) on success; null on corruption/schema drift → treated as a cache miss.
-    public static (Dictionary<string, List<string>> SeamEffects, Dictionary<string, (string? File, int Line)> Locations)? Decode(
-        byte[] blob
-    )
+    public static MemoryStream Unzip(byte[] blob)
     {
-        try
-        {
-            using var input = new MemoryStream(blob);
-            using var gzip = new GZipStream(input, CompressionMode.Decompress);
-            using var json = new MemoryStream();
-            gzip.CopyTo(json);
-            json.Position = 0;
-            var payload = JsonSerializer.Deserialize(json, Context.RenderSidecarPayload);
-            if (payload is null)
-            {
-                return null;
-            }
-
-            var seam = payload.SeamEffects.ToDictionary(kv => kv.Key, kv => kv.Value.ToList(), StringComparer.Ordinal);
-            var loc = new Dictionary<string, (string? File, int Line)>(StringComparer.Ordinal);
-            foreach (var e in payload.Locations)
-            {
-                loc[e.Symbol] = (e.File, e.Line);
-            }
-
-            return (seam, loc);
-        }
-        catch (Exception ex) when (ex is InvalidDataException or JsonException or NotSupportedException)
-        {
-            return null;
-        }
+        using var input = new MemoryStream(blob);
+        using var gzip = new GZipStream(input, CompressionMode.Decompress);
+        var json = new MemoryStream();
+        gzip.CopyTo(json);
+        json.Position = 0;
+        return json;
     }
 }
 
@@ -236,6 +303,8 @@ public static class HazardEffectsCodec
 
 [JsonSerializable(typeof(TreeCachePayload))]
 [JsonSerializable(typeof(EpSiteCachePayload))]
-[JsonSerializable(typeof(RenderSidecarPayload))]
+[JsonSerializable(typeof(LocationsPayload))]
+[JsonSerializable(typeof(SeamPayload))]
+[JsonSerializable(typeof(LibCallsPayload))]
 [JsonSerializable(typeof(HazardEffectsPayload))]
 internal partial class TreeCacheJsonContext : JsonSerializerContext { }
