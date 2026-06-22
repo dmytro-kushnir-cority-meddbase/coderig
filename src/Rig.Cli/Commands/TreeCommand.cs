@@ -9,6 +9,7 @@ using static Rig.Cli.Caching.QueryCacheKeys;
 using static Rig.Cli.Effects.EffectDerivation;
 using static Rig.Cli.EntryPoints.EntryPointContext;
 using static Rig.Cli.Graph.TraversalGraphLoader;
+using static Rig.Cli.Rendering.LlmSummaryRenderer;
 using static Rig.Cli.Rendering.SymbolNameFormatter;
 using static Rig.Cli.Rendering.TreeRenderer;
 
@@ -40,6 +41,10 @@ internal static class TreeCommand
         {
             Description = "Drop box-drawing connectors (├─ └─ │) for pure indentation — diff-friendly.",
         };
+        var llm = new Option<string?>("--llm")
+        {
+            Description = "Emit a compact LLM-optimised flat TSV: 'full' (every reachable node) or 'effects' (effect-bearing nodes only).",
+        };
         var rules = CommonOptions.Rules();
         var depth = CommonOptions.Depth();
         var only = CommonOptions.Only();
@@ -60,6 +65,7 @@ internal static class TreeCommand
             files,
             signatures,
             plain,
+            llm,
             rules,
             depth,
             only,
@@ -69,9 +75,20 @@ internal static class TreeCommand
             format,
             store,
         };
-        // --full / --summary / --effects are three distinct projections of the same tree; only one applies.
+        // --full / --summary / --effects / --llm are distinct projections of the same tree; only one applies.
         cmd.Validators.Add(result =>
         {
+            var llmValue = result.GetValue(llm);
+            if (
+                llmValue is not null
+                && !string.Equals(llmValue, "full", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(llmValue, "effects", StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                result.AddError($"--llm must be 'full' or 'effects', got '{llmValue}'.");
+                return;
+            }
+
             var present = new List<string>();
             if (result.GetValue(full))
             {
@@ -86,6 +103,11 @@ internal static class TreeCommand
             if (result.GetValue(effects))
             {
                 present.Add("--effects");
+            }
+
+            if (llmValue is not null)
+            {
+                present.Add("--llm");
             }
 
             if (present.Count > 1)
@@ -109,6 +131,7 @@ internal static class TreeCommand
                         files: pr.GetValue(files),
                         signatures: pr.GetValue(signatures),
                         plain: pr.GetValue(plain),
+                        llm: pr.GetValue(llm),
                         extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                         depth: pr.GetValue(depth),
                         only: CommonOptions.FilterSet(pr.GetValue(only)),
@@ -137,6 +160,7 @@ internal static class TreeCommand
         bool files,
         bool signatures,
         bool plain,
+        string? llm,
         IReadOnlyList<string> extraRules,
         int? depth,
         HashSet<string> only,
@@ -362,6 +386,26 @@ internal static class TreeCommand
         timer.Lap("deployment map + entry-point derivation");
 
         effects = ApplyEffectFilters(effects, only, exclude); // --only / --exclude (e.g. --exclude throw)
+
+        // --llm full|effects: compact flat TSV for LLM consumption. Emitted before the normal render path
+        // (skips the deployment map, seam, and box-drawing chrome — those are token waste for a model).
+        if (llm is not null)
+        {
+            // Raw provider:operation per occurrence, keyed by enclosing symbol — the LLM renderer
+            // aggregates counts itself (no emoji, no resource names).
+            var rawEffectsForLlm = effects
+                .Where(e => e.EnclosingSymbolId is not null)
+                .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
+                .ToDictionary(
+                    keySelector: g => g.Key,
+                    elementSelector: g => g.Select(e => $"{e.Provider}:{e.Operation}").ToList(),
+                    comparer: StringComparer.Ordinal
+                );
+            var llmEffectsOnly = string.Equals(llm, "effects", StringComparison.OrdinalIgnoreCase);
+            Render(roots: roots, rawEffectsByMethod: rawEffectsForLlm, effectsOnly: llmEffectsOnly, output: output);
+            timer.Total();
+            return 0;
+        }
 
         var emoji = rules.EffectEmoji;
         var effectsByMethod = effects
