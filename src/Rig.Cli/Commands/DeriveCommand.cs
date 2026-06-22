@@ -110,12 +110,13 @@ internal static class DeriveCommand
         //     observation, so it is derived here over the delivery-edge-bearing graph and added as a SECOND
         //     hazard source — NOT folded into HazardFindings(effects), which is pure-over-effects and shared
         //     with impact. The graph is built IN-MEMORY mirroring GraphMaterializer.BuildFromGraphAsync (the
-        //     SAME order: handoff-classified load → generic-factory rewrite → event delivery → actor delivery)
+        //     SAME order: handoff-classified load → generic-factory rewrite → unified publish→consumer delivery)
         //     so the cycles it finds are exactly the cycles the materialized call_edges carry. ---
         var graph = await Reads.LoadFactGraphAsync(context, rules.Handoff);
         graph = FactPathFinder.RewriteGenericFactories(graph, rules.Factory);
-        graph = FactPathFinder.AddEventDeliveryEdges(graph, await Reads.LoadEventReadSitesAsync(context));
-        graph = FactPathFinder.AddActorDeliveryEdges(graph, await Reads.LoadActorDeliverySitesAsync(context, rules.Effects));
+        var eventSites = await Reads.LoadEventDeliverySitesAsync(context);
+        var actorSites = await Reads.LoadActorDeliverySitesAsync(context, rules.Effects);
+        graph = FactPathFinder.AddDeliveryEdges(graph, [.. eventSites, .. actorSites]);
         var cycleFindings = EventCycleFindings(FactCycleDeriver.DeriveEventCycles(graph));
 
         // Both hazard sources unioned: the over-effects pattern findings + the graph-tier event_cycle findings.

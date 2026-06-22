@@ -11,8 +11,8 @@ namespace Rig.Domain.Functions;
 //
 // What it detects: a FEEDBACK CYCLE that closes through ≥1 publish→consumer DELIVERY edge. The graph now
 // carries delivery edges as `Kind="handoff"` `CallEdge`s tagged with a `HandoffDispatcher` — `"event_raise"`
-// (a C# event raise resolved to its subscribers, FactPathFinder.AddEventDeliveryEdges) or `"actor_tell"` (an
-// Echo `Process.tell` resolved to the handlers spawned under that process name, AddActorDeliveryEdges). A
+// (a C# event raise resolved to its subscribers) or `"actor_tell"` (an Echo `Process.tell` resolved to the
+// handlers spawned under that process name), both added by the single FactPathFinder.AddDeliveryEdges join. A
 // cycle that traverses such an edge is the dangerous shape: method A raises an event → a handler runs →
 // (synchronously, or via further raises) eventually a raise is delivered back to A, an unbounded re-entrancy
 // / event-storm / stack-blowing loop that no syntactic call records (the delivery hop is the invisible edge).
@@ -25,7 +25,7 @@ namespace Rig.Domain.Functions;
 // cycle) and avoids the exponential blow-up of enumerating individual cycles.
 //
 // Pure, no I/O, input not mutated. The caller (DeriveCommand / GraphMaterializer-mirrored wiring) supplies a
-// graph that ALREADY has the delivery edges baked in (AddEventDeliveryEdges + AddActorDeliveryEdges); this
+// graph that ALREADY has the delivery edges baked in (FactPathFinder.AddDeliveryEdges); this
 // deriver only reads `graph.CallEdges`.
 public static class FactCycleDeriver
 {

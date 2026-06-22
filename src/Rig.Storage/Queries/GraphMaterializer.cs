@@ -78,24 +78,19 @@ public static class GraphMaterializer
         // in-memory pass re-applies over the bounded graph. No-op when factoryRules is null/empty.
         graph = FactPathFinder.RewriteGenericFactories(graph, factoryRules ?? []);
 
-        // Publish→consumer DELIVERY edges (events): a raise (`someEvent?.Invoke`) delivers to the event's
-        // subscribers, an edge no syntactic call records. EDGE-CREATING like the factory rewrite above, so it
-        // is baked into call_edges here — otherwise the SQL bounding walk never pulls a handler's closure into
-        // a bounded reach (under-reporting --async reach + blinding cycle detection). The event reads are
-        // already in the store at this point (facts are saved before graph build, on both the index and
-        // re-graph paths). Modeled as handoff edges → sync-cut by default, walked under --async.
-        graph = FactPathFinder.AddEventDeliveryEdges(graph, await Reads.LoadEventReadSitesAsync(context, cancellationToken));
-
-        // Publish→consumer DELIVERY edges (Echo actors): the SECOND resolver in the delivery-edge framework
-        // (events above is the first). A `Process.tell(name, msg)` delivers to the handler(s) spawned under
-        // that process NAME — an edge no syntactic call records (a tell only records the actor-API call). Same
-        // EDGE-CREATING bake as the event resolver. The actor tell/ask/spawn methods are DATA (the `actor:*`
-        // effect rules), threaded in like factoryRules — NOT hardcoded — so Domain stays codebase-agnostic.
-        // ~heuristic (the consumer identity is a process-name string, not an exact symbol). No-op when null.
-        graph = FactPathFinder.AddActorDeliveryEdges(
-            graph,
-            await Reads.LoadActorDeliverySitesAsync(context, actorRules ?? [], cancellationToken)
-        );
+        // Publish→consumer DELIVERY edges: a publish (a C# event raise `someEvent?.Invoke` / an Echo
+        // `Process.tell(name, msg)`) delivers to the channel's handler(s), an edge no syntactic call records.
+        // EDGE-CREATING like the factory rewrite above, so it is baked into call_edges here — otherwise the SQL
+        // bounding walk never pulls a handler's closure into a bounded reach (under-reporting --async reach +
+        // blinding cycle detection). The event reads / actor calls are already in the store at this point
+        // (facts are saved before graph build, on both the index and re-graph paths). Both frameworks feed the
+        // ONE framework-blind join (events identity-EXACT on the `E:` symbol; actors ~heuristic on a process-
+        // name string — Tag namespaces them so they never cross). The actor tell/ask/spawn methods are DATA
+        // (the `actor:*` effect rules), threaded in like factoryRules. Modeled as handoff edges → sync-cut by
+        // default, walked under --async. No-op when there are no sites.
+        var eventSites = await Reads.LoadEventDeliverySitesAsync(context, cancellationToken);
+        var actorSites = await Reads.LoadActorDeliverySitesAsync(context, actorRules ?? [], cancellationToken);
+        graph = FactPathFinder.AddDeliveryEdges(graph, [.. eventSites, .. actorSites]);
 
         var connection = context.Database.GetDbConnection();
         if (connection.State != ConnectionState.Open)

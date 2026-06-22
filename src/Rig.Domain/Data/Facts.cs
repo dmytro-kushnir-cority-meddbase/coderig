@@ -275,23 +275,36 @@ public sealed record TypeSymbol(string SymbolId, string Namespace, string FilePa
 // rather than a synchronous call. Lives in Domain because the shaping consumer is a Domain function.
 public sealed record EventSubscriptionSite(string Caller, string FilePath, int Line);
 
-// An event READ site carrying the event's identity (the `E:` DocID) — the input to the publish→consumer
-// DELIVERY edge (FactPathFinder.AddEventDeliveryEdges). Every `someEvent += H` AND every raise
-// (`someEvent?.Invoke(..)`) reads the event, so the site is discriminated by CO-LOCATION with a method-group
-// edge in the graph: a co-located handler ⇒ a SUBSCRIPTION (binds EventId → that handler); no co-located
-// handler ⇒ a RAISE (Caller delivers to every handler subscribed to EventId). Caller is the enclosing method.
-public sealed record EventReadSite(string Caller, string FilePath, int Line, string EventId);
+// How a DeliverySite participates in the publish→consumer join (FactPathFinder.AddDeliveryEdges):
+//   Producer     — the publish (an event raise / an actor tell). Always contributes a delivery edge to
+//                  every handler registered on its (Tag, IdentityToken) channel.
+//   Registration — the subscribe/spawn whose CO-LOCATED methodGroup edge IS the handler. Contributes its
+//                  co-located handler(s) to the channel; a Registration with no co-located methodGroup
+//                  contributes nothing (the actor behaviour: an unresolved spawn handler is skipped).
+//   ByColocation — role decided at join time by whether a methodGroup edge co-locates at the site: a C#
+//                  event read is a SUBSCRIPTION iff a handler co-locates (`someEvent += H`), else a RAISE
+//                  (`someEvent?.Invoke()`). Lets the framework-blind join discriminate the two without the
+//                  loader knowing which a given event read is.
+public enum DeliveryRole
+{
+    Producer,
+    Registration,
+    ByColocation,
+}
 
-// An actor publish/registration SITE — the input to the publish→consumer DELIVERY edge for Echo actors
-// (FactPathFinder.AddActorDeliveryEdges, baked into call_edges at graph build). Mirrors EventReadSite, but
-// the consumer identity is a PROCESS NAME (a string — the spawn/tell first-argument name, resolved through a
-// static ProcessName field), not an exact event symbol, so the resulting binding is `~heuristic`. A
-// REGISTRATION site (spawn/spawnUnit/spawnMany/register, IsRegistration=true) co-locates the process name
-// with a method-group handler edge — exactly like an event `+= H` subscription — so the handler is the
-// methodGroup CallEdge at this site's (Caller,FilePath,Line). A PRODUCER site (tell/tellSystem/ask/askAsync/
-// askIfAlive, IsRegistration=false) is the "raise": Caller (the teller) delivers to every handler registered
-// under ProcessName. Loaded by Reads.LoadActorDeliverySitesAsync; the shaping consumer is a Domain function.
-public sealed record ActorDeliverySite(string Caller, string FilePath, int Line, string ProcessName, bool IsRegistration);
+// A publish→consumer DELIVERY site, framework-BLIND — the uniform input to the single join
+// FactPathFinder.AddDeliveryEdges (baked into call_edges at graph build, so a bounded SQL walk pulls a
+// handler's closure into reach and cycle detection sees the deferred hop). Replaces the former per-framework
+// EventReadSite / ActorDeliverySite pair.
+//
+// IdentityToken is the resolved CHANNEL identity on which a producer is matched to its handlers: an event
+// symbol DocID (`E:`) for C# events — an EXACT binding; a process-name string for Echo actors — `~heuristic`
+// (two unrelated processes sharing a name string over-approximate). Tag is the channel namespace AND the
+// emitted edge's HandoffDispatcher ("event_raise" / "actor_tell"), so an event raise never joins an actor
+// tell even if their tokens collide. Role (above) decides producer vs registration. Caller is the enclosing
+// method; (Caller, FilePath, Line) is the co-location key the join uses to find a registration's handler.
+// Loaded by Reads.LoadEventDeliverySitesAsync / LoadActorDeliverySitesAsync.
+public sealed record DeliverySite(string Caller, string FilePath, int Line, string IdentityToken, string Tag, DeliveryRole Role);
 
 // The fact-derived call graph loaded for cross-project path finding (stage 2 over facts).
 public sealed record FactGraphData(

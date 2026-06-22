@@ -49,32 +49,42 @@ public static partial class FactPathFinder
         return changed ? graph with { CallEdges = rewritten } : graph;
     }
 
-    // PUBLISH→CONSUMER DELIVERY EDGES (events). Resolves, by event IDENTITY, which handler(s) run when an
-    // event is RAISED, and ADDS those as handoff edges raiser→handler — the edge a `someEvent?.Invoke(..)`
-    // implies but that no syntactic call records (a raise is just an event read). This is EDGE-CREATING, so
-    // it MUST be baked into call_edges at graph-build (alongside RewriteGenericFactories) or the SQL bounding
-    // walk never pulls the handler's closure into a bounded reach — see GraphMaterializer.
+    // PUBLISH→CONSUMER DELIVERY EDGES — the SINGLE, framework-BLIND join. Resolves, by CHANNEL identity
+    // (Tag, IdentityToken), which handler(s) run when a channel is PUBLISHED to, and ADDS those as handoff
+    // edges producer→handler — the edge a publish (a `someEvent?.Invoke(..)` raise / an Echo
+    // `Process.tell(name, msg)`) implies but that no syntactic call records. This is EDGE-CREATING, so it
+    // MUST be baked into call_edges at graph-build (alongside RewriteGenericFactories) or the SQL bounding
+    // walk never pulls a handler's closure into a bounded reach — see GraphMaterializer.
     //
-    // Modeled as HANDOFF edges (HandoffDispatcher="event_raise"): delivery is DEFERRED, exactly like a
-    // background/timer/event-subscription dispatch — sync-cut by default, walked under --async, and visible
-    // to whole-program cycle detection (the FR-10 prerequisite). The identity is the event symbol (`E:`
-    // DocID), so the binding is EXACT (not heuristic): a raise of E reaches precisely E's subscribers.
+    // Modeled as HANDOFF edges (HandoffDispatcher = the site's Tag, e.g. "event_raise" / "actor_tell"):
+    // delivery is DEFERRED, exactly like a background/timer/event-subscription dispatch — sync-cut by
+    // default, walked under --async, and visible to whole-program cycle detection (the FR-10 prerequisite).
+    // The binding is only as precise as the channel identity the loader supplied: an event symbol (`E:`
+    // DocID) is EXACT (a raise of E reaches precisely E's subscribers); a process-name string is ~heuristic
+    // (a tell of "P" reaches every handler spawned under "P" — over-approximate on a shared name). Tag
+    // namespaces the channel so an event raise never joins an actor tell even if their tokens collide.
     //
     // Scope line (deliberate): this is DELIVERY (the runtime causes the handler to run), NOT resource
     // COUPLING. A db/io/cache write→read on the same cell is correlated but NOT a delivery — folding those in
     // would make `reaches` claim every writer "reaches" every reader and destroy the graph's meaning. Those
     // stay out; they belong to the separate same-cell/consistency hazard layer (FR-1/dual_write).
     //
-    // Subscriptions vs raises are discriminated by co-location with a method-group edge (see EventReadSite):
-    // a site with a co-located methodGroup edge binds EventId→that handler; a site without is a raise.
-    public static FactGraphData AddEventDeliveryEdges(FactGraphData graph, IReadOnlyList<EventReadSite> eventReads)
+    // Producer vs registration is decided by DeliveryRole: a Producer always publishes; a Registration
+    // contributes its co-located methodGroup handler to the channel; a ByColocation site is a registration
+    // IFF a methodGroup edge co-locates at its (Caller,FilePath,Line) (a C# event read is a subscription iff
+    // co-located, else a raise) — so the loader need not know which a given event read is. The handler is the
+    // `methodGroup` CallEdge already in the graph at a registration site's (Caller,FilePath,Line) — the
+    // subscription's `+= Handler` / the spawn's handler argument; a registration with no co-located
+    // methodGroup contributes nothing.
+    public static FactGraphData AddDeliveryEdges(FactGraphData graph, IReadOnlyList<DeliverySite> sites)
     {
-        if (eventReads.Count == 0)
+        if (sites.Count == 0)
         {
             return graph;
         }
 
-        // Method-group handler(s) per call site — the subscription's `+= Handler` edge already in the graph.
+        // Method-group handler(s) per call site — a registration's `+= Handler` / spawn-arg edge already in
+        // the graph. Keyed on (Caller, File, Line), the co-location key a registration site joins on.
         var handlersBySite = new Dictionary<(string Caller, string File, int Line), List<string>>();
         foreach (var e in graph.CallEdges)
         {
@@ -91,131 +101,28 @@ public static partial class FactPathFinder
             list.Add(e.Callee);
         }
 
-        // Split the event reads into subscriptions (EventId → handlers) and raises (Caller raises EventId).
-        var subscribersByEvent = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        var raises = new List<EventReadSite>();
-        foreach (var read in eventReads)
+        // Split sites into channel handlers ((Tag, IdentityToken) → handlers, from registrations joined to
+        // their co-located method-group) and producers. A ByColocation site is a registration iff a method-
+        // group co-locates; a Registration with no co-located method-group contributes nothing (the handler
+        // isn't a node we can resolve — a lambda subgraph / unresolved target); a ByColocation site with no
+        // co-located method-group is a raise → producer.
+        var handlersByChannel = new Dictionary<(string Tag, string Token), HashSet<string>>();
+        var producers = new List<DeliverySite>();
+        foreach (var site in sites)
         {
-            if (handlersBySite.TryGetValue((read.Caller, read.FilePath, read.Line), out var handlers))
+            var co = handlersBySite.TryGetValue((site.Caller, site.FilePath, site.Line), out var handlers);
+            var isRegistration = site.Role == DeliveryRole.Registration || (site.Role == DeliveryRole.ByColocation && co);
+
+            if (isRegistration)
             {
-                if (!subscribersByEvent.TryGetValue(read.EventId, out var set))
+                if (co)
                 {
-                    subscribersByEvent[read.EventId] = set = new HashSet<string>(StringComparer.Ordinal);
-                }
-                set.UnionWith(handlers);
-            }
-            else
-            {
-                raises.Add(read);
-            }
-        }
-
-        if (subscribersByEvent.Count == 0 || raises.Count == 0)
-        {
-            return graph; // nothing to connect (no subscribers, or no raises)
-        }
-
-        // One handoff edge per (raiser, handler), at the raise site. Dedup so a method that raises E on
-        // several lines doesn't multiply identical edges.
-        var added = new List<CallEdge>();
-        var seen = new HashSet<(string, string)>();
-        foreach (var raise in raises)
-        {
-            if (!subscribersByEvent.TryGetValue(raise.EventId, out var handlers))
-            {
-                continue;
-            }
-
-            foreach (var handler in handlers)
-            {
-                if (seen.Add((raise.Caller, handler)))
-                {
-                    added.Add(
-                        new CallEdge(
-                            Caller: raise.Caller,
-                            Callee: handler,
-                            Kind: EdgeKinds.Handoff,
-                            FilePath: raise.FilePath,
-                            Line: raise.Line,
-                            HandoffDispatcher: "event_raise"
-                        )
-                    );
-                }
-            }
-        }
-
-        return added.Count == 0 ? graph : graph with { CallEdges = [.. graph.CallEdges, .. added] };
-    }
-
-    // PUBLISH→CONSUMER DELIVERY EDGES (Echo actors). The SECOND resolver in the delivery-edge framework
-    // (events is the first, AddEventDeliveryEdges above). Resolves, by PROCESS NAME, which spawn handler(s)
-    // run when a process is TOLD/ASKED, and ADDS those as handoff edges teller→handler — the edge a
-    // `Process.tell(name, msg)` implies but that no syntactic call records (a tell only records the actor-API
-    // invocation, not the dispatch into the handler the actor framework runs). EDGE-CREATING like the event
-    // resolver, so it MUST be baked into call_edges at graph-build (alongside AddEventDeliveryEdges) or the
-    // SQL bounding walk never pulls the handler's closure into a bounded reach — see GraphMaterializer.
-    //
-    // Modeled as HANDOFF edges (HandoffDispatcher="actor_tell"): delivery is DEFERRED — the handler runs later
-    // on the actor's mailbox, not at the tell site — so sync-cut by default, walked under --async, visible to
-    // cycle detection. UNLIKE events, the identity is a STRING process name (the spawn/tell first-argument
-    // name, which resolves through a static ProcessName field), NOT an exact symbol, so this binding is
-    // ~heuristic: a tell of "P" reaches every handler spawned under the name "P" — over-approximate where two
-    // unrelated processes share a name string. Disclosed accordingly (no exact-symbol guarantee).
-    //
-    // Registrations (spawn) vs producers (tell/ask) are pre-discriminated on the ActorDeliverySite
-    // (IsRegistration); the handler is the `methodGroup` CallEdge CO-LOCATED at a registration site's
-    // (Caller,FilePath,Line) — exactly as AddEventDeliveryEdges joins a subscription's `+= Handler`.
-    public static FactGraphData AddActorDeliveryEdges(FactGraphData graph, IReadOnlyList<ActorDeliverySite> actorSites)
-    {
-        if (actorSites.Count == 0)
-        {
-            return graph;
-        }
-
-        // Method-group handler(s) per call site — the spawn's handler-argument edge already in the graph.
-        var handlersBySite = new Dictionary<(string Caller, string File, int Line), List<string>>();
-        foreach (var e in graph.CallEdges)
-        {
-            if (e.Kind != EdgeKinds.MethodGroup)
-            {
-                continue;
-            }
-
-            var key = (e.Caller, e.FilePath, e.Line);
-            if (!handlersBySite.TryGetValue(key, out var list))
-            {
-                handlersBySite[key] = list = [];
-            }
-            list.Add(e.Callee);
-        }
-
-        // ProcessName -> spawned handlers (from registration sites, joined to the co-located method-group),
-        // and the producer (tell/ask) sites. A registration with no co-located method-group is skipped — the
-        // handler isn't a method-group we can resolve to a node (a lambda subgraph or an unresolved target).
-        var handlersByProcess = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        var producers = new List<ActorDeliverySite>();
-        foreach (var site in actorSites)
-        {
-            // PRECISION GATE — join only on a MEMBER-PATH process name (a '.', e.g. `ProcessDns.AccountService`),
-            // the reliable cross-method identity per the actor rule's own rationale. A BARE-variable name
-            // (`tell(pid, …)` / `spawn(name, …)` where the arg is a local/param) is not a stable identity and
-            // collides spuriously: Echo framework internals (`Actor.RunMessageDirective(ProcessId pid, …)`)
-            // would tie to any spawn whose arg is also named "pid". Calibrated on MedDBase (drops ~30 framework
-            // /orphaned false edges, keeps the DNS-table ones). The string identity stays ~heuristic regardless.
-            if (!site.ProcessName.Contains('.'))
-            {
-                continue;
-            }
-
-            if (site.IsRegistration)
-            {
-                if (handlersBySite.TryGetValue((site.Caller, site.FilePath, site.Line), out var handlers))
-                {
-                    if (!handlersByProcess.TryGetValue(site.ProcessName, out var set))
+                    var channel = (site.Tag, site.IdentityToken);
+                    if (!handlersByChannel.TryGetValue(channel, out var set))
                     {
-                        handlersByProcess[site.ProcessName] = set = new HashSet<string>(StringComparer.Ordinal);
+                        handlersByChannel[channel] = set = new HashSet<string>(StringComparer.Ordinal);
                     }
-                    set.UnionWith(handlers);
+                    set.UnionWith(handlers!);
                 }
             }
             else
@@ -224,25 +131,26 @@ public static partial class FactPathFinder
             }
         }
 
-        if (handlersByProcess.Count == 0 || producers.Count == 0)
+        if (handlersByChannel.Count == 0 || producers.Count == 0)
         {
-            return graph; // nothing to connect (no spawn handlers, or no tells)
+            return graph; // nothing to connect (no handlers, or no producers)
         }
 
-        // One handoff edge per (teller, handler), at the tell site. Dedup so a method that tells the same
-        // process on several lines doesn't multiply identical edges.
+        // One handoff edge per (producer, handler), at the publish site, tagged with the producer's Tag.
+        // Dedup on (Caller, Callee, Tag) so a method that publishes the same channel on several lines doesn't
+        // multiply identical edges.
         var added = new List<CallEdge>();
-        var seen = new HashSet<(string, string)>();
+        var seen = new HashSet<(string, string, string)>();
         foreach (var producer in producers)
         {
-            if (!handlersByProcess.TryGetValue(producer.ProcessName, out var handlers))
+            if (!handlersByChannel.TryGetValue((producer.Tag, producer.IdentityToken), out var channelHandlers))
             {
                 continue;
             }
 
-            foreach (var handler in handlers)
+            foreach (var handler in channelHandlers)
             {
-                if (seen.Add((producer.Caller, handler)))
+                if (seen.Add((producer.Caller, handler, producer.Tag)))
                 {
                     added.Add(
                         new CallEdge(
@@ -251,7 +159,7 @@ public static partial class FactPathFinder
                             Kind: EdgeKinds.Handoff,
                             FilePath: producer.FilePath,
                             Line: producer.Line,
-                            HandoffDispatcher: "actor_tell"
+                            HandoffDispatcher: producer.Tag
                         )
                     );
                 }

@@ -411,34 +411,52 @@ public static class Reads
         return rows.ToHashSet();
     }
 
-    // Event READ sites carrying the event identity (the `E:` target DocID) — the input to the publish→consumer
-    // DELIVERY edge (FactPathFinder.AddEventDeliveryEdges, baked into call_edges at graph build). Same event-
-    // read refs as EventSubscriptionSitesAsync, but projecting the EventId too so a RAISE can be matched to
-    // its subscribers; subscriptions vs raises are discriminated downstream by co-location with a method-group
-    // edge. Events are few, so this is cheap.
-    public static async Task<IReadOnlyList<EventReadSite>> LoadEventReadSitesAsync(
+    // Event READ sites projected into the uniform DeliverySite shape — the input to the single framework-blind
+    // publish→consumer DELIVERY join (FactPathFinder.AddDeliveryEdges, baked into call_edges at graph build).
+    // Same event-read refs as EventSubscriptionSitesAsync, but carrying the event's `E:` DocID as the channel
+    // IdentityToken so a RAISE can be matched to its subscribers. Every `someEvent += H` AND every raise
+    // (`someEvent?.Invoke()`) reads the event, so the role is ByColocation — the join decides subscription
+    // (a co-located method-group ⇒ binds EventId → that handler) vs raise (none ⇒ producer). Tag "event_raise"
+    // is the emitted handoff's dispatcher. Events are few, so this is cheap.
+    public static async Task<IReadOnlyList<DeliverySite>> LoadEventDeliverySitesAsync(
         RigDbContext context,
         CancellationToken cancellationToken = default
     ) =>
         await context
             .ReferenceFacts.Where(r => r.EnclosingSymbolId != null && r.RefKind == RefKinds.Read && r.TargetSymbolId.StartsWith("E:"))
-            .Select(r => new EventReadSite(Caller: r.EnclosingSymbolId!, FilePath: r.FilePath, Line: r.Line, EventId: r.TargetSymbolId))
+            .Select(r => new DeliverySite(
+                Caller: r.EnclosingSymbolId!,
+                FilePath: r.FilePath,
+                Line: r.Line,
+                IdentityToken: r.TargetSymbolId,
+                Tag: "event_raise",
+                Role: DeliveryRole.ByColocation
+            ))
             .ToListAsync(cancellationToken);
 
-    // Actor publish/registration SITES carrying the PROCESS NAME (FirstArgumentName) — the input to the
-    // publish→consumer DELIVERY edge for Echo actors (FactPathFinder.AddActorDeliveryEdges, baked into
-    // call_edges at graph build). The SECOND resolver, mirroring LoadEventReadSitesAsync; the difference is
-    // the identity: an actor call's consumer is a process NAME string (resolved through a static ProcessName
-    // field), not an event symbol, so this is ~heuristic. The tell/ask/spawn/register methods are DATA — the
+    // Actor publish/registration SITES projected into the uniform DeliverySite shape — the input to the single
+    // framework-blind publish→consumer DELIVERY join (FactPathFinder.AddDeliveryEdges, baked into call_edges at
+    // graph build). Mirrors LoadEventDeliverySitesAsync; the difference is the identity: an actor call's
+    // consumer is a process NAME string (the FirstArgumentName, resolved through a static ProcessName field),
+    // not an event symbol, so the binding is ~heuristic. The process name is the channel IdentityToken; Tag
+    // "actor_tell" is the emitted handoff's dispatcher. The tell/ask/spawn/register methods are DATA — the
     // `actor:*` effect rules — NOT hardcoded here, so a deployment can re-point the actor API by editing
     // rules.json (same as factoryRules flowing into the graph build).
     //
     // Identification is rules-driven with a coarse SQL filter + in-memory refine (actor calls are not the bulk
     // of refs, so the refine is cheap): SQL pulls invocation refs that carry a FirstArgumentName and an
     // enclosing method and whose target is a method DocID; the in-memory pass keeps only those whose
-    // (declaringType, methodName) matches an actor rule, projecting the rule's Operation to IsRegistration
-    // (spawn/spawnUnit/spawnMany/register = registration; tell/tellSystem/ask/askAsync/askIfAlive = producer).
-    public static async Task<IReadOnlyList<ActorDeliverySite>> LoadActorDeliverySitesAsync(
+    // (declaringType, methodName) matches an actor rule, projecting the rule's Operation to the role
+    // (spawn/spawnUnit/spawnMany/register = Registration; tell/tellSystem/ask/askAsync/askIfAlive = Producer).
+    //
+    // PRECISION GATE (moved here from the former Domain AddActorDeliveryEdges so the join stays framework-
+    // blind): emit a site ONLY for a MEMBER-PATH process name (contains a '.', e.g. `ProcessDns.AccountService`)
+    // — the reliable cross-method identity per the actor rule's own rationale. A BARE-variable name
+    // (`tell(pid, …)` / `spawn(name, …)` where the arg is a local/param) is not a stable identity and collides
+    // spuriously: Echo framework internals (`Actor.RunMessageDirective(ProcessId pid, …)`) would tie to any
+    // spawn whose arg is also named "pid". Calibrated on MedDBase (drops ~30 framework/orphaned false edges,
+    // keeps the DNS-table ones). The string identity stays ~heuristic regardless.
+    public static async Task<IReadOnlyList<DeliverySite>> LoadActorDeliverySitesAsync(
         RigDbContext context,
         IReadOnlyList<FactEffectRule> actorRules,
         CancellationToken cancellationToken = default
@@ -489,7 +507,7 @@ public static class Reads
             })
             .ToListAsync(cancellationToken);
 
-        var sites = new List<ActorDeliverySite>(rows.Count);
+        var sites = new List<DeliverySite>(rows.Count);
         foreach (var r in rows)
         {
             var parsed = ParseActorTarget(r.TargetSymbolId);
@@ -498,13 +516,21 @@ public static class Reads
                 continue;
             }
 
+            // Member-path precision gate (see the method header) — a bare-variable process name is not a
+            // stable cross-method identity, so it never becomes a delivery site.
+            if (!r.FirstArgumentName!.Contains('.', StringComparison.Ordinal))
+            {
+                continue;
+            }
+
             sites.Add(
-                new ActorDeliverySite(
+                new DeliverySite(
                     Caller: r.EnclosingSymbolId!,
                     FilePath: r.FilePath,
                     Line: r.Line,
-                    ProcessName: r.FirstArgumentName!,
-                    IsRegistration: isRegistration
+                    IdentityToken: r.FirstArgumentName!,
+                    Tag: "actor_tell",
+                    Role: isRegistration ? DeliveryRole.Registration : DeliveryRole.Producer
                 )
             );
         }

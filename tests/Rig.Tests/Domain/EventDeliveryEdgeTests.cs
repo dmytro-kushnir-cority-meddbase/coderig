@@ -4,12 +4,13 @@ using Shouldly;
 
 namespace Rig.Tests.Domain;
 
-// The publish→consumer DELIVERY edge for C# events (FactPathFinder.AddEventDeliveryEdges): a raise
-// (`someEvent?.Invoke()`) is resolved, by event identity, to the event's subscribers and ADDED as a handoff
-// edge raiser→handler — the edge no syntactic call records. Modeled as a handoff: sync-cut by default,
-// walked under --async, so the raiser's --async reach now includes what the handler does. Subscriptions vs
-// raises are discriminated by co-location with a method-group edge (a `+= Handler` site has one; a raise
-// doesn't).
+// The publish→consumer DELIVERY edge for C# events, through the single framework-blind join
+// (FactPathFinder.AddDeliveryEdges): a raise (`someEvent?.Invoke()`) is resolved, by event identity, to the
+// event's subscribers and ADDED as a handoff edge raiser→handler — the edge no syntactic call records.
+// Modeled as a handoff: sync-cut by default, walked under --async, so the raiser's --async reach now includes
+// what the handler does. The event loader emits every event read as a ByColocation DeliverySite tagged
+// "event_raise"; the join discriminates subscriptions vs raises by co-location with a method-group edge (a
+// `+= Handler` site has one; a raise doesn't).
 public sealed class EventDeliveryEdgeTests
 {
     private static MethodRef M(string id) => new(id, id, null);
@@ -22,6 +23,11 @@ public sealed class EventDeliveryEdgeTests
 
     private const string Evt = "E:N.Bus.Changed";
 
+    // An event read DeliverySite as the loader emits it: ByColocation (the join decides subscribe vs raise),
+    // tagged "event_raise", with the event `E:` DocID as the channel identity.
+    private static DeliverySite Read(string caller, string file, int line) =>
+        new(Caller: caller, FilePath: file, Line: line, IdentityToken: Evt, Tag: "event_raise", Role: DeliveryRole.ByColocation);
+
     [Test]
     public void Raise_delivers_to_subscribers_as_an_async_handoff()
     {
@@ -33,11 +39,11 @@ public sealed class EventDeliveryEdgeTests
         );
         var reads = new[]
         {
-            new EventReadSite("M:N.Register.Wire", "f.cs", 10, Evt), // subscription (co-located w/ methodGroup)
-            new EventReadSite("M:N.Raiser.Fire", "f.cs", 50, Evt), // raise (no co-located methodGroup)
+            Read("M:N.Register.Wire", "f.cs", 10), // subscription (co-located w/ methodGroup)
+            Read("M:N.Raiser.Fire", "f.cs", 50), // raise (no co-located methodGroup)
         };
 
-        var delivered = FactPathFinder.AddEventDeliveryEdges(graph, reads);
+        var delivered = FactPathFinder.AddDeliveryEdges(graph, reads);
 
         // The raise→handler edge was added: a handoff tagged event_raise, at the raise site.
         var edge = delivered.CallEdges.Single(e => e.Caller == "M:N.Raiser.Fire" && e.Callee == "M:N.Handler.OnChanged");
@@ -60,9 +66,9 @@ public sealed class EventDeliveryEdgeTests
     public void A_subscription_with_no_raise_adds_no_delivery_edge()
     {
         var graph = Graph(new CallEdge("M:N.Register.Wire", "M:N.Handler.OnChanged", "methodGroup", "f.cs", 10));
-        var reads = new[] { new EventReadSite("M:N.Register.Wire", "f.cs", 10, Evt) }; // subscription only
+        var reads = new[] { Read("M:N.Register.Wire", "f.cs", 10) }; // subscription only
 
-        var delivered = FactPathFinder.AddEventDeliveryEdges(graph, reads);
+        var delivered = FactPathFinder.AddDeliveryEdges(graph, reads);
 
         delivered.CallEdges.ShouldBe(graph.CallEdges); // unchanged — nothing to deliver to
     }
@@ -71,9 +77,9 @@ public sealed class EventDeliveryEdgeTests
     public void A_raise_of_an_event_with_no_subscribers_adds_nothing()
     {
         var graph = Graph(new CallEdge("M:N.Raiser.Fire", "M:N.Other.X", "invocation", "f.cs", 1));
-        var reads = new[] { new EventReadSite("M:N.Raiser.Fire", "f.cs", 50, Evt) }; // raise, but nobody subscribes
+        var reads = new[] { Read("M:N.Raiser.Fire", "f.cs", 50) }; // raise, but nobody subscribes
 
-        var delivered = FactPathFinder.AddEventDeliveryEdges(graph, reads);
+        var delivered = FactPathFinder.AddDeliveryEdges(graph, reads);
 
         delivered.CallEdges.ShouldBe(graph.CallEdges);
     }
@@ -87,12 +93,12 @@ public sealed class EventDeliveryEdgeTests
         );
         var reads = new[]
         {
-            new EventReadSite("M:N.Register.Wire", "f.cs", 10, Evt),
-            new EventReadSite("M:N.Raiser.Fire", "f.cs", 50, Evt), // raise #1
-            new EventReadSite("M:N.Raiser.Fire", "f.cs", 60, Evt), // raise #2 (same method, same event)
+            Read("M:N.Register.Wire", "f.cs", 10),
+            Read("M:N.Raiser.Fire", "f.cs", 50), // raise #1
+            Read("M:N.Raiser.Fire", "f.cs", 60), // raise #2 (same method, same event)
         };
 
-        var delivered = FactPathFinder.AddEventDeliveryEdges(graph, reads);
+        var delivered = FactPathFinder.AddDeliveryEdges(graph, reads);
 
         delivered.CallEdges.Count(e => e.Caller == "M:N.Raiser.Fire" && e.Callee == "M:N.Handler.OnChanged").ShouldBe(1);
     }
