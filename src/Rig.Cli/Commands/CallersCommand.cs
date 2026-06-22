@@ -1,6 +1,7 @@
 using System.CommandLine;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
+using Rig.Cli.Deployments;
 using Rig.Cli.Rendering;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
@@ -125,7 +126,10 @@ internal static class CallersCommand
 
         if (entrypointsOnly)
         {
-            return await RunEntryPointsAsync(context, graph, toPattern, maxDepth, mode, rules, workingDirectory, tsv, output);
+            // F9: load the DeploymentMap here and pass it into RunEntryPointsAsync, eliminating the
+            // LoadDeploymentsAsync call that was inside RunEntryPointsAsync (depth-1 in the call tree).
+            var epDeployments = await LoadDeploymentsAsync(context, workingDirectory);
+            return await RunEntryPointsAsync(context, graph, toPattern, maxDepth, mode, rules, workingDirectory, tsv, output, epDeployments);
         }
 
         // Deployment/EP context for the from-symbol annotations (opt-in via deployments.json). Only the
@@ -215,6 +219,9 @@ internal static class CallersCommand
     // The join key is the declaration site (FilePath, Line): a derived EP carries no DocID, but its handler
     // method's symbol fact shares the same site, so an EP is "touching" when some reverse-reachable method is
     // declared at the EP's site. Default is synchronous-only; --async also counts scheduled paths.
+    // F9: `deployments` is passed in from `RunAsync` (already loaded there) so this method no longer
+    // calls `LoadDeploymentsAsync` itself. Default null so future callers that don't have a pre-loaded
+    // map still work (they pass null and the method loads its own below). All current callers pass it in.
     private static async Task<int> RunEntryPointsAsync(
         RigDbContext context,
         FactGraphData graph,
@@ -224,7 +231,8 @@ internal static class CallersCommand
         RuleSet rules,
         string workingDirectory,
         bool tsv,
-        TextWriter output
+        TextWriter output,
+        DeploymentMap? deployments = null
     )
     {
         // Reverse closure of the target (every method that reaches it) over the SAME shaped graph the caller
@@ -240,7 +248,9 @@ internal static class CallersCommand
             return 1;
         }
 
-        var deployments = await LoadDeploymentsAsync(context, workingDirectory);
+        // F9: use the passed-in map when the caller already loaded it; fall back to loading if null
+        // (defensive — the current caller always passes it).
+        deployments ??= await LoadDeploymentsAsync(context, workingDirectory);
 
         // (FilePath, Line) of every reverse-reachable method — the join key against derived EP sites. Sourced
         // from the already-loaded graph's method nodes (the same Kind==Method set, deduped by SymbolId) rather

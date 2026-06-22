@@ -173,9 +173,12 @@ internal static class ImpactCommand
         // miss. Opening issues no query — the cost is in the graph load + reach a hit skips.
         await using var context = OpenReadContext(workingDirectory: workingDirectory, storeRef: headRef);
 
+        // F4: load the DeploymentMap ONCE here so both the warm-path (cache hit) and cold-path share the
+        // same result — eliminates the duplicate LoadDeploymentsAsync that previously appeared in each branch.
+        var deployments = await LoadDeploymentsAsync(context, workingDirectory, error);
+
         // WARM PATH: a fully-materialized diff + provenance + per-EP FQN subset → render WITHOUT loading the
-        // base store or shaping/walking either graph. Deployments are reloaded (a pure function of the
-        // immutable store + deployments.json, so byte-identical to the cold render) for the --structural chips.
+        // base store or shaping/walking either graph. Deployments are loaded once above for the --structural chips.
         if (cacheKey is not null && cache!.Get(cacheKey) is { } cachedBlob && ImpactCacheCodec.Decode(cachedBlob) is { } art)
         {
             RenderImpact(
@@ -184,7 +187,7 @@ internal static class ImpactCommand
                 baseProv: art.BaseProvenance,
                 headProv: art.HeadProvenance,
                 mode: mode,
-                deployments: await LoadDeploymentsAsync(context, workingDirectory, error),
+                deployments: deployments,
                 fqnSites: art.FqnSites,
                 tsv: tsv,
                 structural: structural,
@@ -210,8 +213,6 @@ internal static class ImpactCommand
         graph = FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context);
         graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
 
-        var deployments = await LoadDeploymentsAsync(context, workingDirectory, error);
-
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
         var epSet = await DeriveEntryPointsAsync(context, epData, rules);
         var derivedEps = epSet.Derived;
@@ -223,8 +224,8 @@ internal static class ImpactCommand
         // stores (mirroring `derive`), so the derived effects carry hazard observations (race_window /
         // lazy_init_race; n_plus_1 / unserializable_payload ride along via the observation rules). Scoped to
         // impact — tree/reaches are untouched.
-        var staticFieldWriteRefs = await Reads.LoadStaticFieldWriteRefsAsync(context);
-        var staticFieldReadRefs = await Reads.LoadStaticFieldReadRefsAsync(context);
+        // F8: one combined scan (RefKind in {read,write}) instead of two back-to-back single-kind queries.
+        var (staticFieldWriteRefs, staticFieldReadRefs) = await Reads.LoadStaticFieldAccessRefsByKindAsync(context);
         var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
         var effects = DeriveEffects(
             rules.Effects,
@@ -1097,8 +1098,8 @@ internal static class ImpactCommand
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
         // Hazard delta: derive hazards on the base side too (mirror RunAsync / DeriveCommand) so the base
         // per-EP hazard set is computed over hazard-bearing effects and the diff compares like-for-like.
-        var staticFieldWriteRefs = await Reads.LoadStaticFieldWriteRefsAsync(context);
-        var staticFieldReadRefs = await Reads.LoadStaticFieldReadRefsAsync(context);
+        // F8: one combined scan instead of two back-to-back single-kind queries (mirrors the HEAD side).
+        var (staticFieldWriteRefs, staticFieldReadRefs) = await Reads.LoadStaticFieldAccessRefsByKindAsync(context);
         var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
         var effects = DeriveEffects(
             rules.Effects,

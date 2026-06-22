@@ -73,7 +73,9 @@ internal static class DeriveCommand
         // #4: capture the resolved rule paths from the load, so the fingerprint below reuses them instead of
         // re-running the cascade merge (RulesFingerprint.ComputeFromPaths) just to re-discover the same paths.
         var rules = RuleSetLoader.Load(workingDirectory: workingDirectory, extraRules: extraRules, loadedPaths: out var loadedRulePaths);
-        await using var context = OpenReadContext(workingDirectory, storeRef);
+        // F7: use the out-param overload so the resolved store dir is available for the StoreKey computation
+        // below without a second ResolveReadStoreDir call (io:read ×7).
+        await using var context = OpenReadContext(workingDirectory: workingDirectory, storeRef: storeRef, storeDir: out var rigDir);
 
         // Deployment attribution (opt-in: only when deployments.json sits next to .rig). Empty (no-op) when
         // the config is absent; `error` is the log sink so config problems surface.
@@ -94,7 +96,7 @@ internal static class DeriveCommand
         //     dual_write/thread_local_context post-pass, cached store+rules-keyed and SHARED with `tree
         //     --hazards` (an effect is a per-method fact, EP- and mode-independent). A reindex or rule edit
         //     misses the cache and recomputes, so hazards stay query-side data. ---
-        var rigDir = StoreLayout.ResolveReadStoreDir(workingDirectory, storeRef);
+        // rigDir resolved above via the out-param OpenReadContext overload (F7).
         var storeKey = StoreKey(Path.Combine(rigDir, StoreLayout.DbFileName));
         var rulesHash = RulesFingerprint.ComputeFromPaths(loadedRulePaths); // #4: reuse the paths Load resolved.
         var effects = await LoadOrDeriveHazardEffectsAsync(
