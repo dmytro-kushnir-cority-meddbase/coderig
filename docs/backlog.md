@@ -213,7 +213,7 @@ the rest are the same patterns in other commands, still open. Severity = the cos
 
 | # | Redundant work | EPs | Status |
 |---|---|---|---|
-| F1 | `LoadFactGraphAsync` (efcore:read ×4) loaded inside `DeriveHandoffEntryPointsAsync` AND again directly | Derive | **open** — the clean fix is the `LoadShapedGraphAsync` consolidation (load+shape once, reuse) |
+| F1 | `LoadFactGraphAsync` (efcore:read ×4) loaded inside `DeriveHandoffEntryPointsAsync` AND again directly | Derive | **FIXED** (`9caef5d1`) — `LoadShapedGraphAsync` loaded once, threaded into `DeriveHandoffEntryPointsAsync` + the cycle pass |
 | F2 | `LoadFactEntryPointDataAsync` (efcore:read ×5) loaded top-level AND again inside a derivation callee | Derive ✓, **Reaches/Tree/Callers/Path/Impact open** | derive fixed (epData threaded in); other EPs reload it inside `TraversalGraphLoader.LoadReachInputsFromRowsAsync` + `EntryPointContext.DeriveEpSiteKindAsync` |
 | F3 | `LoadFactGraphAsync` HEAD + BASE in Impact; each opens a fresh ADO conn via `LoadDispatchFactsAsync` | Impact | conn-reuse part FIXED in `LoadFactGraphAsync`; the base/head double-load is **intentional** (different stores) |
 | F4 | `LoadDeploymentsAsync` (io:read ×3, slnx+projrefs parse) runs **twice** (`calls=2`) | Impact | **FIXED** (`78dbe9c2`) — hoisted before the cache branch, reused on both paths |
@@ -228,3 +228,20 @@ Cross-EP heavy shared methods (benign at once-per-command, the F1–F9 cases are
 `DeriveEffects` (4/9), `RuleSetLoader.Load` (9/9). The `LoadShapedGraphAsync` consolidation (above) plus a
 shared per-command `DeploymentMap` cache and threading already-loaded data into callees would clear most of
 the open rows; F6's non-derive instances want `RulesFingerprint` to accept pre-resolved paths everywhere.
+
+### Residual follow-ups surfaced by the work
+
+- **Route EF-fallback `TraversalGraphLoader` through `LoadShapedGraphAsync`.** The consolidation (`9caef5d1`)
+  routed derive + impact through the single shaped-graph loader, closing impact's `--async` delivery-edge
+  gap — but the EF-fallback traversal loader (reaches/tree/path/callers when not on the SQL `call_edges`
+  path) was left doing its own `LoadFactGraphAsync + ShapeGraph + MarkEventSubscriptionHandoffs` WITHOUT
+  `AddDeliveryEdges`, so those fall back paths still don't see delivery edges. Low urgency (the SQL path —
+  the common case — has them baked), but it's the last scattered shaping site. ORDER CAVEAT (load-bearing,
+  see `Reads.LoadShapedGraphAsync`): `AddDeliveryEdges` must precede `MarkEventSubscriptionHandoffs`, else
+  the reclassified `+= H` methodGroup subscription edges starve the event-delivery join (cost us a 24→0
+  `event_cycle` regression, caught by the real-store check).
+- **`seen` flag: split into `seen` vs `depth-capped` via a `TruncationCause` on `TraceNode`.** Today the llm
+  `seen` flag (and `llm-ids`' `seen:<id>` canonical-ref) maps to `TraceNode.Truncated`, which conflates
+  already-expanded / depth-cap / budget-cap. Only genuinely-already-expanded rows are redundancy signals; a
+  depth-capped row flagged `seen` is a false positive. The fix needs a `TruncationCause` enum threaded
+  through `BuildTree`; then `seen` carries a real canonical-ref and `depth-capped` is its own flag.
