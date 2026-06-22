@@ -201,6 +201,61 @@ public sealed class ProductionFixCorpusRaceWindowTests
         lazy.Detail.ShouldStartWith("Corpus.cs:");
     }
 
+    // SPLIT (multi-branch) — a lazy singleton getter that assigns the cell on SEVERAL branches inside
+    // `if (instance == null)` (null-fallbacks / if-else picks), like MedDBase's PerformanceLogger.Factory. The
+    // cell is written >1×, but the getter CONTEXT means it is still init-once — so it is lazy_init_race (low),
+    // NOT the high-confidence race_window the old single-write veto produced (the dominant high-tier FP).
+    [Test]
+    public void Multi_branch_lazy_init_in_a_getter_is_classified_as_lazy_init_race_not_race_window()
+    {
+        var result = ProductionFixCorpus.Analyze(
+            """
+            namespace App
+            {
+                public sealed class Service { }
+
+                public static class Locator
+                {
+                    private static Service _instance;
+
+                    public static Service Instance
+                    {
+                        get
+                        {
+                            if (_instance == null)
+                            {
+                                if (Config.UseNull)
+                                {
+                                    _instance = new Service();
+                                    return _instance;
+                                }
+
+                                _instance = new Service();
+                            }
+
+                            return _instance;
+                        }
+                    }
+                }
+
+                public static class Config
+                {
+                    public static bool UseNull => false;
+                }
+            }
+            """
+        );
+
+        // The cell is written on TWO branches (write count > 1) — the old veto would have left these as
+        // race_window(high). The getter context now classifies both as lazy_init_race(low).
+        result.SharedStateMutationsIn("Locator.get_Instance").Count.ShouldBe(2);
+        result.RaceWindowsIn("Locator.get_Instance").ShouldBeEmpty();
+
+        var lazies = result.LazyInitRacesIn("Locator.get_Instance");
+        lazies.ShouldNotBeEmpty();
+        lazies.ShouldAllBe(l => l.Confidence == "low" && l.Reason == "lazy_init_heuristic");
+    }
+
     // SPLIT — do-once init FLAG in an Init-named method: `if (!_initialised) _initialised = true;` (single
     // read, single write, init-shaped method name). Also a lazy_init_race, not a race_window.
     [Test]

@@ -404,29 +404,37 @@ public static class FactHazardDeriver
         map.TryGetValue($"{provider}:{operation}", out systemClass!) || map.TryGetValue(provider, out systemClass!);
 
     // DISCLOSED STRUCTURAL HEURISTIC for the lazy-init / do-once archetype. We do NOT have the if-condition
-    // value (no new extraction), so we classify on shape only and flag it heuristic. A pair is lazy-init when:
+    // value (no new extraction), so we classify on shape only and flag it heuristic. Two arms:
     //
-    //   (1) the do-once SHAPE holds — the cell is written EXACTLY ONCE in this method (`_x = new X();` /
-    //       `init = true;` fired at most once is the signature of a first-time init; a cell written more than
-    //       once is being driven, not initialised), AND
-    //   (2) a CONTEXT signal corroborates it — the enclosing method is a property getter (`get_*`), an
-    //       init-shaped method (name contains Init/Initialise/Initialize), or a constructor (`.#ctor`/`.cctor`),
-    //       OR the cell's simple name looks init-ish (`instance`/`initialised`/`initialized`).
+    //   (A) a strong CONTEXT signal — the enclosing method is a property getter (`get_*`), an init-shaped
+    //       method (name contains Init/Initialise/Initialize), or a constructor (`.#ctor`/`.cctor`). This is
+    //       the do-once context, and it does NOT require a single write: a lazy singleton getter routinely
+    //       assigns the cell on SEVERAL mutually-exclusive branches inside `if (cell == null)` — null-
+    //       fallbacks, if/else picks — yet is still initialised at most once at runtime. (Calibration:
+    //       `PerformanceLogger.Factory` writes `instance` on 4 branches; the old single-write veto left all 4
+    //       as high race_window noise — the dominant high-tier FP. The getter/ctor CONTEXT is a stronger
+    //       do-once signal than the write count.) OR
+    //   (B) the WEAK cell-name signal — the cell's simple name looks init-ish (`instance`/`initialised`/
+    //       `initialized`). A name heuristic is brittle, so this arm STILL requires the single-write do-once
+    //       SHAPE: a multi-write cell named "instance" outside an init context is being driven, not initialised.
     //
-    // Shape alone (1) is necessary but not sufficient — `if (Cache.Status == 0) Cache.Status = 1;` also writes
-    // once yet is a real mutate-existing race. The context signal (2) is what separates first-time lazy init
-    // from check-then-act on already-valued state, so a plain counter/status mutate stays a race_window. We do
-    // NOT gate on read count: the classic getter (`if (_x == null) … return _x;`) reads the cell more than
-    // once, so a single-read requirement would miss it. The cell-name arm is a WEAK corroborator only
-    // (brittle), never the sole signal — it must still co-occur with the single-write shape.
+    // Everything else stays race_window: `if (Cache.Status == 0) Cache.Status = 1;` in a plain method is a real
+    // mutate-existing check-then-act (no init context, non-init cell name). We do NOT gate on READ count: the
+    // classic getter (`if (_x == null) … return _x;`) reads the cell more than once.
+    //
+    // Trade (disclosed): a getter that conditionally mutates ALREADY-VALUED shared state also lands here as
+    // lazy_init_race(low) rather than race_window — still emitted, just down-ranked. Getter shared-state
+    // mutation is overwhelmingly lazy/caching, so this is the precision-over-recall call for the default surface.
     private static bool LooksLikeLazyInit(string enclosingId, string cell, bool singleWrite)
     {
-        if (!singleWrite)
+        // (A) strong init context — multi-branch init is still do-once, so write count does NOT disqualify.
+        if (EnclosingLooksInitLike(enclosingId))
         {
-            return false; // written more than once — being driven, not initialised. Leave it a race_window.
+            return true;
         }
 
-        return EnclosingLooksInitLike(enclosingId) || CellNameLooksInitLike(cell);
+        // (B) weak cell-name corroborator — only with the single-write do-once shape.
+        return singleWrite && CellNameLooksInitLike(cell);
     }
 
     // The enclosing method's CONTEXT signal: a property getter, an init-named method, or a constructor. Parses
