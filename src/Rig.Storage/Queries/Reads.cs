@@ -837,12 +837,14 @@ public static class Reads
     // the written slot DocID ("F:Ns.Type.field" / "P:Ns.Type.Prop"); the deriver gates its declaring type.
     public static Task<IReadOnlyList<FactFieldAccess>> LoadStaticFieldWriteRefsAsync(
         RigDbContext context,
+        IReadOnlyCollection<string>? enclosingScope = null,
         CancellationToken cancellationToken = default
     ) =>
         LoadStaticFieldAccessRefsAsync(
             context: context,
             refKind: RefKinds.Write,
             excludeReadonly: false,
+            enclosingScope: enclosingScope,
             cancellationToken: cancellationToken
         );
 
@@ -852,12 +854,14 @@ public static class Reads
     // write). Identical join/dedup/structural projection to the write loader — only RefKind differs.
     public static Task<IReadOnlyList<FactFieldAccess>> LoadStaticFieldReadRefsAsync(
         RigDbContext context,
+        IReadOnlyCollection<string>? enclosingScope = null,
         CancellationToken cancellationToken = default
     ) =>
         LoadStaticFieldAccessRefsAsync(
             context: context,
             refKind: RefKinds.Read,
             excludeReadonly: true,
+            enclosingScope: enclosingScope,
             cancellationToken: cancellationToken
         );
 
@@ -871,17 +875,27 @@ public static class Reads
     // "check" of a TOCTOU read-before-write: the value cannot change underneath, so such reads are pure noise
     // (~99k on the real store, dominated by static readonly loggers). The WRITE arm keeps readonly targets:
     // a write to a readonly static is ctor-only and already rare, and remains a genuine shared-state mutation.
+    // `enclosingScope`, when given, bounds the scan to refs whose ENCLOSING is in the set (the EnclosingSymbolId
+    // index makes this a seek, not a full scan) — used by `tree --hazards` to load only this one EP's reachable
+    // methods' field accesses instead of the whole store (~tens of thousands of rows). Null = whole store
+    // (derive/impact, which need every cell).
     private static async Task<IReadOnlyList<FactFieldAccess>> LoadStaticFieldAccessRefsAsync(
         RigDbContext context,
         string refKind,
         bool excludeReadonly,
+        IReadOnlyCollection<string>? enclosingScope = null,
         CancellationToken cancellationToken = default
     )
     {
-        var rows = await context
+        var refs = context
             .ReferenceFacts.AsNoTracking()
-            .Where(r => r.RefKind == refKind && r.TargetInSource && r.EnclosingSymbolId != null)
-            .Join(
+            .Where(r => r.RefKind == refKind && r.TargetInSource && r.EnclosingSymbolId != null);
+        if (enclosingScope is not null)
+        {
+            refs = refs.Where(r => enclosingScope.Contains(r.EnclosingSymbolId!));
+        }
+
+        var rows = await refs.Join(
                 context
                     .SymbolFacts.AsNoTracking()
                     .Where(s => s.Modifiers.Contains("static") && (!excludeReadonly || !s.Modifiers.Contains("readonly"))),

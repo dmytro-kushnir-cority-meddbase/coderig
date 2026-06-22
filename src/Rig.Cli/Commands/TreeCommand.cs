@@ -275,13 +275,15 @@ internal static class TreeCommand
         // unserializable_payload) reachable from this entry point — inline on the tree + a summary section.
         // The bounded tree closure doesn't normally thread the static-field read/write refs (so race_window's
         // shared_state read↔write legs can't pair) nor run the hazard post-pass; --hazards opts THIS EP's
-        // closure into the same machinery `derive` runs whole-store. We re-derive the closure's effects with
-        // the field refs BOUNDED to the tree's reachable methods (race_window/dual_write are intra-method, so
-        // bounding by enclosing method is exact) + the hazard post-pass, and let that augmented set REPLACE the
-        // render effects for this run — so a method whose only effect is a static-field RMW still renders (it
-        // would otherwise be pruned for carrying no cached effect). The augmented effects/seam are NEVER cached
-        // (the forest/effect/sidecar caches stay hazard-free, keyed without --hazards), so a later plain `tree`
-        // is unaffected.
+        // closure into the same machinery `derive` runs whole-store. KEY PERF POINT: the cached/cold `effects`
+        // ALREADY hold every INVOCATION-derived effect + observation (n+1, unserializable, dual_write inputs);
+        // the ONLY thing missing for the hazard passes is the field-fed shared_state effects — and those derive
+        // DIRECTLY from the static-field refs (no graph, invocations, or base edges — see
+        // FactEffectDeriver.EmitFieldAccessEffects). So we derive JUST those and MERGE, rather than reloading
+        // the whole reach graph (which on a big EP cost ~6s for nothing the cached effects didn't already have).
+        // The merged augmented set REPLACES the render effects for this run — so a method whose only effect is a
+        // static-field RMW still renders (it would otherwise be pruned) — and is NEVER cached (the forest/
+        // effect/sidecar caches stay hazard-free, keyed without --hazards), so a later plain `tree` is unaffected.
         IReadOnlyList<DeriveCommand.HazardFinding> hazardFindings = [];
         IReadOnlyDictionary<string, string>? hazardsByMethod = null;
         if (hazards)
@@ -292,53 +294,41 @@ internal static class TreeCommand
                 CollectTreeMethods(root, treeMethods);
             }
 
-            // A full cache hit never loaded the graph/invocations; the re-derive needs both. Load the bounded
-            // reach inputs (graph + invocation/ctor/throw refs) — the same load the cold path does.
-            var hzInputs = await LoadEffectReachInputsAsync(
-                context: context,
-                pattern: fromPattern,
-                direction: SqlReachability.Direction.Forward,
-                shaped
-            );
-            if (graph is null)
-            {
-                graph = hzInputs.Graph;
-                if (!raw)
-                {
-                    graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
-                }
-            }
-
-            // Static-field read/write refs are whole-store; bound them to the tree's methods before deriving
-            // (race_window pairs read→write within one method, so the enclosing-method bound loses nothing).
-            var fieldWriteRefs = (await Reads.LoadStaticFieldWriteRefsAsync(context))
-                .Where(f => f.Enclosing is not null && treeMethods.Contains(f.Enclosing))
-                .ToList();
-            var fieldReadRefs = (await Reads.LoadStaticFieldReadRefsAsync(context))
-                .Where(f => f.Enclosing is not null && treeMethods.Contains(f.Enclosing))
-                .ToList();
-            // [ThreadStatic] cells (whole-store, small) — reroutes a thread-confined RMW from race_window to
-            // thread_local_context; no need to bound (a Contains check against the tree's cells).
+            // Static-field read/write refs, bounded IN SQL to the tree's methods (enclosingScope: treeMethods —
+            // the EnclosingSymbolId index makes it a seek, not a whole-store scan). race_window/dual_write pair
+            // within one method, so the enclosing-method bound loses nothing. Plus [ThreadStatic] cell ids
+            // (small) for the thread_local_context reroute.
+            var fieldWriteRefs = await Reads.LoadStaticFieldWriteRefsAsync(context: context, enclosingScope: treeMethods);
+            var fieldReadRefs = await Reads.LoadStaticFieldReadRefsAsync(context: context, enclosingScope: treeMethods);
             var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
-            effects = DeriveEffects(
+
+            // The field-fed shared_state effects — derived with EMPTY invocations/base-edges/ctor/throw (the
+            // field arm needs none of them), so NO graph load. deriveHazards:false here — the post-pass runs
+            // once over the MERGED set below so race_window/dual_write see both the field-fed and the cached
+            // invocation-derived (Atom.Swap etc.) shared_state legs.
+            var fieldEffects = DeriveEffects(
                 effectRules: rules.Effects,
                 observationRules: rules.Observations,
-                invocations: hzInputs.Invocations,
-                baseEdges: BaseEdgeTuples(graph),
-                ctorRefs: hzInputs.CtorRefs,
-                throwRefs: hzInputs.ThrowRefs,
+                invocations: [],
+                baseEdges: [],
+                ctorRefs: [],
+                throwRefs: [],
                 staticFieldWriteRefs: fieldWriteRefs,
                 staticFieldReadRefs: fieldReadRefs,
-                deriveHazards: true,
-                threadStaticCells: threadStaticCells
+                deriveHazards: false
             );
-            // Findings on the tree's own methods (the field refs are already bounded; this also drops any
-            // invocation-effect finding on a method reachable in the closure but pruned from the forest).
+            IReadOnlyList<DerivedEffect> merged = effects.Concat(fieldEffects).ToList();
+            merged = FactHazardDeriver.DeriveRaceWindows(effects: merged, threadStaticCells: threadStaticCells);
+            merged = FactHazardDeriver.DeriveDualWrites(merged);
+            effects = merged;
+
+            // Findings on the tree's own methods (field refs already bounded; this also drops any invocation-
+            // effect finding on a method reachable in the closure but pruned from the rendered forest).
             hazardFindings = DeriveCommand.HazardFindings(effects).Where(f => treeMethods.Contains(f.Enclosing)).ToList();
             hazardsByMethod = hazardFindings
                 .GroupBy(f => f.Enclosing, StringComparer.Ordinal)
                 .ToDictionary(keySelector: g => g.Key, elementSelector: FormatHazardMark, comparer: StringComparer.Ordinal);
-            timer.Lap("hazard re-derive (bounded to tree)");
+            timer.Lap("hazard re-derive (field effects + post-pass, no graph)");
         }
 
         // Deployment attribution (opt-in via deployments.json) + EP-site lookup, so tree nodes that are
@@ -484,10 +474,12 @@ internal static class TreeCommand
         }
 
         // Seam effects: from the sidecar on a full hit, else computed from the (filtered) effects + graph.
-        // Under --hazards the effects are the augmented (field-fed + post-pass) set, so the cached sidecar seam
-        // (computed from the plain effects) is stale — recompute from the augmented effects and don't cache it.
+        // Under --hazards we still REUSE the cached sidecar seam: the seam is a collapsed-fan-out provider:op
+        // rollup, and whether it includes the few field-fed shared_state effects is cosmetic — not worth a
+        // graph load to recompute. (The WRITE below stays gated on !hazards so a cold --hazards run, which
+        // computes seam from the augmented effects, never caches that augmented seam.)
         IReadOnlyDictionary<string, List<string>> seamEffects;
-        if (sidecar is not null && !hazards)
+        if (sidecar is not null)
         {
             seamEffects = sidecar.Value.SeamEffects;
         }
