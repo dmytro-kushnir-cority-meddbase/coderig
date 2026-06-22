@@ -49,6 +49,104 @@ public static partial class FactPathFinder
         return changed ? graph with { CallEdges = rewritten } : graph;
     }
 
+    // PUBLISH→CONSUMER DELIVERY EDGES (events). Resolves, by event IDENTITY, which handler(s) run when an
+    // event is RAISED, and ADDS those as handoff edges raiser→handler — the edge a `someEvent?.Invoke(..)`
+    // implies but that no syntactic call records (a raise is just an event read). This is EDGE-CREATING, so
+    // it MUST be baked into call_edges at graph-build (alongside RewriteGenericFactories) or the SQL bounding
+    // walk never pulls the handler's closure into a bounded reach — see GraphMaterializer.
+    //
+    // Modeled as HANDOFF edges (HandoffDispatcher="event_raise"): delivery is DEFERRED, exactly like a
+    // background/timer/event-subscription dispatch — sync-cut by default, walked under --async, and visible
+    // to whole-program cycle detection (the FR-10 prerequisite). The identity is the event symbol (`E:`
+    // DocID), so the binding is EXACT (not heuristic): a raise of E reaches precisely E's subscribers.
+    //
+    // Scope line (deliberate): this is DELIVERY (the runtime causes the handler to run), NOT resource
+    // COUPLING. A db/io/cache write→read on the same cell is correlated but NOT a delivery — folding those in
+    // would make `reaches` claim every writer "reaches" every reader and destroy the graph's meaning. Those
+    // stay out; they belong to the separate same-cell/consistency hazard layer (FR-1/dual_write).
+    //
+    // Subscriptions vs raises are discriminated by co-location with a method-group edge (see EventReadSite):
+    // a site with a co-located methodGroup edge binds EventId→that handler; a site without is a raise.
+    public static FactGraphData AddEventDeliveryEdges(FactGraphData graph, IReadOnlyList<EventReadSite> eventReads)
+    {
+        if (eventReads.Count == 0)
+        {
+            return graph;
+        }
+
+        // Method-group handler(s) per call site — the subscription's `+= Handler` edge already in the graph.
+        var handlersBySite = new Dictionary<(string Caller, string File, int Line), List<string>>();
+        foreach (var e in graph.CallEdges)
+        {
+            if (e.Kind != EdgeKinds.MethodGroup)
+            {
+                continue;
+            }
+
+            var key = (e.Caller, e.FilePath, e.Line);
+            if (!handlersBySite.TryGetValue(key, out var list))
+            {
+                handlersBySite[key] = list = [];
+            }
+            list.Add(e.Callee);
+        }
+
+        // Split the event reads into subscriptions (EventId → handlers) and raises (Caller raises EventId).
+        var subscribersByEvent = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var raises = new List<EventReadSite>();
+        foreach (var read in eventReads)
+        {
+            if (handlersBySite.TryGetValue((read.Caller, read.FilePath, read.Line), out var handlers))
+            {
+                if (!subscribersByEvent.TryGetValue(read.EventId, out var set))
+                {
+                    subscribersByEvent[read.EventId] = set = new HashSet<string>(StringComparer.Ordinal);
+                }
+                set.UnionWith(handlers);
+            }
+            else
+            {
+                raises.Add(read);
+            }
+        }
+
+        if (subscribersByEvent.Count == 0 || raises.Count == 0)
+        {
+            return graph; // nothing to connect (no subscribers, or no raises)
+        }
+
+        // One handoff edge per (raiser, handler), at the raise site. Dedup so a method that raises E on
+        // several lines doesn't multiply identical edges.
+        var added = new List<CallEdge>();
+        var seen = new HashSet<(string, string)>();
+        foreach (var raise in raises)
+        {
+            if (!subscribersByEvent.TryGetValue(raise.EventId, out var handlers))
+            {
+                continue;
+            }
+
+            foreach (var handler in handlers)
+            {
+                if (seen.Add((raise.Caller, handler)))
+                {
+                    added.Add(
+                        new CallEdge(
+                            Caller: raise.Caller,
+                            Callee: handler,
+                            Kind: EdgeKinds.Handoff,
+                            FilePath: raise.FilePath,
+                            Line: raise.Line,
+                            HandoffDispatcher: "event_raise"
+                        )
+                    );
+                }
+            }
+        }
+
+        return added.Count == 0 ? graph : graph with { CallEdges = [.. graph.CallEdges, .. added] };
+    }
+
     // The SINGLE shaping pass for the attribution/traversal commands (reaches/tree/path/callers). Applied
     // once at graph load, direction-agnostic: (1) monomorphize generic-factory edges into the CallEdges,
     // then (2) carry the cut + context-dispatch rules ON the graph so BuildIndex picks them up and BOTH

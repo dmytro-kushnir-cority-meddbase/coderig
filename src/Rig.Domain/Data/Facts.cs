@@ -275,6 +275,13 @@ public sealed record TypeSymbol(string SymbolId, string Namespace, string FilePa
 // rather than a synchronous call. Lives in Domain because the shaping consumer is a Domain function.
 public sealed record EventSubscriptionSite(string Caller, string FilePath, int Line);
 
+// An event READ site carrying the event's identity (the `E:` DocID) — the input to the publish→consumer
+// DELIVERY edge (FactPathFinder.AddEventDeliveryEdges). Every `someEvent += H` AND every raise
+// (`someEvent?.Invoke(..)`) reads the event, so the site is discriminated by CO-LOCATION with a method-group
+// edge in the graph: a co-located handler ⇒ a SUBSCRIPTION (binds EventId → that handler); no co-located
+// handler ⇒ a RAISE (Caller delivers to every handler subscribed to EventId). Caller is the enclosing method.
+public sealed record EventReadSite(string Caller, string FilePath, int Line, string EventId);
+
 // The fact-derived call graph loaded for cross-project path finding (stage 2 over facts).
 public sealed record FactGraphData(
     IReadOnlyList<CallEdge> CallEdges,

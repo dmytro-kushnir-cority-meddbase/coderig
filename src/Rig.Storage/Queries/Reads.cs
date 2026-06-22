@@ -411,6 +411,20 @@ public static class Reads
         return rows.ToHashSet();
     }
 
+    // Event READ sites carrying the event identity (the `E:` target DocID) — the input to the publish→consumer
+    // DELIVERY edge (FactPathFinder.AddEventDeliveryEdges, baked into call_edges at graph build). Same event-
+    // read refs as EventSubscriptionSitesAsync, but projecting the EventId too so a RAISE can be matched to
+    // its subscribers; subscriptions vs raises are discriminated downstream by co-location with a method-group
+    // edge. Events are few, so this is cheap.
+    public static async Task<IReadOnlyList<EventReadSite>> LoadEventReadSitesAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    ) =>
+        await context
+            .ReferenceFacts.Where(r => r.EnclosingSymbolId != null && r.RefKind == RefKinds.Read && r.TargetSymbolId.StartsWith("E:"))
+            .Select(r => new EventReadSite(Caller: r.EnclosingSymbolId!, FilePath: r.FilePath, Line: r.Line, EventId: r.TargetSymbolId))
+            .ToListAsync(cancellationToken);
+
     // Loads the exact Roslyn-mined dispatch facts (dispatch_facts) into FactGraphData.MinedDispatch.
     // Probed (not assumed): a store indexed before dispatch facts existed has no table — return null
     // so FactPathFinder degrades to the pre-mining name/arity CHA (flagged heuristic) instead of

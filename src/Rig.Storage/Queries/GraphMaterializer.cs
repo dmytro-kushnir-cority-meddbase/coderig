@@ -76,6 +76,14 @@ public static class GraphMaterializer
         // in-memory pass re-applies over the bounded graph. No-op when factoryRules is null/empty.
         graph = FactPathFinder.RewriteGenericFactories(graph, factoryRules ?? []);
 
+        // Publish→consumer DELIVERY edges (events): a raise (`someEvent?.Invoke`) delivers to the event's
+        // subscribers, an edge no syntactic call records. EDGE-CREATING like the factory rewrite above, so it
+        // is baked into call_edges here — otherwise the SQL bounding walk never pulls a handler's closure into
+        // a bounded reach (under-reporting --async reach + blinding cycle detection). The event reads are
+        // already in the store at this point (facts are saved before graph build, on both the index and
+        // re-graph paths). Modeled as handoff edges → sync-cut by default, walked under --async.
+        graph = FactPathFinder.AddEventDeliveryEdges(graph, await Reads.LoadEventReadSitesAsync(context, cancellationToken));
+
         var connection = context.Database.GetDbConnection();
         if (connection.State != ConnectionState.Open)
         {
