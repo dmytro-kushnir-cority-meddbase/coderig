@@ -3,7 +3,7 @@ using Shouldly;
 
 namespace Rig.Tests.Analysis;
 
-// Executable RCA corpus (docs/rca-corpus-meddbase.md). Each test reproduces a REAL production fix as a
+// Executable RCA corpus (meddbase-analysis/docs/rca-corpus-meddbase.md). Each test reproduces a REAL production fix as a
 // bug/fix pair and asserts what the SHIPPED detectors actually do on each — turning "rig would catch X"
 // prose into a pass/fail. Tests named `_Gap_` pin a KNOWN blind spot (a bug the current detectors miss or
 // mis-attribute); they are the development backlog made executable, and they guard against a future change

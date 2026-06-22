@@ -8,7 +8,7 @@ using Rig.Domain.Functions;
 
 namespace Rig.Tests.Fixtures;
 
-// Executable RCA corpus harness. Each production fix from docs/rca-corpus-meddbase.md is reproduced as a
+// Executable RCA corpus harness. Each production fix from meddbase-analysis/docs/rca-corpus-meddbase.md is reproduced as a
 // self-contained bug/fix snippet; this compiles it IN MEMORY (full framework references) and runs the REAL
 // extract -> derive pipeline with the SHIPPED builtin rules, returning the derived effects so a corpus test
 // can assert what the detectors fire on the BUG vs the FIX. No store, no playground restore — the snippet IS
