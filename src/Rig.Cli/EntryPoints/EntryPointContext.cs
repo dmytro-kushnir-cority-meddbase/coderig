@@ -144,6 +144,8 @@ internal static class EntryPointContext
     // Builds the EP-render context for a tree: the SymbolId->site map (from the loaded graph) and the
     // site->kind map (from the SAME derived entry-point set `derive` emits, incl. promoted handoff
     // origins). Returns null when deployments are unconfigured, so the default tree pays no cost.
+    // F2: epData is optional — when the EF-fallback ReachInputs already carried it, the caller threads
+    // it here so LoadOrDeriveEpSiteKindAsync can skip the redundant LoadFactEntryPointDataAsync.
     internal static async Task<EpRenderContext?> BuildEpContextAsync(
         RigDbContext context,
         FactGraphData graph,
@@ -151,7 +153,8 @@ internal static class EntryPointContext
         IReadOnlyList<string> extraRules,
         RuleSet rules,
         DeploymentMap deployments,
-        bool useCache = true
+        bool useCache = true,
+        FactEntryPointDeriver.FactEntryPointData? epData = null
     )
     {
         if (deployments.IsEmpty)
@@ -161,7 +164,7 @@ internal static class EntryPointContext
 
         // The site->kind map is the expensive, PATTERN-INDEPENDENT half — derive-or-cache it once per
         // (store + rules). The symbol->site map below is cheap and rebuilt fresh from THIS query's graph.
-        var epSiteKind = await LoadOrDeriveEpSiteKindAsync(context, workingDirectory, extraRules, rules, useCache);
+        var epSiteKind = await LoadOrDeriveEpSiteKindAsync(context, workingDirectory, extraRules, rules, useCache, epData);
 
         var siteById = graph
             .Methods.GroupBy(m => m.SymbolId, StringComparer.Ordinal)
@@ -179,6 +182,9 @@ internal static class EntryPointContext
     //   2. The .rig/cache.db query cache — for --rules queries (rule-hash mismatch on the table) when
     //      caching is on; derives once then memoizes.
     //   3. A live derive — --no-cache with a rule mismatch, or no materialized table yet.
+    // F2: epData is optional: when the caller already loaded it (e.g. from the EF-fallback ReachInputs),
+    // it is threaded into DeriveEpSiteKindAsync (tier 3) to skip the redundant LoadFactEntryPointDataAsync.
+    // Null = DeriveEpSiteKindAsync loads its own (back-compat for callers without pre-loaded EP data).
     internal static async Task<
         IReadOnlyDictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>
     > LoadOrDeriveEpSiteKindAsync(
@@ -186,7 +192,8 @@ internal static class EntryPointContext
         string workingDirectory,
         IReadOnlyList<string> extraRules,
         RuleSet rules,
-        bool useCache
+        bool useCache,
+        FactEntryPointDeriver.FactEntryPointData? epData = null
     )
     {
         var rulesHash = RulesFingerprint.Compute(workingDirectory, extraRules);
@@ -199,7 +206,7 @@ internal static class EntryPointContext
 
         if (!useCache)
         {
-            return await DeriveEpSiteKindAsync(context, rules);
+            return await DeriveEpSiteKindAsync(context, rules, epData);
         }
 
         // Tier 2: query cache (handles --rules, which the table doesn't cover).
@@ -212,7 +219,7 @@ internal static class EntryPointContext
             return hit;
         }
 
-        var derived = await DeriveEpSiteKindAsync(context, rules);
+        var derived = await DeriveEpSiteKindAsync(context, rules, epData);
         if (key is not null)
         {
             TryCache(() => cache!.Put(key, EpSiteCacheCodec.Encode(derived)));
@@ -224,12 +231,15 @@ internal static class EntryPointContext
     // The actual whole-store EP derivation (uncached): rule EPs + class-inheritance EPs + promoted handoff
     // origins, flattened to a (file,line)->(kind,requires) map. Shared by the lazy query path and the
     // eager `rig graph` warm-up.
+    // F2: epData is optional — when the EF-fallback reach-input load (LoadReachInputsFromRowsAsync) already
+    // loaded it, the caller threads it here to skip the redundant LoadFactEntryPointDataAsync. Null = load.
     internal static async Task<Dictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>> DeriveEpSiteKindAsync(
         RigDbContext context,
-        RuleSet rules
+        RuleSet rules,
+        FactEntryPointDeriver.FactEntryPointData? epData = null
     )
     {
-        var epData = await Reads.LoadFactEntryPointDataAsync(context);
+        epData ??= await Reads.LoadFactEntryPointDataAsync(context);
         var (derivedEps, _, promoted) = await DeriveEntryPointsAsync(context, epData, rules);
 
         var epSiteKind = new Dictionary<(string File, int Line), (string Kind, IReadOnlyList<string>? Requires)>();
@@ -253,8 +263,11 @@ internal static class EntryPointContext
             return;
         }
 
-        var sites = await DeriveEpSiteKindAsync(context, RuleSetLoader.Load(workingDirectory));
-        await EntryPointSiteStore.PersistAsync(context, sites, RulesFingerprint.Compute(workingDirectory, []));
+        // F6: capture the resolved rule paths so PersistAsync reuses them via ComputeFromPaths instead
+        // of re-running the cascade merge (RulesFingerprint.Compute → ResolveLoadedPaths).
+        var defaultRules = RuleSetLoader.Load(workingDirectory, extraRules: null, loadedPaths: out var loadedRulePaths);
+        var sites = await DeriveEpSiteKindAsync(context, defaultRules);
+        await EntryPointSiteStore.PersistAsync(context, sites, RulesFingerprint.ComputeFromPaths(loadedRulePaths));
     }
 
     // "  ▶ kind  ⟦svc⟧" suffix for a from/root symbol (reaches/path/callers roots), or "" when there is

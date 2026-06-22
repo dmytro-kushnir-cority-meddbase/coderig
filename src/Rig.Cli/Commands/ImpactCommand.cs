@@ -141,8 +141,9 @@ internal static class ImpactCommand
         var max = limit ?? int.MaxValue;
         var mode = CommonOptions.Mode(async); // --async => walk handoff edges (reverse + forward), else sync-cut
         // One rule load for the whole run — rules are working-dir-scoped, so the SAME set serves both stores;
-        // threaded into every helper below.
-        var rules = RuleSetLoader.Load(workingDirectory, extraRules);
+        // threaded into every helper below. F6: capture resolved paths so the fingerprint below reuses them
+        // via ComputeFromPaths instead of re-running the cascade merge.
+        var rules = RuleSetLoader.Load(workingDirectory: workingDirectory, extraRules: extraRules, loadedPaths: out var loadedRulePaths);
 
         // Resolve BOTH per-commit stores up front (sha / short-sha / store-id → store dir). ResolveReadStoreDir
         // throws StoreRefNotFoundException for an unmatched ref → CommandGuard lists what's indexed, so past
@@ -165,7 +166,7 @@ internal static class ImpactCommand
             : ImpactCacheKey(
                 baseStoreKey: baseStoreKey,
                 headStoreKey: headStoreKey,
-                rulesHash: RulesFingerprint.Compute(workingDirectory, extraRules),
+                rulesHash: RulesFingerprint.ComputeFromPaths(loadedRulePaths), // F6: reuse paths Load resolved.
                 mode: mode
             );
 

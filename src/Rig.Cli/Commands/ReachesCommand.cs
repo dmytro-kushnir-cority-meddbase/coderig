@@ -166,8 +166,18 @@ internal static class ReachesCommand
 
         // Deployment/EP chip on the From line: which service(s) host this entry point (opt-in via
         // deployments.json; no-op otherwise). The from-root is the depth-0 reachable symbol.
+        // F2: thread the EpData the EF-fallback load already carried (null on the SQL path) so
+        // BuildEpContextAsync→DeriveEpSiteKindAsync can skip the redundant LoadFactEntryPointDataAsync.
         var reachDeployments = await LoadDeploymentsAsync(context, workingDirectory);
-        var reachEpContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, rules, reachDeployments);
+        var reachEpContext = await BuildEpContextAsync(
+            context: context,
+            graph: graph,
+            workingDirectory: workingDirectory,
+            extraRules: extraRules,
+            rules: rules,
+            deployments: reachDeployments,
+            epData: inputs.EpData
+        );
         var reachFromRoot = reachable.Where(kv => kv.Value.Depth == 0).Select(kv => kv.Key).FirstOrDefault();
         output.WriteLine(
             $"From: {fromPattern}{(mode == FactPathFinder.TraversalMode.AsyncInclude ? "  (--async: handoffs included)" : "")}"

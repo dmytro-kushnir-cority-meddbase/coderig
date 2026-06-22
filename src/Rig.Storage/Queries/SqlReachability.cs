@@ -2,6 +2,7 @@ using System.Data.Common;
 using System.Globalization;
 using System.Text;
 using Rig.Domain.Data;
+using Rig.Domain.Functions;
 using Rig.Storage.Storage;
 
 namespace Rig.Storage.Queries;
@@ -298,11 +299,15 @@ public static class SqlReachability
     // (the part that dominated reaches/tree latency) is replaced by a bounded, indexed join. Base edges
     // come from the graph (all base edges), so LoadFactEntryPointDataAsync — heavy and otherwise only
     // used for its base edges + ctor refs here — is skipped entirely.
+    // F2: EpData carries the FactEntryPointData the EF-fallback path (LoadReachInputsFromRowsAsync)
+    // already loaded, so a caller that also needs the EP site map (DeriveEpSiteKindAsync) can reuse it
+    // instead of issuing a second LoadFactEntryPointDataAsync. Null on the SQL path (not loaded there).
     public sealed record ReachInputs(
         FactGraphData Graph,
         IReadOnlyList<FactInvocation> Invocations,
         IReadOnlyList<SymbolRef> CtorRefs,
-        IReadOnlyList<SymbolRef> ThrowRefs
+        IReadOnlyList<SymbolRef> ThrowRefs,
+        FactEntryPointDeriver.FactEntryPointData? EpData = null
     );
 
     public static async Task<ReachInputs> LoadReachInputsAsync(

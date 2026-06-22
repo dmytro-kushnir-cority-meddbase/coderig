@@ -202,7 +202,9 @@ internal static class TreeCommand
 
         // One merged load for the whole command; --raw zeroes the graph-shaping + render rules (the exact
         // unfiltered tree), else they're applied. Render rules are presentation-only — never affect reach.
-        var rules = RuleSetLoader.Load(workingDirectory, extraRules);
+        // F6: capture the resolved rule paths so the fingerprint below reuses them via ComputeFromPaths
+        // instead of re-running the cascade merge (RulesFingerprint.Compute → ResolveLoadedPaths).
+        var rules = RuleSetLoader.Load(workingDirectory: workingDirectory, extraRules: extraRules, loadedPaths: out var loadedRulePaths);
         var shaped = raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
         var renderRules = raw ? FactRenderRules.Empty : rules.Render;
 
@@ -216,7 +218,7 @@ internal static class TreeCommand
         // to render. Auto-invalidates on reindex: the key embeds a store identity that index/graph change.
         var rigDir = StoreLayout.ResolveReadStoreDir(workingDirectory, storeRef);
         var storeKey = StoreKey(Path.Combine(rigDir, StoreLayout.DbFileName));
-        var rulesHash = RulesFingerprint.Compute(workingDirectory, extraRules);
+        var rulesHash = RulesFingerprint.ComputeFromPaths(loadedRulePaths); // F6: reuse paths Load resolved.
         using var cache = noCache ? null : QueryCache.Open(rigDirectory: rigDir, storeKey: storeKey);
         var cacheKey = cache is null
             ? null
@@ -242,6 +244,9 @@ internal static class TreeCommand
         FactGraphData? graph = null; // stays null on a full hit (forest + render data) — the graph is never loaded
         IReadOnlyList<TraceNode> roots;
         IReadOnlyList<DerivedEffect> effects;
+        // F2: captured from the EF-fallback cold-path load so the EP-site derivation below can reuse it
+        // instead of issuing a second LoadFactEntryPointDataAsync. Null on cache hits and the SQL path.
+        FactEntryPointDeriver.FactEntryPointData? reachInputsEpData = null;
         if (fullHit)
         {
             // FULL HIT: forest + effects + locations + seam all cached → render without touching the graph.
@@ -277,6 +282,7 @@ internal static class TreeCommand
                 shaped
             );
             graph = inputs.Graph;
+            reachInputsEpData = inputs.EpData; // F2: carry through for the EP-site derivation below.
             timer.Lap("graph + invocations load");
             // Event subscriptions (`someEvent += Handler`) are deferred handlers, not synchronous calls —
             // mark them as handoffs so the sync tree doesn't expand the handler as if RegisterEvents ran it.
@@ -398,12 +404,21 @@ internal static class TreeCommand
         var deployments = await LoadDeploymentsAsync(context, workingDirectory);
         // EP context is built from `locations` (not the graph), so it works on the no-graph full-hit path.
         // The expensive, pattern-independent site->kind map is its own cache (LoadOrDeriveEpSiteKind).
+        // F2: thread the EpData the cold-path EF-fallback load already carried (null on cache hits / SQL
+        // path) so DeriveEpSiteKindAsync can skip the redundant LoadFactEntryPointDataAsync.
         var epContext = deployments.IsEmpty
             ? null
             : new EpRenderContext(
                 Deployments: deployments,
                 SiteById: locations,
-                EpSiteKind: await LoadOrDeriveEpSiteKindAsync(context, workingDirectory, extraRules, rules, !noCache)
+                EpSiteKind: await LoadOrDeriveEpSiteKindAsync(
+                    context: context,
+                    workingDirectory: workingDirectory,
+                    extraRules: extraRules,
+                    rules: rules,
+                    useCache: !noCache,
+                    epData: reachInputsEpData
+                )
             );
         timer.Lap("deployment map + entry-point derivation");
 
