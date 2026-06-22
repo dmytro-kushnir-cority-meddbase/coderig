@@ -395,6 +395,33 @@ public static class Reads
         return new FactGraphData(classifiedEdges, implEdges, methods, baseEdges, minedDispatch);
     }
 
+    // The FULLY in-memory-shaped graph: handoff-classified load → ShapeGraph (factory rewrite +
+    // cut/context metadata) → MarkEventSubscriptionHandoffs → AddDeliveryEdges. The SINGLE entry point
+    // for all in-memory consumers that need the complete shaped graph, so classify→factory→delivery→
+    // cut/context is defined once and callers stop hand-rolling the sequence.
+    //
+    // Sync reach is BYTE-IDENTICAL to the pre-consolidation per-consumer results: delivery edges are
+    // handoff edges, which are sync-cut by default (walked only under --async). The --async path for
+    // impact and cycle detection now also walks delivery edges — the intentional gap closure.
+    public static async Task<FactGraphData> LoadShapedGraphAsync(RigDbContext context, RuleSet rules, CancellationToken ct = default)
+    {
+        var graph = await LoadFactGraphAsync(context: context, handoffRules: rules.Handoff, cancellationToken: ct);
+        graph = FactPathFinder.ShapeGraph(graph: graph, factoryRules: rules.Factory, cutRules: rules.Cut, contextRules: rules.Context);
+        // ORDER IS LOAD-BEARING: AddDeliveryEdges resolves an event's handlers by joining event-read sites to
+        // co-located `methodGroup` subscription edges (`someEvent += H`), so it MUST run while those edges are
+        // still methodGroup. MarkEventSubscriptionHandoffs reclassifies exactly those subscription edges to
+        // `handoff` — run it AFTER, or AddDeliveryEdges finds zero handlers and event delivery (event_raise)
+        // edges vanish (event_cycle drops to 0).
+        graph = FactPathFinder.AddDeliveryEdges(
+            graph: graph,
+            sites: await LoadDeliverySitesAsync(context: context, deliveryRules: rules.Delivery, cancellationToken: ct)
+        );
+        return FactPathFinder.MarkEventSubscriptionHandoffs(
+            graph: graph,
+            eventSites: await EventSubscriptionSitesAsync(context: context, cancellationToken: ct)
+        );
+    }
+
     // Call SITES (EnclosingSymbolId, FilePath, Line) that contain an EVENT read — a "read" ref whose
     // target is an event (DocID "E:" prefix). A `someEvent += Handler` records both the event read and
     // the handler method-group at one site, so intersecting these sites with method-group edges
@@ -805,7 +832,8 @@ public static class Reads
         RigDbContext context,
         int limit,
         IReadOnlyList<FactHandoffRule>? handoffRules = null,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        FactGraphData? graph = null
     )
     {
         var rules = handoffRules ?? [];
@@ -851,8 +879,10 @@ public static class Reads
         }
 
         // Fallback: no materialized graph (`rig graph` not run) — derive from the full reference graph.
-        var graph = await LoadFactGraphAsync(context, rules, cancellationToken);
-        return HandoffClassifier.HandoffEntryPoints(graph.CallEdges, rules).Take(limit).ToList();
+        // When the caller already holds the shaped graph (e.g. DeriveCommand which built it for FR-10),
+        // reuse it here instead of reloading (fixes F1 double-load).
+        var fallbackEdges = (graph ?? await LoadFactGraphAsync(context, rules, cancellationToken)).CallEdges;
+        return HandoffClassifier.HandoffEntryPoints(fallbackEdges, rules).Take(limit).ToList();
     }
 
     // Loads the facts needed by FactEntryPointDeriver: base-type edges, constructor+type symbols,

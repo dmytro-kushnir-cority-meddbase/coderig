@@ -81,10 +81,19 @@ internal static class DeriveCommand
         // the config is absent; `error` is the log sink so config problems surface.
         var deployments = await LoadDeploymentsAsync(context, workingDirectory, error);
 
+        // Shaped graph: built once here and reused for both the handoff-EP classifier (F1 fix: avoids the
+        // double-load in DeriveHandoffEntryPointsAsync's fallback path) and the event-cycle deriver below.
+        var shapedGraph = await Reads.LoadShapedGraphAsync(context: context, rules: rules);
+
         // Classified handoffs (background/timer/actor/event) shared by the listing, the origin-EP promotion,
         // and the TSV output — derived once. The total count yields the unclassified residual (a count, not a
         // listing), which is why this is loaded here rather than via DeriveEntryPointsAsync (which drops it).
-        var handoffs = await Reads.DeriveHandoffEntryPointsAsync(context, int.MaxValue, rules.Handoff);
+        var handoffs = await Reads.DeriveHandoffEntryPointsAsync(
+            context: context,
+            limit: int.MaxValue,
+            handoffRules: rules.Handoff,
+            graph: shapedGraph
+        );
         var classifiedHandoffs = handoffs.Where(h => h.Dispatcher is not null).ToList();
         var unclassifiedHandoffCount = handoffs.Count - classifiedHandoffs.Count;
 
@@ -114,14 +123,10 @@ internal static class DeriveCommand
         //     DELIVERY edge (event raise / actor tell). Unlike every other hazard it is NOT an effect-attached
         //     observation, so it is derived here over the delivery-edge-bearing graph and added as a SECOND
         //     hazard source — NOT folded into HazardFindings(effects), which is pure-over-effects and shared
-        //     with impact. The graph is built IN-MEMORY mirroring GraphMaterializer.BuildFromGraphAsync (the
-        //     SAME order: handoff-classified load → generic-factory rewrite → unified publish→consumer delivery)
-        //     so the cycles it finds are exactly the cycles the materialized call_edges carry. ---
-        var graph = await Reads.LoadFactGraphAsync(context, rules.Handoff);
-        graph = FactPathFinder.RewriteGenericFactories(graph, rules.Factory);
-        var sites = await Reads.LoadDeliverySitesAsync(context, rules.Delivery);
-        graph = FactPathFinder.AddDeliveryEdges(graph, sites);
-        var cycleFindings = EventCycleFindings(FactCycleDeriver.DeriveEventCycles(graph));
+        //     with impact. The graph is built IN-MEMORY via LoadShapedGraphAsync (handoff-classified load →
+        //     ShapeGraph → MarkEventSubscriptionHandoffs → AddDeliveryEdges) so the cycles it finds are
+        //     exactly the cycles the materialized call_edges carry. ---
+        var cycleFindings = EventCycleFindings(FactCycleDeriver.DeriveEventCycles(shapedGraph));
 
         // Both hazard sources unioned: the over-effects pattern findings + the graph-tier event_cycle findings.
         // Fed to BOTH the tsv `hazard` emission AND the rendered Hazards section so neither view misses a source.

@@ -202,16 +202,15 @@ internal static class ImpactCommand
         var baseProv = await ResolveBaseProvenanceAsync(baseDbPath, baseRef);
 
         // The branch (HEAD) side, computed inline over one whole-store graph that drives the per-EP forward
-        // reach. Same load + ShapeGraph the EF-fallback path of every traversal command uses, so impact walks
-        // the IDENTICAL shaped graph.
+        // reach. Fully shaped graph: handoff-classified load → ShapeGraph → MarkEventSubscriptionHandoffs →
+        // AddDeliveryEdges. Impact now walks the delivery-edge-bearing graph, so per-EP --async reach includes
+        // event/actor delivery paths.
         var methods = await Reads.LoadDeadCodeMethodsAsync(context);
         // The branch's per-symbol declaration body hashes (guarded — empty on a pre-fact store). Diffed against
         // the base's (loaded once in ComputeBaseSideAsync) to find in-place body edits the reach-set diff misses.
         var branchBodyHashes = await Reads.LoadSymbolBodyHashesAsync(context);
 
-        var graph = await Reads.LoadFactGraphAsync(context, rules.Handoff);
-        graph = FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context);
-        graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+        var graph = await Reads.LoadShapedGraphAsync(context: context, rules: rules);
 
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
         var epSet = await DeriveEntryPointsAsync(context, epData, rules);
@@ -1085,9 +1084,7 @@ internal static class ImpactCommand
     )> ComputeBaseSideAsync(string baseDbPath, RuleSet rules, FactPathFinder.TraversalMode mode)
     {
         await using var context = new RigDbContext(baseDbPath, readOnly: true);
-        var graph = await Reads.LoadFactGraphAsync(context, rules.Handoff);
-        graph = FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context);
-        graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+        var graph = await Reads.LoadShapedGraphAsync(context: context, rules: rules);
 
         var methods = await Reads.LoadDeadCodeMethodsAsync(context);
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
