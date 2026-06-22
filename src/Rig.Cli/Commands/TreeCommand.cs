@@ -170,17 +170,11 @@ internal static class TreeCommand
         // to render. Auto-invalidates on reindex: the key embeds a store identity that index/graph change.
         var rigDir = StoreLayout.ResolveReadStoreDir(workingDirectory, storeRef);
         var storeKey = StoreKey(Path.Combine(rigDir, StoreLayout.DbFileName));
+        var rulesHash = RulesFingerprint.Compute(workingDirectory, extraRules);
         using var cache = noCache ? null : QueryCache.Open(rigDirectory: rigDir, storeKey: storeKey);
         var cacheKey = cache is null
             ? null
-            : TreeCacheKey(
-                storeKey: storeKey,
-                rulesHash: RulesFingerprint.Compute(workingDirectory, extraRules),
-                fromPattern: fromPattern,
-                maxDepth: maxDepth,
-                mode: mode,
-                raw: raw
-            );
+            : TreeCacheKey(storeKey: storeKey, rulesHash: rulesHash, fromPattern: fromPattern, maxDepth: maxDepth, mode: mode, raw: raw);
 
         var cached = cacheKey is not null && cache!.Get(cacheKey) is { } blob ? TreeCacheCodec.Decode(blob) : null;
         // Render sidecar: everything render needs from the graph (seam effects + locations), keyed by the
@@ -271,19 +265,16 @@ internal static class TreeCommand
             return 1;
         }
 
-        // --hazards: surface the pattern HAZARDS (race_window / lazy_init_race / dual_write / n_plus_1 /
-        // unserializable_payload) reachable from this entry point — inline on the tree + a summary section.
-        // The bounded tree closure doesn't normally thread the static-field read/write refs (so race_window's
-        // shared_state read↔write legs can't pair) nor run the hazard post-pass; --hazards opts THIS EP's
-        // closure into the same machinery `derive` runs whole-store. KEY PERF POINT: the cached/cold `effects`
-        // ALREADY hold every INVOCATION-derived effect + observation (n+1, unserializable, dual_write inputs);
-        // the ONLY thing missing for the hazard passes is the field-fed shared_state effects — and those derive
-        // DIRECTLY from the static-field refs (no graph, invocations, or base edges — see
-        // FactEffectDeriver.EmitFieldAccessEffects). So we derive JUST those and MERGE, rather than reloading
-        // the whole reach graph (which on a big EP cost ~6s for nothing the cached effects didn't already have).
-        // The merged augmented set REPLACES the render effects for this run — so a method whose only effect is a
-        // static-field RMW still renders (it would otherwise be pruned) — and is NEVER cached (the forest/
-        // effect/sidecar caches stay hazard-free, keyed without --hazards), so a later plain `tree` is unaffected.
+        // --hazards: surface the pattern HAZARDS (race_window / lazy_init_race / thread_local_context /
+        // dual_write / n_plus_1 / unserializable_payload) on this entry point's tree — inline ⚠ marks + a
+        // summary section. A hazard is a WHOLE-STORE, per-method fact (EP-independent), so we do NOT re-derive
+        // anything per EP: we load the cached whole-store hazard-augmented effect set (shared with `derive`,
+        // keyed by store+rules) and FILTER it to the tree's reachable methods. That filtered set REPLACES the
+        // render effects for this run — so the field-fed shared_state effects (which a plain `tree` omits, not
+        // threading field refs) render too, and a static-field-RMW-only method isn't pruned. Pure lookup +
+        // filter: no graph, no per-EP derive — a warm `--hazards` is a cache hit like a plain `tree`. The
+        // forest/effect/sidecar caches stay hazard-free (keyed without --hazards); this set lives in its own
+        // store-keyed cache namespace, so a later plain `tree` is unaffected.
         IReadOnlyList<DeriveCommand.HazardFinding> hazardFindings = [];
         IReadOnlyDictionary<string, string>? hazardsByMethod = null;
         if (hazards)
@@ -294,41 +285,20 @@ internal static class TreeCommand
                 CollectTreeMethods(root, treeMethods);
             }
 
-            // Static-field read/write refs, bounded IN SQL to the tree's methods (enclosingScope: treeMethods —
-            // the EnclosingSymbolId index makes it a seek, not a whole-store scan). race_window/dual_write pair
-            // within one method, so the enclosing-method bound loses nothing. Plus [ThreadStatic] cell ids
-            // (small) for the thread_local_context reroute.
-            var fieldWriteRefs = await Reads.LoadStaticFieldWriteRefsAsync(context: context, enclosingScope: treeMethods);
-            var fieldReadRefs = await Reads.LoadStaticFieldReadRefsAsync(context: context, enclosingScope: treeMethods);
-            var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
-
-            // The field-fed shared_state effects — derived with EMPTY invocations/base-edges/ctor/throw (the
-            // field arm needs none of them), so NO graph load. deriveHazards:false here — the post-pass runs
-            // once over the MERGED set below so race_window/dual_write see both the field-fed and the cached
-            // invocation-derived (Atom.Swap etc.) shared_state legs.
-            var fieldEffects = DeriveEffects(
-                effectRules: rules.Effects,
-                observationRules: rules.Observations,
-                invocations: [],
-                baseEdges: [],
-                ctorRefs: [],
-                throwRefs: [],
-                staticFieldWriteRefs: fieldWriteRefs,
-                staticFieldReadRefs: fieldReadRefs,
-                deriveHazards: false
+            var hazardEffects = await LoadOrDeriveHazardEffectsAsync(
+                context: context,
+                rigDirectory: rigDir,
+                storeKey: storeKey,
+                rulesHash: rulesHash,
+                rules: rules,
+                useCache: !noCache
             );
-            IReadOnlyList<DerivedEffect> merged = effects.Concat(fieldEffects).ToList();
-            merged = FactHazardDeriver.DeriveRaceWindows(effects: merged, threadStaticCells: threadStaticCells);
-            merged = FactHazardDeriver.DeriveDualWrites(merged);
-            effects = merged;
-
-            // Findings on the tree's own methods (field refs already bounded; this also drops any invocation-
-            // effect finding on a method reachable in the closure but pruned from the rendered forest).
+            effects = hazardEffects.Where(e => e.EnclosingSymbolId is not null && treeMethods.Contains(e.EnclosingSymbolId)).ToList();
             hazardFindings = DeriveCommand.HazardFindings(effects).Where(f => treeMethods.Contains(f.Enclosing)).ToList();
             hazardsByMethod = hazardFindings
                 .GroupBy(f => f.Enclosing, StringComparer.Ordinal)
                 .ToDictionary(keySelector: g => g.Key, elementSelector: FormatHazardMark, comparer: StringComparer.Ordinal);
-            timer.Lap("hazard re-derive (field effects + post-pass, no graph)");
+            timer.Lap("hazard lookup (cached whole-store, filtered to tree)");
         }
 
         // Deployment attribution (opt-in via deployments.json) + EP-site lookup, so tree nodes that are

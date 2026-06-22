@@ -5,6 +5,7 @@ using Rig.Cli.Rendering;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
+using static Rig.Cli.Caching.QueryCacheKeys;
 using static Rig.Cli.Effects.EffectDerivation;
 using static Rig.Cli.EntryPoints.EntryPointContext;
 using static Rig.Cli.Graph.TraversalGraphLoader;
@@ -87,23 +88,20 @@ internal static class DeriveCommand
         // gates (e.g. clientpage_proxy = declaring type derives MedDBase.Pages.ProxyBase).
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
 
-        // --- Effects (data-driven over facts) ---
-        var invocations = await Reads.LoadInvocationRefsAsync(context);
-        var throwRefs = await Reads.LoadThrowRefsAsync(context);
-        var staticFieldWriteRefs = await Reads.LoadStaticFieldWriteRefsAsync(context);
-        var staticFieldReadRefs = await Reads.LoadStaticFieldReadRefsAsync(context);
-        var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
-        var effects = DeriveEffects(
-            effectRules: rules.Effects,
-            observationRules: rules.Observations,
-            invocations: invocations,
-            baseEdges: epData.BaseEdges,
-            ctorRefs: epData.CtorRefs,
-            throwRefs: throwRefs,
-            staticFieldWriteRefs: staticFieldWriteRefs,
-            staticFieldReadRefs: staticFieldReadRefs,
-            deriveHazards: true, // whole-store path runs the race_window hazard post-pass
-            threadStaticCells: threadStaticCells // reroute [ThreadStatic] RMW → thread_local_context
+        // --- Effects (whole-store, hazard-augmented): the field-fed shared_state arms + the race_window/
+        //     dual_write/thread_local_context post-pass, cached store+rules-keyed and SHARED with `tree
+        //     --hazards` (an effect is a per-method fact, EP- and mode-independent). A reindex or rule edit
+        //     misses the cache and recomputes, so hazards stay query-side data. ---
+        var rigDir = StoreLayout.ResolveReadStoreDir(workingDirectory, storeRef);
+        var storeKey = StoreKey(Path.Combine(rigDir, StoreLayout.DbFileName));
+        var rulesHash = RulesFingerprint.Compute(workingDirectory, extraRules);
+        var effects = await LoadOrDeriveHazardEffectsAsync(
+            context: context,
+            rigDirectory: rigDir,
+            storeKey: storeKey,
+            rulesHash: rulesHash,
+            rules: rules,
+            useCache: true
         );
         effects = ApplyEffectFilters(effects: effects, only: only, exclude: exclude); // --only / --exclude (e.g. --exclude throw)
 

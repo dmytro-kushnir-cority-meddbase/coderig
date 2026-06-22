@@ -1,5 +1,8 @@
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
+using Rig.Storage.Queries;
+using Rig.Storage.Storage;
+using static Rig.Cli.Caching.QueryCacheKeys;
 
 namespace Rig.Cli.Effects;
 
@@ -56,6 +59,67 @@ internal static class EffectDerivation
         effects = FactHazardDeriver.DeriveRaceWindows(effects, threadStaticCells);
         effects = FactHazardDeriver.DeriveDualWrites(effects);
         return effects;
+    }
+
+    // The WHOLE-STORE hazard-augmented effect set: every indexed symbol's effects + the field-fed
+    // shared_state arms + the race_window/dual_write/thread_local_context post-pass — i.e. exactly what
+    // `derive` computes. EP-independent and traversal-mode-independent (an effect is a per-method fact), so
+    // `tree --hazards` filters this to its reachable methods instead of re-deriving a bounded slice per EP.
+    // Uncached; the cached wrapper is LoadOrDeriveHazardEffectsAsync.
+    internal static async Task<IReadOnlyList<DerivedEffect>> DeriveHazardEffectsAsync(RigDbContext context, RuleSet rules)
+    {
+        var epData = await Reads.LoadFactEntryPointDataAsync(context);
+        var invocations = await Reads.LoadInvocationRefsAsync(context);
+        var throwRefs = await Reads.LoadThrowRefsAsync(context);
+        var staticFieldWriteRefs = await Reads.LoadStaticFieldWriteRefsAsync(context);
+        var staticFieldReadRefs = await Reads.LoadStaticFieldReadRefsAsync(context);
+        var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
+        return DeriveEffects(
+            effectRules: rules.Effects,
+            observationRules: rules.Observations,
+            invocations: invocations,
+            baseEdges: epData.BaseEdges,
+            ctorRefs: epData.CtorRefs,
+            throwRefs: throwRefs,
+            staticFieldWriteRefs: staticFieldWriteRefs,
+            staticFieldReadRefs: staticFieldReadRefs,
+            deriveHazards: true,
+            threadStaticCells: threadStaticCells
+        );
+    }
+
+    // Cached over the .rig/cache.db query cache, keyed by (store + rules) — see HazardEffectsCacheKey. The
+    // store-correct rigDirectory/storeKey/rulesHash are passed in (so `--store <ref>` caches against the right
+    // commit's store, not the default). Computed once then memoized; `derive` and `tree --hazards` share the
+    // entry, and a reindex (storeKey) or rule edit (rulesHash) misses → recompute, keeping hazards query-side.
+    internal static async Task<IReadOnlyList<DerivedEffect>> LoadOrDeriveHazardEffectsAsync(
+        RigDbContext context,
+        string rigDirectory,
+        string storeKey,
+        string rulesHash,
+        RuleSet rules,
+        bool useCache
+    )
+    {
+        if (!useCache)
+        {
+            return await DeriveHazardEffectsAsync(context, rules);
+        }
+
+        using var cache = QueryCache.Open(rigDirectory: rigDirectory, storeKey: storeKey);
+        var key = cache is null ? null : HazardEffectsCacheKey(storeKey: storeKey, rulesHash: rulesHash);
+        if (key is not null && cache!.Get(key) is { } blob && HazardEffectsCodec.Decode(blob) is { } hit)
+        {
+            return hit;
+        }
+
+        var derived = await DeriveHazardEffectsAsync(context, rules);
+        if (key is not null)
+        {
+            TryCache(() => cache!.Put(key, HazardEffectsCodec.Encode(derived)));
+        }
+
+        return derived;
     }
 
     // Effect selection for reaches/tree/derive: --only keeps just the listed effects, --exclude drops

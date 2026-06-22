@@ -53,6 +53,20 @@ internal static class QueryCacheKeys
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 
+    // The cache key for the WHOLE-STORE hazard-augmented effect set (derive's effect computation: every
+    // indexed symbol's effects + the field-fed shared_state arms + the race_window/dual_write/
+    // thread_local_context post-pass). It is a pure function of the store + the effective rule fingerprint
+    // and is EP-INDEPENDENT and TRAVERSAL-MODE-INDEPENDENT — an effect is a per-method fact, not a function
+    // of which entry point reaches it or whether the walk is sync/async. So `derive`, `tree --hazards` (any
+    // EP, any mode), and any future hazard surface all share ONE entry: compute once, reuse everywhere.
+    // Reindex shifts storeKey (miss); a changed rule shifts rulesHash (miss) — so hazards stay query-side
+    // data (a rule edit needs no re-index, just recomputes the cache). `v1` is the payload-schema version.
+    internal static string HazardEffectsCacheKey(string storeKey, string rulesHash)
+    {
+        var material = $"hazardfx|v1|{storeKey}|{rulesHash}";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+    }
+
     // The cache key for a `rig impact` two-store diff artifact: the artifact is a pure function of the TWO
     // immutable per-commit stores (each addressed by its own StoreKey = rig.db size+mtime), the effective
     // rule fingerprint, and the traversal mode (sync-cut vs async-handoff — it changes the reach footprint).

@@ -192,7 +192,50 @@ public static class RenderSidecarCodec
     }
 }
 
+// The WHOLE-STORE hazard-augmented effect set (derive's effect computation), cached once per (store +
+// rules) and shared by `derive` + `tree --hazards`. EP-independent and mode-independent — an effect is a
+// per-method fact (see HazardEffectsCacheKey). Same GZip-over-source-gen-JSON approach as the forest payload.
+public sealed record HazardEffectsPayload(IReadOnlyList<DerivedEffect> Effects);
+
+public static class HazardEffectsCodec
+{
+    private static readonly TreeCacheJsonContext Context = new(
+        new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull }
+    );
+
+    public static byte[] Encode(IReadOnlyList<DerivedEffect> effects)
+    {
+        var json = JsonSerializer.SerializeToUtf8Bytes(new HazardEffectsPayload(effects), Context.HazardEffectsPayload);
+        using var output = new MemoryStream();
+        using (var gzip = new GZipStream(output, CompressionLevel.Optimal))
+        {
+            gzip.Write(json, offset: 0, count: json.Length);
+        }
+
+        return output.ToArray();
+    }
+
+    // Null on corruption/schema drift → treated as a cache miss (recompute).
+    public static IReadOnlyList<DerivedEffect>? Decode(byte[] blob)
+    {
+        try
+        {
+            using var input = new MemoryStream(blob);
+            using var gzip = new GZipStream(input, CompressionMode.Decompress);
+            using var json = new MemoryStream();
+            gzip.CopyTo(json);
+            json.Position = 0;
+            return JsonSerializer.Deserialize(json, Context.HazardEffectsPayload)?.Effects;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or JsonException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+}
+
 [JsonSerializable(typeof(TreeCachePayload))]
 [JsonSerializable(typeof(EpSiteCachePayload))]
 [JsonSerializable(typeof(RenderSidecarPayload))]
+[JsonSerializable(typeof(HazardEffectsPayload))]
 internal partial class TreeCacheJsonContext : JsonSerializerContext { }
