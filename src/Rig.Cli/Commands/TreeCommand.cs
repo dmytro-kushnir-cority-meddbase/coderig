@@ -28,6 +28,10 @@ internal static class TreeCommand
         var full = new Option<bool>("--full") { Description = "Print every reachable method; effects/unresolved calls as leaf nodes." };
         var summary = new Option<bool>("--summary") { Description = "Print only the effect-count rollup." };
         var effects = new Option<bool>("--effects") { Description = "List only effectful methods (one line each, source order)." };
+        var hazards = new Option<bool>("--hazards")
+        {
+            Description = "Mark pattern HAZARDS (race_window / dual_write / n+1 / …) inline on the tree + a summary section.",
+        };
         var async = CommonOptions.Async();
         var raw = CommonOptions.Raw();
         var files = CommonOptions.Files();
@@ -50,6 +54,7 @@ internal static class TreeCommand
             full,
             summary,
             effects,
+            hazards,
             async,
             raw,
             files,
@@ -98,6 +103,7 @@ internal static class TreeCommand
                         full: pr.GetValue(full),
                         summary: pr.GetValue(summary),
                         effectsOnly: pr.GetValue(effects),
+                        hazards: pr.GetValue(hazards),
                         async: pr.GetValue(async),
                         raw: pr.GetValue(raw),
                         files: pr.GetValue(files),
@@ -125,6 +131,7 @@ internal static class TreeCommand
         bool full,
         bool summary,
         bool effectsOnly,
+        bool hazards,
         bool async,
         bool raw,
         bool files,
@@ -264,6 +271,72 @@ internal static class TreeCommand
             return 1;
         }
 
+        // --hazards: surface the pattern HAZARDS (race_window / lazy_init_race / dual_write / n_plus_1 /
+        // unserializable_payload) reachable from this entry point — inline on the tree + a summary section.
+        // The bounded tree closure doesn't normally thread the static-field read/write refs (so race_window's
+        // shared_state read↔write legs can't pair) nor run the hazard post-pass; --hazards opts THIS EP's
+        // closure into the same machinery `derive` runs whole-store. We re-derive the closure's effects with
+        // the field refs BOUNDED to the tree's reachable methods (race_window/dual_write are intra-method, so
+        // bounding by enclosing method is exact) + the hazard post-pass, and let that augmented set REPLACE the
+        // render effects for this run — so a method whose only effect is a static-field RMW still renders (it
+        // would otherwise be pruned for carrying no cached effect). The augmented effects/seam are NEVER cached
+        // (the forest/effect/sidecar caches stay hazard-free, keyed without --hazards), so a later plain `tree`
+        // is unaffected.
+        IReadOnlyList<DeriveCommand.HazardFinding> hazardFindings = [];
+        IReadOnlyDictionary<string, string>? hazardsByMethod = null;
+        if (hazards)
+        {
+            var treeMethods = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var root in roots)
+            {
+                CollectTreeMethods(root, treeMethods);
+            }
+
+            // A full cache hit never loaded the graph/invocations; the re-derive needs both. Load the bounded
+            // reach inputs (graph + invocation/ctor/throw refs) — the same load the cold path does.
+            var hzInputs = await LoadEffectReachInputsAsync(
+                context: context,
+                pattern: fromPattern,
+                direction: SqlReachability.Direction.Forward,
+                shaped
+            );
+            if (graph is null)
+            {
+                graph = hzInputs.Graph;
+                if (!raw)
+                {
+                    graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
+                }
+            }
+
+            // Static-field read/write refs are whole-store; bound them to the tree's methods before deriving
+            // (race_window pairs read→write within one method, so the enclosing-method bound loses nothing).
+            var fieldWriteRefs = (await Reads.LoadStaticFieldWriteRefsAsync(context))
+                .Where(f => f.Enclosing is not null && treeMethods.Contains(f.Enclosing))
+                .ToList();
+            var fieldReadRefs = (await Reads.LoadStaticFieldReadRefsAsync(context))
+                .Where(f => f.Enclosing is not null && treeMethods.Contains(f.Enclosing))
+                .ToList();
+            effects = DeriveEffects(
+                effectRules: rules.Effects,
+                observationRules: rules.Observations,
+                invocations: hzInputs.Invocations,
+                baseEdges: BaseEdgeTuples(graph),
+                ctorRefs: hzInputs.CtorRefs,
+                throwRefs: hzInputs.ThrowRefs,
+                staticFieldWriteRefs: fieldWriteRefs,
+                staticFieldReadRefs: fieldReadRefs,
+                deriveHazards: true
+            );
+            // Findings on the tree's own methods (the field refs are already bounded; this also drops any
+            // invocation-effect finding on a method reachable in the closure but pruned from the forest).
+            hazardFindings = DeriveCommand.HazardFindings(effects).Where(f => treeMethods.Contains(f.Enclosing)).ToList();
+            hazardsByMethod = hazardFindings
+                .GroupBy(f => f.Enclosing, StringComparer.Ordinal)
+                .ToDictionary(keySelector: g => g.Key, elementSelector: FormatHazardMark, comparer: StringComparer.Ordinal);
+            timer.Lap("hazard re-derive (bounded to tree)");
+        }
+
         // Deployment attribution (opt-in via deployments.json) + EP-site lookup, so tree nodes that are
         // themselves entry points get the ▶ kind + service chip. Null when unconfigured (default tree).
         // Locations (method DocID -> file:line): from the sidecar on a full hit, else from the graph.
@@ -291,6 +364,13 @@ internal static class TreeCommand
             foreach (var root in roots)
             {
                 EmitTsvNode(root, 0, tsvEffects, locations, output);
+            }
+
+            // --hazards: the per-hazard `hazard` rows (same column contract as `derive --format tsv`) after the
+            // node rows, so a consumer reads the node tree and its findings from one stream.
+            foreach (var h in hazardFindings)
+            {
+                output.WriteLine(DeriveCommand.HazardTsvRow(h));
             }
 
             timer.Total();
@@ -371,6 +451,7 @@ internal static class TreeCommand
                 output.WriteLine($"{Indent.L1}{g.Count(), 4}  {g.Key.Provider} {g.Key.Operation}");
             }
 
+            DeriveCommand.WriteHazards(output, hazardFindings, AllHazardSites);
             timer.Total();
             return 0;
         }
@@ -393,13 +474,16 @@ internal static class TreeCommand
                 output.WriteLine($"{Indent.L1}{ShortName(sym)}\n{Indent.L3}{string.Join("  ", effectsByMethod[sym])}");
             }
 
+            DeriveCommand.WriteHazards(output, hazardFindings, AllHazardSites);
             timer.Total();
             return 0;
         }
 
         // Seam effects: from the sidecar on a full hit, else computed from the (filtered) effects + graph.
+        // Under --hazards the effects are the augmented (field-fed + post-pass) set, so the cached sidecar seam
+        // (computed from the plain effects) is stale — recompute from the augmented effects and don't cache it.
         IReadOnlyDictionary<string, List<string>> seamEffects;
-        if (sidecar is not null)
+        if (sidecar is not null && !hazards)
         {
             seamEffects = sidecar.Value.SeamEffects;
         }
@@ -424,7 +508,7 @@ internal static class TreeCommand
         // sidecar (best-effort) so the next warm query renders with NO graph load — only when a graph was
         // actually loaded (cold or sidecar-miss) and caching is on.
         var locById = files ? locations : null;
-        if (graph is not null && sidecarKey is not null)
+        if (graph is not null && sidecarKey is not null && !hazards)
         {
             TryCache(() => cache!.Put(sidecarKey, RenderSidecarCodec.Encode(seamEffects, locations)));
         }
@@ -461,7 +545,8 @@ internal static class TreeCommand
                 cutRules: shaped.Cut,
                 epContext: epContext,
                 full: full,
-                effectLeavesByMethod: effectLeavesByMethod
+                effectLeavesByMethod: effectLeavesByMethod,
+                hazardsByMethod: hazardsByMethod
             );
         }
 
@@ -474,10 +559,48 @@ internal static class TreeCommand
             output.WriteLine($"No effects reachable from '{fromPattern}'. Run with --full for the structural call tree.");
         }
 
+        // --hazards: the summary section under the tree (reuses the `derive` Hazards renderer). Empty-safe —
+        // a no-op without --hazards (hazardFindings stays []). AllHazardSites = show every site (this is the
+        // bounded one-EP drill-in, not the whole-store triage list `derive` caps).
+        DeriveCommand.WriteHazards(output, hazardFindings, AllHazardSites);
+
         timer.Lap("seam effects + render");
         timer.Total();
         return 0;
     }
+
+    // --hazards shows EVERY finding site for the one EP being drilled into (vs. `derive`'s capped whole-store
+    // triage list). WriteHazards samples `limit / 8 + 1` per type, so a large limit prints all of them.
+    private const int AllHazardSites = int.MaxValue;
+
+    // The compact inline hazard marker for one method's findings (the --hazards node annotation): the distinct
+    // hazard types the method carries, each tagged with its WORST (highest) confidence, type-sorted, with a
+    // `×N` suffix when a type fires more than once on the method (e.g. two distinct race windows). Terse on
+    // purpose — the full per-finding evidence is in the Hazards section + the tsv `hazard` rows.
+    private static string FormatHazardMark(IEnumerable<DeriveCommand.HazardFinding> findings) =>
+        "  ⚠ "
+        + string.Join(
+            ", ",
+            findings
+                .GroupBy(f => f.Type, StringComparer.Ordinal)
+                .OrderBy(g => g.Key, StringComparer.Ordinal)
+                .Select(g =>
+                {
+                    var worst = g.Select(f => f.Confidence).OrderBy(ConfidenceRank).First();
+                    return g.Count() > 1 ? $"{g.Key}({worst})×{g.Count()}" : $"{g.Key}({worst})";
+                })
+        );
+
+    // Confidence sort key: high < medium < low, so OrderBy(...).First() picks the WORST (highest-severity)
+    // tier a method carries for a given hazard type. Unknown tiers sort last.
+    private static int ConfidenceRank(string confidence) =>
+        confidence switch
+        {
+            "high" => 0,
+            "medium" => 1,
+            "low" => 2,
+            _ => 3,
+        };
 
     // One DFS pre-order row per tree node for `--format tsv`: depth (rebuilds the hierarchy), full DocID,
     // the edge kind that reached it, the async-handoff dispatcher (if any), the dispatch fan-out degree,

@@ -395,4 +395,48 @@ public sealed class CliApplicationTests
         ).ShouldBe(0);
         output.ToString().ShouldContain("raise --limit");
     }
+
+    // `tree --hazards` — the third hazard SURFACE (after `derive`'s whole-store view + `impact`'s per-EP
+    // delta): the drill-in that renders one entry point's reachable tree with its pattern findings inline.
+    // It re-derives the EP's bounded closure with the static-field refs + the hazard post-pass, marks each
+    // hazard-bearing node with ⚠, and prints the Hazards summary section. CreateTeamAsync writes the DB
+    // (SaveChangesAsync -> efcore:commit) AND the cache (StringSetAsync -> redis:write) in one method — a
+    // db+cache dual_write — so it is the end-to-end fixture for the surface over a REAL index → derive.
+    [Test]
+    public async Task Tree_hazards_marks_a_dual_write_inline_and_in_the_summary_section()
+    {
+        using var playground = await TempPlayground.CreateEntryPointEffectsAsync();
+        var workingDirectory = Path.Combine(playground.RootDirectory, "workspace");
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        (await CliApplication.RunAsync(["index", playground.SolutionPath], output, error, workingDirectory)).ShouldBe(0);
+
+        // Text mode: the dual_write is marked inline on the CreateTeamAsync node AND named in the section.
+        output.GetStringBuilder().Clear();
+        (await CliApplication.RunAsync(["tree", "TeamWorkflow.CreateTeamAsync", "--hazards"], output, error, workingDirectory)).ShouldBe(0);
+        var text = output.ToString();
+        text.ShouldContain("⚠");
+        text.ShouldContain("dual_write(medium)");
+        text.ShouldContain("Hazards (pattern findings over effects):");
+
+        // The surface is OPT-IN: a plain `tree` of the same method shows no hazard marker. Run AFTER the
+        // --hazards query to also prove the augmented effects/seam never polluted the (hazard-free) cache.
+        output.GetStringBuilder().Clear();
+        (await CliApplication.RunAsync(["tree", "TeamWorkflow.CreateTeamAsync"], output, error, workingDirectory)).ShouldBe(0);
+        output.ToString().ShouldNotContain("dual_write");
+
+        // tsv: a `hazard` row carries the finding (same column contract as `derive --format tsv`), trailing
+        // the node rows so a consumer reads the tree and its findings from one stream.
+        output.GetStringBuilder().Clear();
+        (
+            await CliApplication.RunAsync(
+                ["tree", "TeamWorkflow.CreateTeamAsync", "--hazards", "--format", "tsv"],
+                output,
+                error,
+                workingDirectory
+            )
+        ).ShouldBe(0);
+        output.ToString().ShouldContain("hazard\tdual_write\t");
+    }
 }

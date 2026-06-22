@@ -147,7 +147,11 @@ internal static class TreeRenderer
         // declaring-type args and its own-method args. A child resolves its forwarded T:/M: binding tokens
         // against these, so a chain of static factories / generic methods renders concretely. Null at roots.
         IReadOnlyList<string?>? parentDeclaringConcrete = null,
-        IReadOnlyList<string?>? parentMethodConcrete = null
+        IReadOnlyList<string?>? parentMethodConcrete = null,
+        // `--hazards`: a precomputed compact hazard marker per enclosing method (SymbolId -> e.g.
+        // "  ⚠ dual_write(medium), race_window(high)"), appended to the node label so the pattern findings
+        // sit inline on the EP's reachable tree. Null/absent leaves nodes unmarked (the default tree).
+        IReadOnlyDictionary<string, string>? hazardsByMethod = null
     )
     {
         // Compute visible children first — the fan-out label must reflect how many branches are
@@ -275,7 +279,10 @@ internal static class TreeRenderer
         // a source line, not just the effect/library leaves. Trailing so SourceLocDedupWriter dedups it in
         // print order; the root has no reaching edge (CallFile null).
         var callLoc = full && !string.IsNullOrEmpty(node.CallFile) ? $"  {ShortenPath(node.CallFile)}:{node.CallLine}" : "";
-        var label = $"{epPrefix}{name}{dispatch}{handoff}{loop}{calls}{elided}{opaqueTag}{cutTag}{fx}{loc}{epSuffix}{callLoc}";
+        // `--hazards`: the inline pattern-finding marker for this method (empty when unmarked). Placed before
+        // the source-loc suffixes so SourceLocDedupWriter's trailing-loc regex still matches the line.
+        var hazard = hazardsByMethod is not null && hazardsByMethod.TryGetValue(node.SymbolId, out var hz) ? hz : "";
+        var label = $"{epPrefix}{name}{dispatch}{handoff}{loop}{calls}{elided}{opaqueTag}{cutTag}{fx}{hazard}{loc}{epSuffix}{callLoc}";
         output.WriteLine(isRoot ? label : $"{prefix}{Connector(isLast)}{label}");
 
         // Collapse-seam render rule: this node is a fan-out hub (e.g. a reflection service-locator or
@@ -347,7 +354,8 @@ internal static class TreeRenderer
                 full: full,
                 effectLeavesByMethod: effectLeavesByMethod,
                 parentDeclaringConcrete: declaringConcrete,
-                parentMethodConcrete: methodConcrete
+                parentMethodConcrete: methodConcrete,
+                hazardsByMethod: hazardsByMethod
             );
         }
     }
