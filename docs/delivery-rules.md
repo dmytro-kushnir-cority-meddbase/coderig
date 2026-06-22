@@ -1,8 +1,10 @@
 # Delivery rules — publish→consumer edges as composable data, not coded resolvers
 
-**Status: design spec (not yet built).** Sequenced AFTER FR-10 (`event_cycle`) lands and is committed —
-they share `FactPathFinder.GraphShaping.cs` and the `derive` graph-build snippet, so the refactor edits on
-top rather than concurrently. See [hazards.md](hazards.md) for the delivery-edge conjecture this formalises.
+**Status: steps 1–2 SHIPPED; step 3 (field-literal / route-template, re-index) pending.** Step 1 unified
+the two coded resolvers into the framework-blind `FactPathFinder.AddDeliveryEdges`; step 2 made the loader
+generic over a `deliveryRules` JSON section (events + Echo actors are now pure rule data). Both are
+behavior-preserving (MedDBase `event_cycle` held at 24/all-high). See [hazards.md](hazards.md) for the
+delivery-edge conjecture this formalises.
 
 ## The problem this fixes
 
