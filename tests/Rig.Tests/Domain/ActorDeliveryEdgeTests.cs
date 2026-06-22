@@ -116,6 +116,78 @@ public sealed class ActorDeliveryEdgeTests
         delivered.CallEdges.Count(e => e.Caller == "M:N.Teller.Fire" && e.Callee == "M:N.Handler.OnMsg").ShouldBe(1);
     }
 
+    // HANDLER-DISPATCHER LOCATE: a spawn's handler delegate is reclassified by the async-handoff machinery into
+    // a HANDOFF edge (Kind="handoff", HandoffDispatcher="meddbase.echo.spawn") BEFORE this join runs — it is no
+    // longer a methodGroup. So the registration carries HandlerDispatcher naming that dispatcher, and the join
+    // locates its co-located handoff edge as the handler. A HandlerDispatcher=null registration still locates
+    // its co-located methodGroup (the event `+= H` path), which the other tests above cover.
+    [Test]
+    public void Registration_with_a_handler_dispatcher_binds_the_co_located_handoff_edge()
+    {
+        // The spawn's handler is a HANDOFF edge at the spawn site (reclassified), not a methodGroup.
+        var graph = Graph(
+            new CallEdge(
+                Caller: "M:N.Wire.Spawn",
+                Callee: "M:N.Handler.OnMsg",
+                Kind: "handoff",
+                FilePath: "f.cs",
+                Line: 10,
+                HandoffDispatcher: "meddbase.echo.spawn"
+            ),
+            new CallEdge("M:N.Handler.OnMsg", "M:N.Repo.Save", "invocation", "f.cs", 99),
+            new CallEdge("M:N.Teller.Fire", "M:N.Other.X", "invocation", "f.cs", 1)
+        );
+        var sites = new[]
+        {
+            new DeliverySite(
+                Caller: "M:N.Wire.Spawn",
+                FilePath: "f.cs",
+                Line: 10,
+                IdentityToken: Proc,
+                Tag: "actor_tell",
+                Role: DeliveryRole.Registration,
+                HandlerDispatcher: "meddbase.echo.spawn"
+            ),
+            Site("M:N.Teller.Fire", "f.cs", 50, Proc, isRegistration: false), // tell (the producer)
+        };
+
+        var delivered = FactPathFinder.AddDeliveryEdges(graph, sites);
+
+        // The teller→handler delivery edge was added by locating the spawn's HANDOFF handler edge.
+        var edge = delivered.CallEdges.Single(e => e.Caller == "M:N.Teller.Fire" && e.Callee == "M:N.Handler.OnMsg");
+        edge.Kind.ShouldBe("handoff");
+        edge.HandoffDispatcher.ShouldBe("actor_tell");
+        edge.Line.ShouldBe(50);
+    }
+
+    // A registration with HandlerDispatcher set does NOT bind a co-located methodGroup (that is the event path):
+    // a stray methodGroup at the spawn site is not its handler, so nothing is delivered.
+    [Test]
+    public void Registration_with_a_handler_dispatcher_ignores_a_co_located_method_group()
+    {
+        var graph = Graph(
+            new CallEdge("M:N.Wire.Spawn", "M:N.NotHandler.X", "methodGroup", "f.cs", 10),
+            new CallEdge("M:N.Teller.Fire", "M:N.Other.X", "invocation", "f.cs", 1)
+        );
+        var sites = new[]
+        {
+            new DeliverySite(
+                Caller: "M:N.Wire.Spawn",
+                FilePath: "f.cs",
+                Line: 10,
+                IdentityToken: Proc,
+                Tag: "actor_tell",
+                Role: DeliveryRole.Registration,
+                HandlerDispatcher: "meddbase.echo.spawn"
+            ),
+            Site("M:N.Teller.Fire", "f.cs", 50, Proc, isRegistration: false),
+        };
+
+        var delivered = FactPathFinder.AddDeliveryEdges(graph, sites);
+
+        delivered.CallEdges.ShouldBe(graph.CallEdges); // the methodGroup is not the dispatcher's handler
+    }
+
     // TAG NAMESPACING: the join keys on (Tag, IdentityToken), so a registration and a producer that share an
     // identity TOKEN but carry different TAGS (e.g. an event channel vs an actor channel) must NOT cross. This
     // is what lets the one framework-blind join serve both frameworks safely even on a token collision.

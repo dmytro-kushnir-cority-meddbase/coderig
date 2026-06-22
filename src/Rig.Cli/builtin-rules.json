@@ -1806,7 +1806,7 @@
       "id": "echo-actor",
       "tag": "actor_tell",
       "confidence": "heuristic",
-      "_reason": "Echo actors as a publish→consumer DELIVERY mechanism: a spawn/register binds a name to a handler, a tell/ask publishes to that name. The method lists deliberately DUPLICATE those in the actor:* EFFECT rules — different consumers (delivery edges here vs effect derivation + the dual_write hazard there), so the two are kept independent rather than one inferred from the other. resolve:leaf takes the LAST member-path segment so a tell through ProcessDns.X bridges the spawn through ProcessNames.X (parallel registries naming the same process X by leaf) — the full path never matches because the class prefixes differ; ~heuristic (a leaf shared by two unrelated channels over-joins).",
+      "_reason": "Echo actors as a publish→consumer DELIVERY mechanism: a spawn/register binds a name to a handler, a tell/ask publishes to that name. The method lists deliberately DUPLICATE those in the actor:* EFFECT rules — different consumers (delivery edges here vs effect derivation + the dual_write hazard there), so the two are kept independent rather than one inferred from the other. resolve:leaf takes the LAST member-path segment so a tell through ProcessDns.X bridges the spawn through ProcessNames.X (parallel registries naming the same process X by leaf) — the full path never matches because the class prefixes differ; ~heuristic (a leaf shared by two unrelated channels over-joins). The spawn's handler delegate is reclassified by the async-handoff machinery into a handoff edge tagged meddbase.echo.spawn BEFORE the delivery join runs, so the registration's handlerDispatcher names that dispatcher to locate its handler at the spawn site (rather than via methodGroup, which the spawn delegate no longer is).",
       "producer": {
         "source": "arg",
         "resolve": "leaf",
@@ -1819,7 +1819,8 @@
         "resolve": "leaf",
         "argumentIndex": 0,
         "methods": ["spawn", "spawnUnit", "spawnMany", "register"],
-        "declaringTypes": ["Echo.Process"]
+        "declaringTypes": ["Echo.Process"],
+        "handlerDispatcher": "meddbase.echo.spawn"
       }
     }
   ],

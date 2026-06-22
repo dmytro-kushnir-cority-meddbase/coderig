@@ -160,12 +160,16 @@ internal sealed record DeliveryRuleDocument(
 // One side of a delivery rule. `source` selects which facts the loader scans ("event-symbol" | "arg") and
 // `resolve` how the channel identity is found ("symbol" | "path"); `methods`/`declaringTypes` gate the
 // invocation target for "arg" sources; `argumentIndex` selects which argument carries the identity.
+// `handlerDispatcher` (registration endpoints) names the HandoffDispatcher id of the co-located handoff
+// edge(s) that are the handler — spawn delegates reclassified into handoff edges (e.g. "meddbase.echo.spawn");
+// null ⇒ the handler is the co-located methodGroup edge (an event `+= H`).
 internal sealed record DeliveryEndpointDocument(
     string Source,
     string Resolve,
     int ArgumentIndex = 0,
     IReadOnlyList<string>? Methods = null,
-    IReadOnlyList<string>? DeclaringTypes = null
+    IReadOnlyList<string>? DeclaringTypes = null,
+    string? HandlerDispatcher = null
 );
 
 internal sealed record ReadBeforeCommitObservationRule(

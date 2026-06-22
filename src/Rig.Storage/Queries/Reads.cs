@@ -482,7 +482,8 @@ public static class Reads
         //     invocation-ref scan serves every actor-shaped mechanism. The Registration endpoint's
         //     Methods×DeclaringTypes map to Role=Registration; the Producer endpoint's to Role=Producer. A
         //     method appearing under both (none today) resolves to whichever rule is listed last. ---
-        var argMethods = new Dictionary<(string Type, string Name), (string Tag, DeliveryRole Role, string Resolve)>();
+        var argMethods =
+            new Dictionary<(string Type, string Name), (string Tag, DeliveryRole Role, string Resolve, string? HandlerDispatcher)>();
         foreach (var rule in deliveryRules)
         {
             AddArgEndpoint(argMethods, rule.Tag, rule.Registration, DeliveryRole.Registration);
@@ -543,7 +544,8 @@ public static class Reads
                         Line: r.Line,
                         IdentityToken: token,
                         Tag: tagRole.Tag,
-                        Role: tagRole.Role
+                        Role: tagRole.Role,
+                        HandlerDispatcher: tagRole.HandlerDispatcher
                     )
                 );
             }
@@ -558,7 +560,7 @@ public static class Reads
     // always reads arg0; an endpoint declaring ArgumentIndex != 0 is treated as arg0 (no crash) — an
     // extraction limitation to lift when nth-argument names are captured.
     private static void AddArgEndpoint(
-        Dictionary<(string Type, string Name), (string Tag, DeliveryRole Role, string Resolve)> map,
+        Dictionary<(string Type, string Name), (string Tag, DeliveryRole Role, string Resolve, string? HandlerDispatcher)> map,
         string tag,
         DeliveryEndpoint endpoint,
         DeliveryRole role
@@ -573,7 +575,7 @@ public static class Reads
         {
             foreach (var name in endpoint.Methods ?? [])
             {
-                map[(declaringType, name)] = (tag, role, endpoint.Resolve);
+                map[(declaringType, name)] = (tag, role, endpoint.Resolve, endpoint.HandlerDispatcher);
             }
         }
     }

@@ -24,6 +24,7 @@ internal static class FactDeliveryRuleProvider
             Resolve: endpoint.Resolve,
             ArgumentIndex: endpoint.ArgumentIndex,
             Methods: endpoint.Methods,
-            DeclaringTypes: endpoint.DeclaringTypes
+            DeclaringTypes: endpoint.DeclaringTypes,
+            HandlerDispatcher: endpoint.HandlerDispatcher
         );
 }

@@ -304,7 +304,20 @@ public enum DeliveryRole
 // tell even if their tokens collide. Role (above) decides producer vs registration. Caller is the enclosing
 // method; (Caller, FilePath, Line) is the co-location key the join uses to find a registration's handler.
 // Loaded by Reads.LoadDeliverySitesAsync (rule-driven over RuleSet.Delivery).
-public sealed record DeliverySite(string Caller, string FilePath, int Line, string IdentityToken, string Tag, DeliveryRole Role);
+//
+// HandlerDispatcher (carried for registration sites): selects which co-located edge kind in
+// AddDeliveryEdges is this registration's handler — when set, the co-located HANDOFF edge(s) tagged with
+// this dispatcher id (a spawn delegate reclassified by the async-handoff machinery); when null, the
+// co-located methodGroup edge (an event `+= H`). Always null for producers.
+public sealed record DeliverySite(
+    string Caller,
+    string FilePath,
+    int Line,
+    string IdentityToken,
+    string Tag,
+    DeliveryRole Role,
+    string? HandlerDispatcher = null
+);
 
 // A publish→consumer DELIVERY rule — declares one mechanism (C# events, Echo actors, …) by composing the
 // engine's identity primitives, so a codebase marks its use case in DATA rather than a coded resolver.
@@ -318,12 +331,17 @@ public sealed record DeliveryRule(string Id, string Tag, string Confidence, Deli
 // join decides subscribe-vs-raise, so an event rule's two endpoints are identical). "arg" = invocation refs
 // whose (declaringType, method) match Methods×DeclaringTypes; identity is arg[ArgumentIndex] resolved per
 // Resolve ("path" = the member-path argument name, gated to a member path; "symbol" = the target symbol).
+// HandlerDispatcher is the HandoffDispatcher id of the co-located handoff edge(s) that ARE this
+// (registration) endpoint's handler — spawn delegates reclassified by the async-handoff machinery into
+// handoff edges (e.g. "meddbase.echo.spawn"). Null ⇒ the registration's handler is its co-located
+// methodGroup edge instead (an event `+= H`). Selects the handler edge kind in AddDeliveryEdges.
 public sealed record DeliveryEndpoint(
     string Source,
     string Resolve,
     int ArgumentIndex = 0,
     IReadOnlyList<string>? Methods = null,
-    IReadOnlyList<string>? DeclaringTypes = null
+    IReadOnlyList<string>? DeclaringTypes = null,
+    string? HandlerDispatcher = null
 );
 
 // The fact-derived call graph loaded for cross-project path finding (stage 2 over facts).

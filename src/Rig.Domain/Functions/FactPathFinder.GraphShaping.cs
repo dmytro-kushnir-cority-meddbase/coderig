@@ -70,12 +70,14 @@ public static partial class FactPathFinder
     // stay out; they belong to the separate same-cell/consistency hazard layer (FR-1/dual_write).
     //
     // Producer vs registration is decided by DeliveryRole: a Producer always publishes; a Registration
-    // contributes its co-located methodGroup handler to the channel; a ByColocation site is a registration
-    // IFF a methodGroup edge co-locates at its (Caller,FilePath,Line) (a C# event read is a subscription iff
-    // co-located, else a raise) — so the loader need not know which a given event read is. The handler is the
-    // `methodGroup` CallEdge already in the graph at a registration site's (Caller,FilePath,Line) — the
-    // subscription's `+= Handler` / the spawn's handler argument; a registration with no co-located
-    // methodGroup contributes nothing.
+    // contributes its co-located handler edge(s) to the channel; a ByColocation site is a registration IFF a
+    // handler edge co-locates at its (Caller,FilePath,Line) (a C# event read is a subscription iff co-located,
+    // else a raise) — so the loader need not know which a given event read is. The handler edge kind is
+    // DATA-DRIVEN by the registration's HandlerDispatcher: when set (e.g. an Echo spawn), the co-located
+    // HANDOFF edge(s) tagged with that dispatcher — the spawn's handler delegate(s), which the async-handoff
+    // machinery reclassified from methodGroup to handoff BEFORE this join runs; when null (e.g. a C# event
+    // subscription), the co-located `methodGroup` CallEdge (the subscription's `+= Handler`). A registration
+    // that locates no handler edge contributes nothing.
     public static FactGraphData AddDeliveryEdges(FactGraphData graph, IReadOnlyList<DeliverySite> sites)
     {
         if (sites.Count == 0)
@@ -83,46 +85,65 @@ public static partial class FactPathFinder
             return graph;
         }
 
-        // Method-group handler(s) per call site — a registration's `+= Handler` / spawn-arg edge already in
-        // the graph. Keyed on (Caller, File, Line), the co-location key a registration site joins on.
-        var handlersBySite = new Dictionary<(string Caller, string File, int Line), List<string>>();
+        // Co-located edges per call site — a registration's handler edge(s). An event subscription's handler is
+        // the `+= H` METHODGROUP edge; a spawn's handler delegate(s) were reclassified by the async-handoff
+        // machinery into HANDOFF edges tagged with the spawn dispatcher (e.g. meddbase.echo.spawn), so the
+        // registration's HandlerDispatcher names which co-located handoff edges are its handlers. Index both
+        // kinds once, on the co-location key (Caller, File, Line).
+        var edgesBySite = new Dictionary<(string Caller, string File, int Line), List<(string Kind, string? Dispatcher, string Callee)>>();
         foreach (var e in graph.CallEdges)
         {
-            if (e.Kind != EdgeKinds.MethodGroup)
+            if (e.Kind != EdgeKinds.MethodGroup && e.Kind != EdgeKinds.Handoff)
             {
                 continue;
             }
 
             var key = (e.Caller, e.FilePath, e.Line);
-            if (!handlersBySite.TryGetValue(key, out var list))
+            if (!edgesBySite.TryGetValue(key, out var list))
             {
-                handlersBySite[key] = list = [];
+                edgesBySite[key] = list = [];
             }
-            list.Add(e.Callee);
+            list.Add((e.Kind, e.HandoffDispatcher, e.Callee));
         }
 
-        // Split sites into channel handlers ((Tag, IdentityToken) → handlers, from registrations joined to
-        // their co-located method-group) and producers. A ByColocation site is a registration iff a method-
-        // group co-locates; a Registration with no co-located method-group contributes nothing (the handler
-        // isn't a node we can resolve — a lambda subgraph / unresolved target); a ByColocation site with no
-        // co-located method-group is a raise → producer.
+        // The handler(s) a registration site binds: its co-located HandlerDispatcher handoff edges when the rule
+        // names one (spawn delegates), else its co-located methodGroup edges (event `+= H`).
+        IReadOnlyList<string> HandlersAt(DeliverySite site)
+        {
+            if (!edgesBySite.TryGetValue((site.Caller, site.FilePath, site.Line), out var edges))
+            {
+                return [];
+            }
+
+            return site.HandlerDispatcher is { } dispatcher
+                ? edges
+                    .Where(x => x.Kind == EdgeKinds.Handoff && string.Equals(x.Dispatcher, dispatcher, StringComparison.Ordinal))
+                    .Select(x => x.Callee)
+                    .ToList()
+                : edges.Where(x => x.Kind == EdgeKinds.MethodGroup).Select(x => x.Callee).ToList();
+        }
+
+        // Split sites into channel handlers ((Tag, IdentityToken) → handlers) and producers. A ByColocation
+        // site is a registration iff it locates a handler; a Registration with no co-located handler edge
+        // contributes nothing (the handler isn't a node we can resolve — a lambda subgraph / unresolved
+        // target); a ByColocation site with no co-located handler is a raise → producer.
         var handlersByChannel = new Dictionary<(string Tag, string Token), HashSet<string>>();
         var producers = new List<DeliverySite>();
         foreach (var site in sites)
         {
-            var co = handlersBySite.TryGetValue((site.Caller, site.FilePath, site.Line), out var handlers);
-            var isRegistration = site.Role == DeliveryRole.Registration || (site.Role == DeliveryRole.ByColocation && co);
+            IReadOnlyList<string> handlers = site.Role == DeliveryRole.Producer ? [] : HandlersAt(site);
+            var isRegistration = site.Role == DeliveryRole.Registration || (site.Role == DeliveryRole.ByColocation && handlers.Count > 0);
 
             if (isRegistration)
             {
-                if (co)
+                if (handlers.Count > 0)
                 {
                     var channel = (site.Tag, site.IdentityToken);
                     if (!handlersByChannel.TryGetValue(channel, out var set))
                     {
                         handlersByChannel[channel] = set = new HashSet<string>(StringComparer.Ordinal);
                     }
-                    set.UnionWith(handlers!);
+                    set.UnionWith(handlers);
                 }
             }
             else
