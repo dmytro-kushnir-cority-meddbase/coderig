@@ -76,9 +76,12 @@ A third layer over effects + reachability: detectors match PATTERNS across the e
 confidence-tiered findings for an LLM reviewer (suspicion maps, not proofs — **annotate, never suppress**;
 calibrate FP rate before on-by-default). Shipped finding types (catalog: `HazardKinds`): `race_window`
 (read→write of the same cell, same method, no tx — TOCTOU/lost-update; high, medium when tx-bracketed),
-`lazy_init_race` (the lazy-init/do-once shape, low/heuristic), `n_plus_1` (looped read, key varies per
-iteration), `unserializable_payload` (`Option<T>`/etc. into a store/serialize), `dual_write` (≥2 distinct
-durable systems written in one method — db/queue/search/cache/http).
+`lazy_init_race` (the lazy-init/do-once shape, low/heuristic), `thread_local_context` (FR-2: an RMW on a
+`[ThreadStatic]` cell — thread-confined so NOT a race, rerouted here from race_window; the value can be lost
+across an `await`/thread boundary, low/disclosed; detected via the existing `[ThreadStatic]`-attribute ctor
+ref, no re-index), `n_plus_1` (looped read, key varies per iteration), `unserializable_payload` (`Option<T>`
+/etc. into a store/serialize), `dual_write` (≥2 distinct durable systems written in one method — db/queue/
+search/cache/http).
 - **See them**: `rig derive` prints a **Hazards** section (named, counted, per-confidence-tier) + a
   `hazard` tsv row (`type/confidence/reason/cell/enclosing/file:line`).
 - **Diff them**: `rig impact` reports a per-EP hazard DELTA (`+/- hazard <type>(<conf>)` base→head). NB

@@ -64,6 +64,7 @@ Implemented detectors (intra-method / effect-local, tier 1):
 |---|---|---|
 | `race_window` | read → write of the same cell, same method, not bracketed by a transaction (TOCTOU / lost-update) | high; medium when tx-bracketed (disclosed — read-committed ≠ safe) |
 | `lazy_init_race` | `race_window` whose shape is lazy-init / do-once (single write + getter/init/ctor context) | low (heuristic) |
+| `thread_local_context` | a `race_window`-shaped RMW on a `[ThreadStatic]` cell — thread-confined, so NOT a cross-thread race; rerouted here as the context-propagation surface (a value lost across an `await`/thread boundary). Detected via the attribute's ctor reference (no dedicated attribute fact). | low (disclosed — can't prove the await-crossing) |
 | `n_plus_1` | a read inside a loop whose key varies per iteration | high |
 | `unserializable_payload` | a store/serialize whose payload type is serializer-unsupported (e.g. `Option<T>`) | high |
 | `dual_write` | a method writing to ≥2 distinct durable systems (db/queue/search/cache/http/…) | medium (no-outbox-check disclosed) |
@@ -76,8 +77,12 @@ Backlog detectors:
   *raise/publish → handler*; that edge (resolve "what runs when this fires" by event/message identity) must
   exist before any event cycle can close. Same edge unblocks the cache-invalidation cycle.
 - **retry-around-transaction / non-idempotent op** (tier 1 + tier 3).
-- **missing-invalidate** (tier 2 absence), **contention hotspot** (speculative),
-  **context-propagation (AsyncLocal/ThreadStatic)** (tier 3, needs flow modeling — not feasible statically).
+- **missing-invalidate** (tier 2 absence), **contention hotspot** (speculative).
+- **context-propagation (ThreadStatic)** — shipped as `thread_local_context`, a tier-1 STRUCTURAL PROXY for
+  the tier-3 ideal: it flags a `[ThreadStatic]` cell's RMW (disclosed low — the await-crossing isn't proven,
+  which would need flow modeling) rather than nothing. The **AsyncLocal** sibling is a separate detector (a
+  field-*type* signal, not an attribute, and not an RMW reroute — its state lives behind `.Value`); deferred
+  until AsyncLocal is back in scope to calibrate against (the grounding migration, !10208, was reverted).
 
 ## How a Hazard reaches the consumer (surfaces)
 
