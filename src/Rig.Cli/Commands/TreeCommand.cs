@@ -31,6 +31,11 @@ namespace Rig.Cli.Commands;
 //                     because the parent row may be absent in this gappy view).
 // --format llm is rejected when combined with --view summary (different output shape) or --view hazards
 // (distinct rendering).
+//
+// --format llm-ids: same as llm but adds explicit surrogate-id linkage (8-column header):
+//   id  parent_id  depth  name  arity  calls  effects  flags
+// seen rows: flags = "seen:<canonicalId>" where canonicalId is the id of the first expanded emission.
+// Same --view composition rules as llm (rejects summary and hazards).
 internal static class TreeCommand
 {
     internal static Command Build(TextWriter output, TextWriter error, string workingDirectory)
@@ -39,7 +44,7 @@ internal static class TreeCommand
         var view = new Option<string>("--view")
         {
             Description =
-                "Projection view: paths (default) — effectful-paths tree; full — every reachable method with effects/unresolved calls as leaf nodes; effects — flat list of effectful methods; summary — effect-count rollup; hazards — tree with pattern hazards (race_window/dual_write/…) inline. --format llm composes with paths/full/effects; summary and hazards are rejected with --format llm.",
+                "Projection view: paths (default) — effectful-paths tree; full — every reachable method with effects/unresolved calls as leaf nodes; effects — flat list of effectful methods; summary — effect-count rollup; hazards — tree with pattern hazards (race_window/dual_write/…) inline. --format llm/llm-ids composes with paths/full/effects; summary and hazards are rejected with --format llm/llm-ids.",
             DefaultValueFactory = _ => "paths",
         };
         var async = CommonOptions.Async();
@@ -61,7 +66,7 @@ internal static class TreeCommand
         var suppress = new Option<string>("--suppress")
         {
             Description =
-                "Comma-separated list of node kinds to suppress in --format llm output: ctors, lambdas, none. Default when --format llm: ctors,lambdas. Use none to disable all suppression. Ignored for other formats.",
+                "Comma-separated list of node kinds to suppress in --format llm/llm-ids output: ctors, lambdas, none. Default when --format llm/llm-ids: ctors,lambdas. Use none to disable all suppression. Ignored for other formats.",
         };
         var cmd = new Command(name: "tree", description: "Print the first-party call tree from an entry point, annotated with effects.")
         {
@@ -83,12 +88,13 @@ internal static class TreeCommand
             suppress,
         };
         // --view selects one of five mutually-exclusive projections (paths/full/effects/summary/hazards).
-        // --format llm is compatible with paths/full/effects but not with summary or hazards.
+        // --format llm and --format llm-ids are compatible with paths/full/effects but not with summary or hazards.
         cmd.Validators.Add(result =>
         {
             var viewValue = result.GetValue(view) ?? "paths";
             var formatValue = result.GetValue(format);
             var isLlmFormat = string.Equals(formatValue, "llm", StringComparison.OrdinalIgnoreCase);
+            var isLlmIdsFormat = string.Equals(formatValue, "llm-ids", StringComparison.OrdinalIgnoreCase);
 
             var validViews = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "paths", "full", "effects", "summary", "hazards" };
             if (!validViews.Contains(viewValue))
@@ -96,9 +102,10 @@ internal static class TreeCommand
                 result.AddError($"Unknown --view '{viewValue}'. Valid values: paths, full, effects, summary, hazards.");
             }
 
-            // --format llm is incompatible with summary (different output shape) and hazards (distinct rendering).
-            if (isLlmFormat)
+            // --format llm and --format llm-ids are incompatible with summary (different output shape) and hazards (distinct rendering).
+            if (isLlmFormat || isLlmIdsFormat)
             {
+                var formatName = isLlmIdsFormat ? "--format llm-ids" : "--format llm";
                 var incompatible = new List<string>();
                 if (string.Equals(viewValue, "summary", StringComparison.OrdinalIgnoreCase))
                 {
@@ -112,7 +119,7 @@ internal static class TreeCommand
 
                 if (incompatible.Count > 0)
                 {
-                    result.AddError($"--format llm can't be combined with {string.Join(" and ", incompatible)} for 'rig tree'.");
+                    result.AddError($"{formatName} can't be combined with {string.Join(" and ", incompatible)} for 'rig tree'.");
                 }
             }
         });
@@ -125,10 +132,12 @@ internal static class TreeCommand
                     var viewValue = (pr.GetValue(view) ?? "paths").ToLowerInvariant();
                     var formatValue = pr.GetValue(format);
                     var isLlmFmt = string.Equals(formatValue, "llm", StringComparison.OrdinalIgnoreCase);
-                    // --suppress is only meaningful for --format llm; parse it when llm, else no-op.
-                    var suppressSet = isLlmFmt
-                        ? LlmSummaryRenderer.ParseSuppressSet(pr.GetValue(suppress))
-                        : LlmSummaryRenderer.SuppressSet.Default;
+                    var isLlmIdsFmt = string.Equals(formatValue, "llm-ids", StringComparison.OrdinalIgnoreCase);
+                    // --suppress is only meaningful for --format llm / llm-ids; parse it when either, else no-op.
+                    var suppressSet =
+                        isLlmFmt || isLlmIdsFmt
+                            ? LlmSummaryRenderer.ParseSuppressSet(pr.GetValue(suppress))
+                            : LlmSummaryRenderer.SuppressSet.Default;
                     return RunAsync(
                         fromPattern: pr.GetValue(from)!,
                         full: viewValue == "full",
@@ -147,6 +156,7 @@ internal static class TreeCommand
                         noCache: pr.GetValue(noCache),
                         time: pr.GetValue(time),
                         format: formatValue,
+                        llmIds: isLlmIdsFmt,
                         suppressSet: suppressSet,
                         output: output,
                         error: error,
@@ -177,6 +187,7 @@ internal static class TreeCommand
         bool noCache,
         bool time,
         string? format,
+        bool llmIds,
         LlmSummaryRenderer.SuppressSet suppressSet,
         TextWriter output,
         TextWriter error,
@@ -398,10 +409,11 @@ internal static class TreeCommand
 
         effects = ApplyEffectFilters(effects, only, exclude); // --only / --exclude (e.g. --exclude throw)
 
-        // --format llm: compact flat TSV for LLM consumption. Emitted before the normal render path
-        // (skips the deployment map, seam, and box-drawing chrome — those are token waste for a model).
-        // Projection determined by --view: paths (default) → EffectfulPaths; full → Full; effects → EffectsFlat.
-        if (llmFormat)
+        // --format llm / --format llm-ids: compact flat TSV for LLM consumption. Emitted before the
+        // normal render path (skips the deployment map, seam, and box-drawing chrome — those are token
+        // waste for a model). Projection determined by --view: paths (default) → EffectfulPaths; full →
+        // Full; effects → EffectsFlat. llm-ids adds explicit surrogate-id linkage (8-column schema).
+        if (llmFormat || llmIds)
         {
             // Raw provider:operation per occurrence, keyed by enclosing symbol — the LLM renderer
             // aggregates counts itself (no emoji, no resource names).
@@ -417,7 +429,21 @@ internal static class TreeCommand
                 full ? LlmProjection.Full
                 : effectsOnly ? LlmProjection.EffectsFlat
                 : LlmProjection.EffectfulPaths;
-            Render(roots: roots, rawEffectsByMethod: rawEffectsForLlm, projection: projection, output: output, suppress: suppressSet);
+            if (llmIds)
+            {
+                RenderWithIds(
+                    roots: roots,
+                    rawEffectsByMethod: rawEffectsForLlm,
+                    projection: projection,
+                    output: output,
+                    suppress: suppressSet
+                );
+            }
+            else
+            {
+                Render(roots: roots, rawEffectsByMethod: rawEffectsForLlm, projection: projection, output: output, suppress: suppressSet);
+            }
+
             timer.Total();
             return 0;
         }

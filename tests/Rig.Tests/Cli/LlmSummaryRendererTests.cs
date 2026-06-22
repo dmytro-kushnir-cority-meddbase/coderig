@@ -766,6 +766,205 @@ public sealed class LlmSummaryRendererTests
         LlmSummaryRenderer.IsCtorSymbol("M:App.Svc.DoSomething()").ShouldBeFalse();
         LlmSummaryRenderer.IsCtorSymbol("M:App.Repo.Save(App.Entity)").ShouldBeFalse();
     }
+
+    // ── llm-ids format ────────────────────────────────────────────────────────────────────────────
+
+    private static string RenderWithIds(
+        IReadOnlyList<TraceNode> roots,
+        IReadOnlyDictionary<string, List<string>>? rawEffects = null,
+        LlmSummaryRenderer.LlmProjection projection = LlmSummaryRenderer.LlmProjection.Full,
+        LlmSummaryRenderer.SuppressSet suppress = LlmSummaryRenderer.SuppressSet.None
+    )
+    {
+        var sw = new StringWriter();
+        LlmSummaryRenderer.RenderWithIds(
+            roots: roots,
+            rawEffectsByMethod: rawEffects ?? new Dictionary<string, List<string>>(StringComparer.Ordinal),
+            projection: projection,
+            output: sw,
+            suppress: suppress
+        );
+        return sw.ToString();
+    }
+
+    [Test]
+    public void LlmIds_header_is_8_column_schema()
+    {
+        var output = RenderWithIds([Node("M:App.Svc.Do()")]);
+        Lines(output)[0].ShouldBe("id\tparent_id\tdepth\tname\tarity\tcalls\teffects\tflags");
+    }
+
+    [Test]
+    public void LlmIds_every_row_has_8_columns()
+    {
+        var root = Node("M:App.Svc.Do()", callSites: 1, Node("M:App.Repo.Load()"));
+        var lines = Lines(RenderWithIds([root]));
+        foreach (var line in lines.Skip(1))
+        {
+            var cols = line.Split('\t');
+            cols.Length.ShouldBe(8, $"Expected 8 columns for llm-ids; got {cols.Length} on: {line}");
+        }
+    }
+
+    [Test]
+    public void LlmIds_ids_are_monotonic_1_based()
+    {
+        var root = Node("M:App.A.Go()", callSites: 1, Node("M:App.B.Run()", callSites: 1, Node("M:App.C.Exec()")));
+        var lines = Lines(RenderWithIds([root]));
+        var ids = lines.Skip(1).Select(l => int.Parse(l.Split('\t')[0], System.Globalization.CultureInfo.InvariantCulture)).ToList();
+        // Must be 1, 2, 3 (monotonic 1-based)
+        for (var i = 0; i < ids.Count; i++)
+        {
+            ids[i].ShouldBe(i + 1, $"Expected id {i + 1} at position {i}, got {ids[i]}");
+        }
+    }
+
+    [Test]
+    public void LlmIds_parent_id_of_root_is_empty()
+    {
+        var root = Node("M:App.Svc.Do()");
+        var lines = Lines(RenderWithIds([root]));
+        var cols = lines[1].Split('\t');
+        cols[1].ShouldBe(""); // parent_id empty for root
+    }
+
+    [Test]
+    public void LlmIds_parent_id_resolves_to_earlier_row_id()
+    {
+        var root = Node("M:App.Svc.Do()", callSites: 1, Node("M:App.Repo.Load()", callSites: 2));
+        var lines = Lines(RenderWithIds([root]));
+        // line[1] = root (id=1, parent_id=""), line[2] = child (id=2, parent_id=1)
+        var rootCols = lines[1].Split('\t');
+        var childCols = lines[2].Split('\t');
+        rootCols[0].ShouldBe("1"); // root id
+        rootCols[1].ShouldBe(""); // root has no parent
+        childCols[0].ShouldBe("2"); // child id
+        childCols[1].ShouldBe("1"); // parent_id = root's id
+    }
+
+    [Test]
+    public void LlmIds_parent_id_is_correct_for_nested_tree()
+    {
+        // A -> B -> C: A gets id=1, B gets id=2 (parent=1), C gets id=3 (parent=2)
+        var root = Node("M:App.A.Go()", callSites: 1, Node("M:App.B.Run()", callSites: 1, Node("M:App.C.Exec()")));
+        var lines = Lines(RenderWithIds([root]));
+        var aCols = lines[1].Split('\t');
+        var bCols = lines[2].Split('\t');
+        var cCols = lines[3].Split('\t');
+        aCols[0].ShouldBe("1");
+        aCols[1].ShouldBe("");
+        bCols[0].ShouldBe("2");
+        bCols[1].ShouldBe("1"); // parent = A
+        cCols[0].ShouldBe("3");
+        cCols[1].ShouldBe("2"); // parent = B
+    }
+
+    [Test]
+    public void LlmIds_multiple_roots_both_have_empty_parent_id()
+    {
+        var roots = new TraceNode[] { Node("M:App.A.Go()"), Node("M:App.B.Run()") };
+        var lines = Lines(RenderWithIds(roots));
+        // id=1 parent="" and id=2 parent=""
+        lines[1].Split('\t')[1].ShouldBe("");
+        lines[2].Split('\t')[1].ShouldBe("");
+    }
+
+    [Test]
+    public void LlmIds_seen_row_flags_carries_canonical_id()
+    {
+        // First emit M:App.Repo.Load() fully (id=2), then it appears as Truncated (id=3).
+        // The truncated row's flags must be "seen:2".
+        var repo = Node("M:App.Repo.Load()");
+        var truncatedRepo = Truncated("M:App.Repo.Load()");
+        var root = Node("M:App.Svc.Do()", callSites: 1, repo, truncatedRepo);
+
+        var lines = Lines(RenderWithIds([root]));
+        // line[1]=Svc.Do (id=1), line[2]=Repo.Load first emission (id=2), line[3]=Repo.Load seen (id=3)
+        lines.Count.ShouldBe(4); // header + 3 data rows
+        var seenCols = lines[3].Split('\t');
+        seenCols[7].ShouldBe("seen:2"); // flags = seen:<canonicalId>
+    }
+
+    [Test]
+    public void LlmIds_seen_row_without_prior_expansion_uses_seen_only()
+    {
+        // A node that only appears as Truncated (never expanded) → flags = "seen" (no id).
+        var root = Node("M:App.Svc.Do()", callSites: 1, Truncated("M:App.Repo.Load()"));
+        var lines = Lines(RenderWithIds([root]));
+        var seenCols = lines[2].Split('\t');
+        seenCols[7].ShouldBe("seen"); // no canonical id available
+    }
+
+    [Test]
+    public void LlmIds_composes_with_full_projection()
+    {
+        var root = Node("M:App.Svc.Do()", callSites: 1, Node("M:App.Repo.Load()"), Node("M:App.Repo.Save()"));
+        var lines = Lines(RenderWithIds([root], projection: LlmSummaryRenderer.LlmProjection.Full));
+        // header + root + Load + Save = 4
+        lines.Count.ShouldBe(4);
+        // All rows have 8 columns
+        foreach (var line in lines.Skip(1))
+        {
+            line.Split('\t').Length.ShouldBe(8);
+        }
+    }
+
+    [Test]
+    public void LlmIds_composes_with_effects_flat_projection()
+    {
+        var root = Node("M:App.Svc.Do()", callSites: 1, Node("M:App.Repo.Load()"));
+        var rawEffects = RawEffects(("M:App.Repo.Load()", ["efcore:read"]));
+        var lines = Lines(RenderWithIds([root], rawEffects, LlmSummaryRenderer.LlmProjection.EffectsFlat));
+        // header + Load only (root has no effect)
+        lines.Count.ShouldBe(2);
+        var cols = lines[1].Split('\t');
+        cols.Length.ShouldBe(8);
+        // name is at index 3 in llm-ids (id parent_id depth name ...)
+        cols[3].ShouldBe("Repo.Load");
+    }
+
+    [Test]
+    public void LlmIds_composes_with_suppress()
+    {
+        var ctor = Node("M:App.Repo.Repository.#ctor(App.Db.DbContext)");
+        var root = Node("M:App.Svc.Do()", callSites: 1, ctor);
+        var lines = Lines(RenderWithIds([root], suppress: LlmSummaryRenderer.SuppressSet.Ctors));
+        // header + Svc.Do only — ctor is suppressed
+        lines.Count.ShouldBe(2);
+        lines.ShouldNotContain(l => l.Contains("#ctor"));
+    }
+
+    [Test]
+    public void LlmIds_determinism_byte_for_byte_identical_across_two_runs()
+    {
+        var root = Node("M:App.Svc.RunAsync()", callSites: 1, Truncated("M:App.Repo.Load()"), Node("M:App.Repo.Save()"));
+        var rawEffects = RawEffects(("M:App.Repo.Load()", ["efcore:read", "efcore:read"]), ("M:App.Repo.Save()", ["efcore:commit"]));
+
+        var first = RenderWithIds([root], rawEffects);
+        var second = RenderWithIds([root], rawEffects);
+
+        first.ShouldBe(second);
+    }
+
+    [Test]
+    public void LlmIds_llm_format_output_is_unchanged_regression_guard()
+    {
+        // Verify that adding llm-ids did NOT change the llm (positional) format output.
+        var root = Node("M:App.Svc.Do()", callSites: 1, Truncated("M:App.Repo.Load()"), Node("M:App.Cache.Warm()"));
+        var rawEffects = RawEffects(("M:App.Repo.Load()", ["efcore:read"]));
+
+        // Render the original llm format twice; it must be identical regardless of llm-ids being present.
+        var llmFirst = Render([root], rawEffects, LlmSummaryRenderer.LlmProjection.Full);
+        var llmSecond = Render([root], rawEffects, LlmSummaryRenderer.LlmProjection.Full);
+        llmFirst.ShouldBe(llmSecond);
+
+        // The llm format header must still be the 6-column schema, not the 8-column llm-ids schema.
+        Lines(llmFirst)[0].ShouldBe("depth\tname\tarity\tcalls\teffects\tflags");
+
+        // No id or parent_id columns appear.
+        Lines(llmFirst)[0].ShouldNotContain("id\t");
+        Lines(llmFirst)[0].ShouldNotContain("parent_id");
+    }
 }
 
 // CLI-level tests for --format llm: verify the option parses, mutual exclusion works, and output has the right shape.
@@ -973,6 +1172,125 @@ public sealed class LlmSummaryCliTests
         // full >= default (effectful-paths with spine) >= effects-flat
         fullLines.ShouldBeGreaterThanOrEqualTo(defaultLines);
         defaultLines.ShouldBeGreaterThanOrEqualTo(effectsLines);
+    }
+
+    [Test]
+    public async Task Format_llm_ids_alone_is_accepted()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--format", "llm-ids"], output, error);
+
+        error.ToString().ShouldNotContain("can't be combined");
+    }
+
+    [Test]
+    public async Task Format_llm_ids_with_full_is_accepted()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--view", "full", "--format", "llm-ids"], output, error);
+
+        error.ToString().ShouldNotContain("can't be combined");
+    }
+
+    [Test]
+    public async Task Format_llm_ids_with_effects_is_accepted()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--view", "effects", "--format", "llm-ids"], output, error);
+
+        error.ToString().ShouldNotContain("can't be combined");
+    }
+
+    [Test]
+    public async Task Format_llm_ids_combined_with_summary_is_rejected()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--format", "llm-ids", "--view", "summary"], output, error);
+
+        exitCode.ShouldBe(1);
+        error.ToString().ShouldContain("can't be combined");
+        error.ToString().ShouldContain("--view summary");
+    }
+
+    [Test]
+    public async Task Format_llm_ids_combined_with_hazards_is_rejected()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--format", "llm-ids", "--view", "hazards"], output, error);
+
+        exitCode.ShouldBe(1);
+        error.ToString().ShouldContain("can't be combined");
+        error.ToString().ShouldContain("--view hazards");
+    }
+
+    [Test]
+    public async Task Format_llm_ids_emits_8_column_header_and_rows_on_real_index()
+    {
+        using var playground = await Rig.Tests.Fixtures.TempPlayground.CreateEntryPointEffectsAsync();
+        var workingDirectory = System.IO.Path.Combine(playground.RootDirectory, "workspace");
+        var rulesPath = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(playground.SolutionPath)!, "rig.rules.json");
+        var sw = new StringWriter();
+        var err = new StringWriter();
+
+        (await CliApplication.RunAsync(["index", playground.SolutionPath], sw, err, workingDirectory)).ShouldBe(0);
+
+        sw.GetStringBuilder().Clear();
+        (
+            await CliApplication.RunAsync(
+                ["tree", "PaymentGatewayCaller.Dispatch", "--view", "full", "--format", "llm-ids", "--rules", rulesPath],
+                sw,
+                err,
+                workingDirectory
+            )
+        ).ShouldBe(0);
+
+        var lines = sw.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r')).ToList();
+        // 8-column header
+        lines[0].ShouldBe("id\tparent_id\tdepth\tname\tarity\tcalls\teffects\tflags");
+        lines.Count.ShouldBeGreaterThan(1);
+
+        // Collect id → row for parent_id validation.
+        var idToRowIndex = new Dictionary<int, int>(capacity: lines.Count);
+        for (var i = 1; i < lines.Count; i++)
+        {
+            var cols = lines[i].Split('\t');
+            cols.Length.ShouldBe(8, $"Expected 8 columns for llm-ids; got {cols.Length} on: {lines[i]}");
+            var rowId = int.Parse(cols[0], System.Globalization.CultureInfo.InvariantCulture);
+            idToRowIndex[rowId] = i;
+        }
+
+        // ids must be monotonic 1-based
+        var sortedIds = idToRowIndex.Keys.OrderBy(x => x).ToList();
+        for (var i = 0; i < sortedIds.Count; i++)
+        {
+            sortedIds[i].ShouldBe(i + 1, $"id at position {i} should be {i + 1}");
+        }
+
+        // Every non-root row's parent_id must refer to a row with a smaller id.
+        for (var i = 1; i < lines.Count; i++)
+        {
+            var cols = lines[i].Split('\t');
+            var parentIdStr = cols[1];
+            if (string.IsNullOrEmpty(parentIdStr))
+            {
+                continue; // root row — no parent
+            }
+
+            var parentId = int.Parse(parentIdStr, System.Globalization.CultureInfo.InvariantCulture);
+            var thisId = int.Parse(cols[0], System.Globalization.CultureInfo.InvariantCulture);
+            parentId.ShouldBeLessThan(thisId, $"parent_id {parentId} should be less than row id {thisId}");
+            idToRowIndex.ContainsKey(parentId).ShouldBeTrue($"parent_id {parentId} does not match any emitted row id");
+        }
     }
 
     [Test]

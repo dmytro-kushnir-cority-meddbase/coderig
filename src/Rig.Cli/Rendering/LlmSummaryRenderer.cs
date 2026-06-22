@@ -84,6 +84,9 @@ internal static class LlmSummaryRenderer
             ? "depth\tparent\tname\tarity\tcalls\teffects\tflags"
             : "depth\tname\tarity\tcalls\teffects\tflags";
 
+    // 8-column header for llm-ids: explicit surrogate-id linkage.
+    internal const string LlmIdsHeader = "id\tparent_id\tdepth\tname\tarity\tcalls\teffects\tflags";
+
     // effectsByMethod: SymbolId -> list of effect strings in the same form as the tree renderer produces
     // (e.g. "io:read*3"). Structured differently from the tree-display form: the LLM renderer re-aggregates
     // the raw provider:operation strings rather than inheriting the emoji+text rendering.
@@ -119,6 +122,53 @@ internal static class LlmSummaryRenderer
                 projection: projection,
                 output: output,
                 suppress: suppress
+            );
+        }
+    }
+
+    // Render the call-tree forest in llm-ids format: 8-column TSV with explicit surrogate-id linkage.
+    // Schema: id  parent_id  depth  name  arity  calls  effects  flags
+    //   id         – monotonically incrementing 1-based integer, emission order.
+    //   parent_id  – id of the nearest EMITTED ancestor (empty for roots).
+    //   depth … flags – identical to llm format (same node-walk/selection/suppression/name/effects logic).
+    //   seen rows  – flags cell = "seen:<canonicalId>" where canonicalId is the id of the first
+    //                (expanded) emission of that node's SymbolId.
+    internal static void RenderWithIds(
+        IReadOnlyList<TraceNode> roots,
+        IReadOnlyDictionary<string, List<string>> rawEffectsByMethod,
+        LlmProjection projection,
+        TextWriter output,
+        SuppressSet suppress = SuppressSet.Default
+    )
+    {
+        output.WriteLine(LlmIdsHeader);
+
+        // Counter for the next id to emit (1-based, monotonic).
+        var nextId = 1;
+        // SymbolId -> id of its first (expanded) emission — for seen:<id> back-references.
+        var firstEmissionId = new Dictionary<string, int>(StringComparer.Ordinal);
+        // Parent-id stack: index = depth → the id of the nearest emitted ancestor at that depth.
+        // parentIdAtDepth[d] = the id that was emitted at depth d; a child at depth d+1 reads [d].
+        var parentIdAtDepth = new List<int>();
+
+        foreach (var root in roots)
+        {
+            if (projection == LlmProjection.EffectfulPaths && !SubtreeHasEffect(root, rawEffectsByMethod))
+            {
+                continue;
+            }
+
+            WalkNodeWithIds(
+                node: root,
+                depth: 0,
+                parentName: "",
+                rawEffectsByMethod: rawEffectsByMethod,
+                projection: projection,
+                output: output,
+                suppress: suppress,
+                nextId: ref nextId,
+                firstEmissionId: firstEmissionId,
+                parentIdAtDepth: parentIdAtDepth
             );
         }
     }
@@ -579,5 +629,175 @@ internal static class LlmSummaryRenderer
         }
 
         return parts.Count > 0 ? string.Join("|", parts) : "";
+    }
+
+    // llm-ids walk: mirrors WalkNode exactly (same selection/suppression/effects logic) but emits 8-column
+    // rows with explicit id/parent_id surrogate linkage and seen:<canonicalId> back-references.
+    private static void WalkNodeWithIds(
+        TraceNode node,
+        int depth,
+        string parentName,
+        IReadOnlyDictionary<string, List<string>> rawEffectsByMethod,
+        LlmProjection projection,
+        TextWriter output,
+        SuppressSet suppress,
+        ref int nextId,
+        Dictionary<string, int> firstEmissionId,
+        List<int> parentIdAtDepth
+    )
+    {
+        if (IsSuppressed(node.SymbolId, suppress))
+        {
+            if (node.Truncated)
+            {
+                return;
+            }
+
+            foreach (var child in node.Children)
+            {
+                if (projection == LlmProjection.EffectfulPaths && !SubtreeHasEffect(child, rawEffectsByMethod))
+                {
+                    continue;
+                }
+
+                WalkNodeWithIds(
+                    node: child,
+                    depth: depth,
+                    parentName: parentName,
+                    rawEffectsByMethod: rawEffectsByMethod,
+                    projection: projection,
+                    output: output,
+                    suppress: suppress,
+                    nextId: ref nextId,
+                    firstEmissionId: firstEmissionId,
+                    parentIdAtDepth: parentIdAtDepth
+                );
+            }
+
+            return;
+        }
+
+        // Roll up effects from immediately-suppressed direct children.
+        List<string>? rolledUp = null;
+        if (suppress != SuppressSet.None)
+        {
+            foreach (var child in node.Children)
+            {
+                if (IsSuppressed(child.SymbolId, suppress))
+                {
+                    rolledUp ??= new List<string>();
+                    CollectSuppressedEffects(child, rawEffectsByMethod, suppress, rolledUp);
+                }
+            }
+        }
+
+        var hasEffect = rawEffectsByMethod.ContainsKey(node.SymbolId);
+        var hasRolledUp = rolledUp is { Count: > 0 };
+
+        if (projection != LlmProjection.EffectsFlat || hasEffect || hasRolledUp)
+        {
+            var thisId = nextId++;
+            // parent_id: nearest emitted ancestor, determined by the stack at depth-1 (empty for roots).
+            var parentId = depth > 0 && parentIdAtDepth.Count >= depth ? parentIdAtDepth[depth - 1] : 0;
+            var parentIdStr = parentId > 0 ? parentId.ToString(CultureInfo.InvariantCulture) : "";
+
+            // Update parent stack: grow if needed, then record this id at depth d so children can read it.
+            while (parentIdAtDepth.Count <= depth)
+            {
+                parentIdAtDepth.Add(0);
+            }
+
+            parentIdAtDepth[depth] = thisId;
+
+            var name = LlmName(node.SymbolId);
+            var arity = ParseArity(node.SymbolId).ToString(CultureInfo.InvariantCulture);
+            var calls = node.CallSites.ToString(CultureInfo.InvariantCulture);
+
+            List<string> rawEffects;
+            if (hasEffect && hasRolledUp)
+            {
+                var ownEffects = rawEffectsByMethod[node.SymbolId];
+                rawEffects = new List<string>(capacity: ownEffects.Count + rolledUp!.Count);
+                rawEffects.AddRange(ownEffects);
+                rawEffects.AddRange(rolledUp!);
+            }
+            else if (hasEffect)
+            {
+                rawEffects = rawEffectsByMethod[node.SymbolId];
+            }
+            else if (hasRolledUp)
+            {
+                rawEffects = rolledUp!;
+            }
+            else
+            {
+                rawEffects = [];
+            }
+
+            var effectsStr = FormatEffects(rawEffects);
+
+            // Flags: for a seen (Truncated) node, emit "seen:<canonicalId>" where canonicalId is the id
+            // of the first expanded emission of this SymbolId. For a non-truncated node, record this id
+            // as the canonical first emission if it's the first time we've seen this SymbolId.
+            string flags;
+            if (node.Truncated)
+            {
+                // Look up the canonical id for this SymbolId; if we haven't seen it expanded yet
+                // (e.g. it was only ever truncated), use 0 (no canonical).
+                var canonicalId = firstEmissionId.TryGetValue(node.SymbolId, out var cid) ? cid : 0;
+                var seenRef = canonicalId > 0 ? $"seen:{canonicalId.ToString(CultureInfo.InvariantCulture)}" : "seen";
+                var cyclePart = node.EdgeKind == "cycle" ? "|cycle" : "";
+                flags = seenRef + cyclePart;
+            }
+            else
+            {
+                // Record the first expanded emission.
+                if (!firstEmissionId.ContainsKey(node.SymbolId))
+                {
+                    firstEmissionId[node.SymbolId] = thisId;
+                }
+
+                flags = node.EdgeKind == "cycle" ? "cycle" : "";
+            }
+
+            EmitRow(
+                output,
+                thisId.ToString(CultureInfo.InvariantCulture),
+                parentIdStr,
+                depth.ToString(CultureInfo.InvariantCulture),
+                name,
+                arity,
+                calls,
+                effectsStr,
+                flags
+            );
+        }
+
+        if (node.Truncated)
+        {
+            return;
+        }
+
+        var childParentName = LlmName(node.SymbolId);
+        foreach (var child in node.Children)
+        {
+            if (projection == LlmProjection.EffectfulPaths && !SubtreeHasEffect(child, rawEffectsByMethod))
+            {
+                continue;
+            }
+
+            WalkNodeWithIds(
+                node: child,
+                depth: depth + 1,
+                parentName: childParentName,
+                rawEffectsByMethod: rawEffectsByMethod,
+                projection: projection,
+                output: output,
+                suppress: suppress,
+                nextId: ref nextId,
+                firstEmissionId: firstEmissionId,
+                parentIdAtDepth: parentIdAtDepth
+            );
+        }
     }
 }
