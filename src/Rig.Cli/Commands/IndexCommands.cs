@@ -22,6 +22,56 @@ namespace Rig.Cli.Commands;
 // the .rig store rather than query it.
 internal static class IndexCommands
 {
+    // `rig graph` — rebuild the derived call-graph views (call_edges + dispatch_edges + node/search indexes)
+    // from the indexed facts already in the store: NO Roslyn, no rescan, idempotent. This is the standalone
+    // re-graph path (GraphMaterializer.BuildAsync — the overload preserved when the in-memory index path was
+    // split out), re-exposed as a command so a GRAPH-time change (a new edge resolver like publish→consumer
+    // delivery edges, a handoff/factory rule edit) can be materialized without re-indexing the whole solution.
+    // (`derive` cannot do this — it re-reports effects/hazards over the EXISTING graph; it never writes edges.)
+    internal static Command BuildGraph(TextWriter output, TextWriter error, string workingDirectory)
+    {
+        var rules = CommonOptions.Rules();
+        var store = CommonOptions.Store();
+        var cmd = new Command(
+            name: "graph",
+            description: "Rebuild the derived call-graph views (call_edges + dispatch_edges) from indexed facts — no Roslyn, no rescan, idempotent."
+        )
+        {
+            rules,
+            store,
+        };
+        cmd.SetAction(pr =>
+            CommandGuard.RunGuardedAsync(
+                workingDirectory,
+                error,
+                async () =>
+                {
+                    var dbPath = StoreLayout.DbPathForRef(workingDirectory: workingDirectory, storeRef: pr.GetValue(store));
+                    if (!File.Exists(dbPath))
+                    {
+                        return CommandGuard.NoRunError(error);
+                    }
+
+                    var ruleSet = RuleSetLoader.Load(workingDirectory, CommonOptions.RulesOf(pr.GetValue(rules)));
+                    await using var context = new RigDbContext(dbPath);
+                    var stats = await GraphMaterializer.BuildAsync(
+                        context,
+                        handoffRules: ruleSet.Handoff,
+                        progress: message => output.WriteLine($"Progress: {message}"),
+                        factoryRules: ruleSet.Factory
+                    );
+                    output.WriteLine(
+                        $"Graph: {stats.CallEdges} call edge(s), {stats.DispatchEdges} dispatch edge(s) "
+                            + $"({stats.DispatchEdges - stats.HeuristicDispatchEdges} roslyn-mined, {stats.HeuristicDispatchEdges} heuristic), "
+                            + $"{stats.Nodes} node(s)."
+                    );
+                    return 0;
+                }
+            )
+        );
+        return cmd;
+    }
+
     internal static Command BuildIndex(TextWriter output, TextWriter error, string workingDirectory)
     {
         var target = CommonOptions.Pattern(name: "solution", description: "Solution (.slnx/.sln/.slnf) or project (.csproj) to index.");

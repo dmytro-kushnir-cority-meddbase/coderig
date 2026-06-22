@@ -13,6 +13,7 @@ internal static class Root
         new("Runtime Intelligence Graph")
         {
             IndexCommands.BuildIndex(output, error, workingDirectory),
+            IndexCommands.BuildGraph(output, error, workingDirectory),
             FactCommands.BuildRuns(output, error, workingDirectory),
             FactCommands.BuildDi(output, error, workingDirectory),
             FactCommands.BuildSymbols(output, error, workingDirectory),
