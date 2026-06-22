@@ -128,6 +128,23 @@ immediately visible without any tree traversal.
   instead of suppressing the subtree. This dovetails with the redundant-reload findings the derive call-tree
   surfaced (x-phase duplicates become first-class, greppable rows).
 
+### Token efficiency: the `parent` column
+
+The `parent` column re-spells the parent's short name on every child row (and the same name is also that
+node's own `name` on its own row) — long names repeated N× across N siblings. Cut it **per projection**:
+
+- **Reconstructable views (default spine-kept / full):** rows are DFS pre-order with `depth`, so a row's
+  parent is *the nearest preceding row at `depth-1`* — fully derivable (lambda-folding and x-phase both
+  preserve this). So **drop `parent` entirely** in these views: biggest token save, zero indirection (the LLM
+  reads it like an indented tree, natively). Verified the depth+order linkage holds after lambda folding.
+- **Effects-flat view (gaps, no spine):** `parent` cannot be recovered from depth+order, so it stays
+  explicit. *Here* a surrogate row-id (`id` column; `parent` = parent's id) earns its keep — saves the
+  repeated long name AND disambiguates short-name collisions (two `Foo.Bar` from different namespaces shorten
+  identically, making a name-parent ambiguous). Trade-off: an id forces the LLM to build a row-id lookup vs.
+  reading a name locally, so prefer it only where the name is genuinely repeated/ambiguous.
+- Introduce surrogate ids *globally* only if short-name collisions prove common in practice — measure first;
+  the indirection cost is real. Touches `LlmSummaryRenderer`; sequence after the `--format llm` refactor.
+
 ---
 
 ## Refactor: single graph-shaping entry point (`LoadShapedGraphAsync`)
@@ -184,3 +201,30 @@ store is opened read-only and SQLite allows concurrent readers), not `Task.WhenA
 it pays is empirical: the big reads (`reference_facts`) are deserialisation- + I/O-bound, so overlapping them
 across connections *may* use multiple cores and overlap I/O — **profile before building**. Sequence after the
 single-entry-point refactor, which first establishes *what* the independent loads are.
+
+---
+
+## Perf: redundant work per entry point (rig self-dogfood, F1–F9)
+
+Found by running `rig` on its own store and reading every EP's `--format llm` call tree (the `x-phase` flag
+makes a re-reached node a first-class row). One command calling the same heavy load more than once in a
+single invocation. The **derive-path** instances are FIXED (commit `perf(derive): cut redundant reloads`);
+the rest are the same patterns in other commands, still open. Severity = the cost of the repeated work.
+
+| # | Redundant work | EPs | Status |
+|---|---|---|---|
+| F1 | `LoadFactGraphAsync` (efcore:read ×4) loaded inside `DeriveHandoffEntryPointsAsync` AND again directly | Derive | **open** — the clean fix is the `LoadShapedGraphAsync` consolidation (load+shape once, reuse) |
+| F2 | `LoadFactEntryPointDataAsync` (efcore:read ×5) loaded top-level AND again inside a derivation callee | Derive ✓, **Reaches/Tree/Callers/Path/Impact open** | derive fixed (epData threaded in); other EPs reload it inside `TraversalGraphLoader.LoadReachInputsFromRowsAsync` + `EntryPointContext.DeriveEpSiteKindAsync` |
+| F3 | `LoadFactGraphAsync` HEAD + BASE in Impact; each opens a fresh ADO conn via `LoadDispatchFactsAsync` | Impact | conn-reuse part FIXED in `LoadFactGraphAsync`; the base/head double-load is **intentional** (different stores) |
+| F4 | `LoadDeploymentsAsync` (io:read ×3, slnx+projrefs parse) runs **twice** (`calls=2`) | Impact | **open** — cache the `DeploymentMap` on the command, reuse across both sites |
+| F5 | `EffectDerivation.DeriveEffects` (full effect-match loop) runs twice on cold cache | Tree/Reaches/Derive | **open** — `DeriveHazardEffectsAsync` should take the already-derived effects rather than re-deriving |
+| F6 | `RuleSetLoader.LoadMergedDocument` re-run for fingerprinting (4× total per command) | ALL 9 | derive fixed (`ComputeFromPaths` reuses resolved paths); **other 8 EPs open** (still call `RulesFingerprint.Compute` which re-merges) |
+| F7 | `StoreLayout.ResolveReadStoreDir` (io:read ×7) resolved in `OpenReadContext` AND again for `StoreKey` | Derive | **open** — pass the resolved dir from `OpenReadContext` to the cache-key computation |
+| F8 | `LoadStaticField{Write,Read}RefsAsync` — two reads, identical base query | Derive ✓, **Impact/Tree open** | derive fixed (combined `…AccessRefsByKindAsync`); Impact/Tree still call the two single-kind loaders |
+| F9 | `LoadDeploymentsAsync` (io:read ×3) loaded in `RunEntryPointsAsync` AND again at depth-1 | Callers | **open** — pass the loaded `DeploymentMap` into `BuildEpContextAsync` |
+
+Cross-EP heavy shared methods (benign at once-per-command, the F1–F9 cases are the >once ones):
+`LoadFactGraphAsync` (7/9 EPs), `LoadFactEntryPointDataAsync` (7/9), `LoadDeploymentsAsync` (7/9),
+`DeriveEffects` (4/9), `RuleSetLoader.Load` (9/9). The `LoadShapedGraphAsync` consolidation (above) plus a
+shared per-command `DeploymentMap` cache and threading already-loaded data into callees would clear most of
+the open rows; F6's non-derive instances want `RulesFingerprint` to accept pre-resolved paths everywhere.
