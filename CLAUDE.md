@@ -7,6 +7,12 @@ This file is only the things that aren't obvious from those and that you'd other
 
 ## Orchestration — director → orchestrator → coding agents
 
+> **Role check — read FIRST.** This section describes the **orchestrator** (the top-level session the user
+> talks to). **If you are a DISPATCHED CODING SUBAGENT** (you received a single scoped task prompt, not a
+> conversation with the user), this loop is your CALLER's job, NOT yours: you are a **leaf worker** —
+> implement your one task directly and do **NOT** dispatch further subagents, gather "context", or re-run the
+> orchestration loop. Ignore the rest of this section; follow your task prompt.
+
 The effective workflow here for multi-step work is a LOOP. The USER directs (goals, the load-bearing
 calls, course-correction); YOU are the **orchestrator**; SUBAGENTS do the coding. The loop:
 
