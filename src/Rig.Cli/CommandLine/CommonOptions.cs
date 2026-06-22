@@ -10,8 +10,6 @@ namespace Rig.Cli.CommandLine;
 // live, now expressed once, declaratively.
 internal static class CommonOptions
 {
-    private static void LOame() { }
-
     internal static Argument<string> Pattern(string name, string description) => new(name) { Description = description };
 
     // --rules <path>... (repeatable): each value is resolved to a full path, matching the old loop.
@@ -94,6 +92,16 @@ internal static class CommonOptions
 
     // --maxdepth/--depth absent => unbounded (int.MaxValue); the closure + node cap + cycle dedup still terminate.
     internal static int DepthOrUnbounded(int? depth) => depth ?? int.MaxValue;
+
+    // --format token readers: matched case-insensitively. These replace the hand-rolled
+    // `string.Equals(format, "<fmt>", StringComparison.OrdinalIgnoreCase)` that was repeated at every
+    // command's read site (and in `tree`'s cross-flag validator). `llm`/`llm-ids` are only meaningful for
+    // `tree`; the helpers live here so the one spelling serves all callers.
+    internal static bool IsTsv(string? format) => string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
+
+    internal static bool IsLlm(string? format) => string.Equals(format, "llm", StringComparison.OrdinalIgnoreCase);
+
+    internal static bool IsLlmIds(string? format) => string.Equals(format, "llm-ids", StringComparison.OrdinalIgnoreCase);
 
     // The case-insensitive effect-filter set from a parsed --only/--exclude value (null when the flag was absent).
     internal static HashSet<string> FilterSet(string[]? tokens) => new(tokens ?? [], StringComparer.OrdinalIgnoreCase);

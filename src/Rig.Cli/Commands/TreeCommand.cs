@@ -105,8 +105,8 @@ internal static class TreeCommand
             // (e.g. `--format xml`), which would surface as an UNHANDLED exception instead of a clean error.
             var formatResult = result.GetResult(format);
             var formatValue = formatResult?.Tokens.Count > 0 ? formatResult.Tokens[0].Value : null;
-            var isLlmFormat = string.Equals(formatValue, "llm", StringComparison.OrdinalIgnoreCase);
-            var isLlmIdsFormat = string.Equals(formatValue, "llm-ids", StringComparison.OrdinalIgnoreCase);
+            var isLlmFormat = CommonOptions.IsLlm(formatValue);
+            var isLlmIdsFormat = CommonOptions.IsLlmIds(formatValue);
 
             // --format llm and --format llm-ids are incompatible with summary (different output shape) and hazards (distinct rendering).
             if (isLlmFormat || isLlmIdsFormat)
@@ -151,98 +151,105 @@ internal static class TreeCommand
                 workingDirectory,
                 error,
                 () =>
-                {
-                    var viewValue = (pr.GetValue(view) ?? "paths").ToLowerInvariant();
-                    var formatValue = pr.GetValue(format);
-                    var isLlmFmt = string.Equals(formatValue, "llm", StringComparison.OrdinalIgnoreCase);
-                    var isLlmIdsFmt = string.Equals(formatValue, "llm-ids", StringComparison.OrdinalIgnoreCase);
-                    // --suppress is only meaningful for --format llm / llm-ids; parse it when either, else no-op.
-                    var suppressSet = isLlmFmt || isLlmIdsFmt ? ParseSuppressSet(pr.GetValue(suppress)) : SuppressSet.Default;
-                    return RunAsync(
-                        fromPattern: pr.GetValue(from)!,
-                        full: viewValue == "full",
-                        summary: viewValue == "summary",
-                        effectsOnly: viewValue == "effects",
-                        hazards: viewValue == "hazards",
-                        async: pr.GetValue(async),
-                        raw: pr.GetValue(raw),
-                        files: pr.GetValue(files),
-                        signatures: pr.GetValue(signatures),
-                        plain: pr.GetValue(plain),
-                        extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
-                        depth: pr.GetValue(depth),
-                        only: CommonOptions.FilterSet(pr.GetValue(only)),
-                        exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
-                        noCache: pr.GetValue(noCache),
-                        time: pr.GetValue(time),
-                        format: formatValue,
-                        llmIds: isLlmIdsFmt,
-                        suppressSet: suppressSet,
-                        output: output,
-                        error: error,
-                        workingDirectory: workingDirectory,
-                        storeRef: pr.GetValue(store)
-                    );
-                }
+                    RunAsync(
+                        new Options(
+                            FromPattern: pr.GetValue(from)!,
+                            View: pr.GetValue(view) ?? "paths",
+                            Async: pr.GetValue(async),
+                            Raw: pr.GetValue(raw),
+                            Files: pr.GetValue(files),
+                            Signatures: pr.GetValue(signatures),
+                            Plain: pr.GetValue(plain),
+                            ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                            Depth: pr.GetValue(depth),
+                            Only: CommonOptions.FilterSet(pr.GetValue(only)),
+                            Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
+                            NoCache: pr.GetValue(noCache),
+                            Time: pr.GetValue(time),
+                            Format: pr.GetValue(format),
+                            Suppress: pr.GetValue(suppress)
+                        ),
+                        new CommandIo(Output: output, Error: error, WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
+                    )
             )
         );
         return cmd;
     }
 
-    private static async Task<int> RunAsync(
-        string fromPattern,
-        bool full,
-        bool summary,
-        bool effectsOnly,
-        bool hazards,
-        bool async,
-        bool raw,
-        bool files,
-        bool signatures,
-        bool plain,
-        IReadOnlyList<string> extraRules,
-        int? depth,
-        HashSet<string> only,
-        HashSet<string> exclude,
-        bool noCache,
-        bool time,
-        string? format,
-        bool llmIds,
-        SuppressSet suppressSet,
-        TextWriter output,
-        TextWriter error,
-        string workingDirectory,
-        string? storeRef
-    )
+    // Bound option values for `rig tree`. Raw user inputs (View/Format/Suppress kept as the parsed strings);
+    // the flag derivations (view -> full/summary/…, format -> llm/llm-ids/tsv, suppress parsing) live at the
+    // top of RunAsync, so the cross-flag derivation lives in one place rather than split across SetAction.
+    private sealed record Options(
+        string FromPattern,
+        string View,
+        bool Async,
+        bool Raw,
+        bool Files,
+        bool Signatures,
+        bool Plain,
+        IReadOnlyList<string> ExtraRules,
+        int? Depth,
+        HashSet<string> Only,
+        HashSet<string> Exclude,
+        bool NoCache,
+        bool Time,
+        string? Format,
+        string? Suppress
+    );
+
+    private static async Task<int> RunAsync(Options opts, CommandIo io)
     {
-        var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
-        var llmFormat = string.Equals(format, "llm", StringComparison.OrdinalIgnoreCase);
-        var maxDepth = CommonOptions.DepthOrUnbounded(depth);
-        var mode = CommonOptions.Mode(async);
+        // Flags derived from the raw option values, in one place (not split into SetAction): the --view
+        // string fans into the projection bools, and --format into the llm/llm-ids/tsv selectors.
+        var viewValue = opts.View.ToLowerInvariant();
+        var full = viewValue == "full";
+        var summary = viewValue == "summary";
+        var effectsOnly = viewValue == "effects";
+        var hazards = viewValue == "hazards";
+
+        var tsv = CommonOptions.IsTsv(opts.Format);
+        var llmFormat = CommonOptions.IsLlm(opts.Format);
+        var llmIds = CommonOptions.IsLlmIds(opts.Format);
+        // --suppress is only meaningful for --format llm / llm-ids; parse it when either, else no-op.
+        var suppressSet = llmFormat || llmIds ? ParseSuppressSet(opts.Suppress) : SuppressSet.Default;
+
+        var maxDepth = CommonOptions.DepthOrUnbounded(opts.Depth);
+        var mode = CommonOptions.Mode(opts.Async);
 
         // One merged load for the whole command; --raw zeroes the graph-shaping + render rules (the exact
         // unfiltered tree), else they're applied. Render rules are presentation-only — never affect reach.
         // F6: capture the resolved rule paths so the fingerprint below reuses them via ComputeFromPaths
         // instead of re-running the cascade merge (RulesFingerprint.Compute → ResolveLoadedPaths).
-        var rules = RuleSetLoader.Load(workingDirectory: workingDirectory, extraRules: extraRules, loadedPaths: out var loadedRulePaths);
-        var shaped = raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
-        var renderRules = raw ? FactRenderRules.Empty : rules.Render;
+        var rules = RuleSetLoader.Load(
+            workingDirectory: io.WorkingDirectory,
+            extraRules: opts.ExtraRules,
+            loadedPaths: out var loadedRulePaths
+        );
+        var shaped = opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
+        var renderRules = opts.Raw ? FactRenderRules.Empty : rules.Render;
 
-        await using var context = OpenReadContext(workingDirectory, storeRef);
-        var timer = new PhaseTimer(time, error);
+        await using var context = OpenReadContext(io.WorkingDirectory, io.StoreRef);
+        var timer = new PhaseTimer(opts.Time, io.Error);
 
         // Query cache (best-effort, opt-out via --no-cache). A `rig tree` query recomputes the call-tree
         // forest (BuildTree) AND its effects (the ~3.8s dominant cost); both are a pure function of the
         // store + effective rules + traversal params. Cache the pair in a separate writable `.rig/cache.db`
         // (rig.db itself is opened read-only); a repeat query skips both and only re-loads the cheaper graph
         // to render. Auto-invalidates on reindex: the key embeds a store identity that index/graph change.
-        var rigDir = StoreLayout.ResolveReadStoreDir(workingDirectory, storeRef);
+        var rigDir = StoreLayout.ResolveReadStoreDir(io.WorkingDirectory, io.StoreRef);
         var storeKey = StoreKey(Path.Combine(rigDir, StoreLayout.DbFileName));
         var rulesHash = RulesFingerprint.ComputeFromPaths(loadedRulePaths); // F6: reuse paths Load resolved.
-        using var cache = noCache ? null : QueryCache.Open(rigDirectory: rigDir, storeKey: storeKey);
+        using var cache = opts.NoCache ? null : QueryCache.Open(rigDirectory: rigDir, storeKey: storeKey);
         var cacheKey = cache is null
             ? null
-            : TreeCacheKey(storeKey: storeKey, rulesHash: rulesHash, fromPattern: fromPattern, maxDepth: maxDepth, mode: mode, raw: raw);
+            : TreeCacheKey(
+                storeKey: storeKey,
+                rulesHash: rulesHash,
+                fromPattern: opts.FromPattern,
+                maxDepth: maxDepth,
+                mode: mode,
+                raw: opts.Raw
+            );
 
         var cached = cacheKey is not null && cache!.Get(cacheKey) is { } blob ? TreeCacheCodec.Decode(blob) : null;
         // Render data the graph would otherwise be reloaded to produce, split by filter-dependence so the
@@ -252,7 +259,7 @@ internal static class TreeCommand
         //   - seam summaries are derived from the FILTERED effects → keyed by the forest key + the filter
         //     signature (`:seam:<sig>`), since filters are absent from the forest key.
         var locKey = cacheKey is null ? null : cacheKey + ":loc";
-        var seamKey = cacheKey is null ? null : cacheKey + ":seam:" + EffectFilterSignature(only, exclude);
+        var seamKey = cacheKey is null ? null : cacheKey + ":seam:" + EffectFilterSignature(opts.Only, opts.Exclude);
         var cachedLocations =
             cached is not null && locKey is not null && cache!.Get(locKey) is { } locBlob ? LocationsCodec.Decode(locBlob) : null;
         var cachedSeam =
@@ -282,11 +289,11 @@ internal static class TreeCommand
             effects = cached.Effects;
             graph = await LoadShapedTraversalGraphAsync(
                 context: context,
-                pattern: fromPattern,
+                pattern: opts.FromPattern,
                 direction: SqlReachability.Direction.Forward,
                 shaped
             );
-            if (!raw)
+            if (!opts.Raw)
             {
                 graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
             }
@@ -297,7 +304,7 @@ internal static class TreeCommand
         {
             var inputs = await LoadEffectReachInputsAsync(
                 context: context,
-                pattern: fromPattern,
+                pattern: opts.FromPattern,
                 direction: SqlReachability.Direction.Forward,
                 shaped
             );
@@ -306,12 +313,12 @@ internal static class TreeCommand
             timer.Lap("graph + invocations load");
             // Event subscriptions (`someEvent += Handler`) are deferred handlers, not synchronous calls —
             // mark them as handoffs so the sync tree doesn't expand the handler as if RegisterEvents ran it.
-            if (!raw)
+            if (!opts.Raw)
             {
                 graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
             }
 
-            roots = FactPathFinder.BuildTree(graph, fromPattern, maxDepth, mode: mode);
+            roots = FactPathFinder.BuildTree(graph, opts.FromPattern, maxDepth, mode: mode);
             timer.Lap("event marking + BuildTree");
             if (roots.Count == 0)
             {
@@ -340,7 +347,7 @@ internal static class TreeCommand
 
         if (roots.Count == 0)
         {
-            output.WriteLine($"No symbol matches '{fromPattern}'.");
+            io.Output.WriteLine($"No symbol matches '{opts.FromPattern}'.");
             return 1;
         }
 
@@ -370,7 +377,7 @@ internal static class TreeCommand
                 storeKey: storeKey,
                 rulesHash: rulesHash,
                 rules: rules,
-                useCache: !noCache
+                useCache: !opts.NoCache
             );
             effects = hazardEffects.Where(e => e.EnclosingSymbolId is not null && treeMethods.Contains(e.EnclosingSymbolId)).ToList();
             hazardFindings = DeriveCommand.HazardFindings(effects).Where(f => treeMethods.Contains(f.Enclosing)).ToList();
@@ -397,7 +404,7 @@ internal static class TreeCommand
         // file, line. Emitted here so it pays for neither the deployment map nor the seam computation.
         if (tsv)
         {
-            var tsvEffects = ApplyEffectFilters(effects, only, exclude)
+            var tsvEffects = ApplyEffectFilters(effects, opts.Only, opts.Exclude)
                 .Where(e => e.EnclosingSymbolId is not null)
                 .GroupBy(e => e.EnclosingSymbolId!, StringComparer.Ordinal)
                 .ToDictionary(
@@ -407,21 +414,21 @@ internal static class TreeCommand
                 );
             foreach (var root in roots)
             {
-                EmitTsvNode(root, 0, tsvEffects, locations, output);
+                EmitTsvNode(root, 0, tsvEffects, locations, io.Output);
             }
 
             // --hazards: the per-hazard `hazard` rows (same column contract as `derive --format tsv`) after the
             // node rows, so a consumer reads the node tree and its findings from one stream.
             foreach (var h in hazardFindings)
             {
-                output.WriteLine(DeriveCommand.HazardTsvRow(h));
+                io.Output.WriteLine(DeriveCommand.HazardTsvRow(h));
             }
 
             timer.Total();
             return 0;
         }
 
-        var deployments = await LoadDeploymentsAsync(context, workingDirectory);
+        var deployments = await LoadDeploymentsAsync(context, io.WorkingDirectory);
         // EP context is built from `locations` (not the graph), so it works on the no-graph full-hit path.
         // The expensive, pattern-independent site->kind map is its own cache (LoadOrDeriveEpSiteKind).
         // F2: thread the EpData the cold-path EF-fallback load already carried (null on cache hits / SQL
@@ -433,16 +440,16 @@ internal static class TreeCommand
                 SiteById: locations,
                 EpSiteKind: await LoadOrDeriveEpSiteKindAsync(
                     context: context,
-                    workingDirectory: workingDirectory,
-                    extraRules: extraRules,
+                    workingDirectory: io.WorkingDirectory,
+                    extraRules: opts.ExtraRules,
                     rules: rules,
-                    useCache: !noCache,
+                    useCache: !opts.NoCache,
                     epData: reachInputsEpData
                 )
             );
         timer.Lap("deployment map + entry-point derivation");
 
-        effects = ApplyEffectFilters(effects, only, exclude); // --only / --exclude (e.g. --exclude throw)
+        effects = ApplyEffectFilters(effects, opts.Only, opts.Exclude); // --only / --exclude (e.g. --exclude throw)
 
         // --format llm / --format llm-ids: compact flat TSV for LLM consumption. Emitted before the
         // normal render path (skips the deployment map, seam, and box-drawing chrome — those are token
@@ -470,13 +477,19 @@ internal static class TreeCommand
                     roots: roots,
                     rawEffectsByMethod: rawEffectsForLlm,
                     projection: projection,
-                    output: output,
+                    output: io.Output,
                     suppress: suppressSet
                 );
             }
             else
             {
-                Render(roots: roots, rawEffectsByMethod: rawEffectsForLlm, projection: projection, output: output, suppress: suppressSet);
+                Render(
+                    roots: roots,
+                    rawEffectsByMethod: rawEffectsForLlm,
+                    projection: projection,
+                    output: io.Output,
+                    suppress: suppressSet
+                );
             }
 
             timer.Total();
@@ -547,15 +560,15 @@ internal static class TreeCommand
             }
 
             var hits = effects.Where(e => e.EnclosingSymbolId is not null && seen.Contains(e.EnclosingSymbolId)).ToList();
-            output.WriteLine($"From: {fromPattern}");
-            output.WriteLine($"Reachable methods: {seen.Count}");
-            output.WriteLine($"Effects on reachable methods: {hits.Count}");
+            io.Output.WriteLine($"From: {opts.FromPattern}");
+            io.Output.WriteLine($"Reachable methods: {seen.Count}");
+            io.Output.WriteLine($"Effects on reachable methods: {hits.Count}");
             foreach (var g in hits.GroupBy(h => (h.Provider, h.Operation)).OrderByDescending(g => g.Count()))
             {
-                output.WriteLine($"{Indent.L1}{g.Count(), 4}  {g.Key.Provider} {g.Key.Operation}");
+                io.Output.WriteLine($"{Indent.L1}{g.Count(), 4}  {g.Key.Provider} {g.Key.Operation}");
             }
 
-            DeriveCommand.WriteHazards(output, hazardFindings, AllHazardSites);
+            DeriveCommand.WriteHazards(io.Output, hazardFindings, AllHazardSites);
             timer.Total();
             return 0;
         }
@@ -572,13 +585,13 @@ internal static class TreeCommand
                 CollectEffectful(root, effectsByMethod, ordered, seen);
             }
 
-            output.WriteLine($"From: {fromPattern}  ({ordered.Count} effectful method(s), source order)");
+            io.Output.WriteLine($"From: {opts.FromPattern}  ({ordered.Count} effectful method(s), source order)");
             foreach (var sym in ordered)
             {
-                output.WriteLine($"{Indent.L1}{ShortName(sym)}\n{Indent.L3}{string.Join("  ", effectsByMethod[sym])}");
+                io.Output.WriteLine($"{Indent.L1}{ShortName(sym)}\n{Indent.L3}{string.Join("  ", effectsByMethod[sym])}");
             }
 
-            DeriveCommand.WriteHazards(output, hazardFindings, AllHazardSites);
+            DeriveCommand.WriteHazards(io.Output, hazardFindings, AllHazardSites);
             timer.Total();
             return 0;
         }
@@ -615,7 +628,7 @@ internal static class TreeCommand
         // loaded (cold or render-miss) and caching is on. Locations are filter- AND hazard-independent, so
         // they cache under the forest key always; the seam is filter-dependent and NOT cached under --hazards
         // (the augmented effects would taint the rollup that a plain `tree` would later read).
-        var locById = files ? locations : null;
+        var locById = opts.Files ? locations : null;
         if (graph is not null && locKey is not null)
         {
             TryCache(() => cache!.Put(locKey, LocationsCodec.Encode(locations)));
@@ -629,7 +642,7 @@ internal static class TreeCommand
         // Print-order source-loc dedup: collapse a repeated trailing path (the --full call-site/leaf locs AND
         // the --files 📄 definition-loc) so the file name shows only when it changes down the tree. Mode-
         // agnostic — always on; it's a no-op when no loc is rendered (default mode). One writer per forest.
-        var renderOut = new SourceLocDedupWriter(output);
+        var renderOut = new SourceLocDedupWriter(io.Output);
         var rendered = 0;
         foreach (var root in roots)
         {
@@ -642,7 +655,7 @@ internal static class TreeCommand
             // Fold single-impl interface/base hops (IFoo.M -> Foo.M when there's exactly one target)
             // into the impl, with a «via IFoo» marker — exact, no info loss. --raw shows the raw hops.
             RenderTreeNode(
-                node: raw ? root : FoldSingleImplHops(root, effectsByMethod),
+                node: opts.Raw ? root : FoldSingleImplHops(root, effectsByMethod),
                 prefix: "",
                 isLast: true,
                 isRoot: true,
@@ -651,10 +664,10 @@ internal static class TreeCommand
                 renderRules: renderRules,
                 seamEffects: seamEffects,
                 output: renderOut,
-                files: files,
+                files: opts.Files,
                 locById: locById,
-                signatures: signatures,
-                plain: plain,
+                signatures: opts.Signatures,
+                plain: opts.Plain,
                 cutRules: shaped.Cut,
                 epContext: epContext,
                 full: full,
@@ -669,13 +682,13 @@ internal static class TreeCommand
         // instead of leaving them unsure whether the symbol was wrong or the tool failed.
         if (rendered == 0)
         {
-            output.WriteLine($"No effects reachable from '{fromPattern}'. Run with --view full for the structural call tree.");
+            io.Output.WriteLine($"No effects reachable from '{opts.FromPattern}'. Run with --view full for the structural call tree.");
         }
 
         // --hazards: the summary section under the tree (reuses the `derive` Hazards renderer). Empty-safe —
         // a no-op without --hazards (hazardFindings stays []). AllHazardSites = show every site (this is the
         // bounded one-EP drill-in, not the whole-store triage list `derive` caps).
-        DeriveCommand.WriteHazards(output, hazardFindings, AllHazardSites);
+        DeriveCommand.WriteHazards(io.Output, hazardFindings, AllHazardSites);
 
         timer.Lap("seam effects + render");
         timer.Total();
