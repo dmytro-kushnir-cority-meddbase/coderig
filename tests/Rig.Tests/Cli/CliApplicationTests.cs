@@ -86,20 +86,18 @@ public sealed class CliApplicationTests
         error.ToString().ShouldContain($"Unrecognized command or argument '{flag}'");
     }
 
-    // Mutually-exclusive projection modes are rejected up front (validation runs before any store access,
+    // Unknown --view values are rejected up front (validation runs before any store access,
     // so these fail cleanly without a store).
     [Test]
-    public async Task Tree_rejects_conflicting_projection_modes()
+    public async Task Tree_rejects_unknown_view_value()
     {
         var output = new StringWriter();
         var error = new StringWriter();
 
-        var exitCode = await CliApplication.RunAsync(["tree", "X", "--full", "--summary"], output, error);
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--view", "bogus"], output, error);
 
         exitCode.ShouldBe(1);
-        error.ToString().ShouldContain("can't be combined");
-        error.ToString().ShouldContain("--full");
-        error.ToString().ShouldContain("--summary");
+        error.ToString().ShouldContain("Unknown --view 'bogus'");
     }
 
     [Test]
@@ -414,7 +412,7 @@ public sealed class CliApplicationTests
 
         // Text mode: the dual_write is marked inline on the CreateTeamAsync node AND named in the section.
         output.GetStringBuilder().Clear();
-        (await CliApplication.RunAsync(["tree", "TeamWorkflow.CreateTeamAsync", "--hazards"], output, error, workingDirectory)).ShouldBe(0);
+        (await CliApplication.RunAsync(["tree", "TeamWorkflow.CreateTeamAsync", "--view", "hazards"], output, error, workingDirectory)).ShouldBe(0);
         var text = output.ToString();
         text.ShouldContain("⚠");
         text.ShouldContain("dual_write(medium)");
@@ -431,7 +429,7 @@ public sealed class CliApplicationTests
         output.GetStringBuilder().Clear();
         (
             await CliApplication.RunAsync(
-                ["tree", "TeamWorkflow.CreateTeamAsync", "--hazards", "--format", "tsv"],
+                ["tree", "TeamWorkflow.CreateTeamAsync", "--view", "hazards", "--format", "tsv"],
                 output,
                 error,
                 workingDirectory

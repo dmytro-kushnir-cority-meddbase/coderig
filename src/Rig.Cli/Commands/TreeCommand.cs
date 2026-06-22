@@ -17,30 +17,29 @@ namespace Rig.Cli.Commands;
 
 // `rig tree <from>` — the full first-party call TREE from an entry point over the fact graph (same edges
 // as reaches/path: interface->impl + base->override dispatch + loop context). Default prunes to paths that
-// REACH an effect; --full prints every reachable method AND promotes effects/unresolved library calls to
-// call-site leaf nodes; --summary prints the effect-count rollup; --effects collapses to one line per
-// effectful method. Forest + effects are query-cached (the dominant cost); a render sidecar lets a warm
-// query skip the graph load entirely.
+// REACH an effect; `--view full` prints every reachable method AND promotes effects/unresolved library
+// calls to call-site leaf nodes; `--view summary` prints the effect-count rollup; `--view effects`
+// collapses to one line per effectful method; `--view hazards` marks pattern hazards inline. Forest +
+// effects are query-cached (the dominant cost); a render sidecar lets a warm query skip the graph load
+// entirely.
 //
-// --format llm: compact TSV for LLM consumption. Composes with the projection flags:
-//   default       → EffectfulPaths — effectful-paths with the ancestor spine kept; reconstructable from
-//                   depth+order (6-column header: depth name arity calls effects flags).
-//   --full        → Full — every reachable node (same 6-column header, no parent column).
-//   --effects     → EffectsFlat — flat effect-bearing list (7-column header adds a parent-name column
-//                   because the parent row may be absent in this gappy view).
-// --format llm is rejected when combined with --summary (different output shape) or --hazards
+// --format llm: compact TSV for LLM consumption. Composes with --view:
+//   paths (default) → EffectfulPaths — effectful-paths with the ancestor spine kept; reconstructable from
+//                     depth+order (6-column header: depth name arity calls effects flags).
+//   full            → Full — every reachable node (same 6-column header, no parent column).
+//   effects         → EffectsFlat — flat effect-bearing list (7-column header adds a parent-name column
+//                     because the parent row may be absent in this gappy view).
+// --format llm is rejected when combined with --view summary (different output shape) or --view hazards
 // (distinct rendering).
 internal static class TreeCommand
 {
     internal static Command Build(TextWriter output, TextWriter error, string workingDirectory)
     {
         var from = CommonOptions.Pattern(name: "from", description: "Entry-point method pattern.");
-        var full = new Option<bool>("--full") { Description = "Print every reachable method; effects/unresolved calls as leaf nodes." };
-        var summary = new Option<bool>("--summary") { Description = "Print only the effect-count rollup." };
-        var effects = new Option<bool>("--effects") { Description = "List only effectful methods (one line each, source order)." };
-        var hazards = new Option<bool>("--hazards")
+        var view = new Option<string>("--view")
         {
-            Description = "Mark pattern HAZARDS (race_window / dual_write / n+1 / …) inline on the tree + a summary section.",
+            Description = "Projection view: paths (default) — effectful-paths tree; full — every reachable method with effects/unresolved calls as leaf nodes; effects — flat list of effectful methods; summary — effect-count rollup; hazards — tree with pattern hazards (race_window/dual_write/…) inline. --format llm composes with paths/full/effects; summary and hazards are rejected with --format llm.",
+            DefaultValueFactory = _ => "paths",
         };
         var async = CommonOptions.Async();
         var raw = CommonOptions.Raw();
@@ -61,10 +60,7 @@ internal static class TreeCommand
         var cmd = new Command(name: "tree", description: "Print the first-party call tree from an entry point, annotated with effects.")
         {
             from,
-            full,
-            summary,
-            effects,
-            hazards,
+            view,
             async,
             raw,
             files,
@@ -79,46 +75,32 @@ internal static class TreeCommand
             format,
             store,
         };
-        // --full / --summary / --effects are distinct projections of the same tree; only one applies.
-        // --format llm is compatible with default/--full/--effects but not with --summary or --hazards.
+        // --view selects one of five mutually-exclusive projections (paths/full/effects/summary/hazards).
+        // --format llm is compatible with paths/full/effects but not with summary or hazards.
         cmd.Validators.Add(result =>
         {
+            var viewValue = result.GetValue(view) ?? "paths";
             var formatValue = result.GetValue(format);
             var isLlmFormat = string.Equals(formatValue, "llm", StringComparison.OrdinalIgnoreCase);
 
-            var present = new List<string>();
-            if (result.GetValue(full))
+            var validViews = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "paths", "full", "effects", "summary", "hazards" };
+            if (!validViews.Contains(viewValue))
             {
-                present.Add("--full");
+                result.AddError($"Unknown --view '{viewValue}'. Valid values: paths, full, effects, summary, hazards.");
             }
 
-            if (result.GetValue(summary))
-            {
-                present.Add("--summary");
-            }
-
-            if (result.GetValue(effects))
-            {
-                present.Add("--effects");
-            }
-
-            if (present.Count > 1)
-            {
-                result.AddError($"Options {string.Join(" and ", present)} can't be combined for 'rig tree'.");
-            }
-
-            // --format llm is incompatible with --summary (different output shape) and --hazards (distinct rendering).
+            // --format llm is incompatible with summary (different output shape) and hazards (distinct rendering).
             if (isLlmFormat)
             {
                 var incompatible = new List<string>();
-                if (result.GetValue(summary))
+                if (string.Equals(viewValue, "summary", StringComparison.OrdinalIgnoreCase))
                 {
-                    incompatible.Add("--summary");
+                    incompatible.Add("--view summary");
                 }
 
-                if (result.GetValue(hazards))
+                if (string.Equals(viewValue, "hazards", StringComparison.OrdinalIgnoreCase))
                 {
-                    incompatible.Add("--hazards");
+                    incompatible.Add("--view hazards");
                 }
 
                 if (incompatible.Count > 0)
@@ -132,12 +114,14 @@ internal static class TreeCommand
                 workingDirectory,
                 error,
                 () =>
-                    RunAsync(
+                {
+                    var viewValue = (pr.GetValue(view) ?? "paths").ToLowerInvariant();
+                    return RunAsync(
                         fromPattern: pr.GetValue(from)!,
-                        full: pr.GetValue(full),
-                        summary: pr.GetValue(summary),
-                        effectsOnly: pr.GetValue(effects),
-                        hazards: pr.GetValue(hazards),
+                        full: viewValue == "full",
+                        summary: viewValue == "summary",
+                        effectsOnly: viewValue == "effects",
+                        hazards: viewValue == "hazards",
                         async: pr.GetValue(async),
                         raw: pr.GetValue(raw),
                         files: pr.GetValue(files),
@@ -154,7 +138,8 @@ internal static class TreeCommand
                         error: error,
                         workingDirectory: workingDirectory,
                         storeRef: pr.GetValue(store)
-                    )
+                    );
+                }
             )
         );
         return cmd;
@@ -400,7 +385,7 @@ internal static class TreeCommand
 
         // --format llm: compact flat TSV for LLM consumption. Emitted before the normal render path
         // (skips the deployment map, seam, and box-drawing chrome — those are token waste for a model).
-        // Projection determined by the EXISTING flags: default → EffectfulPaths; --full → Full; --effects → EffectsFlat.
+        // Projection determined by --view: paths (default) → EffectfulPaths; full → Full; effects → EffectsFlat.
         if (llmFormat)
         {
             // Raw provider:operation per occurrence, keyed by enclosing symbol — the LLM renderer
@@ -608,7 +593,7 @@ internal static class TreeCommand
         // instead of leaving them unsure whether the symbol was wrong or the tool failed.
         if (rendered == 0)
         {
-            output.WriteLine($"No effects reachable from '{fromPattern}'. Run with --full for the structural call tree.");
+            output.WriteLine($"No effects reachable from '{fromPattern}'. Run with --view full for the structural call tree.");
         }
 
         // --hazards: the summary section under the tree (reuses the `derive` Hazards renderer). Empty-safe —

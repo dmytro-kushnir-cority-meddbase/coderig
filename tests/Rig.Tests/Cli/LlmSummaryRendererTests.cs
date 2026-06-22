@@ -498,13 +498,13 @@ public sealed class LlmSummaryCliTests
     [Test]
     public async Task Format_llm_with_full_is_accepted()
     {
-        // --full --format llm is a valid combination (Full projection).
+        // --view full --format llm is a valid combination (Full projection).
         var output = new StringWriter();
         var error = new StringWriter();
 
         // No index exists, but it should fail with "No symbol matches" (exit 1) not a validation error.
         // We only check that the CLI does NOT emit a "can't be combined" validation error.
-        var exitCode = await CliApplication.RunAsync(["tree", "X", "--full", "--format", "llm"], output, error);
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--view", "full", "--format", "llm"], output, error);
 
         // May fail for "no index" reasons, but not for a validation/parse error.
         error.ToString().ShouldNotContain("can't be combined");
@@ -517,7 +517,7 @@ public sealed class LlmSummaryCliTests
         var output = new StringWriter();
         var error = new StringWriter();
 
-        var exitCode = await CliApplication.RunAsync(["tree", "X", "--effects", "--format", "llm"], output, error);
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--view", "effects", "--format", "llm"], output, error);
 
         error.ToString().ShouldNotContain("can't be combined");
     }
@@ -539,11 +539,11 @@ public sealed class LlmSummaryCliTests
         var output = new StringWriter();
         var error = new StringWriter();
 
-        var exitCode = await CliApplication.RunAsync(["tree", "X", "--format", "llm", "--summary"], output, error);
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--format", "llm", "--view", "summary"], output, error);
 
         exitCode.ShouldBe(1);
         error.ToString().ShouldContain("can't be combined");
-        error.ToString().ShouldContain("--summary");
+        error.ToString().ShouldContain("--view summary");
     }
 
     [Test]
@@ -552,25 +552,23 @@ public sealed class LlmSummaryCliTests
         var output = new StringWriter();
         var error = new StringWriter();
 
-        var exitCode = await CliApplication.RunAsync(["tree", "X", "--format", "llm", "--hazards"], output, error);
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--format", "llm", "--view", "hazards"], output, error);
 
         exitCode.ShouldBe(1);
         error.ToString().ShouldContain("can't be combined");
-        error.ToString().ShouldContain("--hazards");
+        error.ToString().ShouldContain("--view hazards");
     }
 
     [Test]
-    public async Task Full_and_effects_together_are_still_rejected()
+    public async Task Unknown_view_value_is_rejected()
     {
         var output = new StringWriter();
         var error = new StringWriter();
 
-        var exitCode = await CliApplication.RunAsync(["tree", "X", "--full", "--effects"], output, error);
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--view", "invalid"], output, error);
 
         exitCode.ShouldBe(1);
-        error.ToString().ShouldContain("can't be combined");
-        error.ToString().ShouldContain("--full");
-        error.ToString().ShouldContain("--effects");
+        error.ToString().ShouldContain("Unknown --view 'invalid'");
     }
 
     [Test]
@@ -587,7 +585,7 @@ public sealed class LlmSummaryCliTests
         sw.GetStringBuilder().Clear();
         (
             await CliApplication.RunAsync(
-                ["tree", "PaymentGatewayCaller.Dispatch", "--effects", "--format", "llm", "--rules", rulesPath],
+                ["tree", "PaymentGatewayCaller.Dispatch", "--view", "effects", "--format", "llm", "--rules", rulesPath],
                 sw,
                 err,
                 workingDirectory
@@ -595,7 +593,7 @@ public sealed class LlmSummaryCliTests
         ).ShouldBe(0);
 
         var lines = sw.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r')).ToList();
-        // --effects → EffectsFlat projection: 7-column header (with parent-name column).
+        // --view effects → EffectsFlat projection: 7-column header (with parent-name column).
         lines[0].ShouldBe("depth\tparent\tname\tarity\tcalls\teffects\tflags");
         // At least one data row (effects exist: gateway_ask, gateway_tell)
         lines.Count.ShouldBeGreaterThan(1);
@@ -623,7 +621,7 @@ public sealed class LlmSummaryCliTests
         sw.GetStringBuilder().Clear();
         (
             await CliApplication.RunAsync(
-                ["tree", "PaymentGatewayCaller.Dispatch", "--full", "--format", "llm", "--rules", rulesPath],
+                ["tree", "PaymentGatewayCaller.Dispatch", "--view", "full", "--format", "llm", "--rules", rulesPath],
                 sw,
                 err,
                 workingDirectory
@@ -634,7 +632,7 @@ public sealed class LlmSummaryCliTests
         sw.GetStringBuilder().Clear();
         (
             await CliApplication.RunAsync(
-                ["tree", "PaymentGatewayCaller.Dispatch", "--effects", "--format", "llm", "--rules", rulesPath],
+                ["tree", "PaymentGatewayCaller.Dispatch", "--view", "effects", "--format", "llm", "--rules", rulesPath],
                 sw,
                 err,
                 workingDirectory
@@ -642,7 +640,7 @@ public sealed class LlmSummaryCliTests
         ).ShouldBe(0);
         var effectsLines = sw.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
 
-        // --full --format llm has at least as many rows as --effects --format llm (effects is the subset)
+        // --view full --format llm has at least as many rows as --view effects --format llm (effects is the subset)
         fullLines.ShouldBeGreaterThanOrEqualTo(effectsLines);
     }
 
@@ -660,7 +658,7 @@ public sealed class LlmSummaryCliTests
         sw.GetStringBuilder().Clear();
         (
             await CliApplication.RunAsync(
-                ["tree", "PaymentGatewayCaller.Dispatch", "--full", "--format", "llm", "--rules", rulesPath],
+                ["tree", "PaymentGatewayCaller.Dispatch", "--view", "full", "--format", "llm", "--rules", rulesPath],
                 sw,
                 err,
                 workingDirectory
@@ -682,7 +680,7 @@ public sealed class LlmSummaryCliTests
         sw.GetStringBuilder().Clear();
         (
             await CliApplication.RunAsync(
-                ["tree", "PaymentGatewayCaller.Dispatch", "--effects", "--format", "llm", "--rules", rulesPath],
+                ["tree", "PaymentGatewayCaller.Dispatch", "--view", "effects", "--format", "llm", "--rules", rulesPath],
                 sw,
                 err,
                 workingDirectory
