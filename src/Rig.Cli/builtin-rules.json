@@ -1439,6 +1439,16 @@
       "reason": "config_read: the configuration key / section name is the syntactic first argument of GetSection/GetValue/GetConnectionString (true even for the ConfigurationBinder extension methods — the IConfiguration receiver is not in the argument list). argumentIndex 0 reads the const-resolved list, so a const-keyed read (GetSection(Keys.Foo)) yields the value, not just a literal."
     },
     {
+      "provider": "throw",
+      "operation": "raise",
+      "methods": [],
+      "matchThrow": true,
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "fact_derived",
+      "reason": "throw_site_exception: a `throw new XxxException(...)` site. Language-universal (not codebase-specific), so it ships builtin; the thrown exception type is the resource. A repo can still add its OWN matchThrow rule for framework-specific functional throws (e.g. LanguageExt failwith/raise)."
+    },
+    {
       "provider": "lock",
       "operation": "acquire",
       "methods": [ "Enter", "TryEnter", "Wait", "WaitAsync", "WaitOne", "EnterReadLock", "EnterWriteLock", "EnterUpgradeableReadLock", "AcquireReaderLock", "AcquireWriterLock" ],
