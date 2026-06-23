@@ -396,11 +396,30 @@ public sealed record PathStep(
     string? DispatchBasis = null
 );
 
+// Why a TraceNode's subtree was not expanded (Truncated=true). None = not truncated.
+// Precedence when multiple conditions apply simultaneously: AlreadyExpanded wins over DepthCapped
+// wins over BudgetCapped — the first matching condition in BuildTree sets the cause.
+public enum TruncationCause
+{
+    None,
+
+    // The symbol was already expanded earlier in the DFS walk (cycle / shared callee). This is
+    // the genuine redundancy signal — the subtree is shown in full elsewhere in the tree.
+    AlreadyExpanded,
+
+    // The node's depth reached the maxDepth cap; the subtree was not walked.
+    DepthCapped,
+
+    // The node-budget counter reached zero; the subtree was not walked.
+    BudgetCapped,
+}
+
 // A node in a call TREE rooted at an entry point (rig tree). EdgeKind/LoopKind describe the call
 // that reached this node from its parent (EdgeKind="entry" for a root; "invocation"/"impl-dispatch"/
 // "override-dispatch"; LoopKind set when that call sits inside a loop). Truncated=true marks a node
 // whose subtree was NOT expanded because the method was already expanded elsewhere (cycle / shared
-// callee) or a depth/budget cap was hit — rendered as "⋯elided".
+// callee) or a depth/budget cap was hit — rendered as "⋯elided". TruncationCause records WHICH
+// condition triggered the truncation (None when Truncated=false).
 public sealed record TraceNode(
     string SymbolId,
     string EdgeKind,
@@ -408,6 +427,7 @@ public sealed record TraceNode(
     string? LoopDetail,
     IReadOnlyList<TraceNode> Children,
     bool Truncated = false,
+    TruncationCause TruncationCause = TruncationCause.None,
     // Dispatch fan-out degree of the edge that reached this node from its parent: N(>1) when that
     // edge is an impl-/override-dispatch that fanned its source method out to N targets (this node
     // is one of N siblings — D3 edge provenance), else 0. Lets the renderer mark a fan-out hop

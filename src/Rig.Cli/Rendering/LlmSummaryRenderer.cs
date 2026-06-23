@@ -32,11 +32,13 @@ namespace Rig.Cli.Rendering;
 //   calls   – number of call sites from the parent (TraceNode.CallSites).
 //   effects – deduplicated + counted: "io:read*3,efcore:read*2"; single: "io:read"; empty: "".
 //             ASCII only, whitespace-free: count suffix is "*N", distinct effects joined by ",".
-//   flags   – pipe-separated subset of "cycle", "seen", "elided", "lambda"; empty when none.
-//             "seen" = Truncated node (already expanded elsewhere or depth/budget cap hit).
-//             Note: the TraceNode.Truncated flag conflates two causes — (a) already expanded
-//             elsewhere (genuine re-reach) and (b) depth/budget cap; they are not distinguishable
-//             from the current model without a TruncationCause field on TraceNode.
+//   flags   – pipe-separated subset of "cycle", "seen", "depth-capped", "budget-capped"; empty when none.
+//             "seen"          = TruncationCause.AlreadyExpanded — the subtree is expanded in full
+//                              elsewhere in the tree (genuine redundancy signal).
+//             "depth-capped"  = TruncationCause.DepthCapped — the node's depth reached maxDepth;
+//                              the subtree was not walked (not redundancy).
+//             "budget-capped" = TruncationCause.BudgetCapped — the node-budget counter hit zero;
+//                              the subtree was not walked (not redundancy).
 //
 // Lambda rows (DocID containing "~λ") are suppressed by default (see SuppressSet).
 // Compiler-generated type names ("<>c", "d__N") are suppressed by default.
@@ -45,8 +47,8 @@ namespace Rig.Cli.Rendering;
 // (if any) are rolled up onto the nearest non-suppressed ancestor's row — no effect is lost.
 // Use SuppressSet.None to disable all suppression.
 //
-// Seen (Truncated) nodes ARE emitted with their effects and flags=seen — making redundant
-// loads first-class, greppable rows is the whole point of the format.
+// Truncated nodes ARE emitted with their effects and a flags token describing the truncation cause
+// (seen | depth-capped | budget-capped) — making redundant loads and cap-hit nodes greppable rows.
 internal static class LlmSummaryRenderer
 {
     // Projection axis — orthogonal to format. Chosen by the caller based on presence of --full/--effects.
@@ -128,11 +130,14 @@ internal static class LlmSummaryRenderer
 
     // Render the call-tree forest in llm-ids format: 8-column TSV with explicit surrogate-id linkage.
     // Schema: id  parent_id  depth  name  arity  calls  effects  flags
-    //   id         – monotonically incrementing 1-based integer, emission order.
-    //   parent_id  – id of the nearest EMITTED ancestor (empty for roots).
+    //   id           – monotonically incrementing 1-based integer, emission order.
+    //   parent_id    – id of the nearest EMITTED ancestor (empty for roots).
     //   depth … flags – identical to llm format (same node-walk/selection/suppression/name/effects logic).
-    //   seen rows  – flags cell = "seen:<canonicalId>" where canonicalId is the id of the first
-    //                (expanded) emission of that node's SymbolId.
+    //   AlreadyExpanded rows – flags cell = "seen:<canonicalId>" where canonicalId is the id of the
+    //                          first (expanded) emission of that node's SymbolId; bare "seen" when
+    //                          no prior expansion exists.
+    //   DepthCapped rows    – flags cell = "depth-capped" (no back-reference).
+    //   BudgetCapped rows   – flags cell = "budget-capped" (no back-reference).
     internal static void RenderWithIds(
         IReadOnlyList<TraceNode> roots,
         IReadOnlyDictionary<string, List<string>> rawEffectsByMethod,
@@ -552,14 +557,8 @@ internal static class LlmSummaryRenderer
 
             var effectsStr = FormatEffects(rawEffects);
 
-            // Flags: "seen" for a Truncated node (the "⋯elided" marker in the tree renderer).
-            // NOTE: TraceNode.Truncated conflates two distinct causes:
-            //   (a) already expanded elsewhere (genuine re-reach redundancy signal), and
-            //   (b) depth/budget cap was hit (not redundancy).
-            // These are not distinguishable from the current model; splitting would require a
-            // TruncationCause field on TraceNode and plumbing through BuildTree. Until then, "seen"
-            // is used as the single flag (more accurate than "x-phase" for the common case (a),
-            // and avoids the misleading cross-phase implication for case (b)).
+            // Flags: cause-specific token for Truncated nodes; empty for non-truncated non-cycle nodes.
+            // AlreadyExpanded → "seen"; DepthCapped → "depth-capped"; BudgetCapped → "budget-capped".
             var flags = BuildFlags(node);
 
             // Emit the row: fixed column count, no trailing tab.
@@ -578,7 +577,7 @@ internal static class LlmSummaryRenderer
             }
         }
 
-        // seen (Truncated) nodes do NOT expand their children (the tree already chose not to).
+        // Truncated nodes do NOT expand their children (the tree already chose not to).
         if (node.Truncated)
         {
             return;
@@ -614,13 +613,20 @@ internal static class LlmSummaryRenderer
 
     private static string BuildFlags(TraceNode node)
     {
-        // "seen": a Truncated node — the "⋯elided" marker in the tree renderer.
-        // Covers both "already-seen" (re-reach) and depth/budget-cap truncation; the cause is not
-        // distinguishable from the current model (TraceNode.Truncated is a single bool).
+        // Truncation-cause flags: only AlreadyExpanded maps to "seen" (the genuine redundancy signal).
+        // DepthCapped and BudgetCapped get their own distinct flags — they are NOT redundancy.
         var parts = new List<string>();
         if (node.Truncated)
         {
-            parts.Add("seen");
+            parts.Add(
+                node.TruncationCause switch
+                {
+                    TruncationCause.AlreadyExpanded => "seen",
+                    TruncationCause.DepthCapped => "depth-capped",
+                    TruncationCause.BudgetCapped => "budget-capped",
+                    _ => "seen", // None should not occur on a Truncated node; fall back gracefully.
+                }
+            );
         }
 
         if (node.EdgeKind == "cycle")
@@ -736,18 +742,40 @@ internal static class LlmSummaryRenderer
 
             var effectsStr = FormatEffects(rawEffects);
 
-            // Flags: for a seen (Truncated) node, emit "seen:<canonicalId>" where canonicalId is the id
-            // of the first expanded emission of this SymbolId. For a non-truncated node, record this id
-            // as the canonical first emission if it's the first time we've seen this SymbolId.
+            // Flags: for a Truncated node, emit a cause-specific flag.
+            // AlreadyExpanded: "seen:<canonicalId>" where canonicalId is the id of the first expanded
+            //   emission of this SymbolId; bare "seen" when no prior expansion exists.
+            // DepthCapped / BudgetCapped: "depth-capped" / "budget-capped" — no back-reference, because
+            //   these nodes have no prior expansion to point to.
+            // For a non-truncated node, record this id as the canonical first emission.
             string flags;
             if (node.Truncated)
             {
-                // Look up the canonical id for this SymbolId; if we haven't seen it expanded yet
-                // (e.g. it was only ever truncated), use 0 (no canonical).
-                var canonicalId = firstEmissionId.TryGetValue(node.SymbolId, out var cid) ? cid : 0;
-                var seenRef = canonicalId > 0 ? $"seen:{canonicalId.ToString(CultureInfo.InvariantCulture)}" : "seen";
+                string truncFlag;
+                if (node.TruncationCause == TruncationCause.AlreadyExpanded)
+                {
+                    // Look up the canonical id for this SymbolId; if we haven't seen it expanded yet
+                    // (e.g. it was only ever truncated), use 0 (no canonical).
+                    var canonicalId = firstEmissionId.TryGetValue(node.SymbolId, out var cid) ? cid : 0;
+                    truncFlag = canonicalId > 0 ? $"seen:{canonicalId.ToString(CultureInfo.InvariantCulture)}" : "seen";
+                }
+                else if (node.TruncationCause == TruncationCause.DepthCapped)
+                {
+                    truncFlag = "depth-capped";
+                }
+                else if (node.TruncationCause == TruncationCause.BudgetCapped)
+                {
+                    truncFlag = "budget-capped";
+                }
+                else
+                {
+                    // None should not occur on a Truncated node; fall back gracefully.
+                    var canonicalId = firstEmissionId.TryGetValue(node.SymbolId, out var cid) ? cid : 0;
+                    truncFlag = canonicalId > 0 ? $"seen:{canonicalId.ToString(CultureInfo.InvariantCulture)}" : "seen";
+                }
+
                 var cyclePart = node.EdgeKind == "cycle" ? "|cycle" : "";
-                flags = seenRef + cyclePart;
+                flags = truncFlag + cyclePart;
             }
             else
             {

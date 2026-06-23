@@ -285,14 +285,39 @@ public sealed class LlmSummaryRendererTests
         cols[5].ShouldBe("seen");
     }
 
-    // ── "seen" flag (Truncated = elided/seen; was "x-phase") ────────────────────────────────────
-    // NOTE: TraceNode.Truncated conflates "already expanded elsewhere" and "depth/budget cap" —
-    // both emit flags="seen". The causes are not distinguishable from the current model.
+    // ── truncation-cause flags (AlreadyExpanded → "seen"; DepthCapped → "depth-capped"; BudgetCapped → "budget-capped") ──
+
+    [Test]
+    public void AlreadyExpanded_node_renders_seen_flag()
+    {
+        // A node with TruncationCause.AlreadyExpanded (the genuine redundancy signal) → flags="seen".
+        var truncated = new TraceNode(
+            "M:App.Repo.Load()",
+            "invocation",
+            null,
+            null,
+            [],
+            Truncated: true,
+            TruncationCause: TruncationCause.AlreadyExpanded
+        );
+        var root = Node("M:App.Svc.Do()", callSites: 1, truncated);
+        var rawEffects = RawEffects(("M:App.Repo.Load()", ["efcore:read", "efcore:read"]));
+
+        var lines = Lines(Render([root], rawEffects));
+        // line[2] = the truncated child
+        var seenLine = lines[2];
+        seenLine.ShouldContain("seen");
+        seenLine.ShouldNotContain("depth-capped");
+        seenLine.ShouldNotContain("budget-capped");
+        // Must include its effects even though Truncated; ASCII format
+        seenLine.ShouldContain("efcore:read*2");
+    }
 
     [Test]
     public void Seen_node_is_emitted_with_seen_flag()
     {
         // An already-expanded node appears again as Truncated — the elided marker.
+        // The TruncationCause.None fallback in BuildFlags also maps to "seen" for backward compat.
         var root = Node("M:App.Svc.Do()", callSites: 1, Truncated("M:App.Repo.Load()"));
         var rawEffects = RawEffects(("M:App.Repo.Load()", ["efcore:read", "efcore:read"]));
 
@@ -303,6 +328,52 @@ public sealed class LlmSummaryRendererTests
         seenLine.ShouldNotContain("x-phase");
         // Must include its effects even though Truncated; ASCII format
         seenLine.ShouldContain("efcore:read*2");
+    }
+
+    [Test]
+    public void DepthCapped_node_renders_depth_capped_flag_not_seen()
+    {
+        // A node truncated by the depth cap should emit "depth-capped", NOT "seen".
+        var truncated = new TraceNode(
+            "M:App.Repo.Load()",
+            "invocation",
+            null,
+            null,
+            [],
+            Truncated: true,
+            TruncationCause: TruncationCause.DepthCapped
+        );
+        var root = Node("M:App.Svc.Do()", callSites: 1, truncated);
+
+        var lines = Lines(Render([root]));
+        var flagLine = lines[2];
+        var flags = flagLine.Split('\t')[5];
+        flags.ShouldBe("depth-capped");
+        flagLine.ShouldNotContain("seen");
+        flagLine.ShouldNotContain("budget-capped");
+    }
+
+    [Test]
+    public void BudgetCapped_node_renders_budget_capped_flag_not_seen()
+    {
+        // A node truncated by the node-budget cap should emit "budget-capped", NOT "seen".
+        var truncated = new TraceNode(
+            "M:App.Repo.Load()",
+            "invocation",
+            null,
+            null,
+            [],
+            Truncated: true,
+            TruncationCause: TruncationCause.BudgetCapped
+        );
+        var root = Node("M:App.Svc.Do()", callSites: 1, truncated);
+
+        var lines = Lines(Render([root]));
+        var flagLine = lines[2];
+        var flags = flagLine.Split('\t')[5];
+        flags.ShouldBe("budget-capped");
+        flagLine.ShouldNotContain("seen");
+        flagLine.ShouldNotContain("depth-capped");
     }
 
     [Test]
@@ -893,6 +964,52 @@ public sealed class LlmSummaryRendererTests
         var lines = Lines(RenderWithIds([root]));
         var seenCols = lines[2].Split('\t');
         seenCols[7].ShouldBe("seen"); // no canonical id available
+    }
+
+    [Test]
+    public void LlmIds_AlreadyExpanded_carries_seen_back_reference()
+    {
+        // First emit M:App.Repo.Load() fully (id=2), then it appears as AlreadyExpanded (id=3).
+        // The truncated row's flags must be "seen:2" — the genuine redundancy back-reference.
+        var repo = Node("M:App.Repo.Load()");
+        var alreadyExpanded = new TraceNode(
+            "M:App.Repo.Load()",
+            "invocation",
+            null,
+            null,
+            [],
+            Truncated: true,
+            TruncationCause: TruncationCause.AlreadyExpanded
+        );
+        var root = Node("M:App.Svc.Do()", callSites: 1, repo, alreadyExpanded);
+
+        var lines = Lines(RenderWithIds([root]));
+        // line[1]=Svc.Do (id=1), line[2]=Repo.Load first emission (id=2), line[3]=AlreadyExpanded (id=3)
+        lines.Count.ShouldBe(4);
+        var seenCols = lines[3].Split('\t');
+        seenCols[7].ShouldBe("seen:2"); // back-reference to canonical emission
+    }
+
+    [Test]
+    public void LlmIds_DepthCapped_emits_depth_capped_flag_without_back_reference()
+    {
+        // A DepthCapped node has no prior expansion — just the bare "depth-capped" flag, no ":id".
+        var depthCapped = new TraceNode(
+            "M:App.Repo.Load()",
+            "invocation",
+            null,
+            null,
+            [],
+            Truncated: true,
+            TruncationCause: TruncationCause.DepthCapped
+        );
+        var root = Node("M:App.Svc.Do()", callSites: 1, depthCapped);
+
+        var lines = Lines(RenderWithIds([root]));
+        lines.Count.ShouldBe(3); // header + root + depth-capped child
+        var capCols = lines[2].Split('\t');
+        capCols[7].ShouldBe("depth-capped");
+        capCols[7].ShouldNotContain("seen");
     }
 
     [Test]

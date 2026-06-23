@@ -36,10 +36,12 @@ internal static class QueryCacheKeys
     }
 
     // The cache key for a `rig tree` forest+effects artifact: everything the artifact is a function of —
-    // the store identity, the effective rule fingerprint, and the traversal parameters. `v1` is the
-    // payload-schema version (bump to ignore older blobs). Render-only flags (--files/--summary/--effects
-    // and --only/--exclude) are deliberately absent: they don't change the forest or the unfiltered
-    // effects, only how they're presented, so they must not fragment the cache.
+    // the store identity, the effective rule fingerprint, and the traversal parameters. `v2` is the
+    // payload-schema version (bump to ignore older blobs) — bumped from v1 when TraceNode gained
+    // TruncationCause, so a warm cache from before the split doesn't render stale conflated `seen` flags.
+    // Render-only flags (--files/--summary/--effects and --only/--exclude) are deliberately absent: they
+    // don't change the forest or the unfiltered effects, only how they're presented, so they must not
+    // fragment the cache.
     internal static string TreeCacheKey(
         string storeKey,
         string rulesHash,
@@ -49,7 +51,7 @@ internal static class QueryCacheKeys
         bool raw
     )
     {
-        var material = $"tree|v1|{storeKey}|{rulesHash}|{fromPattern}|{maxDepth}|{mode}|{raw}";
+        var material = $"tree|v2|{storeKey}|{rulesHash}|{fromPattern}|{maxDepth}|{mode}|{raw}";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 

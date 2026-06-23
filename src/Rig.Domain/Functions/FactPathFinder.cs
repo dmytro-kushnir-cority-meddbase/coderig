@@ -496,9 +496,24 @@ public static partial class FactPathFinder
 
             // Already expanded elsewhere (cycle / shared callee), at depth cap, or out of budget:
             // mark as truncated and do NOT expand. budget check is re-checked after decrement.
-            if (expanded.Contains(n.Symbol) || n.Depth >= maxDepth || budget <= 0)
+            // Cause is attributed by PRECEDENCE: AlreadyExpanded wins when multiple conditions apply
+            // (it is the meaningful redundancy signal); DepthCapped next; BudgetCapped last.
+            if (expanded.Contains(n.Symbol))
             {
                 n.Truncated = true;
+                n.TruncationCause = TruncationCause.AlreadyExpanded;
+                continue;
+            }
+            else if (n.Depth >= maxDepth)
+            {
+                n.Truncated = true;
+                n.TruncationCause = TruncationCause.DepthCapped;
+                continue;
+            }
+            else if (budget <= 0)
+            {
+                n.Truncated = true;
+                n.TruncationCause = TruncationCause.BudgetCapped;
                 continue;
             }
 
@@ -606,6 +621,7 @@ public static partial class FactPathFinder
         public readonly string? CallFile;
         public readonly int CallLine;
         public bool Truncated;
+        public TruncationCause TruncationCause;
 
         // Distinct call sites under this node's parent that produced an identical edge (collapsed
         // siblings). Bumped instead of adding a duplicate kid; rendered as "×N calls".
@@ -657,6 +673,7 @@ public static partial class FactPathFinder
                 LoopDetail: n.LoopDetail,
                 Children: EmptyNodes,
                 Truncated: true,
+                TruncationCause: n.TruncationCause,
                 Fanout: n.Fanout,
                 HandoffVia: n.HandoffVia,
                 DispatchBasis: n.DispatchBasis,
