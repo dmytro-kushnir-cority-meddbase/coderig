@@ -487,3 +487,24 @@ repo supplies a `cacheCoherence` rule). **NOT calibrated-clean — do NOT enable
   `*Cache` types stripped of `Cache` (Account, AccountType, … TrackingCategory); `bulkWriteMethods` =
   UpdateMulti(/Async)/DeleteMulti/UpdateEntitiesDirectly(/Async); `invalidationMethods` =
   Remove/RemoveKey/Clear/Invalidate.
+
+---
+
+## `callers`/`reaches` silently under-report when sync hides the async/scheduled surface (BUG-rig-missed-entrypoints-healthcode Defect 2)
+
+A sync `rig callers <m> --entrypoints` that yields **0** reads as "not reachable from any entry point" — but the
+entire scheduled + actor/message-dispatched surface is sync-cut by default and only appears under `--async`. In
+the real case `Master.GetMedicalPerson --entrypoints` returned 0 sync but **92 under --async** (89 action + the
+background worker + http + soap); `GetCompany` 16 → 219. For a security/authorization reachability question this
+is actively misleading — a reviewer could wrongly de-risk a change. (Defect 1, the `[ClientBinding]` EP miss, is
+fixed per-repo; this is the orthogonal engine half.)
+
+**Fix (pick, low-risk first):**
+1. **Footer/hint when sync under-reports:** when `--entrypoints` (or `reaches`) walks past ≥1 handoff edge that
+   was sync-cut, print `N handoff edge(s) not walked — re-run with --async`. Strongest signal: when sync EPs == 0
+   but `--roots`/`--async` would yield > 0, say so explicitly ("0 sync EPs; M reachable via async/scheduled handoff").
+2. **`--async` default for `callers`/`reaches`** with a `--no-async` opt-out (bigger semantics change; the sync
+   answer is the special case, not the default — debatable, surface as a fork).
+Recommend #1 (the footer) — it preserves sync semantics and kills the "0 = dead" misread. Touches CallersCommand
+/ ReachesCommand rendering + the traversal's handoff-skipped count (already computed at the sync-cut point in
+FactPathFinder.Successors / GraphIndex). Cheap, high-value for the reachability use case.
