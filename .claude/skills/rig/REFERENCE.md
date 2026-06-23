@@ -4,8 +4,8 @@
 
 | Command | Purpose |
 |---|---|
-| `rig index <sln\|csproj> [--rules p…] [--identity id] [--from entry.csproj] [--parallelism n] [--durable]` | Extract facts. Solution = all projects' source in one run (callgraph crosses boundaries in-process). Single `.csproj` = that project's source only (refs become metadata DLLs). **`--from entry.csproj`** = index only the entry project's transitive ProjectReference closure (minus test projects) — still ONE cross-project workspace; writes the closure to `relevant-projects.json`. Skips all out-of-closure test/tool projects before their design-time build. **`--parallelism n`** parallelises the (independent, no-binary) design-time builds. **Save is fast + crash-safe by default**: durability-off pragmas + write-to-temp + atomic rename over `rig.db` (so a fresh `index` cleanly REPLACES — the old "index APPENDS" footgun is gone; that now only applies to `mine`/`--identity`). **`--durable`** opts into a journaled write. |
-| `rig mine <sln> --from <csproj> [--rules p…] [--identity id] [--parallelism n]` | BFS DOWN the dep graph from `--from` (toward what it references). Each project indexed as its own run under one `--identity`, stitched at query time. Direction matters: `--from Pages` reaches Workflows; `--from Workflows` does NOT reach Pages. |
+| `rig index <sln\|csproj> [--rules p…] [--identity id] [--from entry.csproj] [--parallelism n] [--durable]` | Extract facts. Solution = all projects' source in one run (callgraph crosses boundaries in-process). Single `.csproj` = that project's source only (refs become metadata DLLs). **`--from entry.csproj`** = index only the entry project's transitive ProjectReference closure (minus test projects) — still ONE cross-project workspace; writes the closure to `relevant-projects.json`. Skips all out-of-closure test/tool projects before their design-time build. **`--parallelism n`** parallelises the (independent, no-binary) design-time builds. **Save is fast + crash-safe by default**: durability-off pragmas + write-to-temp + atomic rename over `rig.db` (so a fresh `index` cleanly REPLACES — the old "index APPENDS" footgun is gone; that now only applies to `--identity`). **`--durable`** opts into a journaled write. |
+| `rig mine <sln> --from <csproj>` *(legacy/superseded)* | BFS-down-the-dep-graph indexer, separate run per project under one `--identity`. **Superseded by `rig index --from <csproj>`** (one cross-project workspace, internal parallel build) — use `index --from`. The `mine` subcommand still ships in the binary but is no longer the documented path. |
 | `rig runs` | List runs + symbol/reference/di counts (provenance / health check). |
 | `rig derive [--rules p…] [--limit n] [--only p,…] [--exclude p,…] [--format tsv]` | Stage-2 over facts: re-derive effects + page/action/background/wcf entry points + **classified** handoffs (background/timer/actor/event, by dispatcher + registration site, with an `async_handoff` note) + promoted handoff origins; unclassified-methodGroup residual collapsed to a count. One DB open, one rule load. |
 | `rig entrypoints [--rules p…] [--store ref] [--limit n] [--format tsv]` | The rule-detected entry-point set (page/action/class-inheritance + promoted async-handoff origins — the SAME set `derive`/`callers --entrypoints`/`impact` build), grouped by kind, with service attribution when `deployments.json` is present. A focused listing without `derive`'s effect + classified-handoff sections. `--format tsv` = one row per EP (kind, route, file, line, requires, loaded services, active services). |
@@ -15,7 +15,7 @@
 | `rig path <from> <to> [--async]` | One concrete path (BFS-shortest), with per-hop file:line + loop context. Synchronous by default; **`--async`** crosses + renders the `⤳ handoff via <dispatcher>` hop. |
 | `rig impact [--base <ref>] [--base-store p] [--repo p] [--per-ep] [--async] [--format tsv]` | Blast radius + behavioral diff of a git change vs another commit. (1) changed methods (FILE-granular over-approx), (2) affected entry points by deployed service, (3) behavioral delta = effects/observations reachable from the changed set, branch vs base (`+`/`-effect`, `+/-observation`; param-free keys → formatting/signature-immune). **`--per-ep`** = per-entry-point effect-set diff (surfaces path-masked deltas + relocations). Needs BOTH commits indexed; `--base` resolves a ref→sha→store, or `--base-store <path>`; `--repo` = source repo for the diff when it's a separate tree. See SKILL.md. |
 | `rig graph` | Rebuild the derived call-graph views (`call_edges`+`dispatch_edges`) from facts — the fast SQL traversal path. Idempotent, no rescan. **Now run automatically at the tail of `index`** (opt out: `index --no-graph`); run standalone after editing `handoffDispatchers`/factory rules (no re-index needed). |
-| `rig dead [--lib] [--include-dispatch] [--all] [--root pat…] [--rules p…] [--format tsv]` | Unreachable first-party methods. Report-only. See SKILL.md. |
+| `rig dead [--lib] [--include-dispatch] [--all] [--root pat…] [--rules p…] [--format tsv]` | Unreachable first-party methods. Report-only. ⚠️ **Currently DISABLED** (unwired in Root.cs — errors "not matched"). See SKILL.md. |
 | `rig refs <pat> [--first-party] [--kind <refkind>] [--limit n]` | Reference facts to a symbol (invocation/methodGroup/ctor/typeUse/throw/attributeUse). |
 | `rig symbols <pat> [--kind <k>] [--limit n]` | Declared symbols (method/type/property/field/event). |
 | `rig di` | DI registrations (code + XML service descriptors + static rule mappings), run-agnostic. |
@@ -142,11 +142,12 @@ Recall recoveries already built in:
 
 ## Env gotchas
 
-- **Pre-build the target** (MSBuild, not design-time) before `index`/`mine` so bins have DLLs; net48 web
-  projects use a FLAT `bin/`, not `bin/Debug/net48`.
-- **`mine` at `--parallelism 1`**; never run two mines at once; a large mine depletes shared net48 DLLs —
-  rebuild the `--from` project before any subsequent single-project index, or it binds against a near-empty bin.
-- **`rig index` now REPLACES atomically** (temp + rename) — re-running a standalone `index` cleanly overwrites; no need to delete `.rig` first. `mine` (and `index --identity`) still APPENDS in place — delete `.rig` before re-mining the same target.
+- **`rig index` builds internally — no external pre-build.** One `rig index <sln> --parallelism 16
+  --reuse-build-cache` call runs a parallel, cached design-time build itself then extracts; the old
+  "MSBuild first" step is obsolete. `index` is the sole extraction command; `index --from <csproj>` covers
+  the entry-scoped closure (the old `mine`). Never run two `index` commands against one clone at once.
+- **`rig index` REPLACES atomically** (temp + rename) — re-running a standalone `index` cleanly overwrites;
+  no need to delete `.rig` first. Only `index --identity` (multi-solution accumulate) APPENDS in place.
 - **Rules load at INDEX time vs QUERY time are asymmetric** — `rig index` resolves rules relative to the SOLUTION dir (+ builtin/global), NOT the analysis cwd. **DI registrations + the XML DI miner (`xmlDiFiles`) are captured at INDEX time**, so if your ruleset lives in the analysis cwd you MUST pass `--rules <that>.json` to `rig index` or `rig di` comes back empty (effects/entry points are derived at QUERY time from cwd rules, so they look fine — the asymmetry is silent). Symptom: `DiRegistrations: 0` despite XML service descriptors existing.
 - **Index with the published/global `rig`**; the plain Debug bin throws `System.Composition.TypedParts`
   not found from `AdhocWorkspace` (missing MEF deps). Read-only queries work from any build.
@@ -159,5 +160,5 @@ Recall recoveries already built in:
 
 - Fast iterate (read-only queries): `dotnet build src/Rig.Cli/Rig.Cli.csproj -c Debug -p:UseSharedCompilation=false`
   then `dotnet <…>/bin/Debug/net10.0/Rig.Cli.dll <args>` from the dir holding `.rig`.
-- Ship to global (needed for `index`/`mine`): `dotnet pack src/Rig.Cli/Rig.Cli.csproj -c Release -o .rig-nupkg /p:PackageVersion=$v /p:Version=$v` → `dotnet tool uninstall --global rig; dotnet tool install --global rig --add-source .rig-nupkg --version $v`. (The repo's `mini-ci.ps1` does this but the `-ExecutionPolicy Bypass` invocation may be blocked by the harness; run the pack/install steps directly.)
+- Ship to global (needed for `index`): `dotnet pack src/Rig.Cli/Rig.Cli.csproj -c Release -o .rig-nupkg /p:PackageVersion=$v /p:Version=$v` → `dotnet tool uninstall --global rig; dotnet tool install --global rig --add-source .rig-nupkg --version $v`. (The repo's `mini-ci.ps1` does this but the `-ExecutionPolicy Bypass` invocation may be blocked by the harness; run the pack/install steps directly.)
 - Tests: `dotnet test tests/Rig.Tests/Rig.Tests.csproj -c Debug -p:UseSharedCompilation=false`. Fact-layer derivers are fixture-tested (no SQLite) in `FactDerivationTests`; pure-domain graph logic in `Domain/*Tests.cs`.

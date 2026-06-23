@@ -31,10 +31,11 @@ public static class GraphMaterializer
 
     public static async Task<GraphStats> BuildAsync(
         RigDbContext context,
-        FactHandoffRule[]? handoffRules = null,
+        IReadOnlyList<FactHandoffRule>? handoffRules = null,
         Action<string>? progress = null,
         CancellationToken cancellationToken = default,
-        IReadOnlyList<FactGenericFactoryRule>? factoryRules = null
+        IReadOnlyList<FactGenericFactoryRule>? factoryRules = null,
+        IReadOnlyList<DeliveryRule>? deliveryRules = null
     )
     {
         progress?.Invoke("Loading facts");
@@ -42,7 +43,31 @@ public static class GraphMaterializer
         // table) so the persisted Kind="handoff" + HandoffDispatcher flow to every SQL reader; the
         // in-memory oracle classifies identically by being given the same rules.
         var graph = await Reads.LoadFactGraphAsync(context, handoffRules, cancellationToken);
+        return await BuildFromGraphAsync(context, graph, factoryRules, progress, cancellationToken, deliveryRules: deliveryRules);
+    }
 
+    // Materialize the derived tables from a graph ALREADY built in memory (FactGraphProjection.FromAnalysis at
+    // index time), so the graph phase skips re-reading the whole fact store off disk. The graph MUST already be
+    // handoff-classified — both FromAnalysis and LoadFactGraphAsync do this — this method only bakes the
+    // generic-factory rewrite and persists. `rig index` calls this with the facts it just extracted; the
+    // DB-loading BuildAsync overload above wraps it for callers that only have a store (a re-graph).
+    //
+    // `symbols`/`references` are the in-memory fact arrays from THIS index run. When supplied (the `rig index`
+    // path), the FTS search index is fed from them directly — skipping the full-table scans of symbol_facts /
+    // reference_facts that the SQL `INSERT … SELECT` would otherwise do (the bulk of the graph phase's disk
+    // reads, since the facts were just written and are still in RAM). Null on the re-graph path (BuildAsync
+    // only has the store), which falls back to the on-disk SELECT.
+    public static async Task<GraphStats> BuildFromGraphAsync(
+        RigDbContext context,
+        FactGraphData graph,
+        IReadOnlyList<FactGenericFactoryRule>? factoryRules = null,
+        Action<string>? progress = null,
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<SymbolFact>? symbols = null,
+        IReadOnlyList<ReferenceFact>? references = null,
+        IReadOnlyList<DeliveryRule>? deliveryRules = null
+    )
+    {
         // Bake generic-factory monomorphization into the persisted edges — the SAME RewriteGenericFactories
         // the in-memory traversal applies via ShapeGraph. This is the EDGE-CREATING shaping (it rewrites
         // `caller -> Factory<X>` to `caller -> X.Target`), so it MUST be in call_edges or the SQL bounding
@@ -53,11 +78,27 @@ public static class GraphMaterializer
         // in-memory pass re-applies over the bounded graph. No-op when factoryRules is null/empty.
         graph = FactPathFinder.RewriteGenericFactories(graph, factoryRules ?? []);
 
+        // Publish→consumer DELIVERY edges: a publish (a C# event raise `someEvent?.Invoke` / an Echo
+        // `Process.tell(name, msg)`) delivers to the channel's handler(s), an edge no syntactic call records.
+        // EDGE-CREATING like the factory rewrite above, so it is baked into call_edges here — otherwise the SQL
+        // bounding walk never pulls a handler's closure into a bounded reach (under-reporting --async reach +
+        // blinding cycle detection). The event reads / actor calls are already in the store at this point
+        // (facts are saved before graph build, on both the index and re-graph paths). Both frameworks feed the
+        // ONE framework-blind join (events identity-EXACT on the `E:` symbol; actors ~heuristic on a process-
+        // name string — Tag namespaces them so they never cross). Each delivery MECHANISM is DATA (the
+        // `deliveryRules` rule section), threaded in like factoryRules; the single rule-driven loader returns
+        // BOTH event + actor sites. Modeled as handoff edges → sync-cut by default, walked under --async.
+        // No-op when there are no sites.
+        var sites = await Reads.LoadDeliverySitesAsync(context, deliveryRules ?? [], cancellationToken);
+        graph = FactPathFinder.AddDeliveryEdges(graph, sites);
+
         var connection = context.Database.GetDbConnection();
         if (connection.State != ConnectionState.Open)
         {
             await connection.OpenAsync(cancellationToken);
         }
+
+        await ApplyGraphPragmasAsync(connection, cancellationToken);
 
         await EnsureSchemaAsync(connection, cancellationToken);
 
@@ -85,18 +126,55 @@ public static class GraphMaterializer
         // while preserving the SAME mid-token, case-insensitive substring semantics LIKE had. Queries
         // <3 chars fall back to LIKE. Owned by `rig graph` (the writer); read commands only MATCH them.
         progress?.Invoke("Building search index (FTS5 trigram)");
-        await BuildSearchIndexAsync(connection, progress, cancellationToken);
+        await BuildSearchIndexAsync(connection, progress, cancellationToken, symbols, references);
 
         // Refresh whole-store statistics (sqlite_stat1) now that all derived tables + indexes exist, so the
         // query-time planner picks the right index/join order for whole-store reads (entry-point data,
         // dispatch facts) instead of guessing. One-time cost at graph build; query connections only read.
         progress?.Invoke("Analyzing statistics");
+        // analysis_limit caps the rows ANALYZE samples PER INDEX (SQLite 3.32+), so it stops full-scanning
+        // the multi-GB fact tables — a large share of the phase's disk reads — while still producing
+        // good-enough sqlite_stat1 for the planner (the column distributions it needs are well-estimated
+        // from a bounded sample). 0 = unbounded (the old full scan); 400 is SQLite's own recommended cap.
+        await ExecuteAsync(connection, null, "PRAGMA analysis_limit=400;", cancellationToken);
         await ExecuteAsync(connection, null, "ANALYZE;", cancellationToken);
 
         return new GraphStats(CallEdges: callCount, DispatchEdges: dispatchCount, Nodes: nodeCount, HeuristicDispatchEdges: heuristicCount);
     }
 
-    private static async Task BuildSearchIndexAsync(DbConnection connection, Action<string>? progress, CancellationToken cancellationToken)
+    // Tune THIS connection for the graph rebuild. The phase is both write-heavy (DELETE + bulk-insert
+    // ~550k call edges + ~260k nodes) and READ-heavy: the FTS5 trigram builds, the `nodes` UNION, and
+    // ANALYZE all full-scan the just-written fact tables, which on SQLite defaults (mmap_size=0, 2 MB
+    // cache) means a syscall-per-page cold read — the bulk of the phase's multi-GB disk reads. A big
+    // mmap + page cache serves those scans from memory, temp_store=MEMORY keeps the FTS/ANALYZE scratch
+    // off disk, and synchronous=OFF drops fsyncs (the rebuild is idempotent — re-run `rig graph`). This
+    // is the same read-pragma template the query paths use (StorageProbes), plus synchronous=OFF.
+    // journal_mode is deliberately LEFT ON: unlike the save path (which writes a throwaway .tmp then
+    // atomically renames), graph mutates the PUBLISHED store in place, so the rollback journal must
+    // stay for the one-transaction rebuild to remain crash-safe. Best-effort — a PRAGMA that doesn't
+    // take just leaves the default.
+    private static async Task ApplyGraphPragmasAsync(DbConnection connection, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                "PRAGMA mmap_size=1073741824; PRAGMA cache_size=-262144; PRAGMA temp_store=MEMORY; PRAGMA synchronous=OFF;";
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (DbException)
+        {
+            // pragmas are an optimization only — ignore and run with the defaults
+        }
+    }
+
+    private static async Task BuildSearchIndexAsync(
+        DbConnection connection,
+        Action<string>? progress,
+        CancellationToken cancellationToken,
+        IReadOnlyList<SymbolFact>? symbols = null,
+        IReadOnlyList<ReferenceFact>? references = null
+    )
     {
         // symbol_fts: one row per distinct SymbolId (matching SearchSymbolsAsync's dedup), trigram over
         // symbolid + name (the two LIKE'd columns); kind + the display payload ride along UNINDEXED so a
@@ -113,16 +191,23 @@ public static class GraphMaterializer
             """,
             cancellationToken
         );
-        await ExecuteAsync(
-            connection,
-            null,
-            """
-            INSERT INTO symbol_fts(symbolid, name, kind, signature, filepath, line, assembly)
-            SELECT SymbolId, Name, Kind, Signature, FilePath, Line, DefiningAssembly
-            FROM symbol_facts GROUP BY SymbolId;
-            """,
-            cancellationToken
-        );
+        if (symbols is not null)
+        {
+            await InsertSymbolFtsFromMemoryAsync(connection, symbols, cancellationToken);
+        }
+        else
+        {
+            await ExecuteAsync(
+                connection,
+                null,
+                """
+                INSERT INTO symbol_fts(symbolid, name, kind, signature, filepath, line, assembly)
+                SELECT SymbolId, Name, Kind, Signature, FilePath, Line, DefiningAssembly
+                FROM symbol_facts GROUP BY SymbolId;
+                """,
+                cancellationToken
+            );
+        }
 
         // ref_target_fts: the DISTINCT target symbols (far fewer than the millions of reference rows,
         // and a superset of symbol_facts — includes BCL/external targets `rig refs` can search). A MATCH
@@ -135,12 +220,19 @@ public static class GraphMaterializer
             "CREATE VIRTUAL TABLE ref_target_fts USING fts5(symbolid, tokenize = 'trigram');",
             cancellationToken
         );
-        await ExecuteAsync(
-            connection,
-            null,
-            "INSERT INTO ref_target_fts(symbolid) SELECT DISTINCT TargetSymbolId FROM reference_facts;",
-            cancellationToken
-        );
+        if (references is not null)
+        {
+            await InsertRefTargetFtsFromMemoryAsync(connection, references, cancellationToken);
+        }
+        else
+        {
+            await ExecuteAsync(
+                connection,
+                null,
+                "INSERT INTO ref_target_fts(symbolid) SELECT DISTINCT TargetSymbolId FROM reference_facts;",
+                cancellationToken
+            );
+        }
 
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT (SELECT count(*) FROM symbol_fts), (SELECT count(*) FROM ref_target_fts);";
@@ -149,6 +241,78 @@ public static class GraphMaterializer
         {
             progress?.Invoke($"search index: {reader.GetInt32(0)} symbols, {reader.GetInt32(1)} ref targets");
         }
+    }
+
+    // Feed symbol_fts from the in-memory SymbolFacts, one row per distinct SymbolId — the RAM equivalent of
+    // the `… GROUP BY SymbolId` SELECT, with no symbol_facts scan. (Like that GROUP BY, which row's display
+    // payload represents a duplicate id is arbitrary; here it's the first-seen — cosmetic only, and only for
+    // multi-targeted/partial duplicates.) One reused prepared insert inside a single transaction.
+    private static async Task InsertSymbolFtsFromMemoryAsync(
+        DbConnection connection,
+        IReadOnlyList<SymbolFact> symbols,
+        CancellationToken cancellationToken
+    )
+    {
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.Transaction = (DbTransaction)transaction;
+        command.CommandText =
+            "INSERT INTO symbol_fts(symbolid, name, kind, signature, filepath, line, assembly) "
+            + "VALUES ($sid, $name, $kind, $sig, $file, $line, $asm);";
+        var pSid = AddParam(command, "$sid");
+        var pName = AddParam(command, "$name");
+        var pKind = AddParam(command, "$kind");
+        var pSig = AddParam(command, "$sig");
+        var pFile = AddParam(command, "$file");
+        var pLine = AddParam(command, "$line");
+        var pAsm = AddParam(command, "$asm");
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var s in symbols)
+        {
+            if (!seen.Add(s.SymbolId))
+            {
+                continue; // one row per distinct SymbolId
+            }
+
+            pSid.Value = s.SymbolId;
+            pName.Value = s.Name;
+            pKind.Value = s.Kind;
+            pSig.Value = s.Signature;
+            pFile.Value = s.FilePath;
+            pLine.Value = s.Line;
+            pAsm.Value = s.DefiningAssembly;
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    // Feed ref_target_fts from the in-memory ReferenceFacts' DISTINCT TargetSymbolId — the RAM equivalent of
+    // the `SELECT DISTINCT TargetSymbolId FROM reference_facts` scan (the biggest table), deduped in-process.
+    private static async Task InsertRefTargetFtsFromMemoryAsync(
+        DbConnection connection,
+        IReadOnlyList<ReferenceFact> references,
+        CancellationToken cancellationToken
+    )
+    {
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.Transaction = (DbTransaction)transaction;
+        command.CommandText = "INSERT INTO ref_target_fts(symbolid) VALUES ($sid);";
+        var pSid = AddParam(command, "$sid");
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var r in references)
+        {
+            if (seen.Add(r.TargetSymbolId))
+            {
+                pSid.Value = r.TargetSymbolId;
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+        }
+
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private static async Task<int> BuildNodesAsync(DbConnection connection, CancellationToken cancellationToken)

@@ -43,7 +43,7 @@ public sealed class ImpactEpDiffTests(AnalyzedPlaygrounds playgrounds)
 
     private static async Task<ImpactCommand.EpDiff> DiffAsync(string branchDb, string baseDb, string wd)
     {
-        var rules = RuleSet.Load(wd);
+        var rules = RuleSetLoader.Load(wd);
         await using var branchCtx = new RigDbContext(branchDb, pooling: false, readOnly: true);
         var branchEpData = await Reads.LoadFactEntryPointDataAsync(branchCtx);
         var branchSet = await EntryPointContext.DeriveEntryPointsAsync(branchCtx, branchEpData, rules);

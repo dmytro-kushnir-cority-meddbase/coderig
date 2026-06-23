@@ -52,13 +52,14 @@ public class TreeComputeBenchmarks
 
         await using var context = new RigDbContext(dbPath, readOnly: true);
 
-        _factoryRules = FactGenericFactoryRuleProvider.LoadForWorkingDirectory(dir);
-        _cutRules = FactTraversalCutRuleProvider.LoadForWorkingDirectory(dir);
-        _contextRules = FactContextDispatchRuleProvider.LoadForWorkingDirectory(dir);
-        _effectRules = FactEffectRuleProvider.LoadForWorkingDirectory(dir);
-        _observationRules = FactObservationRuleProvider.LoadForWorkingDirectory(dir);
-        _epRules = FactEntryPointRuleProvider.LoadForWorkingDirectory(dir);
-        _classRules = FactEntryPointRuleProvider.LoadClassInheritanceForWorkingDirectory(dir);
+        var rules = RuleSetLoader.Load(dir);
+        _factoryRules = rules.Factory;
+        _cutRules = rules.Cut;
+        _contextRules = rules.Context;
+        _effectRules = rules.Effects;
+        _observationRules = rules.Observations;
+        _epRules = rules.EntryPoints;
+        _classRules = rules.ClassInheritance;
 
         var inputs = await SqlReachability.LoadReachInputsAsync(context, _pattern, SqlReachability.Direction.Forward);
         _rawGraph = inputs.Graph;

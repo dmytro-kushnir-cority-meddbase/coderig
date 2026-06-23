@@ -31,7 +31,17 @@ public static partial class FactPathFinder
         public HashSet<string> StrippedReceivers = new(StringComparer.Ordinal);
     }
 
-    private static ReverseMaps BuildReverseMaps(FactGraphData graph, bool narrowDispatch = true, TraversalMode mode = TraversalMode.SyncCut)
+    // descendantsFrom: when the caller already holds an index built from the SAME graph, its
+    // DescendantsCache is shared into the internal index below — the strict-descendant closure is a pure
+    // function of graph.BaseEdges (identical across every index from this graph), so a set cached via one
+    // index is valid for the other. Lets each type's descendants be computed ONCE per command (the dispatch
+    // scan here + the caller's later Predecessors hops) instead of once per index.
+    private static ReverseMaps BuildReverseMaps(
+        FactGraphData graph,
+        bool narrowDispatch = true,
+        TraversalMode mode = TraversalMode.SyncCut,
+        GraphIndex? descendantsFrom = null
+    )
     {
         var rev = new ReverseMaps { NarrowDispatch = narrowDispatch };
         foreach (var edge in graph.CallEdges)
@@ -71,6 +81,13 @@ public static partial class FactPathFinder
         // Reverse dispatch = the forward CHA dispatch edges, inverted. (The receiver-blind superset;
         // ReverseDispatchReaches narrows per hop when narrowing is on.)
         var index = BuildIndex(graph, narrowDispatch: false);
+        // Share the caller's descendant-closure cache (see descendantsFrom note) so the scan below and the
+        // caller's later Descendants() hops compute each type's strict descendants once, not once per index.
+        if (descendantsFrom is not null)
+        {
+            index.DescendantsCache = descendantsFrom.DescendantsCache;
+        }
+
         foreach (var node in index.Nodes)
         foreach (var target in DispatchTargets(node, index, receiverType: null))
         {
@@ -295,20 +312,58 @@ public static partial class FactPathFinder
             index.Nodes.Add(edge.Callee);
         }
 
+        // Sort each adjacency list ONCE here — total order: call-site line (primary, preserves source
+        // order for distinct-line children), then callee SymbolId (first tie-break, ordinal), then edge
+        // Kind (second tie-break), then ReceiverType (final tie-break) — so Successors iterates it
+        // directly instead of re-running OrderBy().ThenBy() on every node expansion. The four-key total
+        // order is store-independent: same-line edges that share even the callee id are distinguished by
+        // Kind/ReceiverType, so a re-index (which reshuffles SQLite rowids) or a parallel-load (which
+        // does not preserve insertion order) cannot change child ordering. Line stays primary, so
+        // distinct-line children are unaffected. Adjacency is immutable after this build, and BuildIndex
+        // finishes single-threaded before any (possibly parallel, e.g. ReachesFromEachSeed) traversal
+        // reads the shared index, so the in-place sort is race-free.
+        foreach (var list in index.Adjacency.Values)
+        {
+            list.Sort(
+                static (a, b) =>
+                {
+                    var byLine = a.Line.CompareTo(b.Line);
+                    if (byLine != 0)
+                    {
+                        return byLine;
+                    }
+
+                    var byCallee = string.CompareOrdinal(a.Callee, b.Callee);
+                    if (byCallee != 0)
+                    {
+                        return byCallee;
+                    }
+
+                    var byKind = string.CompareOrdinal(a.Kind, b.Kind);
+                    if (byKind != 0)
+                    {
+                        return byKind;
+                    }
+
+                    return string.CompareOrdinal(a.ReceiverType, b.ReceiverType);
+                }
+            );
+        }
+
         index.MethodsByStrippedType = graph
             .Methods.Where(m => m.ContainingTypeId is not null)
             .GroupBy(m => TypeClosure.StripGeneric(m.ContainingTypeId!), StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
-        
+
         index.ImplsByInterface = graph
             .ImplementsEdges.GroupBy(e => e.InterfaceType, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.Select(e => e.ImplType).Distinct(StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
-        
+
         index.ImplsByErrorInterfaceName = graph
             .ImplementsEdges.Where(e => e.InterfaceType.StartsWith("!:", StringComparison.Ordinal))
             .GroupBy(e => SimpleTypeName(e.InterfaceType), StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.Select(e => e.ImplType).Distinct(StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
-        
+
         index.StrippedBaseEdges = TypeClosure.BuildBaseEdgeLookup(
             (graph.BaseEdges ?? new List<BaseEdge>()).Select(e => (e.SubType, e.BaseType))
         );

@@ -23,11 +23,22 @@ internal static class BuildInputFingerprint
 {
     // Version/config manifests across the dependency mechanisms this codebase mixes — Paket, classic
     // NuGet (packages.config), PackageReference / Central Package Management — plus MSBuild props and the
-    // SDK pin. Stat'd up the directory tree: root-level ones (paket.lock/dependencies, global.json,
-    // Directory.*, nuget.config) are found at the repo root; project-level ones (paket.references,
-    // packages.config) at the project dir. ALL are committed SOURCE files the design-time build only
-    // READS — paket/nuget *restore* doesn't rewrite them (only `paket install`/`update` or a manual edit
-    // does) — so stat is stable and never races the build's obj output.
+    // SDK pin. Stat'd up the directory tree: root-level ones (global.json, Directory.*, nuget.config) are
+    // found at the repo root; project-level ones (paket.references, packages.config) at the project dir.
+    // ALL are committed SOURCE files the design-time build only READS — paket/nuget *restore* doesn't
+    // rewrite them (only `paket install`/`update` or a manual edit does) — so stat is stable and never
+    // races the build's obj output.
+    //
+    // The root paket.lock + paket.dependencies are deliberately NOT here, nor is Directory.Packages.props:
+    // hashing those central version lists WHOLESALE keyed every project to the entire list, so one version
+    // bump invalidated all ~300 projects. They are now folded PER PROJECT — Paket via PaketClosure (the
+    // project's transitive closure + global resolution settings), Central Package Management via CpmClosure
+    // (the central versions for packages the project references + the props' global part) — so a bump
+    // invalidates exactly the projects that resolve the changed package. paket.references stays here
+    // (per-project already) so a binding-redirect/suffix-only edit PaketClosure ignores still flips.
+    // Directory.Build.props/.targets STAY here: they're arbitrary MSBuild, not version lists, so they're
+    // correctly global — already scoped by directory locality (a project only folds the ones in ITS ancestor
+    // chain, so a leaf-subtree props invalidates only that subtree; only a repo-root one invalidates all).
     //
     // This is deliberately an ALLOWLIST: a version pinned by a mechanism not listed here ("god knows what
     // else") won't flip the key. That's why --reuse-build-cache is opt-in — after an exotic dependency
@@ -36,62 +47,103 @@ internal static class BuildInputFingerprint
     [
         "Directory.Build.props",
         "Directory.Build.targets",
-        "Directory.Packages.props",
         "global.json",
-        "paket.lock",
-        "paket.dependencies",
         "paket.references",
         "packages.config",
         "nuget.config",
         "NuGet.config",
     ];
 
-    public static string Compute(string projectFilePath)
+    // A materialised build-input file: its path and the SHA-256 hex of its bytes, or null when absent (so
+    // presence/absence flips the key). Content, not mtime — stable across the mtime churn a branch switch makes.
+    public readonly record struct FileFold(string Path, string? Sha256);
+
+    // Everything the design-time-build fingerprint is a function of, materialised off disk by Gather so Of can
+    // fold it purely: the project file, the ancestor manifest walk (in walk order), the per-project Paket and
+    // CPM closure materials (each null when the project isn't managed by that mechanism), and the sorted *.cs
+    // path set. The functional-core boundary — a recompute is Of(Gather(path)); the pure half is independently
+    // testable and reused by --verify-build-cache.
+    public sealed record BuildInputs(
+        FileFold ProjectFile,
+        IReadOnlyList<FileFold> ConfigFiles,
+        string? PaketClosureMaterial,
+        string? CpmClosureMaterial,
+        IReadOnlyList<string> CsPaths
+    );
+
+    // PURE CORE: fold a materialised input set into the fingerprint — no IO, no clock. The order mirrors the
+    // old inline Compute exactly (project file, then the ancestor walk in order, then the paket closure
+    // material, then the sorted *.cs paths), so existing cache keys stay valid across this refactor.
+    public static string Of(BuildInputs inputs)
     {
-        var fullProjectPath = Path.GetFullPath(projectFilePath);
-        var projectDir = Path.GetDirectoryName(fullProjectPath) ?? "";
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-
-        // Only build-STABLE inputs are fingerprinted — files the design-time build never writes — so the
-        // key can't race the build's own output flush. (We tried hashing obj/project.assets.json and
-        // obj/project.nuget.cache: both are build OUTPUTS, and reading them right after the out-of-process
-        // build races the flush, so the fingerprint took multiple indexes to converge. Inputs don't race.)
-        //
-        // The project file itself — declared PackageReference versions, direct/framework <Reference>s,
-        // TFM, compile options all live here, so an edit flips the key. Content-hashed (not stat'd) so a
-        // branch switch that rewrites its mtime but not its content stays a cache HIT.
-        FeedContent(hash, fullProjectPath);
-
-        // Build props/targets + CPM versions + SDK pin + the dependency-manifest allowlist, walked up to
-        // the drive root. Under Central Package Management every package version is in
-        // Directory.Packages.props; under Paket the versions are in paket.lock — either way a bump flips
-        // the key here. (Gap: a transitive-only bump with no manifest change isn't seen — narrow, and
-        // --reuse-build-cache is opt-in; re-index without it after such a change.)
-        for (var dir = projectDir; !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir))
+        Feed(hash, inputs.ProjectFile);
+        foreach (var file in inputs.ConfigFiles)
         {
-            foreach (var name in AncestorConfigFiles)
-            {
-                FeedContent(hash, Path.Combine(dir, name));
-            }
-
-            // The Paket tooling/wiring lives in a .paket subdir at the repo root. Its targets define HOW
-            // references resolve, so a Paket upgrade can change resolution without touching paket.lock.
-            FeedContent(hash, Path.Combine(dir, ".paket", "Paket.Restore.targets"));
+            Feed(hash, file);
         }
 
-        // The SET of *.cs paths (detects add / remove / rename — removals also self-heal downstream via
-        // the File.Exists filter, but additions only surface here). Sorted for stability; paths only, no
-        // mtime and no content — edits to existing files must stay a cache HIT.
-        var csFiles = EnumerateCsFiles(projectDir).ToArray();
-        Array.Sort(csFiles, StringComparer.OrdinalIgnoreCase);
-        foreach (var file in csFiles)
+        // Paket's per-project resolved closure (PaketClosure) — only the project's transitive closure + the
+        // global resolution settings, so a version bump flips just the projects that resolve the package.
+        if (inputs.PaketClosureMaterial is not null)
         {
-            hash.AppendData(Encoding.UTF8.GetBytes(file));
+            hash.AppendData(Encoding.UTF8.GetBytes(inputs.PaketClosureMaterial));
+        }
+
+        // Central Package Management's per-project closure (CpmClosure) — the central versions for packages
+        // this project references + the props' global part, same per-project scoping as Paket.
+        if (inputs.CpmClosureMaterial is not null)
+        {
+            hash.AppendData(Encoding.UTF8.GetBytes(inputs.CpmClosureMaterial));
+        }
+
+        // The SET of *.cs paths (detects add / remove / rename). Paths only, no content — body edits are
+        // Roslyn's job on every index and must NOT flip this key.
+        foreach (var cs in inputs.CsPaths)
+        {
+            hash.AppendData(Encoding.UTF8.GetBytes(cs));
             hash.AppendData("\n"u8);
         }
 
         return Convert.ToHexString(hash.GetHashAndReset());
     }
+
+    // IMPERATIVE SHELL: read everything Of needs off disk. Only build-STABLE inputs are read — files the
+    // design-time build never writes — so the fingerprint can't race the build's obj output. The project file
+    // (declared versions/refs/TFM/options), the ancestor manifest walk up to the drive root (each content-
+    // hashed via the per-run memo), the paket closure material, and the *.cs path set.
+    public static BuildInputs Gather(string projectFilePath)
+    {
+        var fullProjectPath = Path.GetFullPath(projectFilePath);
+        var projectDir = Path.GetDirectoryName(fullProjectPath) ?? "";
+
+        var configFiles = new List<FileFold>();
+        for (var dir = projectDir; !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir))
+        {
+            foreach (var name in AncestorConfigFiles)
+            {
+                configFiles.Add(Fold(Path.Combine(dir, name)));
+            }
+
+            // The Paket tooling/wiring lives in a .paket subdir at the repo root. Its targets define HOW
+            // references resolve, so a Paket upgrade can change resolution without touching paket.lock.
+            configFiles.Add(Fold(Path.Combine(dir, ".paket", "Paket.Restore.targets")));
+        }
+
+        var csFiles = EnumerateCsFiles(projectDir).ToArray();
+        Array.Sort(csFiles, StringComparer.OrdinalIgnoreCase);
+
+        return new BuildInputs(
+            ProjectFile: Fold(fullProjectPath),
+            ConfigFiles: configFiles,
+            PaketClosureMaterial: PaketClosure.Compute(projectDir),
+            CpmClosureMaterial: CpmClosure.Compute(fullProjectPath),
+            CsPaths: csFiles
+        );
+    }
+
+    // The fingerprint of a project on disk: gather (IO) then fold (pure).
+    public static string Compute(string projectFilePath) => Of(Gather(projectFilePath));
 
     // Per-run memo of file CONTENT hashes, keyed by (path, length, mtime) so a shared root manifest
     // (paket.lock, Directory.Packages.props, …) is hashed once even though every project in the closure
@@ -100,21 +152,24 @@ internal static class BuildInputFingerprint
     // A one-shot CLI process; the key self-invalidates if a file is genuinely edited mid-session (tests).
     private static readonly ConcurrentDictionary<string, string> ContentHashCache = new(StringComparer.Ordinal);
 
-    private static void FeedContent(IncrementalHash hash, string path)
+    // PURE: fold one file's (path, content-hash-or-absent) into the hash — `path|sha\n` when present,
+    // `path|-\n` when absent, so presence/absence and content both flip the key.
+    private static void Feed(IncrementalHash hash, FileFold file) =>
+        hash.AppendData(Encoding.UTF8.GetBytes(file.Sha256 is null ? $"{file.Path}|-\n" : $"{file.Path}|{file.Sha256}\n"));
+
+    // IO: a file's content fold — SHA-256 hex when present (memoised per run by path+len+mtime so a shared
+    // root manifest is hashed once), null when absent. Content (not mtime) is what determines the build, so
+    // this is stable across the mtime churn a branch checkout produces.
+    private static FileFold Fold(string path)
     {
-        // The SHA-256 of the file's bytes when present; a fixed marker when absent, so presence/absence
-        // flips the key. Content (not mtime) is what determines the build, so this is stable across the
-        // mtime churn a branch checkout produces.
         if (!File.Exists(path))
         {
-            hash.AppendData(Encoding.UTF8.GetBytes($"{path}|-\n"));
-            return;
+            return new FileFold(Path: path, Sha256: null);
         }
 
         var info = new FileInfo(path);
         var memoKey = $"{path}|{info.Length}|{File.GetLastWriteTimeUtc(path).Ticks}";
-        var contentHash = ContentHashCache.GetOrAdd(memoKey, static (_, arg) => HashFile(arg), path);
-        hash.AppendData(Encoding.UTF8.GetBytes($"{path}|{contentHash}\n"));
+        return new FileFold(Path: path, Sha256: ContentHashCache.GetOrAdd(memoKey, static (_, arg) => HashFile(arg), path));
     }
 
     private static string HashFile(string path)

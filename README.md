@@ -30,7 +30,7 @@ rig graph
 # explore (run from the directory that holds .rig/)
 rig derive                              # effects + entry points inventory
 rig reaches "Type.Method"               # effects reachable from an entry point
-rig tree    "Type.Method" --effects     # compact call tree: only effectful methods
+rig tree    "Type.Method" --view effects # compact call tree: only effectful methods
 rig callers "Type.Method" --entrypoints # reverse: which entry points reach this
 rig path    "From.Method" "To.Method"   # one concrete path between two symbols
 ```
@@ -64,7 +64,7 @@ All commands except `index`/`mine` are read-only and run from the directory that
 | `rig runs` | List indexed runs (entry-point / effect / symbol counts) |
 | `rig derive [--rules <p>...] [--only <p,..>] [--exclude <p,..>]` | Stage-2 pass over facts: re-derive effects + entry points + classified handoffs. `--exclude throw` drops exceptions |
 | `rig reaches <pat> [--async] [--only/--exclude <p,..>] [--maxdepth <n>] [--format tsv]` | Effects reachable from an entry point (synchronous by default; `--async` also walks handoffs into a separate ⚡ bucket) |
-| `rig tree <pat> [--full\|--summary\|--effects] [--async] [--only/--exclude <p,..>] [--raw] [--maxdepth <n>]` | Call tree from an entry point. Default prunes to effect-reaching paths; `--effects` lists only effectful methods; `--raw` bypasses render rules |
+| `rig tree <pat> [--view paths\|full\|effects\|summary\|hazards] [--async] [--only/--exclude <p,..>] [--raw] [--maxdepth <n>] [--format llm\|llm-ids\|tsv]` | Call tree from an entry point. Default (`--view paths`) prunes to effect-reaching paths; `--view effects` lists only effectful methods; `--view hazards` marks pattern hazards (race_window/dual_write/…) inline + a summary section; `--raw` bypasses render rules; `--format llm` emits a compact 6/7-column TSV; `--format llm-ids` adds explicit surrogate-id linkage (8-column TSV with `id`/`parent_id`) |
 | `rig callers <pat> [--roots\|--entrypoints] [--async] [--raw] [--maxdepth <n>]` | Reverse reachability: who reaches this method. `--entrypoints` = the rule-detected entry points; `--roots` = no-predecessor candidates |
 | `rig path <fromPat> <toPat> [--async] [--raw] [--maxdepth <n>]` | One concrete path between two symbols |
 | `rig dead [--lib] [--include-dispatch] [--all] [--root <pat>...] [--format tsv]` | Unreachable first-party methods (report-only — compiler-confirm before removing) |

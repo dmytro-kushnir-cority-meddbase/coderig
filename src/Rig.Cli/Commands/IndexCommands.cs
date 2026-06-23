@@ -1,5 +1,6 @@
 using System.CommandLine;
 using System.Diagnostics;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -7,7 +8,9 @@ using Rig.Analysis;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Git;
+using Rig.Cli.Telemetry;
 using Rig.Domain.Data;
+using Rig.Domain.Functions;
 using Rig.Storage.Queries;
 using Rig.Storage.Storage;
 using static Rig.Cli.EntryPoints.EntryPointContext;
@@ -19,6 +22,59 @@ namespace Rig.Cli.Commands;
 // the .rig store rather than query it.
 internal static class IndexCommands
 {
+    // `rig graph` — rebuild the derived call-graph views (call_edges + dispatch_edges + node/search indexes)
+    // from the indexed facts already in the store: NO Roslyn, no rescan, idempotent. This is the standalone
+    // re-graph path (GraphMaterializer.BuildAsync — the overload preserved when the in-memory index path was
+    // split out), re-exposed as a command so a GRAPH-time change (a new edge resolver like publish→consumer
+    // delivery edges, a handoff/factory rule edit) can be materialized without re-indexing the whole solution.
+    // (`derive` cannot do this — it re-reports effects/hazards over the EXISTING graph; it never writes edges.)
+    internal static Command BuildGraph(TextWriter output, TextWriter error, string workingDirectory)
+    {
+        var rules = CommonOptions.Rules();
+        var store = CommonOptions.Store();
+        var cmd = new Command(
+            name: "graph",
+            description: "Rebuild the derived call-graph views (call_edges + dispatch_edges) from indexed facts — no Roslyn, no rescan, idempotent."
+        )
+        {
+            rules,
+            store,
+        };
+        cmd.SetAction(pr =>
+            CommandGuard.RunGuardedAsync(
+                workingDirectory,
+                error,
+                async () =>
+                {
+                    var dbPath = StoreLayout.DbPathForRef(workingDirectory: workingDirectory, storeRef: pr.GetValue(store));
+                    if (!File.Exists(dbPath))
+                    {
+                        return CommandGuard.NoRunError(error);
+                    }
+
+                    var ruleSet = RuleSetLoader.Load(workingDirectory, CommonOptions.RulesOf(pr.GetValue(rules)));
+                    await using var context = new RigDbContext(dbPath);
+                    var stats = await GraphMaterializer.BuildAsync(
+                        context,
+                        handoffRules: ruleSet.Handoff,
+                        progress: message => output.WriteLine($"Progress: {message}"),
+                        factoryRules: ruleSet.Factory,
+                        // The `deliveryRules` section drives the publish→consumer delivery edges (events +
+                        // actors), threaded in like factoryRules (data, not hardcoded) — see GraphMaterializer.
+                        deliveryRules: ruleSet.Delivery
+                    );
+                    output.WriteLine(
+                        $"Graph: {stats.CallEdges} call edge(s), {stats.DispatchEdges} dispatch edge(s) "
+                            + $"({stats.DispatchEdges - stats.HeuristicDispatchEdges} roslyn-mined, {stats.HeuristicDispatchEdges} heuristic), "
+                            + $"{stats.Nodes} node(s)."
+                    );
+                    return 0;
+                }
+            )
+        );
+        return cmd;
+    }
+
     internal static Command BuildIndex(TextWriter output, TextWriter error, string workingDirectory)
     {
         var target = CommonOptions.Pattern(name: "solution", description: "Solution (.slnx/.sln/.slnf) or project (.csproj) to index.");
@@ -36,10 +92,23 @@ internal static class IndexCommands
         {
             Description = "Print a per-phase timing breakdown (workspace build, compile+read, extract, save, graph).",
         };
+        // The design-time-build cache is ON BY DEFAULT (validated on MedDBase via --verify-build-cache, 2026-06-20):
+        // a project whose build inputs are unchanged skips the dominant build phase. --reuse-build-cache is kept
+        // as a deprecated no-op so existing scripts don't error; --no-build-cache opts out.
         var reuseBuildCache = new Option<bool>("--reuse-build-cache")
         {
+            Description = "(deprecated; the build cache is on by default) — no-op. Use --no-build-cache to disable.",
+            Hidden = true,
+        };
+        var noBuildCache = new Option<bool>("--no-build-cache")
+        {
+            Description = "Disable the design-time-build cache (always do a full build; don't read or write the cache).",
+        };
+        var verifyBuildCache = new Option<bool>("--verify-build-cache")
+        {
             Description =
-                "Reuse cached design-time build results for projects whose inputs are unchanged (skips the dominant build phase).",
+                "Guardrail: build EVERY project (ignore cache hits) and diff the fresh result against the cached one, "
+                + "reporting any mismatch — proves the fingerprint captures every build input before the cache is trusted.",
         };
 
         var cmd = new Command(name: "index", description: "Index a solution/project into a .rig store.")
@@ -54,6 +123,8 @@ internal static class IndexCommands
             noGraph,
             time,
             reuseBuildCache,
+            noBuildCache,
+            verifyBuildCache,
         };
 
         cmd.SetAction(pr =>
@@ -71,7 +142,8 @@ internal static class IndexCommands
                         includeTests: pr.GetValue(includeTests),
                         noGraph: pr.GetValue(noGraph),
                         time: pr.GetValue(time),
-                        reuseBuildCache: pr.GetValue(reuseBuildCache),
+                        noBuildCache: pr.GetValue(noBuildCache),
+                        verifyBuildCache: pr.GetValue(verifyBuildCache),
                         output: output,
                         error: error,
                         workingDirectory: workingDirectory
@@ -91,15 +163,23 @@ internal static class IndexCommands
         bool includeTests,
         bool noGraph,
         bool time,
-        bool reuseBuildCache,
+        bool noBuildCache,
+        bool verifyBuildCache,
         TextWriter output,
         TextWriter error,
         string workingDirectory
     )
     {
         var timings = time ? new PhaseTimings() : null;
-        // Design-time-build cache lives outside the per-commit store dir so it's shared across indexes.
-        var buildCacheDir = reuseBuildCache ? Path.Combine(StoreLayout.RigDir(workingDirectory), "dtb-cache") : null;
+        // Sample CPU (process + whole-machine) / RAM / disk on a background timer for the whole run, so the
+        // --time breakdown can show WHY a phase is slow — e.g. design-time-builds is low process-CPU but high
+        // system-CPU (the work is in child MSBuild processes), not just how long it took. No-op without --time.
+        timings?.StartSampling();
+        // Design-time-build cache: ON BY DEFAULT, lives outside the per-commit store dir so it's shared across
+        // indexes. --no-build-cache opts out; --verify-build-cache forces it on (it diffs against + refreshes
+        // the sidecars), so verify wins over a contradictory --no-build-cache.
+        var useBuildCache = !noBuildCache || verifyBuildCache;
+        var buildCacheDir = useBuildCache ? Path.Combine(StoreLayout.RigDir(workingDirectory), "dtb-cache") : null;
         // --from <csproj>: index only the transitive ProjectReference closure of the entry project
         // (minus test projects) in ONE cross-project Roslyn workspace — skips every out-of-closure
         // test/tool project before its design-time build runs. The closure is written to
@@ -119,6 +199,8 @@ internal static class IndexCommands
                 return 2;
             }
         }
+
+        var rules = RuleSetLoader.Load(target);
 
         // Capture provenance + the destination store-id up front, so the store location and commit can be
         // announced BEFORE the (long) analysis — useful when monitoring a re-index. The commit IS the
@@ -163,8 +245,8 @@ internal static class IndexCommands
 
             result = await SolutionAnalyzer.AnalyzeAsync(
                 target,
+                rules,
                 progress: message => output.WriteLine($"Progress: {message}"),
-                extraRulesPaths: extraRules.Count > 0 ? extraRules : null,
                 projectIdentity: identity,
                 scopeProjectPaths: scopeProjectPaths,
                 parallelism: parallelism,
@@ -172,7 +254,8 @@ internal static class IndexCommands
                 // them back in.
                 excludeTests: !includeTests,
                 timings: timings,
-                buildCacheDir: buildCacheDir
+                buildCacheDir: buildCacheDir,
+                verifyBuildCache: verifyBuildCache
             );
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException)
@@ -188,7 +271,14 @@ internal static class IndexCommands
             return 2;
         }
         analyzeWatch.Stop();
-        output.WriteLine($"Progress: Analysis phase done in {FormatElapsed(analyzeWatch.Elapsed)}");
+        output.WriteLine($"Progress: Analysis phase done in {TimingReport.FormatElapsed(analyzeWatch.Elapsed)}");
+
+        // Memory-profiling pause (RIG_PROFILE_PAUSE): AnalyzeAsync has returned, so its Roslyn
+        // workspace/compilations/semantic models are now UNROOTED — only the plain-string fact set
+        // (`result`) is reachable. A gcdump here forces a GC, so it shows the LIVE set after collection;
+        // diffing it against the "extract-peak" snapshot reveals how much of the ceiling was genuine
+        // working set vs. uncollected Gen-2 garbage. No-op unless the env var is set.
+        ProfilingPause.MaybePause("pre-save (roslyn unrooted)");
 
         // Publish model. A standalone `index` is a full REPLACE published via write-to-temp +
         // atomic rename, so a crash can't tear the live store (and the previous index survives a
@@ -268,7 +358,7 @@ internal static class IndexCommands
         totalWatch.Stop();
         timings?.Record("save", saveWatch.Elapsed);
         output.WriteLine(
-            $"Progress: Save phase done in {FormatElapsed(saveWatch.Elapsed)}  (analysis {FormatElapsed(analyzeWatch.Elapsed)}, total {FormatElapsed(totalWatch.Elapsed)})"
+            $"Progress: Save phase done in {TimingReport.FormatElapsed(saveWatch.Elapsed)}  (analysis {TimingReport.FormatElapsed(analyzeWatch.Elapsed)}, total {TimingReport.FormatElapsed(totalWatch.Elapsed)})"
         );
 
         output.WriteLine($"Indexed: {Path.GetFullPath(result.SolutionPath)}");
@@ -285,58 +375,70 @@ internal static class IndexCommands
         {
             output.WriteLine("Progress: Building call-graph views");
             var graphWatch = Stopwatch.StartNew();
-            await MaterializeGraphAsync(dbPath: finalDbPath, workingDirectory: workingDirectory, output: output);
+            await MaterializeGraphAsync(
+                dbPath: finalDbPath,
+                rules: rules,
+                result: result,
+                workingDirectory: workingDirectory,
+                output: output
+            );
             graphWatch.Stop();
             timings?.Record("graph", graphWatch.Elapsed);
         }
 
         if (timings is not null)
         {
-            WriteTimingBreakdown(output, timings);
+            var samples = timings.StopSampling();
+            TimingReport.WriteBreakdown(output, timings, samples);
+            TimingReport.WriteCsv(
+                output: output,
+                directory: workingDirectory,
+                fileName: "rig-index-telemetry.csv",
+                timings: timings,
+                samples: samples
+            );
         }
 
         return 0;
     }
 
-    // Per-phase timing table for `rig index --time`: each recorded phase with its share of the summed
-    // total. Phases are emitted in execution order (rules-load, workspace-build, wire-generators,
-    // compile+read, extract, projections+xml-di, save, graph) so the analysis sub-phases group first.
-    private static void WriteTimingBreakdown(TextWriter output, PhaseTimings timings)
-    {
-        var entries = timings.Entries;
-        var total = entries.Sum(e => e.Value.TotalSeconds);
-        output.WriteLine("Timing breakdown:");
-        foreach (var (name, elapsed) in entries)
-        {
-            var pct = total > 0 ? elapsed.TotalSeconds / total * 100 : 0;
-            output.WriteLine($"  {name, -20} {FormatElapsed(elapsed), 8}  {pct, 5:0.0}%");
-        }
-
-        output.WriteLine($"  {"total", -20} {FormatElapsed(TimeSpan.FromSeconds(total)), 8}  100.0%");
-    }
-    
     // Build the derived call-graph views (call_edges + dispatch_edges) + the EP-site table into the store at
-    // dbPath. Shared by the standalone `graph` command and the tail of `index` (so a freshly-indexed store is
-    // query-ready on the fast SQL path without a manual follow-up). Idempotent — rerun any time, no rescan.
-    private static async Task MaterializeGraphAsync(string dbPath, string workingDirectory, TextWriter output)
+    // dbPath, using the already-loaded rules passed in by the caller (no second rule load). Run as the tail of
+    // `index` so a freshly-indexed store is query-ready on the fast SQL path without a manual follow-up.
+    // Idempotent — rerun any time, no rescan.
+    private static async Task MaterializeGraphAsync(
+        string dbPath,
+        RuleSet rules,
+        AnalysisResult result,
+        string workingDirectory,
+        TextWriter output
+    )
     {
         var stopwatch = Stopwatch.StartNew();
         await using var context = new RigDbContext(dbPath);
-        // Classification rules flow in here so call_edges is written with Kind="handoff" baked in — the
-        // single place classification persists, read back by every SQL query path. Generic-factory rules
-        // flow in too so the factory monomorphization is baked into call_edges (so the SQL bounding walk
-        // sees the rewritten edges the in-memory traversal does — no effect-path divergence).
-        var rules = RuleSet.Load(workingDirectory);
-        var stats = await GraphMaterializer.BuildAsync(
+        // Build the call graph from the facts we just extracted (in memory) instead of re-reading the whole
+        // fact store back off disk — FactGraphProjection.FromAnalysis is the field-for-field equivalent of
+        // Reads.LoadFactGraphAsync. Classification rules flow in here so call_edges is written with
+        // Kind="handoff" baked in; generic-factory rules flow to BuildFromGraphAsync so the factory
+        // monomorphization is baked into call_edges (so the SQL bounding walk sees the rewritten edges the
+        // in-memory traversal does — no effect-path divergence).
+        var graph = FactGraphProjection.FromAnalysis(result, rules.Handoff);
+        var stats = await GraphMaterializer.BuildFromGraphAsync(
             context,
-            rules.Handoff.ToArray(),
+            graph,
+            rules.Factory,
             message => output.WriteLine($"Progress: {message}"),
-            factoryRules: rules.Factory
+            // Feed the FTS search index from the facts we just extracted (still in RAM) instead of
+            // re-scanning symbol_facts / reference_facts off disk — the bulk of the graph phase's reads.
+            symbols: result.Symbols,
+            references: result.References,
+            // The `deliveryRules` section drives the publish→consumer delivery edges (data, not hardcoded).
+            deliveryRules: rules.Delivery
         );
         output.WriteLine(
             $"Graph: {stats.CallEdges} call edge(s), {stats.DispatchEdges} dispatch edge(s) "
                 + $"({stats.DispatchEdges - stats.HeuristicDispatchEdges} roslyn-mined, {stats.HeuristicDispatchEdges} heuristic), "
-                + $"{stats.Nodes} node(s) in {FormatElapsed(stopwatch.Elapsed)}"
+                + $"{stats.Nodes} node(s) in {TimingReport.FormatElapsed(stopwatch.Elapsed)}"
         );
         // Materialize the pattern-independent EP-site set into a table now, so every later query reads it
         // directly instead of re-deriving from the whole-store fact tables. No-op without deployments.json.
@@ -419,19 +521,6 @@ internal static class IndexCommands
         }
     }
 
-    private static string FormatElapsed(TimeSpan elapsed) =>
-        elapsed.TotalMinutes >= 1 ? $"{(int)elapsed.TotalMinutes}m{elapsed.Seconds:00}s" : $"{elapsed.TotalSeconds:0.0}s";
-
-    private static string ComputeIdentity(string solutionPath) =>
-        Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(solutionPath)))
-        )[..16];
-
-    // The indented-JSON sidecar write shared by `index --from` (relevant-projects.json) and `mine`
-    // (reachable-projects.json).
     private static void WriteJsonSidecar(string path, object data) =>
-        File.WriteAllText(
-            path: path,
-            contents: JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true })
-        );
+        File.WriteAllText(path: path, contents: JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
 }

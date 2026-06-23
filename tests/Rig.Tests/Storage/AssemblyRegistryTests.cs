@@ -25,6 +25,7 @@ public sealed class AssemblyRegistryTests
         var dir = Directory.CreateTempSubdirectory("rig-asmreg-").FullName;
         var dbPath = Path.Combine(dir, "rig.db");
         var solution = Path.Combine(dir, "Test.slnx");
+
         try
         {
             var symbols = new[] { Symbol("M:Asm.A.One", "Asm.A"), Symbol("M:Asm.A.Two", "Asm.A"), Symbol("M:Asm.B.Solo", "Asm.B") };
@@ -58,6 +59,7 @@ public sealed class AssemblyRegistryTests
                     .Select(m => m.AssemblyName)
                     .OrderBy(n => n)
                     .ToListAsync();
+
                 membership.ShouldBe(["Asm.A", "Asm.B"]);
             }
 

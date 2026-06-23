@@ -15,7 +15,7 @@ namespace Rig.Analysis.Extraction;
 // global id (host-context only) — they are simply not emitted as symbols here.
 internal static class FactExtractor
 {
-    public static FactExtractionResult Extract(SourceModel source)
+    public static FactExtractionResult Extract(SourceModel source, SymbolStringCache symbolCache)
     {
         var model = source.SemanticModel;
         var root = source.Root;
@@ -31,41 +31,55 @@ internal static class FactExtractor
         var relations = new List<TypeRelationFact>();
         var dispatch = new List<DispatchFact>();
         var dispatchSeen = new HashSet<(string, string, string)>();
+        // Per-file memo for EnclosingSymbolId: enclosing node -> its owning DocID. Shared across the lambda
+        // pass and every reference so a member's DocID is built once, not once per contained reference.
+        var enclosingCache = new Dictionary<SyntaxNode, string?>();
 
-        // --- Lambda identity (18b): synthesize a symbol + handoff edge for each argument-passed lambda
-        //     BEFORE the reference pass, so EnclosingSymbolId can re-root the lambda body's facts. ---
-        var lambdaIds = CollectLambdaSymbols(symbols, root, model, tree, fileText, references);
+        // --- Lambda identity (18b): a synthetic symbol + handoff edge for each argument-passed lambda,
+        //     so EnclosingSymbolId can re-root the lambda body's facts onto the lambda. The map is built
+        //     INCREMENTALLY by the single descendant walk below (no separate pre-pass): DescendantNodes()
+        //     is pre-order, so a lambda node is always visited — and thus registered here — before any
+        //     reference in its body asks EnclosingSymbolId to re-root to it, and before a NESTED lambda
+        //     resolves its enclosing to this (outer, ancestor) one. EnclosingSymbolId only ever walks
+        //     ancestors, which are always already visited, so one pass suffices. ---
+        var lambdaIds = new Dictionary<SyntaxNode, string>();
+        var lambdaOrdinalByMember = new Dictionary<string, int>(StringComparer.Ordinal);
+        var assemblyName = model.Compilation.AssemblyName ?? "";
 
         // --- Declarations -> SymbolFact (+ TypeRelation for type base/interface edges, DispatchFact
         //     for exact member-level dispatch) ---
         void OnDeclaration(MemberDeclarationSyntax decl)
         {
-            var symbol = model.GetDeclaredSymbol(decl);
-            if (symbol is null)
-            {
-                return;
-            }
-
-            // Field/event declarations declare one symbol per variable; handle below.
+            // Field/event declarations declare one symbol PER VARIABLE, so GetDeclaredSymbol(decl) on the
+            // declaration node itself returns null (`int a, b;` has no single declared symbol). Handle them
+            // FIRST — before the null gate below — resolving each variable declarator individually; otherwise
+            // the null return swallows every class field, leaving only enum members (which ARE single-symbol
+            // EnumMemberDeclarationSyntax) in the store and orphaning every `F:` write-ref from its symbol.
             if (decl is BaseFieldDeclarationSyntax fieldDecl)
             {
                 foreach (var variable in fieldDecl.Declaration.Variables)
                 {
                     if (model.GetDeclaredSymbol(variable) is { } fieldSymbol)
                     {
-                        AddSymbol(symbols, fieldSymbol, tree, fileText, variable);
+                        AddSymbol(symbols, fieldSymbol, tree, fileText, variable, symbolCache);
                     }
                 }
                 return;
             }
 
-            var docId = symbol.GetDocumentationCommentId();
+            var symbol = model.GetDeclaredSymbol(decl);
+            if (symbol is null)
+            {
+                return;
+            }
+
+            var docId = symbolCache.DocId(symbol);
             if (docId is null)
             {
                 return;
             }
 
-            AddSymbol(symbols, symbol, tree, fileText, decl);
+            AddSymbol(symbols, symbol, tree, fileText, decl, symbolCache);
 
             if (symbol is INamedTypeSymbol typeSymbol)
             {
@@ -87,7 +101,7 @@ internal static class FactExtractor
                         continue;
                     }
 
-                    AddSymbol(symbols, accessor, tree, fileText, AccessorNode(accessor) ?? decl);
+                    AddSymbol(symbols, accessor, tree, fileText, AccessorNode(accessor) ?? decl, symbolCache);
                     if (accessor.OverriddenMethod is { } overriddenAccessor)
                     {
                         AddDispatchFact(dispatch, dispatchSeen, source: overriddenAccessor, target: accessor, kind: DispatchKinds.Override);
@@ -127,19 +141,35 @@ internal static class FactExtractor
             }
 
             var invocation = refKind == RefKinds.Invocation ? InvocationOf(name) : null;
-            var receiverType = refKind == RefKinds.Invocation ? ReceiverTypeOf(name, model) : null;
+            var receiverType = refKind == RefKinds.Invocation ? ReceiverTypeOf(name, model, symbolCache) : null;
             var (firstArgTemplate, firstArgType, firstArgName) = FirstArgumentOf(
                 FirstArgumentExpressionOf(name, refKind, invocation),
-                model
+                model,
+                symbolCache
             );
             var (argumentTemplates, argumentNames) = ArgumentListOf(refKind, invocation, model);
-            var structural = StructuralContextOf(invocation, model);
+            // Structural context (enclosing loop / fan-out invocation / try-catch / held-resource scope)
+            // feeds the stage-2 observation deriver. The walk root is the invocation node for a call, but a
+            // STATIC-FIELD WRITE (`StaticType.Field = v`) also derives a shared_state:mutate effect (FR-1b)
+            // and a static-field READ (`= StaticType.Field`) a shared_state:read effect (FR-1 read arm) —
+            // both must carry the SAME observations as an invocation. A publish under Parallel.ForEach is the
+            // highest-value WRITE shape; for the read leg the held-resource scope matters specifically: the
+            // race_window hazard tiers a read-before-write pair DOWN to "verify isolation" only when BOTH the
+            // read and the write are bracketed by a transaction (transaction_spans_effect), so the read ref
+            // must walk its enclosing scopes too. So read AND write walk from their `name` node (its ancestors
+            // include the enclosing loop / fan-out call / lock / using). Other ref kinds keep no structural
+            // context (no effect consumes it).
+            SyntaxNode? structuralRoot =
+                refKind == RefKinds.Invocation ? invocation
+                : refKind is RefKinds.Write or RefKinds.Read ? name
+                : null;
+            var structural = StructuralContextOf(structuralRoot, model, symbolCache);
             var delegateConsumer = refKind == RefKinds.MethodGroup ? DelegateConsumerOf(name, model) : null;
             AddReference(
                 references,
                 target,
                 refKind: refKind,
-                enclosingId: EnclosingSymbolId(name, model, lambdaIds),
+                enclosingId: EnclosingSymbolId(name, model, lambdaIds, enclosingCache),
                 tree: tree,
                 node: name,
                 receiverType: receiverType,
@@ -149,7 +179,8 @@ internal static class FactExtractor
                 firstArgumentName: firstArgName,
                 delegateConsumer: delegateConsumer,
                 argumentTemplates: argumentTemplates,
-                argumentNames: argumentNames
+                argumentNames: argumentNames,
+                symbolCache: symbolCache
             );
 
             // 18c: a method-group ASSIGNED to a delegate field/property/event (not passed as an
@@ -160,10 +191,7 @@ internal static class FactExtractor
                 var resolvedTarget = target is IMethodSymbol bound
                     ? (bound.ReducedFrom ?? bound).OriginalDefinition
                     : target.OriginalDefinition;
-                if (
-                    resolvedTarget.GetDocumentationCommentId() is { } boundId
-                    && dispatchSeen.Add((slot, boundId, DispatchKinds.DelegateBind))
-                )
+                if (symbolCache.DocId(resolvedTarget) is { } boundId && dispatchSeen.Add((slot, boundId, DispatchKinds.DelegateBind)))
                 {
                     dispatch.Add(new DispatchFact(SourceMember: slot, TargetMember: boundId, Kind: DispatchKinds.DelegateBind));
                 }
@@ -175,7 +203,7 @@ internal static class FactExtractor
             // fetches). See AddAccessorInvocations for the body-only selectivity.
             if (target is IPropertySymbol propertyAccess && refKind is RefKinds.Read or RefKinds.Write)
             {
-                AddAccessorInvocations(references, propertyAccess, name, model, tree, lambdaIds);
+                AddAccessorInvocations(references, propertyAccess, name, model, tree, lambdaIds, enclosingCache, symbolCache);
             }
         }
 
@@ -192,9 +220,10 @@ internal static class FactExtractor
                     references,
                     ctor,
                     refKind: RefKinds.Ctor,
-                    enclosingId: EnclosingSymbolId(creation, model, lambdaIds),
+                    enclosingId: EnclosingSymbolId(creation, model, lambdaIds, enclosingCache),
                     tree: tree,
-                    node: creation
+                    node: creation,
+                    symbolCache: symbolCache
                 );
             }
         }
@@ -215,8 +244,8 @@ internal static class FactExtractor
                 new ReferenceFact(
                     TargetSymbolId: slot,
                     RefKind: RefKinds.Invocation,
-                    EnclosingSymbolId: EnclosingSymbolId(invocation, model, lambdaIds),
-                    TargetAssembly: model.Compilation.AssemblyName ?? "",
+                    EnclosingSymbolId: EnclosingSymbolId(invocation, model, lambdaIds, enclosingCache),
+                    TargetAssembly: assemblyName,
                     TargetInSource: true,
                     FilePath: tree.FilePath,
                     Line: tree.GetLineSpan(invocation.Span).StartLinePosition.Line + 1
@@ -242,27 +271,51 @@ internal static class FactExtractor
                 references,
                 type,
                 refKind: RefKinds.Throw,
-                enclosingId: EnclosingSymbolId(thrown, model, lambdaIds),
+                enclosingId: EnclosingSymbolId(thrown, model, lambdaIds, enclosingCache),
                 tree: tree,
                 node: thrown,
-                structural: StructuralContextOf(thrown, model),
-                allowRuntime: true
+                structural: StructuralContextOf(thrown, model, symbolCache),
+                allowRuntime: true,
+                symbolCache: symbolCache
             );
         }
+
+        // Collected during the single descendant walk below, then lowered after — folding the lock pass
+        // into this walk avoids a second full `root.DescendantNodes()` traversal (+ its ToArray).
+        List<LockStatementSyntax>? lockStatements = null;
 
         foreach (var node in root.DescendantNodes())
         {
             switch (node)
             {
+                case AnonymousFunctionExpressionSyntax lambda:
+                    ProcessLambda(
+                        lambda: lambda,
+                        symbols: symbols,
+                        references: references,
+                        lambdaIds: lambdaIds,
+                        ordinalByMember: lambdaOrdinalByMember,
+                        assembly: assemblyName,
+                        model: model,
+                        tree: tree,
+                        fileText: fileText,
+                        enclosingCache: enclosingCache,
+                        symbolCache: symbolCache
+                    );
+                    break;
+
                 case BaseObjectCreationExpressionSyntax creation:
                     OnCreation(creation);
                     break;
+
                 case InvocationExpressionSyntax invocation:
                     OnInvocation(invocation);
                     break;
+
                 case MemberDeclarationSyntax decl:
                     OnDeclaration(decl);
                     break;
+
                 case SimpleNameSyntax name:
                     OnName(name);
                     break;
@@ -270,8 +323,13 @@ internal static class FactExtractor
                 case ThrowStatementSyntax { Expression: { } stmtOperand }:
                     OnThrow(stmtOperand);
                     break;
+
                 case ThisExpressionSyntax exprThrow:
                     OnThrow(exprThrow);
+                    break;
+
+                case LockStatementSyntax lockStmt:
+                    (lockStatements ??= []).Add(lockStmt);
                     break;
 
                 default:
@@ -289,7 +347,10 @@ internal static class FactExtractor
         // body's closing brace — and let the existing data-driven lock rules classify them. The
         // DETECTION stays in rules (builtin-rules.json); this only records a structural fact the
         // language guarantees, exactly as the ctor/throw passes record their constructs.
-        AddLockStatementRefs(references, root, model, tree, lambdaIds);
+        if (lockStatements is not null)
+        {
+            AddLockStatementRefs(references, lockStatements, model, tree, lambdaIds, enclosingCache, symbolCache);
+        }
 
         return new FactExtractionResult(symbols, references, relations, dispatch);
     }
@@ -301,18 +362,14 @@ internal static class FactExtractor
     // lexical span the ordering work (transaction/lock-held-across-IO) will read.
     private static void AddLockStatementRefs(
         List<ReferenceFact> references,
-        SyntaxNode root,
+        IReadOnlyList<LockStatementSyntax> locks,
         SemanticModel model,
         SyntaxTree tree,
-        IReadOnlyDictionary<SyntaxNode, string> lambdaIds
+        IReadOnlyDictionary<SyntaxNode, string> lambdaIds,
+        Dictionary<SyntaxNode, string?> enclosingCache,
+        SymbolStringCache symbolCache
     )
     {
-        var locks = root.DescendantNodes().OfType<LockStatementSyntax>().ToArray();
-        if (locks.Length == 0)
-        {
-            return;
-        }
-
         var monitor = model.Compilation.GetTypeByMetadataName("System.Threading.Monitor");
         var enter = monitor?.GetMembers("Enter").OfType<IMethodSymbol>().FirstOrDefault();
         var exit = monitor?.GetMembers("Exit").OfType<IMethodSymbol>().FirstOrDefault();
@@ -323,8 +380,8 @@ internal static class FactExtractor
 
         foreach (var lockStmt in locks)
         {
-            var enclosing = EnclosingSymbolId(lockStmt, model, lambdaIds);
-            var structural = StructuralContextOf(lockStmt, model);
+            var enclosing = EnclosingSymbolId(lockStmt, model, lambdaIds, enclosingCache);
+            var structural = StructuralContextOf(lockStmt, model, symbolCache);
 
             // acquire: at the `lock` keyword / locked expression. allowRuntime keeps the BCL ref.
             AddReference(
@@ -335,11 +392,13 @@ internal static class FactExtractor
                 tree: tree,
                 node: lockStmt.Expression,
                 structural: structural,
-                allowRuntime: true
+                allowRuntime: true,
+                symbolCache: symbolCache
             );
 
             // release: at the closing brace of the block (or the embedded statement's last line).
             var releaseLine = tree.GetLineSpan(lockStmt.Statement.Span).EndLinePosition.Line + 1;
+
             AddReference(
                 references,
                 exit,
@@ -349,7 +408,8 @@ internal static class FactExtractor
                 node: lockStmt.Expression,
                 structural: structural,
                 allowRuntime: true,
-                lineOverride: releaseLine
+                lineOverride: releaseLine,
+                symbolCache: symbolCache
             );
         }
     }
@@ -453,9 +513,16 @@ internal static class FactExtractor
         }
     }
 
-    private static void AddSymbol(List<SymbolFact> symbols, ISymbol symbol, SyntaxTree tree, string fileText, SyntaxNode node)
+    private static void AddSymbol(
+        List<SymbolFact> symbols,
+        ISymbol symbol,
+        SyntaxTree tree,
+        string fileText,
+        SyntaxNode node,
+        SymbolStringCache symbolCache
+    )
     {
-        var docId = symbol.GetDocumentationCommentId();
+        var docId = symbolCache.DocId(symbol);
         if (docId is null)
         {
             return;
@@ -490,9 +557,9 @@ internal static class FactExtractor
                 SymbolId: docId,
                 Kind: KindOf(symbol),
                 Name: symbol.Name,
-                Namespace: symbol.ContainingNamespace?.ToDisplayString() ?? "",
-                ContainingSymbolId: symbol.ContainingSymbol?.GetDocumentationCommentId(),
-                Modifiers: ModifiersOf(symbol),
+                Namespace: symbolCache.NamespaceDisplay(symbol.ContainingNamespace),
+                ContainingSymbolId: symbolCache.DocId(symbol.ContainingSymbol),
+                Modifiers: ModifiersOf(symbol, symbolCache),
                 TypeKind: typeKind,
                 Signature: symbol.ToDisplayString(),
                 FilePath: tree.FilePath,
@@ -565,7 +632,8 @@ internal static class FactExtractor
         string? delegateConsumer = null,
         int? lineOverride = null,
         string? argumentTemplates = null,
-        string? argumentNames = null
+        string? argumentNames = null,
+        SymbolStringCache? symbolCache = null
     )
     {
         // Generic type arguments at the CALL SITE — read from the constructed `target` BEFORE
@@ -574,22 +642,11 @@ internal static class FactExtractor
             ? string.Join(',', generic.TypeArguments.Select(t => t.ToDisplayString()))
             : null;
 
-        // Generic monomorphization bindings (RENDERING only) — see ReferenceFact. The DECLARING binding is
-        // the callee's containing-type instantiation at this site (receiver/qualifier for a call, the
-        // constructed type for a ctor, the owning type for a property/field read — e.g. `pipeline.Enumerate`
-        // where Enumerate is a `Func<…>` property on QueryPipeline<TRecord, TColumn>); the METHOD binding is
-        // the callee's own type args. Each position is encoded C:/T:/M:/? so the renderer can resolve
-        // forwarded params against the parent's binding.
-        var constructed = target as IMethodSymbol;
-        var declaringContainer = constructed is not null ? (constructed.ReducedFrom ?? constructed).ContainingType : target.ContainingType;
-        var declaringTypeArgBinding = GenericArgBinding(declaringContainer?.TypeArguments);
-        var methodTypeArgBinding = GenericArgBinding(constructed?.TypeArguments);
-
         // For constructors, point the reference at the constructor's containing type's ctor DocID;
         // for everything else use the symbol's own DocID. Reduced extension methods resolve to the
         // original definition so the DocID matches the declaration.
         var resolved = target is IMethodSymbol method ? (method.ReducedFrom ?? method).OriginalDefinition : target.OriginalDefinition;
-        var docId = resolved.GetDocumentationCommentId();
+        var docId = symbolCache is not null ? symbolCache.DocId(resolved) : resolved.GetDocumentationCommentId();
         if (docId is null)
         {
             return;
@@ -597,6 +654,27 @@ internal static class FactExtractor
 
         var inSource = resolved.Locations.Any(loc => loc.IsInSource);
         var assembly = resolved.ContainingAssembly?.Name ?? "";
+
+        // Generic monomorphization bindings (RENDERING only) — see ReferenceFact. The DECLARING binding is
+        // the callee's containing-type instantiation at this site (receiver/qualifier for a call, the
+        // constructed type for a ctor, the owning type for a property/field read — e.g. `pipeline.Enumerate`
+        // where Enumerate is a `Func<…>` property on QueryPipeline<TRecord, TColumn>); the METHOD binding is
+        // the callee's own type args. Each position is encoded C:/T:/M:/? so the renderer can resolve
+        // forwarded params against the parent's binding. Computed ONLY for first-party (inSource) targets:
+        // only first-party nodes render, so a BCL callee's binding is dead storage (stored as null below) —
+        // and a generic BCL call (List<T>.Add, Dictionary<,>.TryGetValue) is the common case, so gating
+        // this skips the GenericArgBinding JSON serialization that would otherwise be computed and discarded.
+        string? declaringTypeArgBinding = null;
+        string? methodTypeArgBinding = null;
+        if (inSource)
+        {
+            var constructed = target as IMethodSymbol;
+            var declaringContainer = constructed is not null
+                ? (constructed.ReducedFrom ?? constructed).ContainingType
+                : target.ContainingType;
+            declaringTypeArgBinding = GenericArgBinding(declaringContainer?.TypeArguments);
+            methodTypeArgBinding = GenericArgBinding(constructed?.TypeArguments);
+        }
 
         // Keep ALL method-call facts (invocation/ctor) regardless of assembly — they are the complete
         // set any future effect rule (incl. BCL: HttpClient, System.IO, sockets, locks, caches, …) can
@@ -634,11 +712,10 @@ internal static class FactExtractor
                 EnclosingScopes: structural.EnclosingScopes,
                 ArgumentTemplates: argumentTemplates,
                 ArgumentNames: argumentNames,
-                // First-party gate: only first-party nodes are rendered, so a BCL callee's binding (List<int>
-                // .Add) would be dead storage. C: concrete tokens still carry BCL type NAMES — that's fine,
-                // they appear as the substituted args of a first-party generic.
-                DeclaringTypeArgBinding: inSource ? declaringTypeArgBinding : null,
-                MethodTypeArgBinding: inSource ? methodTypeArgBinding : null
+                // Already null for non-first-party targets (computed only when inSource above) — only
+                // first-party nodes render, so a BCL callee's binding would be dead storage.
+                DeclaringTypeArgBinding: declaringTypeArgBinding,
+                MethodTypeArgBinding: methodTypeArgBinding
             )
         );
     }
@@ -669,11 +746,29 @@ internal static class FactExtractor
 
         var templates = new string?[arguments.Count];
         var names = new string?[arguments.Count];
+        var anyTemplate = false;
+        var anyName = false;
         for (var i = 0; i < arguments.Count; i++)
         {
             var expression = arguments[i].Expression;
-            templates[i] = StringValueOf(expression, model);
-            names[i] = expression is MemberAccessExpressionSyntax or IdentifierNameSyntax ? expression.ToString() : null;
+            var template = StringValueOf(expression, model);
+            templates[i] = template;
+            anyTemplate |= template is not null;
+
+            var name = expression is MemberAccessExpressionSyntax or IdentifierNameSyntax ? expression.ToString() : null;
+            names[i] = name;
+            anyName |= name is not null;
+        }
+
+        // When NEITHER list captured anything (every arg is a numeric/other literal or a complex
+        // expression — no string template, no member/identifier path) both arrays are all-null and carry
+        // no information: NthJsonString returns null for every index over a null payload and a "[null,
+        // null]" one alike. Skip the serialize (and the retained/stored strings) for that case. The two
+        // lists stay index-aligned — both present or both absent — so a captured value in either keeps
+        // the full positional pair (e.g. a literal arg surfaces a null hole in the names list).
+        if (!anyTemplate && !anyName)
+        {
+            return (null, null);
         }
 
         return (JsonSerializer.Serialize(templates), JsonSerializer.Serialize(names));
@@ -702,16 +797,16 @@ internal static class FactExtractor
     // Static type of an invocation's receiver: `a.Foo()` -> type of `a` (open-generic FQN).
     // Bare `Foo()` (implicit this) and other shapes return null — only explicit member-access
     // receivers carry a receiver-type fact.
-    private static string? ReceiverTypeOf(SimpleNameSyntax name, SemanticModel model)
+    private static string? ReceiverTypeOf(SimpleNameSyntax name, SemanticModel model, SymbolStringCache symbolCache)
     {
         if (name.Parent is MemberAccessExpressionSyntax member && member.Name == name)
         {
-            return model.GetTypeInfo(member.Expression).Type?.OriginalDefinition.ToDisplayString();
+            return symbolCache.TypeDisplay(model.GetTypeInfo(member.Expression).Type);
         }
 
         if (name.Parent is MemberBindingExpressionSyntax binding && binding.Parent is ConditionalAccessExpressionSyntax conditional)
         {
-            return model.GetTypeInfo(conditional.Expression).Type?.OriginalDefinition.ToDisplayString();
+            return symbolCache.TypeDisplay(model.GetTypeInfo(conditional.Expression).Type);
         }
 
         return null;
@@ -802,7 +897,11 @@ internal static class FactExtractor
     // interpolated, via StringTemplateExtensions — the same helper the Roslyn EffectExtractor uses
     // for http_argument/string_argument) and its static type (open-generic FQN, for argument_type).
     // Returns (null, null) for a null argument.
-    private static (string? Template, string? Type, string? Name) FirstArgumentOf(ExpressionSyntax? argument, SemanticModel model)
+    private static (string? Template, string? Type, string? Name) FirstArgumentOf(
+        ExpressionSyntax? argument,
+        SemanticModel model,
+        SymbolStringCache symbolCache
+    )
     {
         if (argument is null)
         {
@@ -810,7 +909,7 @@ internal static class FactExtractor
         }
 
         var template = argument.GetStringTemplate();
-        var type = model.GetTypeInfo(argument).Type?.OriginalDefinition.ToDisplayString();
+        var type = symbolCache.TypeDisplay(model.GetTypeInfo(argument).Type);
         // Member/identifier path of the argument (the routing target / discriminator, e.g.
         // `PaymentGatewayProcessDns.AccountService`); null for literals and other expression shapes.
         var name = argument is MemberAccessExpressionSyntax or IdentifierNameSyntax ? argument.ToString() : null;
@@ -826,113 +925,130 @@ internal static class FactExtractor
     //   * caught exception types of all enclosing try/catch clauses -> concurrency_handled
     // Returns all-null for a null node (non-invocation ref). Generalized to any node so throw
     // operands carry the same loop/try-catch context as invocations.
-    private static StructuralContext StructuralContextOf(SyntaxNode? invocation, SemanticModel model)
+    // The FQN type of an enclosing-invocation receiver, for FQN-based structural-context matching (e.g.
+    // parallel_fanout). An INSTANCE receiver (`x.M()`) resolves to the value's type; a STATIC-class receiver
+    // (`Parallel.ForEach`, whose expression has no value type) resolves to the referenced type ITSELF — so a
+    // rule matches the same FQN whether the call was written `Parallel.ForEach` or fully qualified as
+    // `System.Threading.Tasks.Parallel.ForEach`. (Matching the syntactic receiver TEXT missed the qualified form.)
+    private static string EnclosingReceiverType(ExpressionSyntax receiver, SemanticModel model, SymbolStringCache symbolCache)
+    {
+        if (model.GetTypeInfo(receiver).Type is { } valueType)
+        {
+            return symbolCache.TypeDisplay(valueType) ?? "";
+        }
+
+        if (model.GetSymbolInfo(receiver).Symbol is INamedTypeSymbol staticType)
+        {
+            return symbolCache.TypeDisplay(staticType) ?? "";
+        }
+
+        return "";
+    }
+
+    private static StructuralContext StructuralContextOf(SyntaxNode? invocation, SemanticModel model, SymbolStringCache symbolCache)
     {
         if (invocation is null)
         {
             return default;
         }
 
+        // ONE ancestor walk feeds all four structural facts — nearest enclosing loop, enclosing
+        // member-access invocations, caught exception types, and held-resource (using/lock) scopes —
+        // instead of four separate `Ancestors()` enumerations (each of which re-walked to the root).
+        // Ancestors() is innermost-first, so every list keeps the exact order the prior per-fact walks
+        // produced. The three lists are allocated LAZILY: the common case (a call with no enclosing
+        // loop/try/scope and no member-access invocation around it) allocates nothing here.
         string? loopKind = null;
         string? loopDetail = null;
+        List<FactStructuralContext.EnclosingInvocation>? enclosing = null;
+        List<string>? catchTypes = null;
+        List<FactStructuralContext.EnclosingScope>? scopes = null;
+
         foreach (var ancestor in invocation.Ancestors())
         {
             switch (ancestor)
             {
-                case ForEachStatementSyntax forEach:
+                // Nearest enclosing loop only — first one found wins; later (outer) loops are ignored.
+                case ForEachStatementSyntax forEach when loopKind is null:
                     loopKind = "foreach";
                     loopDetail = $"{forEach.Identifier.ValueText} in {forEach.Expression}";
                     break;
-                case ForStatementSyntax:
+                case ForStatementSyntax when loopKind is null:
                     loopKind = "for";
                     loopDetail = "for";
                     break;
-                case WhileStatementSyntax:
+                case WhileStatementSyntax when loopKind is null:
                     loopKind = "while";
                     loopDetail = "while";
                     break;
-            }
 
-            if (loopKind is not null)
-            {
-                break;
-            }
-        }
+                case InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax memberAccess }:
+                    (enclosing ??= []).Add(
+                        new FactStructuralContext.EnclosingInvocation(
+                            ReceiverText: memberAccess.Expression.ToString(),
+                            ReceiverType: EnclosingReceiverType(memberAccess.Expression, model, symbolCache),
+                            MethodName: memberAccess.Name.Identifier.ValueText
+                        )
+                    );
+                    break;
 
-        var enclosing = new List<FactStructuralContext.EnclosingInvocation>();
-        foreach (var ancestor in invocation.Ancestors().OfType<InvocationExpressionSyntax>())
-        {
-            if (ancestor.Expression is not MemberAccessExpressionSyntax memberAccess)
-            {
-                continue;
-            }
+                case TryStatementSyntax tryStatement:
+                    foreach (var catchClause in tryStatement.Catches)
+                    {
+                        if (catchClause.Declaration is not null)
+                        {
+                            (catchTypes ??= []).Add(model.GetTypeInfo(catchClause.Declaration.Type).Type?.ToDisplayString() ?? "");
+                        }
+                    }
+                    break;
 
-            var receiverText = memberAccess.Expression.ToString();
-            var receiverType = model.GetTypeInfo(memberAccess.Expression).Type?.OriginalDefinition.ToDisplayString() ?? "";
-            enclosing.Add(
-                new FactStructuralContext.EnclosingInvocation(
-                    ReceiverText: receiverText,
-                    ReceiverType: receiverType,
-                    MethodName: memberAccess.Name.Identifier.ValueText
-                )
-            );
-        }
-
-        var catchTypes = new List<string>();
-        foreach (var tryStatement in invocation.Ancestors().OfType<TryStatementSyntax>())
-        {
-            foreach (var catchClause in tryStatement.Catches)
-            {
-                if (catchClause.Declaration is not null)
-                {
-                    catchTypes.Add(model.GetTypeInfo(catchClause.Declaration.Type).Type?.ToDisplayString() ?? "");
-                }
-            }
-        }
-
-        // Enclosing held-resource scopes (innermost-first): `using`/`lock` ancestors. A `using` carries
-        // its resource type (the disposed object — a transaction, connection, …); a `lock` carries the
-        // locked expression's type (or "" if unresolved). Feeds resource_span: a network/IO effect
-        // nested in a transaction-using or a lock is held across that effect.
-        var scopes = new List<FactStructuralContext.EnclosingScope>();
-        foreach (var ancestor in invocation.Ancestors())
-        {
-            if (ancestor is LockStatementSyntax lockStmt)
-            {
-                scopes.Add(new FactStructuralContext.EnclosingScope(Kind: "lock", Type: TypeDisplayOf(lockStmt.Expression, model)));
-            }
-            else if (ancestor is UsingStatementSyntax usingStmt)
-            {
-                scopes.Add(new FactStructuralContext.EnclosingScope(Kind: "using", Type: UsingResourceType(usingStmt, model)));
-            }
-            else if (ancestor is LocalDeclarationStatementSyntax local && local.UsingKeyword.IsKind(SyntaxKind.UsingKeyword))
-            {
-                scopes.Add(new FactStructuralContext.EnclosingScope(Kind: "using", Type: DeclarationType(local.Declaration, model)));
+                // Held-resource scopes (innermost-first): a `using` carries its resource type (the
+                // disposed object — a transaction, connection, …); a `lock` carries the locked
+                // expression's type (or "" if unresolved). Feeds resource_span: a network/IO effect
+                // nested in a transaction-using or a lock is held across that effect.
+                case LockStatementSyntax lockStmt:
+                    (scopes ??= []).Add(
+                        new FactStructuralContext.EnclosingScope(Kind: "lock", Type: TypeDisplayOf(lockStmt.Expression, model, symbolCache))
+                    );
+                    break;
+                case UsingStatementSyntax usingStmt:
+                    (scopes ??= []).Add(
+                        new FactStructuralContext.EnclosingScope(Kind: "using", Type: UsingResourceType(usingStmt, model, symbolCache))
+                    );
+                    break;
+                case LocalDeclarationStatementSyntax local when local.UsingKeyword.IsKind(SyntaxKind.UsingKeyword):
+                    (scopes ??= []).Add(
+                        new FactStructuralContext.EnclosingScope(
+                            Kind: "using",
+                            Type: DeclarationType(local.Declaration, model, symbolCache)
+                        )
+                    );
+                    break;
             }
         }
 
         return new StructuralContext(
             LoopKind: loopKind,
             LoopDetail: loopDetail,
-            EnclosingInvocations: FactStructuralContext.EncodeInvocations(enclosing),
-            CatchTypes: FactStructuralContext.EncodeList(catchTypes),
-            EnclosingScopes: FactStructuralContext.EncodeScopes(scopes)
+            EnclosingInvocations: enclosing is null ? null : FactStructuralContext.EncodeInvocations(enclosing),
+            CatchTypes: catchTypes is null ? null : FactStructuralContext.EncodeList(catchTypes),
+            EnclosingScopes: scopes is null ? null : FactStructuralContext.EncodeScopes(scopes)
         );
     }
 
     // The resource type of a `using` statement: the declared variable's type for
     // `using (var x = expr)` / `using (Resource x = expr)`, or the expression's type for
     // `using (expr)`. Open-generic FQN; "" when unresolved.
-    private static string UsingResourceType(UsingStatementSyntax usingStmt, SemanticModel model)
+    private static string UsingResourceType(UsingStatementSyntax usingStmt, SemanticModel model, SymbolStringCache symbolCache)
     {
         if (usingStmt.Declaration is { } declaration)
         {
-            return DeclarationType(declaration, model);
+            return DeclarationType(declaration, model, symbolCache);
         }
 
         if (usingStmt.Expression is { } expression)
         {
-            return TypeDisplayOf(expression, model);
+            return TypeDisplayOf(expression, model, symbolCache);
         }
 
         return "";
@@ -940,7 +1056,7 @@ internal static class FactExtractor
 
     // The declared type of a variable declaration; for `var` Roslyn resolves the inferred type from
     // the declaration's type syntax, falling back to the first initializer's type. Open-generic FQN.
-    private static string DeclarationType(VariableDeclarationSyntax declaration, SemanticModel model)
+    private static string DeclarationType(VariableDeclarationSyntax declaration, SemanticModel model, SymbolStringCache symbolCache)
     {
         var type = model.GetTypeInfo(declaration.Type).Type;
         if (type is null or IErrorTypeSymbol && declaration.Variables.FirstOrDefault()?.Initializer?.Value is { } initializer)
@@ -948,11 +1064,11 @@ internal static class FactExtractor
             type = model.GetTypeInfo(initializer).Type;
         }
 
-        return type?.OriginalDefinition.ToDisplayString() ?? "";
+        return symbolCache.TypeDisplay(type) ?? "";
     }
 
-    private static string TypeDisplayOf(ExpressionSyntax expression, SemanticModel model) =>
-        model.GetTypeInfo(expression).Type?.OriginalDefinition.ToDisplayString() ?? "";
+    private static string TypeDisplayOf(ExpressionSyntax expression, SemanticModel model, SymbolStringCache symbolCache) =>
+        symbolCache.TypeDisplay(model.GetTypeInfo(expression).Type) ?? "";
 
     private readonly record struct StructuralContext(
         string? LoopKind,
@@ -1166,7 +1282,9 @@ internal static class FactExtractor
         SimpleNameSyntax name,
         SemanticModel model,
         SyntaxTree tree,
-        IReadOnlyDictionary<SyntaxNode, string> lambdaIds
+        IReadOnlyDictionary<SyntaxNode, string> lambdaIds,
+        Dictionary<SyntaxNode, string?> enclosingCache,
+        SymbolStringCache symbolCache
     )
     {
         var (reads, writes) = AccessShape(name);
@@ -1177,9 +1295,9 @@ internal static class FactExtractor
             return;
         }
 
-        var enclosing = EnclosingSymbolId(name, model, lambdaIds);
-        var receiver = ReceiverTypeOf(name, model);
-        var structural = StructuralContextOf(name, model);
+        var enclosing = EnclosingSymbolId(name, model, lambdaIds, enclosingCache);
+        var receiver = ReceiverTypeOf(name, model, symbolCache);
+        var structural = StructuralContextOf(name, model, symbolCache);
         if (getter is not null)
         {
             AddReference(
@@ -1190,7 +1308,8 @@ internal static class FactExtractor
                 tree: tree,
                 node: name,
                 receiverType: receiver,
-                structural: structural
+                structural: structural,
+                symbolCache: symbolCache
             );
         }
 
@@ -1204,7 +1323,8 @@ internal static class FactExtractor
                 tree: tree,
                 node: name,
                 receiverType: receiver,
-                structural: structural
+                structural: structural,
+                symbolCache: symbolCache
             );
         }
     }
@@ -1274,7 +1394,18 @@ internal static class FactExtractor
     // deferred dispatcher) instead of bleeding into the enclosing method. Walks ancestors-or-self,
     // innermost-first: the first arg-lambda in `lambdaIds` wins; lambdas NOT in the map (field/local
     // assignments — 18c) are transparent and fall through to the member, preserving prior behaviour.
-    private static string? EnclosingSymbolId(SyntaxNode node, SemanticModel model, IReadOnlyDictionary<SyntaxNode, string> lambdaIds)
+    // The enclosing node's owning DocID, MEMOIZED per enclosing node. Every reference inside a member
+    // resolves to the same id, so without the cache a method with N reference sites pays N× GetDeclaredSymbol
+    // + GetDocumentationCommentId (the latter rebuilds the full signature string each time) — the dominant
+    // allocator in extract at ~1.7M references. The cache (one per source file) collapses that to ~one
+    // resolution per declared method/accessor. Keyed by the enclosing node; the ancestor walk is allocation-
+    // free and runs per call, but the expensive bind + string build happens once.
+    private static string? EnclosingSymbolId(
+        SyntaxNode node,
+        SemanticModel model,
+        IReadOnlyDictionary<SyntaxNode, string> lambdaIds,
+        Dictionary<SyntaxNode, string?> cache
+    )
     {
         for (var cur = node; cur is not null; cur = cur.Parent)
         {
@@ -1283,120 +1414,133 @@ internal static class FactExtractor
                 return lambdaId;
             }
 
-            // A node inside a bodied accessor (`get {…}`/`set {…}`/`init {…}`/`add`/`remove`, or
-            // `get => …`) is owned by the ACCESSOR method (M:get_X/M:set_X) — the symbol the access-site
-            // call edge targets and the graph node that is emitted — NOT the property (P:X), which is
-            // never a call-graph node. Keying effects to the property orphaned them from reachability
-            // (reaches/tree intersect call-graph method ids against effect enclosing ids).
-            if (cur is AccessorDeclarationSyntax accessor)
+            if (cur is AccessorDeclarationSyntax or MemberDeclarationSyntax)
             {
-                return model.GetDeclaredSymbol(accessor)?.GetDocumentationCommentId();
-            }
-
-            if (cur is MemberDeclarationSyntax member)
-            {
-                if (member is BaseFieldDeclarationSyntax field)
+                if (cache.TryGetValue(cur, out var cached))
                 {
-                    var first = field.Declaration.Variables.FirstOrDefault();
-                    return first is null ? null : model.GetDeclaredSymbol(first)?.GetDocumentationCommentId();
+                    return cached;
                 }
 
-                // Expression-bodied property/indexer (`PersonRecord Person => PersonCache.New(…);`): the
-                // body IS the getter's, so own it by the getter accessor (M:get_X) to match the node +
-                // edge. Auto-property initializers (`{ get; } = Compute()`, no ExpressionBody) run in the
-                // ctor — not an accessor node — so they fall through to the property id unchanged.
-                ArrowExpressionClauseSyntax? expressionBody = member switch
-                {
-                    PropertyDeclarationSyntax p => p.ExpressionBody,
-                    IndexerDeclarationSyntax ix => ix.ExpressionBody,
-                    _ => null,
-                };
-                if (expressionBody is not null && model.GetDeclaredSymbol(member) is IPropertySymbol { GetMethod: { } getter })
-                {
-                    return getter.GetDocumentationCommentId();
-                }
-
-                return model.GetDeclaredSymbol(member)?.GetDocumentationCommentId();
+                var id = ComputeEnclosingId(cur, model);
+                cache[cur] = id;
+                return id;
             }
         }
+
         return null;
     }
 
-    // 18b: assign a synthetic identity to every lambda passed as a call/ctor ARGUMENT, emit it as a
+    // The per-node enclosing-owner resolution, factored out of EnclosingSymbolId so it can be memoized.
+    private static string? ComputeEnclosingId(SyntaxNode cur, SemanticModel model)
+    {
+        // A node inside a bodied accessor (`get {…}`/`set {…}`/`init {…}`/`add`/`remove`, or `get => …`)
+        // is owned by the ACCESSOR method (M:get_X/M:set_X) — the symbol the access-site call edge targets
+        // and the graph node that is emitted — NOT the property (P:X), which is never a call-graph node.
+        // Keying effects to the property orphaned them from reachability (reaches/tree intersect call-graph
+        // method ids against effect enclosing ids).
+        if (cur is AccessorDeclarationSyntax accessor)
+        {
+            return model.GetDeclaredSymbol(accessor)?.GetDocumentationCommentId();
+        }
+
+        var member = (MemberDeclarationSyntax)cur;
+        if (member is BaseFieldDeclarationSyntax field)
+        {
+            var first = field.Declaration.Variables.FirstOrDefault();
+            return first is null ? null : model.GetDeclaredSymbol(first)?.GetDocumentationCommentId();
+        }
+
+        // Expression-bodied property/indexer (`PersonRecord Person => PersonCache.New(…);`): the body IS the
+        // getter's, so own it by the getter accessor (M:get_X) to match the node + edge. Auto-property
+        // initializers (`{ get; } = Compute()`, no ExpressionBody) run in the ctor — not an accessor node —
+        // so they fall through to the property id unchanged.
+        ArrowExpressionClauseSyntax? expressionBody = member switch
+        {
+            PropertyDeclarationSyntax p => p.ExpressionBody,
+            IndexerDeclarationSyntax ix => ix.ExpressionBody,
+            _ => null,
+        };
+        if (expressionBody is not null && model.GetDeclaredSymbol(member) is IPropertySymbol { GetMethod: { } getter })
+        {
+            return getter.GetDocumentationCommentId();
+        }
+
+        return model.GetDeclaredSymbol(member)?.GetDocumentationCommentId();
+    }
+
+    // 18b: assign a synthetic identity to ONE lambda passed as a call/ctor ARGUMENT, emit it as a
     // "lambda" SymbolFact + a methodGroup edge (enclosing -> lambda) carrying the DelegateConsumer (the
-    // dispatcher it's handed to), and return the node->id map that re-roots the lambda body's facts.
+    // dispatcher it's handed to), and register the node->id mapping that re-roots the lambda body's facts.
     // A lambda that is NOT an argument (a `Func<> f = () => ..` field/local, a `+=` handler) gets no
     // identity here — LambdaConsumerOf returns null — and stays owned by its member (deferred to 18c).
-    // Outer lambdas precede their nested children in document order, so a nested lambda's own edge
-    // resolves its enclosing to the OUTER lambda (already in the map).
-    private static Dictionary<SyntaxNode, string> CollectLambdaSymbols(
+    // Called from the single descendant walk in document (pre-order) order, so an OUTER lambda is always
+    // registered before its NESTED children: a nested lambda's own edge resolves its enclosing to the
+    // outer lambda (already in lambdaIds), and ordinals are assigned per member in source order.
+    private static void ProcessLambda(
+        AnonymousFunctionExpressionSyntax lambda,
         List<SymbolFact> symbols,
-        SyntaxNode root,
+        List<ReferenceFact> references,
+        Dictionary<SyntaxNode, string> lambdaIds,
+        Dictionary<string, int> ordinalByMember,
+        string assembly,
         SemanticModel model,
         SyntaxTree tree,
         string fileText,
-        List<ReferenceFact> references
+        Dictionary<SyntaxNode, string?> enclosingCache,
+        SymbolStringCache symbolCache
     )
     {
-        var ids = new Dictionary<SyntaxNode, string>();
-        var ordinalByMember = new Dictionary<string, int>(StringComparer.Ordinal);
-        var assembly = model.Compilation.AssemblyName ?? "";
-
-        foreach (var lambda in root.DescendantNodes().OfType<AnonymousFunctionExpressionSyntax>())
+        var consumer = LambdaConsumerOf(lambda, model);
+        if (consumer is null)
         {
-            var consumer = LambdaConsumerOf(lambda, model);
-            if (consumer is null)
-            {
-                continue; // not an argument-passed lambda — no deferred identity
-            }
-
-            var member = lambda.FirstAncestorOrSelf<MemberDeclarationSyntax>();
-            var memberSymbol = member is null ? null : model.GetDeclaredSymbol(member);
-            var memberId = memberSymbol?.GetDocumentationCommentId();
-            if (memberId is null)
-            {
-                continue;
-            }
-
-            var ordinal = ordinalByMember.TryGetValue(memberId, out var n) ? n : 0;
-            ordinalByMember[memberId] = ordinal + 1;
-            var id = $"{memberId}~λ{ordinal}"; // λ marker: clearly synthetic, never collides with a real DocID
-            ids[lambda] = id;
-
-            var lineSpan = tree.GetLineSpan(lambda.Span);
-            var line = lineSpan.StartLinePosition.Line + 1;
-            symbols.Add(
-                new SymbolFact(
-                    SymbolId: id,
-                    Kind: "lambda",
-                    Name: $"λ{ordinal}",
-                    Namespace: memberSymbol?.ContainingNamespace?.ToDisplayString() ?? "",
-                    ContainingSymbolId: memberId,
-                    Modifiers: "",
-                    TypeKind: "",
-                    Signature: "lambda",
-                    FilePath: tree.FilePath,
-                    Line: line,
-                    EndLine: lineSpan.EndLinePosition.Line + 1,
-                    DefiningAssembly: assembly,
-                    IsOverride: false,
-                    BodyHash: BodyHashOf(fileText, lambda)
-                )
-            );
-            references.Add(
-                new ReferenceFact(
-                    TargetSymbolId: id,
-                    RefKind: RefKinds.MethodGroup,
-                    EnclosingSymbolId: EnclosingSymbolId(lambda.Parent ?? lambda, model, ids),
-                    TargetAssembly: assembly,
-                    TargetInSource: true,
-                    FilePath: tree.FilePath,
-                    Line: line,
-                    DelegateConsumer: consumer
-                )
-            );
+            return; // not an argument-passed lambda — no deferred identity
         }
-        return ids;
+
+        var member = lambda.FirstAncestorOrSelf<MemberDeclarationSyntax>();
+        var memberSymbol = member is null ? null : model.GetDeclaredSymbol(member);
+        var memberId = symbolCache.DocId(memberSymbol);
+        if (memberId is null)
+        {
+            return;
+        }
+
+        var ordinal = ordinalByMember.TryGetValue(memberId, out var n) ? n : 0;
+        ordinalByMember[memberId] = ordinal + 1;
+        var id = $"{memberId}~λ{ordinal}"; // λ marker: clearly synthetic, never collides with a real DocID
+        lambdaIds[lambda] = id;
+
+        var lineSpan = tree.GetLineSpan(lambda.Span);
+        var line = lineSpan.StartLinePosition.Line + 1;
+        symbols.Add(
+            new SymbolFact(
+                SymbolId: id,
+                Kind: "lambda",
+                Name: $"λ{ordinal}",
+                Namespace: symbolCache.NamespaceDisplay(memberSymbol?.ContainingNamespace),
+                ContainingSymbolId: memberId,
+                Modifiers: "",
+                TypeKind: "",
+                Signature: "lambda",
+                FilePath: tree.FilePath,
+                Line: line,
+                EndLine: lineSpan.EndLinePosition.Line + 1,
+                DefiningAssembly: assembly,
+                IsOverride: false,
+                BodyHash: BodyHashOf(fileText, lambda)
+            )
+        );
+        references.Add(
+            new ReferenceFact(
+                TargetSymbolId: id,
+                RefKind: RefKinds.MethodGroup,
+                EnclosingSymbolId: EnclosingSymbolId(lambda.Parent ?? lambda, model, lambdaIds, enclosingCache),
+                TargetAssembly: assembly,
+                TargetInSource: true,
+                FilePath: tree.FilePath,
+                Line: line,
+                DelegateConsumer: consumer
+            )
+        );
     }
 
     // The dispatcher a lambda is handed to: the enclosing invocation/constructor the lambda is an
@@ -1436,7 +1580,50 @@ internal static class FactExtractor
             _ => symbol.Kind.ToString().ToLowerInvariant(),
         };
 
-    private static string ModifiersOf(ISymbol symbol)
+    // The space-joined modifier string, memoized per (accessibility + flags) combo: the value is a pure
+    // function of those inputs, so ModifierKey encodes them into one int and the cache shares one built
+    // string across all symbols with that combo (one of only a few dozen) — skipping the per-symbol
+    // List<string> + Join, and collapsing the retained-duplicate Modifiers strings on the fact set.
+    private static string ModifiersOf(ISymbol symbol, SymbolStringCache symbolCache) =>
+        symbolCache.Modifiers(key: ModifierKey(symbol), symbol: symbol, build: BuildModifiers);
+
+    // Packs everything BuildModifiers reads into one int cache key: accessibility in the low bits, each
+    // boolean modifier in its own bit. Two symbols with the same key produce the identical modifier string.
+    private static int ModifierKey(ISymbol symbol)
+    {
+        var key = (int)symbol.DeclaredAccessibility; // 0..6, fits the low 3 bits
+        if (symbol.IsStatic)
+        {
+            key |= 1 << 3;
+        }
+        if (symbol.IsAbstract)
+        {
+            key |= 1 << 4;
+        }
+        if (symbol.IsSealed)
+        {
+            key |= 1 << 5;
+        }
+        if (symbol.IsVirtual)
+        {
+            key |= 1 << 6;
+        }
+        if (symbol.IsOverride)
+        {
+            key |= 1 << 7;
+        }
+        if (symbol is IMethodSymbol { IsAsync: true })
+        {
+            key |= 1 << 8;
+        }
+        if (symbol is IFieldSymbol { IsReadOnly: true } or IPropertySymbol { IsReadOnly: true })
+        {
+            key |= 1 << 9;
+        }
+        return key;
+    }
+
+    private static string BuildModifiers(ISymbol symbol)
     {
         var parts = new List<string>();
         // Accessibility first (e.g. "public", "private", "internal", "protected internal"). Roslyn's

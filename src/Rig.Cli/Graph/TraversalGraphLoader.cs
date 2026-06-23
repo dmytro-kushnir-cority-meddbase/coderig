@@ -19,6 +19,15 @@ internal static class TraversalGraphLoader
     internal static RigDbContext OpenReadContext(string workingDirectory, string? storeRef = null) =>
         new(StoreLayout.DbPathForRef(workingDirectory, storeRef), readOnly: true);
 
+    // F7: overload that also surfaces the resolved store DIRECTORY so the caller can reuse it for a
+    // cache-key computation (StoreKey), avoiding a second ResolveReadStoreDir call. The caller receives
+    // the dir as an `out` parameter; the existing no-out-param overload is unchanged for all other callers.
+    internal static RigDbContext OpenReadContext(string workingDirectory, string? storeRef, out string storeDir)
+    {
+        storeDir = StoreLayout.ResolveReadStoreDir(workingDirectory, storeRef);
+        return new(Path.Combine(storeDir, StoreLayout.DbFileName), readOnly: true);
+    }
+
     // The call graph for a traversal command (reaches/tree/path/callers). When the derived edge views
     // exist (`rig graph` has been run) it returns the BOUNDED subgraph for `pattern` in the given
     // direction — loaded on disk via recursive CTE, sized to the result, not the 1.6GB store. Otherwise
@@ -95,7 +104,9 @@ internal static class TraversalGraphLoader
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
-        return new SqlReachability.ReachInputs(graph, invocations, CtorRefs: epData.CtorRefs, ThrowRefs: throwRefs);
+        // F2: surface epData so callers that also need the EP site map (DeriveEpSiteKindAsync) can
+        // reuse it instead of issuing a second LoadFactEntryPointDataAsync on the EF-fallback path.
+        return new SqlReachability.ReachInputs(graph, invocations, CtorRefs: epData.CtorRefs, ThrowRefs: throwRefs, EpData: epData);
     }
 
     // Base edges in the (TypeId, BaseId) shape FactEffectDeriver.Derive expects, from a graph's edges.

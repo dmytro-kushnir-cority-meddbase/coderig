@@ -239,7 +239,7 @@ public sealed class SqlReachabilityTests(AnalyzedPlaygrounds playgrounds)
     }
 
     private static IReadOnlyList<FactHandoffRule> HandoffRules(AnalyzedPlayground playground) =>
-        FactHandoffRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory);
+        RuleSetLoader.Load(playground.WorkingDirectory).Handoff;
 
     private static IReadOnlyDictionary<string, int> OracleDepth(
         FactGraphData graph,
@@ -260,7 +260,7 @@ public sealed class SqlReachabilityTests(AnalyzedPlaygrounds playgrounds)
         map.Select(kv => (kv.Key, kv.Value)).OrderBy(t => t.Key, StringComparer.Ordinal).ToArray();
 
     private static IReadOnlyList<FactGenericFactoryRule> FactoryRules(AnalyzedPlayground playground) =>
-        FactGenericFactoryRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory);
+        RuleSetLoader.Load(playground.WorkingDirectory).Factory;
 
     // The in-memory oracle the SQL views are compared against: handoff-classified (FactProjection) AND
     // generic-factory-rewritten, mirroring exactly what GraphMaterializer now bakes into call_edges.

@@ -1,4 +1,5 @@
 using System.CommandLine;
+using Microsoft.EntityFrameworkCore;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
@@ -54,12 +55,7 @@ internal static class FactCommands
     }
 
     // Render the runs in one open store context, at the given indent levels (id line / detail lines).
-    private static async Task RenderRunsAsync(
-        RigDbContext context,
-        TextWriter output,
-        string idIndent,
-        string detailIndent
-    )
+    private static async Task RenderRunsAsync(RigDbContext context, TextWriter output, string idIndent, string detailIndent)
     {
         var runs = await Reads.ListRunsAsync(context);
         foreach (var run in runs)
@@ -95,6 +91,16 @@ internal static class FactCommands
                         return CommandGuard.NoRunError(error);
                     }
 
+                    if (registrations.Count == 0)
+                    {
+                        output.WriteLine("DI Registrations");
+                        output.WriteLine($"{Indent.L1}0 DI registrations found.");
+                        output.WriteLine(
+                            $"{Indent.L1}(DI is mined from XML DI config files during `rig index`; an empty result is expected for projects without XML-based DI.)"
+                        );
+                        return 0;
+                    }
+
                     DiRenderer.Render(registrations, output);
                     return 0;
                 }
@@ -127,29 +133,48 @@ internal static class FactCommands
     {
         var skipped = new Option<bool>("--skipped") { Description = "List source files skipped during indexing." };
         var cmd = new Command(name: "files", description: "Inspect indexed source files.") { skipped };
-        // `files` exists only to serve --skipped today; keep the historical usage hint as a validator
-        // (exits with a parse error rather than running an empty command).
-        cmd.Validators.Add(result =>
-        {
-            if (!result.GetValue(skipped))
-            {
-                result.AddError("Usage: rig files --skipped");
-            }
-        });
-        cmd.SetAction(_ =>
+        cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
                 error,
                 async () =>
                 {
                     await using var context = OpenReadContext(workingDirectory);
-                    var sourceFiles = await Reads.LoadSkippedSourceFilesAsync(context);
-                    if (sourceFiles is null)
+                    if (pr.GetValue(skipped))
+                    {
+                        var sourceFiles = await Reads.LoadSkippedSourceFilesAsync(context);
+                        if (sourceFiles is null)
+                        {
+                            return CommandGuard.NoRunError(error);
+                        }
+
+                        SourceFileRenderer.RenderSkipped(sourceFiles, output);
+                        return 0;
+                    }
+
+                    // Bare invocation: summarise what is in the store so it is not a dead end.
+                    if (!await context.Database.CanConnectAsync())
                     {
                         return CommandGuard.NoRunError(error);
                     }
 
-                    SourceFileRenderer.RenderSkipped(sourceFiles, output);
+                    var indexedCount = await context
+                        .SourceFiles.Where(f => f.Status != "skipped")
+                        .Select(f => f.FilePath)
+                        .Distinct()
+                        .CountAsync();
+                    var skippedCount = await context
+                        .SourceFiles.Where(f => f.Status == "skipped")
+                        .Select(f => f.FilePath)
+                        .Distinct()
+                        .CountAsync();
+                    output.WriteLine("Source Files");
+                    output.WriteLine($"{Indent.L1}{indexedCount} indexed source file(s)");
+                    if (skippedCount > 0)
+                    {
+                        output.WriteLine($"{Indent.L1}({skippedCount} skipped — use --skipped to list)");
+                    }
+
                     return 0;
                 }
             )
@@ -162,7 +187,11 @@ internal static class FactCommands
         var pattern = CommonOptions.Pattern(name: "pattern", description: "Symbol name pattern to search for.");
         var kind = CommonOptions.Kind();
         var limit = CommonOptions.Limit(50);
-        var cmd = new Command(name: "symbols", description: "Search indexed symbols by name.") { pattern, kind, limit };
+        var noLambdas = new Option<bool>("--no-lambdas")
+        {
+            Description = "Exclude compiler-generated lambdas (symbols containing ~λ in their DocID).",
+        };
+        var cmd = new Command(name: "symbols", description: "Search indexed symbols by name.") { pattern, kind, limit, noLambdas };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
@@ -171,15 +200,32 @@ internal static class FactCommands
                 {
                     var p = pr.GetValue(pattern)!;
                     var k = pr.GetValue(kind);
+                    var cap = pr.GetValue(limit);
+                    var filterLambdas = pr.GetValue(noLambdas);
                     await using var context = OpenReadContext(workingDirectory);
-                    var hits = await Reads.SearchSymbolsAsync(context, pattern: p, kind: k, limit: pr.GetValue(limit));
+                    // Fetch beyond the display cap so we can compute the true post-filter total: the LIKE
+                    // fallback hard-caps at 5000 unique rows, and the FTS path returns all matches.
+                    var allHits = await Reads.SearchSymbolsAsync(context, pattern: p, kind: k, limit: int.MaxValue);
+                    var filtered = filterLambdas
+                        ? allHits.Where(h => !h.SymbolId.Contains("~λ", StringComparison.Ordinal)).ToList()
+                        : allHits.ToList();
+                    var total = filtered.Count;
+                    var shown = filtered.Take(cap).ToList();
                     output.WriteLine($"Symbols matching '{p}'{(k is null ? "" : $" kind={k}")}");
-                    foreach (var hit in hits)
+                    foreach (var hit in shown)
                     {
                         output.WriteLine($"{Indent.L1}{hit.Kind, -8} {hit.SymbolId}  {ShortenPath(hit.FilePath)}:{hit.Line}");
                     }
 
-                    output.WriteLine($"{Indent.L1}({hits.Count} shown)");
+                    if (total > cap)
+                    {
+                        output.WriteLine($"{Indent.L1}(showing {cap} of {total} — use --limit to raise)");
+                    }
+                    else
+                    {
+                        output.WriteLine($"{Indent.L1}({total} shown)");
+                    }
+
                     return 0;
                 }
             )

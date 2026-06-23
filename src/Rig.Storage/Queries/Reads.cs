@@ -388,8 +388,38 @@ public static class Reads
         var methods = methodRows.GroupBy(m => m.SymbolId, StringComparer.Ordinal).Select(g => g.First()).ToList();
 
         var classifiedEdges = HandoffClassifier.Classify(callEdges, handoffRules);
-        var minedDispatch = await LoadDispatchFactsAsync(context, cancellationToken);
+        // #2: hand the (now-open) EF connection to the dispatch-facts loader so it neither re-resolves it nor
+        // re-applies the read pragmas — the single sqlite_master existence probe is the only irreducible cost.
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        var minedDispatch = await LoadDispatchFactsAsync(context, connection, cancellationToken);
         return new FactGraphData(classifiedEdges, implEdges, methods, baseEdges, minedDispatch);
+    }
+
+    // The FULLY in-memory-shaped graph: handoff-classified load → ShapeGraph (factory rewrite +
+    // cut/context metadata) → MarkEventSubscriptionHandoffs → AddDeliveryEdges. The SINGLE entry point
+    // for all in-memory consumers that need the complete shaped graph, so classify→factory→delivery→
+    // cut/context is defined once and callers stop hand-rolling the sequence.
+    //
+    // Sync reach is BYTE-IDENTICAL to the pre-consolidation per-consumer results: delivery edges are
+    // handoff edges, which are sync-cut by default (walked only under --async). The --async path for
+    // impact and cycle detection now also walks delivery edges — the intentional gap closure.
+    public static async Task<FactGraphData> LoadShapedGraphAsync(RigDbContext context, RuleSet rules, CancellationToken ct = default)
+    {
+        var graph = await LoadFactGraphAsync(context: context, handoffRules: rules.Handoff, cancellationToken: ct);
+        graph = FactPathFinder.ShapeGraph(graph: graph, factoryRules: rules.Factory, cutRules: rules.Cut, contextRules: rules.Context);
+        // ORDER IS LOAD-BEARING: AddDeliveryEdges resolves an event's handlers by joining event-read sites to
+        // co-located `methodGroup` subscription edges (`someEvent += H`), so it MUST run while those edges are
+        // still methodGroup. MarkEventSubscriptionHandoffs reclassifies exactly those subscription edges to
+        // `handoff` — run it AFTER, or AddDeliveryEdges finds zero handlers and event delivery (event_raise)
+        // edges vanish (event_cycle drops to 0).
+        graph = FactPathFinder.AddDeliveryEdges(
+            graph: graph,
+            sites: await LoadDeliverySitesAsync(context: context, deliveryRules: rules.Delivery, cancellationToken: ct)
+        );
+        return FactPathFinder.MarkEventSubscriptionHandoffs(
+            graph: graph,
+            eventSites: await EventSubscriptionSitesAsync(context: context, cancellationToken: ct)
+        );
     }
 
     // Call SITES (EnclosingSymbolId, FilePath, Line) that contain an EVENT read — a "read" ref whose
@@ -411,16 +441,225 @@ public static class Reads
         return rows.ToHashSet();
     }
 
+    // The SINGLE rule-driven loader of publish→consumer DELIVERY sites — the uniform input to the framework-
+    // BLIND join (FactPathFinder.AddDeliveryEdges, baked into call_edges at graph build). Replaces the former
+    // per-framework LoadEventDeliverySitesAsync + LoadActorDeliverySitesAsync pair: a codebase declares each
+    // mechanism in DATA (the `deliveryRules` rule section), and this loader is generic over it. The actor case
+    // is no longer inferred from the `actor:*` effect rules; both events and actors are pure rule data, each
+    // composing the two identity primitives ("symbol" / "path") this loader implements.
+    //
+    // It scans each fact source ONCE regardless of how many rules use it:
+    //   - event-symbol rules (Producer.Source == "event-symbol"): event-read refs (RefKind=read, target "E:").
+    //     The event's `E:` DocID is the channel IdentityToken — an EXACT binding. Every `someEvent += H` AND
+    //     every raise (`someEvent?.Invoke()`) reads the event, so the role is ByColocation; the join decides
+    //     subscription (a co-located method-group ⇒ that handler) vs raise (none ⇒ producer). One site per read
+    //     per such rule (normally one event rule).
+    //   - arg rules (Producer.Source == "arg"): invocation refs whose (declaringType, method) match a rule's
+    //     Registration or Producer endpoint Methods×DeclaringTypes. The channel identity is the argument the
+    //     rule's `resolve` selects, both GATED to a member path (Contains('.'): a bare-variable name like
+    //     `tell(pid, …)` is not a stable cross-method identity and collides spuriously, so it is skipped):
+    //     "path" keeps the full member path; "leaf" keeps the LAST segment (bridging parallel registries that
+    //     share a leaf but differ by class prefix — e.g. tell `ProcessDns.X` ↔ spawn `ProcessNames.X`). An
+    //     invocation matching a Registration endpoint gets Role=Registration; a Producer endpoint, Role=
+    //     Producer. The process-name string identity is ~heuristic (more so for leaf).
+    //
+    // ArgumentIndex > 0 is not yet supported by the facts (only FirstArgumentName/arg0 is captured), so a
+    // "path" rule with ArgumentIndex != 0 falls back to arg0 — see the in-memory pass below.
+    public static async Task<IReadOnlyList<DeliverySite>> LoadDeliverySitesAsync(
+        RigDbContext context,
+        IReadOnlyList<DeliveryRule> deliveryRules,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var sites = new List<DeliverySite>();
+
+        // --- event-symbol rules: one event-read scan, regardless of rule count (normally one event rule). ---
+        var eventRules = deliveryRules
+            .Where(rule => string.Equals(rule.Producer.Source, "event-symbol", StringComparison.Ordinal))
+            .ToList();
+        if (eventRules.Count > 0)
+        {
+            var eventReads = await context
+                .ReferenceFacts.Where(r => r.EnclosingSymbolId != null && r.RefKind == RefKinds.Read && r.TargetSymbolId.StartsWith("E:"))
+                .Select(r => new
+                {
+                    r.EnclosingSymbolId,
+                    r.FilePath,
+                    r.Line,
+                    r.TargetSymbolId,
+                })
+                .ToListAsync(cancellationToken);
+
+            foreach (var rule in eventRules)
+            {
+                foreach (var r in eventReads)
+                {
+                    sites.Add(
+                        new DeliverySite(
+                            Caller: r.EnclosingSymbolId!,
+                            FilePath: r.FilePath,
+                            Line: r.Line,
+                            IdentityToken: r.TargetSymbolId,
+                            Tag: rule.Tag,
+                            Role: DeliveryRole.ByColocation
+                        )
+                    );
+                }
+            }
+        }
+
+        // --- arg rules: combined (declaringType, method) -> (Tag, Role) map across ALL arg rules, so one
+        //     invocation-ref scan serves every actor-shaped mechanism. The Registration endpoint's
+        //     Methods×DeclaringTypes map to Role=Registration; the Producer endpoint's to Role=Producer. A
+        //     method appearing under both (none today) resolves to whichever rule is listed last. ---
+        var argMethods =
+            new Dictionary<(string Type, string Name), (string Tag, DeliveryRole Role, string Resolve, string? HandlerDispatcher)>();
+        foreach (var rule in deliveryRules)
+        {
+            AddArgEndpoint(argMethods, rule.Tag, rule.Registration, DeliveryRole.Registration);
+            AddArgEndpoint(argMethods, rule.Tag, rule.Producer, DeliveryRole.Producer);
+        }
+
+        if (argMethods.Count > 0)
+        {
+            // Coarse SQL filter: actor-shaped calls are invocations with a captured first-argument name (the
+            // process name) inside a method, whose target is a method DocID. The in-memory pass refines by the
+            // declaring-type+method gate — such calls are few, so the unrefined set is small.
+            var rows = await context
+                .ReferenceFacts.Where(r =>
+                    r.EnclosingSymbolId != null
+                    && r.FirstArgumentName != null
+                    && r.RefKind == RefKinds.Invocation
+                    && r.TargetSymbolId.StartsWith("M:")
+                )
+                .Select(r => new
+                {
+                    r.EnclosingSymbolId,
+                    r.FilePath,
+                    r.Line,
+                    r.FirstArgumentName,
+                    r.TargetSymbolId,
+                })
+                .ToListAsync(cancellationToken);
+
+            foreach (var r in rows)
+            {
+                var parsed = ParseInvocationTarget(r.TargetSymbolId);
+                if (parsed is not { } method || !argMethods.TryGetValue(method, out var tagRole))
+                {
+                    continue;
+                }
+
+                // Both arg resolvers GATE to a member path (contains a '.', e.g. `ProcessDns.AccountService`):
+                // a bare-variable name (`tell(pid, …)`) is not a stable cross-method identity and collides
+                // spuriously with framework internals, so it never becomes a delivery site.
+                if (!r.FirstArgumentName!.Contains('.', StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                // `path` keeps the full member path (`ProcessDns.AccountService`); `leaf` takes the LAST segment
+                // (`AccountService`) — the bridge across PARALLEL registries that share a leaf but differ by
+                // class prefix (e.g. a tell through `ProcessDns.X` and the spawn through `ProcessNames.X` name
+                // the same process X). `leaf` is more ~heuristic — a leaf shared by two unrelated channels
+                // over-joins — so it is opt-in per rule (the resolve field), calibrated, and disclosed.
+                var token = string.Equals(tagRole.Resolve, "leaf", StringComparison.Ordinal)
+                    ? r.FirstArgumentName![(r.FirstArgumentName!.LastIndexOf('.') + 1)..]
+                    : r.FirstArgumentName!;
+
+                sites.Add(
+                    new DeliverySite(
+                        Caller: r.EnclosingSymbolId!,
+                        FilePath: r.FilePath,
+                        Line: r.Line,
+                        IdentityToken: token,
+                        Tag: tagRole.Tag,
+                        Role: tagRole.Role,
+                        HandlerDispatcher: tagRole.HandlerDispatcher
+                    )
+                );
+            }
+        }
+
+        return sites;
+    }
+
+    // Folds one arg-source endpoint's Methods×DeclaringTypes into the combined (type, method) -> (Tag, Role)
+    // map. Non-arg endpoints (e.g. event-symbol) are skipped here — they are handled by the event scan.
+    // NOTE on ArgumentIndex: only FirstArgumentName/arg0 is captured as a fact today, so the `path` resolver
+    // always reads arg0; an endpoint declaring ArgumentIndex != 0 is treated as arg0 (no crash) — an
+    // extraction limitation to lift when nth-argument names are captured.
+    private static void AddArgEndpoint(
+        Dictionary<(string Type, string Name), (string Tag, DeliveryRole Role, string Resolve, string? HandlerDispatcher)> map,
+        string tag,
+        DeliveryEndpoint endpoint,
+        DeliveryRole role
+    )
+    {
+        if (!string.Equals(endpoint.Source, "arg", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        foreach (var declaringType in endpoint.DeclaringTypes ?? [])
+        {
+            foreach (var name in endpoint.Methods ?? [])
+            {
+                map[(declaringType, name)] = (tag, role, endpoint.Resolve, endpoint.HandlerDispatcher);
+            }
+        }
+    }
+
+    // "M:Echo.Process.tell``1(Echo.ProcessId,…)" -> ("Echo.Process", "tell"). A generic "(declaringType,
+    // method) from an M: DocID" parser. Mirrors FactEffectDeriver's ParseMethod (declaring type's arity
+    // markers stripped is unnecessary for the actor types, which are non-generic, so we keep the declaring
+    // type verbatim and only trim the method-level "``N"). Null when the DocID is not a method id or has no
+    // dot before the member name.
+    private static (string DeclaringType, string Name)? ParseInvocationTarget(string docId)
+    {
+        if (!docId.StartsWith("M:", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var searchEnd = docId.IndexOf('(');
+        if (searchEnd < 0)
+        {
+            searchEnd = docId.Length;
+        }
+
+        var lastDot = docId.LastIndexOf('.', searchEnd - 1);
+        if (lastDot < 2)
+        {
+            return null;
+        }
+
+        var declaring = docId.Substring(startIndex: 2, length: lastDot - 2);
+        var methodStart = lastDot + 1;
+        var backtick = docId.IndexOf('`', startIndex: methodStart, count: searchEnd - methodStart);
+        var methodEnd = backtick >= 0 ? backtick : searchEnd;
+        if (methodEnd <= methodStart)
+        {
+            return null;
+        }
+
+        return (declaring, docId.Substring(startIndex: methodStart, length: methodEnd - methodStart));
+    }
+
     // Loads the exact Roslyn-mined dispatch facts (dispatch_facts) into FactGraphData.MinedDispatch.
     // Probed (not assumed): a store indexed before dispatch facts existed has no table — return null
     // so FactPathFinder degrades to the pre-mining name/arity CHA (flagged heuristic) instead of
     // throwing "no such table" on a read-only connection that can't migrate.
     private static async Task<IReadOnlyList<DispatchFact>?> LoadDispatchFactsAsync(
         RigDbContext context,
+        DbConnection? connection,
         CancellationToken cancellationToken
     )
     {
-        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        // Reuse the caller's already-open connection when supplied (the LoadFactGraphAsync hot path); otherwise
+        // open it here. Either way the dispatch_facts existence probe runs once — a store predating the table
+        // returns null so FactPathFinder degrades to name/arity CHA instead of throwing on the read-only conn.
+        connection ??= await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         if (!await StorageProbes.TableExistsAsync(connection, "dispatch_facts", cancellationToken))
         {
             return null;
@@ -593,7 +832,8 @@ public static class Reads
         RigDbContext context,
         int limit,
         IReadOnlyList<FactHandoffRule>? handoffRules = null,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        FactGraphData? graph = null
     )
     {
         var rules = handoffRules ?? [];
@@ -639,8 +879,10 @@ public static class Reads
         }
 
         // Fallback: no materialized graph (`rig graph` not run) — derive from the full reference graph.
-        var graph = await LoadFactGraphAsync(context, rules, cancellationToken);
-        return HandoffClassifier.HandoffEntryPoints(graph.CallEdges, rules).Take(limit).ToList();
+        // When the caller already holds the shaped graph (e.g. DeriveCommand which built it for FR-10),
+        // reuse it here instead of reloading (fixes F1 double-load).
+        var fallbackEdges = (graph ?? await LoadFactGraphAsync(context, rules, cancellationToken)).CallEdges;
+        return HandoffClassifier.HandoffEntryPoints(fallbackEdges, rules).Take(limit).ToList();
     }
 
     // Loads the facts needed by FactEntryPointDeriver: base-type edges, constructor+type symbols,
@@ -824,5 +1066,181 @@ public static class Reads
             .ToListAsync(cancellationToken);
 
         return rows;
+    }
+
+    // Loads WRITE reference facts (RefKind="write") whose TARGET is a STATIC field/auto-property, for
+    // fact-based shared-state-mutation derivation (FR-1(b)). The field-write fact already exists — the
+    // FactExtractor classifies an assignment LHS as RefKinds.Write — but no deriver arm consumed it; this
+    // surfaces those whose target is STATIC, which is the property that makes a write a SHARED-state
+    // mutation (an instance/local write is local-vs-shared-ambiguous and deliberately excluded). The
+    // target's static-ness is the JOIN to symbol_facts.Modifiers — the fact layer's only source of the
+    // written slot's modifiers (the call graph carries method->method edges only). First-party only
+    // (TargetInSource) and EnclosingSymbolId not null so the effect keys to a call-graph node. Target is
+    // the written slot DocID ("F:Ns.Type.field" / "P:Ns.Type.Prop"); the deriver gates its declaring type.
+    public static Task<IReadOnlyList<FactFieldAccess>> LoadStaticFieldWriteRefsAsync(
+        RigDbContext context,
+        IReadOnlyCollection<string>? enclosingScope = null,
+        CancellationToken cancellationToken = default
+    ) =>
+        LoadStaticFieldAccessRefsAsync(
+            context: context,
+            refKind: RefKinds.Write,
+            excludeReadonly: false,
+            enclosingScope: enclosingScope,
+            cancellationToken: cancellationToken
+        );
+
+    // Loads READ reference facts (RefKind="read") whose TARGET is a STATIC field/auto-property — the FR-1
+    // read arm, the symmetric twin of LoadStaticFieldWriteRefsAsync. A read of `StaticType.SharedField` is
+    // the "check" of a shared cell (the read-before-write TOCTOU/lost-update detector pairs it with the
+    // write). Identical join/dedup/structural projection to the write loader — only RefKind differs.
+    public static Task<IReadOnlyList<FactFieldAccess>> LoadStaticFieldReadRefsAsync(
+        RigDbContext context,
+        IReadOnlyCollection<string>? enclosingScope = null,
+        CancellationToken cancellationToken = default
+    ) =>
+        LoadStaticFieldAccessRefsAsync(
+            context: context,
+            refKind: RefKinds.Read,
+            excludeReadonly: true,
+            enclosingScope: enclosingScope,
+            cancellationToken: cancellationToken
+        );
+
+    // Combined loader for BOTH static-field-access arms in ONE query (the derive path needs both, back-to-back).
+    // Runs a single scan with (RefKind == write || RefKind == read) and partitions client-side into (Writes,
+    // Reads) — eliminating one of the two reference_facts round-trips LoadStaticField{Write,Read}RefsAsync made
+    // separately. Semantics are EXACTLY the union of the two single-kind loaders: same static-target gate,
+    // TargetInSource, EnclosingSymbolId != null, same structural projection, same per-partition dedup by
+    // (FilePath, Line, Target). The one asymmetry the single-kind loaders carry is the `readonly` drop — only
+    // the READ arm excludes readonly static targets (an immutable cell can't be a TOCTOU "check"; ~99k logger
+    // reads of noise), while the WRITE arm keeps them. So the join keeps BOTH static-and-readonly and
+    // static-and-mutable rows (gated on `static`), tags each row with its readonly-ness, and the client-side
+    // partition applies the readonly drop to the READ side only — reproducing each loader's row set exactly.
+    public static async Task<(
+        IReadOnlyList<FactFieldAccess> Writes,
+        IReadOnlyList<FactFieldAccess> Reads
+    )> LoadStaticFieldAccessRefsByKindAsync(RigDbContext context, CancellationToken cancellationToken = default)
+    {
+        var rows = await context
+            .ReferenceFacts.AsNoTracking()
+            .Where(r => (r.RefKind == RefKinds.Write || r.RefKind == RefKinds.Read) && r.TargetInSource && r.EnclosingSymbolId != null)
+            .Join(
+                context.SymbolFacts.AsNoTracking().Where(s => s.Modifiers.Contains("static")),
+                r => r.TargetSymbolId,
+                s => s.SymbolId,
+                (r, s) =>
+                    new
+                    {
+                        Access = new FactFieldAccess(
+                            Target: r.TargetSymbolId,
+                            Enclosing: r.EnclosingSymbolId,
+                            FilePath: r.FilePath,
+                            Line: r.Line,
+                            LoopKind: r.EnclosingLoopKind,
+                            LoopDetail: r.EnclosingLoopDetail,
+                            EnclosingInvocations: r.EnclosingInvocations,
+                            CatchTypes: r.EnclosingCatchTypes,
+                            EnclosingScopes: r.EnclosingScopes
+                        ),
+                        r.RefKind,
+                        IsReadonly = s.Modifiers.Contains("readonly"),
+                    }
+            )
+            .ToListAsync(cancellationToken);
+
+        // Partition by kind, then dedup each partition by (FilePath, Line, Target) — mirroring each single-kind
+        // loader's tail. The READ arm drops readonly targets (the `excludeReadonly: true` the read loader sets);
+        // the WRITE arm keeps them.
+        var writes = rows.Where(x => string.Equals(x.RefKind, RefKinds.Write, StringComparison.Ordinal))
+            .Select(x => x.Access)
+            .GroupBy(r => (r.FilePath, r.Line, r.Target))
+            .Select(g => g.First())
+            .ToList();
+        var reads = rows.Where(x => string.Equals(x.RefKind, RefKinds.Read, StringComparison.Ordinal) && !x.IsReadonly)
+            .Select(x => x.Access)
+            .GroupBy(r => (r.FilePath, r.Line, r.Target))
+            .Select(g => g.First())
+            .ToList();
+
+        return (writes, reads);
+    }
+
+    // Shared loader for both static-field-access arms (read vs write differ only by RefKind). Joins the
+    // access ref to symbol_facts on a STATIC target (the fact layer's only source of the target's modifiers),
+    // first-party only (TargetInSource), enclosing non-null (keys the effect to a call-graph node), carries
+    // the access's structural context (mirrors LoadInvocationRefsAsync), and dedups by site.
+    //
+    // `excludeReadonly` additionally drops `readonly` static targets — set ONLY on the READ arm. A read of an
+    // immutable cell (static readonly / const-folded field, e.g. a logger or a frozen table) can never be the
+    // "check" of a TOCTOU read-before-write: the value cannot change underneath, so such reads are pure noise
+    // (~99k on the real store, dominated by static readonly loggers). The WRITE arm keeps readonly targets:
+    // a write to a readonly static is ctor-only and already rare, and remains a genuine shared-state mutation.
+    // `enclosingScope`, when given, bounds the scan to refs whose ENCLOSING is in the set (the EnclosingSymbolId
+    // index makes this a seek, not a full scan) — used by `tree --hazards` to load only this one EP's reachable
+    // methods' field accesses instead of the whole store (~tens of thousands of rows). Null = whole store
+    // (derive/impact, which need every cell).
+    private static async Task<IReadOnlyList<FactFieldAccess>> LoadStaticFieldAccessRefsAsync(
+        RigDbContext context,
+        string refKind,
+        bool excludeReadonly,
+        IReadOnlyCollection<string>? enclosingScope = null,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var refs = context
+            .ReferenceFacts.AsNoTracking()
+            .Where(r => r.RefKind == refKind && r.TargetInSource && r.EnclosingSymbolId != null);
+        if (enclosingScope is not null)
+        {
+            refs = refs.Where(r => enclosingScope.Contains(r.EnclosingSymbolId!));
+        }
+
+        var rows = await refs.Join(
+                context
+                    .SymbolFacts.AsNoTracking()
+                    .Where(s => s.Modifiers.Contains("static") && (!excludeReadonly || !s.Modifiers.Contains("readonly"))),
+                r => r.TargetSymbolId,
+                s => s.SymbolId,
+                (r, s) =>
+                    new FactFieldAccess(
+                        Target: r.TargetSymbolId,
+                        Enclosing: r.EnclosingSymbolId,
+                        FilePath: r.FilePath,
+                        Line: r.Line,
+                        LoopKind: r.EnclosingLoopKind,
+                        LoopDetail: r.EnclosingLoopDetail,
+                        EnclosingInvocations: r.EnclosingInvocations,
+                        CatchTypes: r.EnclosingCatchTypes,
+                        EnclosingScopes: r.EnclosingScopes
+                    )
+            )
+            .ToListAsync(cancellationToken);
+
+        return rows.GroupBy(r => (r.FilePath, r.Line, r.Target)).Select(g => g.First()).ToList();
+    }
+
+    // The set of field/auto-property DocIDs carrying a [ThreadStatic] attribute. No dedicated attribute fact
+    // is needed: an attribute application is a constructor invocation (`new ThreadStaticAttribute()`), so it
+    // already lands as a `ctor` reference whose ENCLOSING is the decorated field's DocID and whose TARGET is
+    // the attribute's ctor — exactly the join below. A [ThreadStatic] cell is THREAD-CONFINED (each thread
+    // owns its copy) so it cannot have a cross-thread shared-state race; the hazard layer uses this set to
+    // reroute such read→write pairs from race_window to the FR-2 thread_local_context candidate (see
+    // FactHazardDeriver.ThreadLocalContextType). Matched on the exact ctor DocID, which is index-seekable on
+    // the TargetSymbolId index; the rarer form where the attribute name binds to the type (not the ctor) is
+    // not covered — accepted, it is uncommon for [ThreadStatic].
+    public static async Task<IReadOnlySet<string>> LoadThreadStaticFieldIdsAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        const string threadStaticCtor = "M:System.ThreadStaticAttribute.#ctor";
+        var ids = await context
+            .ReferenceFacts.AsNoTracking()
+            .Where(r => r.RefKind == RefKinds.Ctor && r.TargetSymbolId == threadStaticCtor && r.EnclosingSymbolId != null)
+            .Select(r => r.EnclosingSymbolId!)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+        return ids.ToHashSet(StringComparer.Ordinal);
     }
 }

@@ -5,26 +5,68 @@ effect observations, and deployment attribution live in [README.md](README.md). 
 [docs/ubiquitous-language.md](docs/ubiquitous-language.md). Handover notes: [docs/handover.md](docs/handover.md).
 This file is only the things that aren't obvious from those and that you'd otherwise re-derive.
 
+## Orchestration — director → orchestrator → coding agents
+
+> **Role check — read FIRST.** This section describes the **orchestrator** (the top-level session the user
+> talks to). **If you are a DISPATCHED CODING SUBAGENT** (you received a single scoped task prompt, not a
+> conversation with the user), this loop is your CALLER's job, NOT yours: you are a **leaf worker** —
+> implement your one task directly and do **NOT** dispatch further subagents, gather "context", or re-run the
+> orchestration loop. Ignore the rest of this section; follow your task prompt.
+
+The effective workflow here for multi-step work is a LOOP. The USER directs (goals, the load-bearing
+calls, course-correction); YOU are the **orchestrator**; SUBAGENTS do the coding. The loop:
+
+1. **Orchestrator gathers + HOLDS the context** — reads the code, maps the design, runs the calibration
+   queries. The context lives in the orchestrator so dispatching a build doesn't lose it and the review can
+   happen without re-reading.
+2. **Define the task + propose the architecture** — surface genuine forks; recommend, don't survey.
+3. **GATE — coding does not start until either:** the user **approves the architecture in principle** (a
+   fork chosen, a scope OK'd, a "go"), **OR `auto` mode is on** (approval bypass — proceed on your own
+   judgement, still surfacing a fork only if it risks a false negative or is hard to reverse).
+4. **Dispatch the coding to a SUBAGENT** — one scoped build, tightly prompted (below).
+5. **Orchestrator REVIEWS + VALIDATES + COMMITS** — read the diff, confirm the full suite green, run the
+   real-data check (the MedDBase re-graph/derive) yourself; then commit. The subagent never commits.
+
+The rules that make this produce mergeable code, not plausible diffs:
+
+- **Subagents NEVER commit — you review their diff and commit it.** This is the quality gate: treat an
+  agent's "done, nothing else changed" as a CLAIM to verify (a real `--expect-no-effect-change` gate
+  regression was caught *only* in review). Independently confirm the suite is green AND do the real-data
+  validation (the agent can't touch the MedDBase store) before committing.
+- **Prompt tightly or get the wrong thing.** Each agent task states: the exact problem, a PRECEDENT to
+  mirror (e.g. "mirror the existing X machinery"), hard constraints (annotate-only / full suite green / **do
+  NOT commit** / don't touch docs), the explicit ACCEPTANCE test, and the gotchas (TUnit filter syntax,
+  csharpier-first, named-args, this list).
+- **One agent at a time on shared files** — `FactEffectDeriver`/`FactHazardDeriver`/`builtin-rules.json`/the
+  derive+impact paths all contend; concurrent agents just merge-conflict. Parallel only on disjoint work.
+- **Run code agents in the MAIN checkout, NOT `isolation: worktree`** — worktree isolation branches from a
+  STALE base in this repo (an old `main` merge), so prerequisite files are missing. Bit us twice.
+- **Green + committed before the next unit** — never let agent output stack up uncommitted.
+- **Design first, dispatch second, calibrate after.** Argue the architecture before building; ship each
+  detector/feature with a bug/fix fixture; FP-calibrate a new signal on the real MedDBase store before it
+  goes on-by-default (a structurally-true detector that fires 179× is still noise). Surface genuine forks
+  to the user; autopilot the rest.
+- **Don't dispatch for small/exploratory work** — root-causing, calibration queries, one-file fixes, and
+  doc edits are faster inline. Agents earn their keep only on self-contained builds with a clear acceptance test.
+
 ## Build / test / ship
 
-- **Ship flow is `scripts/mini-ci.ps1`** — csharpier check → `dotnet build -warnaserror` → all tests →
+- **Ship flow is `scripts/mini-ci.ps1`** — csharpier check → `dotnet build` → all tests →
   pack → reinstall the global `rig` tool. Run it after any source change you intend to use from the CLI.
   Format first (`dotnet csharpier format <files>` or `scripts/format.ps1`) or the csharpier gate fails.
 - **Tests are TUnit on Microsoft.Testing.Platform, not vstest.** `dotnet test --filter` does NOT work
   (prints help, "Zero tests ran"). Run a subset with:
   `dotnet run --project tests/Rig.Tests --no-build -- --treenode-filter "/*/*/<ClassName>/*"`
   (path is `/Assembly/Namespace/Class/Test`; `*` wildcards each segment). `dotnet test` with no filter is fine.
-- **Analyzer errors are `-warnaserror` and mechanical to fix — just do it, don't ask:**
-  - `error UseNamedArgs: Consider invoking <Method> with named arguments` → name the args at that call
-    site (`Foo(x: a, y: b)`). The forked analyzer (`use-named-args-fs`) fires on EVERY multi-arg
-    first-party call, so **write new multi-arg calls with named args up front** to avoid the round-trip.
-    Genuinely-noisy stdlib methods are exempt via `.editorconfig` `UseNamedArgs.exclude_methods`
-    (`|`-separated; e.g. `String.Equals`, `Path.Combine`, `Dictionary.TryGetValue`) — add to that list
-    rather than naming args for a framework call that reads fine positionally.
-  - `MA0011` (format-provider) → pass `System.Globalization.CultureInfo.InvariantCulture`.
-  - **The csharpier auto-format races an in-flight `dotnet build`** (format edits a file the compiler is
-    reading) → spurious "N Error(s)" with no diagnostic. Re-run the build once it settles; verify green
-    with `--no-incremental`.
+- **`-warnaserror` is OFF** (removed from mini-ci 2026-06-22). Analyzer diagnostics — the forked
+  `UseNamedArgs` (`use-named-args-fs`, fires on every multi-arg first-party call), `MA0011`
+  (format-provider) — are now **non-fatal warnings**, not build errors: the build no longer fails on them
+  and there's no fix-it round-trip. Still worth following for readability where cheap (named args on new
+  multi-arg first-party calls; `CultureInfo.InvariantCulture` on formatting), and `.editorconfig`
+  `UseNamedArgs.exclude_methods` still suppresses the noisy stdlib ones — but none of it gates the build.
+  - **The csharpier auto-format still races an in-flight `dotnet build`** (format edits a file the compiler
+    is reading) → spurious "N Error(s)" with no diagnostic. Re-run the build once it settles; verify with
+    `--no-incremental`.
 
 ## Effect ↔ reachability model (read before touching effects or `EnclosingSymbolId`)
 

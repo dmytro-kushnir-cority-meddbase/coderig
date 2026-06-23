@@ -54,16 +54,25 @@ public static class Writes
 
         if (fastBulkWrite)
         {
-            // No rollback journal, no fsync, in-memory temp, 64 MB page cache, single-writer lock.
-            // A crash mid-write corrupts this file — acceptable because the caller publishes via
-            // atomic rename, so the live store is never the one being written.
+            // No rollback journal, no fsync, in-memory temp, single-writer lock. A crash mid-write
+            // corrupts this file — acceptable because the caller publishes via atomic rename, so the live
+            // store is never the one being written.
+            //
+            // mmap_size + a 256 MB page cache are the key reads tuning: save is not only write-heavy, the
+            // END of save REBUILDS the dropped secondary indexes, each a full scan of its fact table (the
+            // ~1.7M-row reference_facts ×2). On SQLite defaults (mmap_size=0) those cold scans are a
+            // syscall-per-page read that re-reads what the prior index build just touched — the bulk of the
+            // phase's multi-GB disk reads. A 4 GB mmap covers the whole fact store, so those repeated scans
+            // are served from the OS page mapping instead of disk. Same template the graph/query paths use
+            // (GraphMaterializer / StorageProbes), which set it for exactly this reason.
             foreach (
                 var pragma in new[]
                 {
                     "PRAGMA journal_mode=OFF;",
                     "PRAGMA synchronous=OFF;",
                     "PRAGMA temp_store=MEMORY;",
-                    "PRAGMA cache_size=-65536;",
+                    "PRAGMA mmap_size=4294967296;",
+                    "PRAGMA cache_size=-262144;",
                     "PRAGMA locking_mode=EXCLUSIVE;",
                 }
             )

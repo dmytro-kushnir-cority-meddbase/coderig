@@ -56,7 +56,7 @@ public sealed class MultiLineHandoffTests(AnalyzedPlaygrounds playgrounds)
     private async Task<FactGraphData> GraphAsync()
     {
         var playground = await playgrounds.LegacyNet48Async();
-        var rules = FactHandoffRuleProvider.LoadForWorkingDirectory(playground.WorkingDirectory);
+        var rules = RuleSetLoader.Load(playground.WorkingDirectory).Handoff;
         return FactProjection.GraphData(playground.Result, rules);
     }
 }

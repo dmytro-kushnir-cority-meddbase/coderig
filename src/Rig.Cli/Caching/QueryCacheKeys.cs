@@ -36,10 +36,12 @@ internal static class QueryCacheKeys
     }
 
     // The cache key for a `rig tree` forest+effects artifact: everything the artifact is a function of —
-    // the store identity, the effective rule fingerprint, and the traversal parameters. `v1` is the
-    // payload-schema version (bump to ignore older blobs). Render-only flags (--files/--summary/--effects
-    // and --only/--exclude) are deliberately absent: they don't change the forest or the unfiltered
-    // effects, only how they're presented, so they must not fragment the cache.
+    // the store identity, the effective rule fingerprint, and the traversal parameters. `v2` is the
+    // payload-schema version (bump to ignore older blobs) — bumped from v1 when TraceNode gained
+    // TruncationCause, so a warm cache from before the split doesn't render stale conflated `seen` flags.
+    // Render-only flags (--files/--summary/--effects and --only/--exclude) are deliberately absent: they
+    // don't change the forest or the unfiltered effects, only how they're presented, so they must not
+    // fragment the cache.
     internal static string TreeCacheKey(
         string storeKey,
         string rulesHash,
@@ -49,7 +51,36 @@ internal static class QueryCacheKeys
         bool raw
     )
     {
-        var material = $"tree|v1|{storeKey}|{rulesHash}|{fromPattern}|{maxDepth}|{mode}|{raw}";
+        var material = $"tree|v2|{storeKey}|{rulesHash}|{fromPattern}|{maxDepth}|{mode}|{raw}";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+    }
+
+    // The cache key for the WHOLE-STORE hazard-augmented effect set (derive's effect computation: every
+    // indexed symbol's effects + the field-fed shared_state arms + the race_window/dual_write/
+    // thread_local_context post-pass). It is a pure function of the store + the effective rule fingerprint
+    // and is EP-INDEPENDENT and TRAVERSAL-MODE-INDEPENDENT — an effect is a per-method fact, not a function
+    // of which entry point reaches it or whether the walk is sync/async. So `derive`, `tree --hazards` (any
+    // EP, any mode), and any future hazard surface all share ONE entry: compute once, reuse everywhere.
+    // Reindex shifts storeKey (miss); a changed rule shifts rulesHash (miss) — so hazards stay query-side
+    // data (a rule edit needs no re-index, just recomputes the cache). `v1` is the payload-schema version.
+    internal static string HazardEffectsCacheKey(string storeKey, string rulesHash)
+    {
+        var material = $"hazardfx|v1|{storeKey}|{rulesHash}";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+    }
+
+    // The cache key for a `rig impact` two-store diff artifact: the artifact is a pure function of the TWO
+    // immutable per-commit stores (each addressed by its own StoreKey = rig.db size+mtime), the effective
+    // rule fingerprint, and the traversal mode (sync-cut vs async-handoff — it changes the reach footprint).
+    // Both store keys are folded in, so reindexing EITHER side shifts the key (miss); `mode` distinguishes a
+    // --async run from a sync one. Render-only flags (--structural / --format / --limit) are deliberately
+    // ABSENT: they only change how the SAME diff is presented (which section, truncation, tsv vs human), not
+    // the diff itself, so they must not fragment the cache. `v1` is the payload-schema version (bump to
+    // ignore older blobs). The artifact is stored in the HEAD store's cache.db (its store_key purge column),
+    // so the base side's identity lives only in this key — a stale base store can never serve a hit.
+    internal static string ImpactCacheKey(string baseStoreKey, string headStoreKey, string rulesHash, FactPathFinder.TraversalMode mode)
+    {
+        var material = $"impact|v1|{baseStoreKey}|{headStoreKey}|{rulesHash}|{mode}";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 
@@ -73,8 +104,7 @@ internal static class QueryCacheKeys
         {
             put();
         }
-        catch (Exception ex)
-            when (ex is JsonException or NotSupportedException or InvalidOperationException or IOException)
+        catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException or IOException)
         {
             // skip caching this result
         }

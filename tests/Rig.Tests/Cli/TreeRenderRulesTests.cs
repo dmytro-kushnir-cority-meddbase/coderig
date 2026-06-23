@@ -60,6 +60,35 @@ public sealed class TreeRenderRulesTests
     }
 
     [Test]
+    public void Hazards_marker_is_appended_to_the_node_label_for_the_matching_method()
+    {
+        // `tree --hazards` passes a precomputed SymbolId -> marker map; the renderer appends it to that node's
+        // label only. Here Do carries a dual_write marker; its child Save does not.
+        var root = Node("M:App.Svc.Do()", Node("M:App.Repo.Save()"));
+        var hazards = new Dictionary<string, string>(StringComparer.Ordinal) { ["M:App.Svc.Do()"] = "  ⚠ dual_write(medium)" };
+
+        var output = new StringWriter();
+        TreeRenderer.RenderTreeNode(
+            root,
+            prefix: "",
+            isLast: true,
+            isRoot: true,
+            Effects(("M:App.Svc.Do()", "💾 efcore:commit")),
+            prune: false,
+            FactRenderRules.Empty,
+            new Dictionary<string, List<string>>(StringComparer.Ordinal),
+            output,
+            hazardsByMethod: hazards
+        );
+        var lines = output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r')).ToList();
+
+        // The marked node carries the ⚠ marker AFTER its effect tag; the unmarked child does not.
+        lines[0].ShouldStartWith("Svc.Do");
+        lines[0].ShouldContain("⚠ dual_write(medium)");
+        lines.ShouldContain(l => l.Contains("Repo.Save") && !l.Contains("⚠"));
+    }
+
+    [Test]
     public void Plain_mode_preserves_depth_via_two_space_indentation()
     {
         var root = Node("M:App.Root.Go()", Node("M:App.A.M()", Node("M:App.A1.M()")));

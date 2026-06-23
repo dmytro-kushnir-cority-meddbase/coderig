@@ -1,5 +1,8 @@
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
+using Rig.Storage.Queries;
+using Rig.Storage.Storage;
+using static Rig.Cli.Caching.QueryCacheKeys;
 
 namespace Rig.Cli.Effects;
 
@@ -14,17 +17,120 @@ internal static class EffectDerivation
         IReadOnlyList<FactInvocation> invocations,
         IReadOnlyList<(string, string)> baseEdges,
         IReadOnlyList<SymbolRef> ctorRefs,
-        IReadOnlyList<SymbolRef> throwRefs
-    ) =>
-        FactEffectDeriver.Derive(
+        IReadOnlyList<SymbolRef> throwRefs,
+        // FR-1(b): static-field/auto-property write refs (whole-store; supplied by `derive`). The bounded
+        // reaches/tree/impact closures do not yet bound these, so they default to none there (a follow-up).
+        IReadOnlyList<FactFieldAccess>? staticFieldWriteRefs = null,
+        // FR-1 read arm: static-field/auto-property read refs (whole-store; supplied by `derive`), threaded
+        // symmetrically to the write refs. Defaults to none for the bounded closures.
+        IReadOnlyList<FactFieldAccess>? staticFieldReadRefs = null,
+        // Hazard post-pass (race_window read-before-write matcher). Default OFF — like the other field-fed
+        // signals it runs only on the whole-store `derive` path, not the bounded tree/reaches/impact closures
+        // (which don't bound the static-field refs, so a read+write pair would be incomplete there anyway).
+        bool deriveHazards = false,
+        // [ThreadStatic] cell DocIDs (Reads.LoadThreadStaticFieldIdsAsync). A read→write on one is rerouted
+        // from race_window to thread_local_context (thread-confined ⇒ not a race, but the FR-2 surface).
+        // Null/empty leaves the legacy race_window classification unchanged.
+        IReadOnlySet<string>? threadStaticCells = null
+    )
+    {
+        var effects = FactEffectDeriver.Derive(
             invocations,
             effectRules,
             providerFilter: null,
             baseEdges: baseEdges,
             ctorRefs: ctorRefs,
             observationRules: observationRules,
-            throwRefs: throwRefs
+            throwRefs: throwRefs,
+            staticFieldWriteRefs: staticFieldWriteRefs,
+            staticFieldReadRefs: staticFieldReadRefs
         );
+
+        // Annotate qualifying effects with hazard observations — pure post-passes over the derived effects
+        // that add observations and drop nothing:
+        //   - race_window: a read-before-write of the same shared cell in one method (RMW / TOCTOU);
+        //   - dual_write: durable writes to ≥2 distinct system classes in one method (FR-8, distributed
+        //     consistency — DB + queue / search / cache / external HTTP with no atomicity).
+        if (!deriveHazards)
+        {
+            return effects;
+        }
+
+        effects = FactHazardDeriver.DeriveRaceWindows(effects, threadStaticCells);
+        effects = FactHazardDeriver.DeriveDualWrites(effects);
+        return effects;
+    }
+
+    // The WHOLE-STORE hazard-augmented effect set: every indexed symbol's effects + the field-fed
+    // shared_state arms + the race_window/dual_write/thread_local_context post-pass — i.e. exactly what
+    // `derive` computes. EP-independent and traversal-mode-independent (an effect is a per-method fact), so
+    // `tree --hazards` filters this to its reachable methods instead of re-deriving a bounded slice per EP.
+    // Uncached; the cached wrapper is LoadOrDeriveHazardEffectsAsync.
+    internal static async Task<IReadOnlyList<DerivedEffect>> DeriveHazardEffectsAsync(
+        RigDbContext context,
+        RuleSet rules,
+        // Perf (#1b): the caller (DeriveCommand) has already loaded the EP data for its own base-type gates;
+        // thread it through to skip the redundant LoadFactEntryPointDataAsync here. Null = load it ourselves
+        // (back-compat for callers that don't have it — e.g. the uncached cache-miss path triggered elsewhere).
+        FactEntryPointDeriver.FactEntryPointData? epData = null
+    )
+    {
+        epData ??= await Reads.LoadFactEntryPointDataAsync(context);
+        var invocations = await Reads.LoadInvocationRefsAsync(context);
+        var throwRefs = await Reads.LoadThrowRefsAsync(context);
+        // Perf (#3): one reference_facts scan for both the write and read static-field arms (was two).
+        var (staticFieldWriteRefs, staticFieldReadRefs) = await Reads.LoadStaticFieldAccessRefsByKindAsync(context);
+        var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
+        return DeriveEffects(
+            effectRules: rules.Effects,
+            observationRules: rules.Observations,
+            invocations: invocations,
+            baseEdges: epData.BaseEdges,
+            ctorRefs: epData.CtorRefs,
+            throwRefs: throwRefs,
+            staticFieldWriteRefs: staticFieldWriteRefs,
+            staticFieldReadRefs: staticFieldReadRefs,
+            deriveHazards: true,
+            threadStaticCells: threadStaticCells
+        );
+    }
+
+    // Cached over the .rig/cache.db query cache, keyed by (store + rules) — see HazardEffectsCacheKey. The
+    // store-correct rigDirectory/storeKey/rulesHash are passed in (so `--store <ref>` caches against the right
+    // commit's store, not the default). Computed once then memoized; `derive` and `tree --hazards` share the
+    // entry, and a reindex (storeKey) or rule edit (rulesHash) misses → recompute, keeping hazards query-side.
+    internal static async Task<IReadOnlyList<DerivedEffect>> LoadOrDeriveHazardEffectsAsync(
+        RigDbContext context,
+        string rigDirectory,
+        string storeKey,
+        string rulesHash,
+        RuleSet rules,
+        bool useCache,
+        // Perf (#1b): the already-loaded EP data, threaded into DeriveHazardEffectsAsync on a cache MISS so it
+        // need not reload it. Unused on a cache HIT (derivation is skipped). Null = derivation loads its own.
+        FactEntryPointDeriver.FactEntryPointData? epData = null
+    )
+    {
+        if (!useCache)
+        {
+            return await DeriveHazardEffectsAsync(context, rules, epData);
+        }
+
+        using var cache = QueryCache.Open(rigDirectory: rigDirectory, storeKey: storeKey);
+        var key = cache is null ? null : HazardEffectsCacheKey(storeKey: storeKey, rulesHash: rulesHash);
+        if (key is not null && cache!.Get(key) is { } blob && HazardEffectsCodec.Decode(blob) is { } hit)
+        {
+            return hit;
+        }
+
+        var derived = await DeriveHazardEffectsAsync(context, rules, epData);
+        if (key is not null)
+        {
+            TryCache(() => cache!.Put(key, HazardEffectsCodec.Encode(derived)));
+        }
+
+        return derived;
+    }
 
     // Effect selection for reaches/tree/derive: --only keeps just the listed effects, --exclude drops
     // them (exclude wins on overlap). Tokens match an effect's `provider` (e.g. "throw") or the precise
@@ -44,4 +150,49 @@ internal static class EffectDerivation
 
         static bool InSet(DerivedEffect e, HashSet<string> set) => set.Contains(e.Provider) || set.Contains($"{e.Provider}:{e.Operation}");
     }
+
+    // The distinct provider strings (e.g. "http", "throw") known from the effective rule set.
+    // A bare-provider --only/--exclude token is valid iff it appears here.
+    internal static HashSet<string> KnownProviders(RuleSet rules) =>
+        new(rules.Effects.Select(r => r.Provider), StringComparer.OrdinalIgnoreCase);
+
+    // The distinct provider:operation strings (e.g. "http:GET", "throw:access_denied") known from
+    // the effective rule set. A provider:operation token is valid iff it appears here.
+    internal static HashSet<string> KnownProviderOps(RuleSet rules) =>
+        new(rules.Effects.Select(r => $"{r.Provider}:{r.Operation}"), StringComparer.OrdinalIgnoreCase);
+
+    // Warn to STDERR for any --only/--exclude token that cannot match any known provider or
+    // provider:operation from the effective rule set. Non-fatal: the command still runs. A token is
+    // "unknown" only when it matches neither a bare provider NOR any provider:op — so "http" is valid
+    // when ANY http:* rule exists, and "http:GET" is valid iff that exact pair exists. Token-matching
+    // mirrors ApplyEffectFilters exactly (case-insensitive, bare provider matches any op of that provider).
+    internal static void WarnUnknownFilterTokens(HashSet<string> only, HashSet<string> exclude, RuleSet rules, TextWriter errorWriter)
+    {
+        if (only.Count == 0 && exclude.Count == 0)
+        {
+            return;
+        }
+
+        var knownProviders = KnownProviders(rules);
+        var knownProviderOps = KnownProviderOps(rules);
+
+        // Compute the sorted provider list once — only consumed when at least one unknown token is found.
+        string? sortedProvidersLabel = null;
+
+        foreach (var token in only.Concat(exclude))
+        {
+            if (!TokenIsKnown(token, knownProviders, knownProviderOps))
+            {
+                sortedProvidersLabel ??= string.Join(", ", knownProviders.OrderBy(p => p, StringComparer.OrdinalIgnoreCase));
+                errorWriter.WriteLine(
+                    $"warning: --only/--exclude token '{token}' matched no known effect (providers: {sortedProvidersLabel}). Run 'rig derive --list-providers' to see the full set."
+                );
+            }
+        }
+    }
+
+    // A token is known when it is a bare provider ("http") present in the known-provider set, OR a
+    // provider:operation pair ("http:GET") present in the known-provider-op set. Mirrors InSet above.
+    private static bool TokenIsKnown(string token, HashSet<string> knownProviders, HashSet<string> knownProviderOps) =>
+        token.Contains(':') ? knownProviderOps.Contains(token) : knownProviders.Contains(token);
 }

@@ -60,6 +60,41 @@ public sealed class ImpactTwoStoreTests(AnalyzedPlaygrounds playgrounds)
         }
     }
 
+    // (a2) FR-4 gate end-to-end: identical stores have no per-EP effect change, so
+    // `--expect-no-effect-change` must PASS (exit 0) and print its OK verdict to STDERR — proving the gate
+    // doesn't false-positive on a behavior-preserving diff (the property that makes it safe in CI) and that
+    // the flag is wired through the full command. (The fail path — count > 0 → exit 1 — is unit-covered in
+    // ImpactExpectGateTests; constructing a shared-EP effect delta from two stores is disproportionate here.)
+    [Test]
+    public async Task Expect_no_effect_change_passes_on_identical_stores()
+    {
+        var pg = await playgrounds.EntryPointEffectsAsync();
+        var wd = NewWorkingDirectory();
+        try
+        {
+            var baseId = await MaterializeStoreAsync(wd, pg.Result, storeId: "gatebase", provenance: null);
+            var headId = await MaterializeStoreAsync(wd, pg.Result, storeId: "gatehead", provenance: null);
+
+            var output = new StringWriter();
+            var error = new StringWriter();
+            var exit = await CliApplication.RunAsync(
+                ["impact", "--base", baseId, "--head", headId, "--expect-no-effect-change"],
+                output,
+                error,
+                wd
+            );
+
+            exit.ShouldBe(0);
+            // Report still renders on stdout; the gate verdict is on stderr (so --format tsv stays clean).
+            output.ToString().ShouldContain("0 entry point(s) with a changed behavior");
+            error.ToString().ShouldContain("OK");
+        }
+        finally
+        {
+            TryDelete(wd);
+        }
+    }
+
     // (b) Two stores from DIFFERENT sources (EntryPointEffects vs LegacyNet48). The entry-point set genuinely
     // differs both ways and the reachable effects/trees differ, so the diff is non-empty: some EPs are flagged
     // and the structural breadcrumb (or behavioral section) renders. Asserts the STRUCTURE of the output, not

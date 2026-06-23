@@ -3,7 +3,7 @@ using Shouldly;
 
 namespace Rig.Tests.Analysis;
 
-public sealed class AnalysisRuleSetTests
+public sealed class RuleSetLoaderTests
 {
     [Test]
     public void LoadForSolution_rejects_file_rules_without_id()
@@ -18,7 +18,7 @@ public sealed class AnalysisRuleSetTests
             """
         );
 
-        var exception = Should.Throw<InvalidOperationException>(() => AnalysisRuleSet.LoadForSolution(workspace.SolutionPath));
+        var exception = Should.Throw<InvalidOperationException>(() => RuleSetLoader.LoadForSolution(workspace.SolutionPath));
 
         exception.Message.ShouldContain("File rule in `exclude` is missing `id`.");
     }
@@ -36,7 +36,7 @@ public sealed class AnalysisRuleSetTests
             """
         );
 
-        var exception = Should.Throw<InvalidOperationException>(() => AnalysisRuleSet.LoadForSolution(workspace.SolutionPath));
+        var exception = Should.Throw<InvalidOperationException>(() => RuleSetLoader.LoadForSolution(workspace.SolutionPath));
 
         exception.Message.ShouldContain("File rule `include-contract` is missing `glob`.");
     }
@@ -61,7 +61,7 @@ public sealed class AnalysisRuleSetTests
             """
         );
 
-        var rules = AnalysisRuleSet.LoadForSolution(workspace.SolutionPath, [workspace.ExtraRulesPath]);
+        var rules = RuleSetLoader.LoadForSolution(workspace.SolutionPath, [workspace.ExtraRulesPath]);
 
         rules.IsTestProject("Rig.Tests").ShouldBeTrue();
         rules.IsExcludedProject("Sample.AppHost").ShouldBeTrue();
@@ -82,7 +82,7 @@ public sealed class AnalysisRuleSetTests
             """
         );
 
-        var projected = FactEntryPointRuleProvider.LoadForWorkingDirectory(workspace.DirectoryPath);
+        var projected = RuleSetLoader.Load(workspace.DirectoryPath).EntryPoints;
 
         projected.ShouldHaveSingleItem().Requires.ShouldBe(["FrontEnd", "BackEnd"]);
     }
@@ -104,9 +104,9 @@ public sealed class AnalysisRuleSetTests
             """
         );
 
-        var rules = AnalysisRuleSet.LoadForSolution(workspace.SolutionPath);
+        var rules = RuleSetLoader.LoadForSolution(workspace.SolutionPath);
 
-        rules.TypeEntryPoints.ShouldHaveSingleItem().Id.ShouldBe("legacy");
+        rules.EntryPoints.ShouldHaveSingleItem().Id.ShouldBe("legacy");
     }
 
     [Test]
@@ -122,9 +122,48 @@ public sealed class AnalysisRuleSetTests
             """
         );
 
-        var projected = FactHandoffRuleProvider.LoadForWorkingDirectory(workspace.DirectoryPath);
+        var projected = RuleSetLoader.Load(workspace.DirectoryPath).Handoff;
 
         projected.ShouldHaveSingleItem().Requires.ShouldBe(["FrontEnd"]);
+    }
+
+    [Test]
+    public void DeliveryRules_round_trip_into_RuleSet_Delivery()
+    {
+        using var workspace = TempRulesWorkspace.Create(
+            """
+            {
+              "deliveryRules": [
+                {
+                  "id": "echo-actor",
+                  "tag": "actor_tell",
+                  "confidence": "heuristic",
+                  "producer": {
+                    "source": "arg", "resolve": "path", "argumentIndex": 0,
+                    "methods": ["tell", "ask"], "declaringTypes": ["Echo.Process"]
+                  },
+                  "registration": {
+                    "source": "arg", "resolve": "path", "argumentIndex": 0,
+                    "methods": ["spawn", "register"], "declaringTypes": ["Echo.Process"]
+                  }
+                }
+              ]
+            }
+            """
+        );
+
+        // The cascade merges the builtin deliveryRules first, then the workspace's; assert on the
+        // workspace's `echo-actor` overlaid copy (the LAST one in load order carries the test's method lists).
+        var delivery = RuleSetLoader.Load(workspace.DirectoryPath).Delivery;
+
+        var rule = delivery.Last(r => r.Id == "echo-actor");
+        rule.Tag.ShouldBe("actor_tell");
+        rule.Confidence.ShouldBe("heuristic");
+        rule.Producer.Source.ShouldBe("arg");
+        rule.Producer.Resolve.ShouldBe("path");
+        rule.Producer.Methods.ShouldBe(["tell", "ask"]);
+        rule.Producer.DeclaringTypes.ShouldBe(["Echo.Process"]);
+        rule.Registration.Methods.ShouldBe(["spawn", "register"]);
     }
 
     private sealed class TempRulesWorkspace : IDisposable

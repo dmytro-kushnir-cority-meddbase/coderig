@@ -2,6 +2,7 @@ using System.Data.Common;
 using System.Globalization;
 using System.Text;
 using Rig.Domain.Data;
+using Rig.Domain.Functions;
 using Rig.Storage.Storage;
 
 namespace Rig.Storage.Queries;
@@ -174,18 +175,11 @@ public static class SqlReachability
         var connection = await OpenAsync(context, cancellationToken);
         await ExecNonQueryAsync(connection, "DROP TABLE IF EXISTS reach_set;", null, cancellationToken);
         await ExecNonQueryAsync(connection, "CREATE TEMP TABLE reach_set(sym TEXT PRIMARY KEY);", null, cancellationToken);
-        await using (var insert = connection.CreateCommand())
-        {
-            insert.CommandText = "INSERT OR IGNORE INTO reach_set(sym) VALUES ($s);";
-            var p = insert.CreateParameter();
-            p.ParameterName = "$s";
-            insert.Parameters.Add(p);
-            foreach (var sym in reachable.Keys)
-            {
-                p.Value = sym;
-                await insert.ExecuteNonQueryAsync(cancellationToken);
-            }
-        }
+        // The reverse closure already lives in `reach_depth` — built by ReachedWithDepthAsync above on this
+        // SAME shared connection (temp tables are connection-scoped, and it isn't dropped until the next
+        // ReachedWithDepthAsync). Copy it in ONE set-based statement instead of marshalling every key back to
+        // C# and re-inserting it row-by-row (a synchronous round-trip per closure member — thousands).
+        await ExecNonQueryAsync(connection, "INSERT OR IGNORE INTO reach_set(sym) SELECT sym FROM reach_depth;", null, cancellationToken);
 
         // A no-predecessor root has no incoming SYNCHRONOUS call edge (handoff edges don't count under
         // sync-cut — that's exactly what makes a scheduled callback a background ORIGIN) and no incoming
@@ -305,11 +299,15 @@ public static class SqlReachability
     // (the part that dominated reaches/tree latency) is replaced by a bounded, indexed join. Base edges
     // come from the graph (all base edges), so LoadFactEntryPointDataAsync — heavy and otherwise only
     // used for its base edges + ctor refs here — is skipped entirely.
+    // F2: EpData carries the FactEntryPointData the EF-fallback path (LoadReachInputsFromRowsAsync)
+    // already loaded, so a caller that also needs the EP site map (DeriveEpSiteKindAsync) can reuse it
+    // instead of issuing a second LoadFactEntryPointDataAsync. Null on the SQL path (not loaded there).
     public sealed record ReachInputs(
         FactGraphData Graph,
         IReadOnlyList<FactInvocation> Invocations,
         IReadOnlyList<SymbolRef> CtorRefs,
-        IReadOnlyList<SymbolRef> ThrowRefs
+        IReadOnlyList<SymbolRef> ThrowRefs,
+        FactEntryPointDeriver.FactEntryPointData? EpData = null
     );
 
     public static async Task<ReachInputs> LoadReachInputsAsync(

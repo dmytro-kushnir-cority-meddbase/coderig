@@ -86,7 +86,7 @@ internal static class TreeRenderer
         }
     }
 
-    // True when this node directly has an effect or any descendant does. A "↺seen" (Truncated) node
+    // True when this node directly has an effect or any descendant does. A "⋯elided" (Truncated) node
     // has no children here, so only its own effect counts — that's sound: the effects under the
     // method's real subtree are printed under its first (expanded) occurrence, so nothing is lost.
     internal static bool SubtreeHasEffect(TraceNode node, IReadOnlyDictionary<string, List<string>> effectsByMethod)
@@ -147,7 +147,11 @@ internal static class TreeRenderer
         // declaring-type args and its own-method args. A child resolves its forwarded T:/M: binding tokens
         // against these, so a chain of static factories / generic methods renders concretely. Null at roots.
         IReadOnlyList<string?>? parentDeclaringConcrete = null,
-        IReadOnlyList<string?>? parentMethodConcrete = null
+        IReadOnlyList<string?>? parentMethodConcrete = null,
+        // `--hazards`: a precomputed compact hazard marker per enclosing method (SymbolId -> e.g.
+        // "  ⚠ dual_write(medium), race_window(high)"), appended to the node label so the pattern findings
+        // sit inline on the EP's reachable tree. Null/absent leaves nodes unmarked (the default tree).
+        IReadOnlyDictionary<string, string>? hazardsByMethod = null
     )
     {
         // Compute visible children first — the fan-out label must reflect how many branches are
@@ -178,9 +182,12 @@ internal static class TreeRenderer
         var handoff = node.EdgeKind == EdgeKinds.Handoff ? $" ⤳handoff via {ShortName(node.HandoffVia)} [cross_thread]" : "";
         var loop = node.LoopKind is null ? "" : $" 🔁[{ShortLoop(node.LoopDetail)}]";
         // Identical sibling edges collapsed under one parent (e.g. a generic method called once per
-        // type-arg): show the call-site count rather than N repeated "↺seen" lines.
+        // type-arg): show the call-site count rather than N repeated "⋯elided" lines.
         var calls = node.CallSites > 1 ? $" ×{node.CallSites} calls" : "";
-        var seen = node.Truncated ? " ↺seen" : "";
+        // Subtree not drawn here: this method was already expanded elsewhere (cycle / shared callee), or
+        // a depth/budget cap was hit. "elided" states the consequence without implying a cycle (the
+        // marker fires for all three), and reads unambiguously to a model parsing the tree.
+        var elided = node.Truncated ? " ⋯elided" : "";
         // Opaque-type render rule: a matching non-root node is drawn as a leaf — its own effects still
         // print, but its subtree is suppressed (the type's internals aren't worth expanding).
         var opaque = isRoot ? null : renderRules.MatchOpaque(node.SymbolId);
@@ -272,7 +279,10 @@ internal static class TreeRenderer
         // a source line, not just the effect/library leaves. Trailing so SourceLocDedupWriter dedups it in
         // print order; the root has no reaching edge (CallFile null).
         var callLoc = full && !string.IsNullOrEmpty(node.CallFile) ? $"  {ShortenPath(node.CallFile)}:{node.CallLine}" : "";
-        var label = $"{epPrefix}{name}{dispatch}{handoff}{loop}{calls}{seen}{opaqueTag}{cutTag}{fx}{loc}{epSuffix}{callLoc}";
+        // `--hazards`: the inline pattern-finding marker for this method (empty when unmarked). Placed before
+        // the source-loc suffixes so SourceLocDedupWriter's trailing-loc regex still matches the line.
+        var hazard = hazardsByMethod is not null && hazardsByMethod.TryGetValue(node.SymbolId, out var hz) ? hz : "";
+        var label = $"{epPrefix}{name}{dispatch}{handoff}{loop}{calls}{elided}{opaqueTag}{cutTag}{fx}{hazard}{loc}{epSuffix}{callLoc}";
         output.WriteLine(isRoot ? label : $"{prefix}{Connector(isLast)}{label}");
 
         // Collapse-seam render rule: this node is a fan-out hub (e.g. a reflection service-locator or
@@ -344,7 +354,8 @@ internal static class TreeRenderer
                 full: full,
                 effectLeavesByMethod: effectLeavesByMethod,
                 parentDeclaringConcrete: declaringConcrete,
-                parentMethodConcrete: methodConcrete
+                parentMethodConcrete: methodConcrete,
+                hazardsByMethod: hazardsByMethod
             );
         }
     }

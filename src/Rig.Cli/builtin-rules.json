@@ -113,6 +113,25 @@
   },
   "effects": [
     {
+      "provider": "object_store",
+      "operation": "write",
+      "methods": [
+        "Create",
+        "CreateInstance",
+        "UpdateInstance",
+        "Store",
+        "Save",
+        "Serialize"
+      ],
+      "declaringTypeNameEndsWith": [
+        "ObjectStore"
+      ],
+      "resource": "type_argument",
+      "confidence": "medium",
+      "basis": "compilation",
+      "reason": "object_store_write"
+    },
+    {
       "provider": "http",
       "operation": "GET",
       "methods": [
@@ -1420,6 +1439,16 @@
       "reason": "config_read: the configuration key / section name is the syntactic first argument of GetSection/GetValue/GetConnectionString (true even for the ConfigurationBinder extension methods — the IConfiguration receiver is not in the argument list). argumentIndex 0 reads the const-resolved list, so a const-keyed read (GetSection(Keys.Foo)) yields the value, not just a literal."
     },
     {
+      "provider": "throw",
+      "operation": "raise",
+      "methods": [],
+      "matchThrow": true,
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "fact_derived",
+      "reason": "throw_site_exception: a `throw new XxxException(...)` site. Language-universal (not codebase-specific), so it ships builtin; the thrown exception type is the resource. A repo can still add its OWN matchThrow rule for framework-specific functional throws (e.g. LanguageExt failwith/raise)."
+    },
+    {
       "provider": "lock",
       "operation": "acquire",
       "methods": [ "Enter", "TryEnter", "Wait", "WaitAsync", "WaitOne", "EnterReadLock", "EnterWriteLock", "EnterUpgradeableReadLock", "AcquireReaderLock", "AcquireWriterLock" ],
@@ -1588,6 +1617,93 @@
       "confidence": "medium",
       "basis": "compilation+profile",
       "reason": "inproc_timer_thread_stateless_hazard"
+    },
+    {
+      "provider": "shared_state",
+      "operation": "mutate",
+      "methods": [ "Swap", "SwapAsync" ],
+      "receiverTypes": [ "LanguageExt.Atom", "LanguageExt.AtomAsync" ],
+      "atomic": true,
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "shared_state(Atom): LanguageExt Atom/AtomAsync.Swap[Async] is an atomic read-modify-write on an inherently shared mutable cell — by construction concurrency-shared (you reach for an Atom precisely to publish across threads). Gated on the Atom receiver type (NOT method name alone — unrelated static helpers on a class named Swap do not match this gate)."
+    },
+    {
+      "provider": "shared_state",
+      "operation": "mutate",
+      "methods": [ "TryAdd", "AddOrUpdate", "GetOrAdd", "TryRemove", "TryUpdate", "Clear" ],
+      "receiverTypes": [ "System.Collections.Concurrent.ConcurrentDictionary" ],
+      "atomic": true,
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "shared_state(ConcurrentDictionary): the concurrent dictionary mutators. ConcurrentDictionary exists ONLY to be shared across threads, so a mutation on it is by-contract a shared-state write — unlike a bare Dictionary.Add (receiver could be local), which is why this is rule-expressible and a plain-collection .Add is not."
+    },
+    {
+      "provider": "shared_state",
+      "operation": "mutate",
+      "methods": [ "Enqueue", "TryDequeue" ],
+      "receiverTypes": [ "System.Collections.Concurrent.ConcurrentQueue", "System.Collections.Concurrent.BlockingCollection" ],
+      "atomic": true,
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "shared_state(ConcurrentQueue/BlockingCollection): Enqueue/TryDequeue mutate an inherently-shared producer/consumer queue."
+    },
+    {
+      "provider": "shared_state",
+      "operation": "mutate",
+      "methods": [ "Add", "TryAdd", "TryTake" ],
+      "receiverTypes": [ "System.Collections.Concurrent.ConcurrentBag", "System.Collections.Concurrent.BlockingCollection" ],
+      "atomic": true,
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "shared_state(ConcurrentBag/BlockingCollection): Add/TryTake on an inherently-shared bag/blocking collection. Gated on the concurrent receiver type so a local List.Add never matches."
+    },
+    {
+      "provider": "shared_state",
+      "operation": "mutate",
+      "methods": [ "Push", "TryPop" ],
+      "receiverTypes": [ "System.Collections.Concurrent.ConcurrentStack" ],
+      "atomic": true,
+      "resource": "receiver_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "shared_state(ConcurrentStack): Push/TryPop mutate an inherently-shared stack."
+    },
+    {
+      "provider": "shared_state",
+      "operation": "mutate",
+      "methods": [ "AddOrUpdate", "GetOrAdd", "TryAdd", "TryRemove", "TryUpdate", "Update", "Enqueue", "Dequeue", "Push", "Pop", "InterlockedExchange", "InterlockedCompareExchange" ],
+      "receiverTypes": [ "System.Collections.Immutable.ImmutableInterlocked" ],
+      "declaringTypes": [ "System.Collections.Immutable.ImmutableInterlocked" ],
+      "atomic": true,
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation+profile",
+      "reason": "shared_state(ImmutableInterlocked): ImmutableInterlocked.* are the lock-free atomic RMW helpers over a shared immutable-collection field (the whole point is concurrent publication). Static helpers (no receiver), so gated/resolved on the declaring type."
+    },
+    {
+      "provider": "shared_state",
+      "operation": "mutate",
+      "methods": [],
+      "matchFieldWrite": true,
+      "resource": "field_slot",
+      "confidence": "medium",
+      "basis": "fact_derived",
+      "reason": "shared_state(static-field-write): an assignment to a STATIC field/auto-property (StaticType.SharedField = v) — shared mutable state published to every caller regardless of receiver, which is what makes it rule-expressible (an instance-field write is local-vs-shared-ambiguous and is NOT matched). Consumes the existing write refs (no re-index); static-ness is gated upstream via the symbol-facts Modifiers join. resource:'field_slot' (any non-'declaring_type' value) resolves to the SLOT DocID (F:Ns.Type.Field), not the declaring type, so the race_window matcher pairs on the exact cell — read TypeX.A / write TypeX.B never falsely pair."
+    },
+    {
+      "provider": "shared_state",
+      "operation": "read",
+      "methods": [],
+      "matchFieldRead": true,
+      "resource": "field_slot",
+      "confidence": "medium",
+      "basis": "fact_derived",
+      "reason": "shared_state(static-field-read): a read of a STATIC field/auto-property (… = StaticType.SharedField) — the symmetric twin of static-field-write. A read of shared mutable state regardless of receiver, which is what makes it rule-expressible (an instance-field read is local-vs-shared-ambiguous and is NOT matched). The 'check' of a shared cell, modeled as an effect so a read-before-write (TOCTOU/lost-update) candidate can pair it with a same-cell write. Consumes the existing read refs (no re-index); static-ness is gated upstream via the symbol-facts Modifiers join. resource:'field_slot' (any non-'declaring_type' value) resolves to the SLOT DocID (F:Ns.Type.Field) so the race_window matcher pairs reads and writes on the exact cell."
     }
   ],
   "diRegistrations": [
@@ -1688,6 +1804,36 @@
       "reason": "msdi_servicedescriptor_singleton"
     }
   ],
+  "deliveryRules": [
+    {
+      "id": "csharp-event",
+      "tag": "event_raise",
+      "confidence": "exact",
+      "producer": { "source": "event-symbol", "resolve": "symbol" },
+      "registration": { "source": "event-symbol", "resolve": "symbol" }
+    },
+    {
+      "id": "echo-actor",
+      "tag": "actor_tell",
+      "confidence": "heuristic",
+      "_reason": "Echo actors as a publish→consumer DELIVERY mechanism: a spawn/register binds a name to a handler, a tell/ask publishes to that name. The method lists deliberately DUPLICATE those in the actor:* EFFECT rules — different consumers (delivery edges here vs effect derivation + the dual_write hazard there), so the two are kept independent rather than one inferred from the other. resolve:leaf takes the LAST member-path segment so a tell through ProcessDns.X bridges the spawn through ProcessNames.X (parallel registries naming the same process X by leaf) — the full path never matches because the class prefixes differ; ~heuristic (a leaf shared by two unrelated channels over-joins). The spawn's handler delegate is reclassified by the async-handoff machinery into a handoff edge tagged meddbase.echo.spawn BEFORE the delivery join runs, so the registration's handlerDispatcher names that dispatcher to locate its handler at the spawn site (rather than via methodGroup, which the spawn delegate no longer is).",
+      "producer": {
+        "source": "arg",
+        "resolve": "leaf",
+        "argumentIndex": 0,
+        "methods": ["tell", "tellSystem", "ask", "askAsync", "askIfAlive"],
+        "declaringTypes": ["Echo.Process"]
+      },
+      "registration": {
+        "source": "arg",
+        "resolve": "leaf",
+        "argumentIndex": 0,
+        "methods": ["spawn", "spawnUnit", "spawnMany", "register"],
+        "declaringTypes": ["Echo.Process"],
+        "handlerDispatcher": "meddbase.echo.spawn"
+      }
+    }
+  ],
   "files": {
     "exclude": [
       {
@@ -1777,6 +1923,31 @@
         "observationType": "lock_held_across_effect",
         "context": "lock"
       }
+    ],
+    "serializationHazard": [
+      {
+        "providers": ["object_store"],
+        "unsupportedTypePatterns": ["LanguageExt.Option", "LanguageExt.Either"]
+      }
+    ],
+    "nPlusOne": [
+      {
+        "providers": [
+          "http",
+          "redis",
+          "inproc_cache",
+          "entity_cache",
+          "db_reader",
+          "db_command",
+          "llblgen",
+          "repository",
+          "efcore",
+          "fhir",
+          "elasticsearch",
+          "azure_search"
+        ],
+        "operations": ["GET", "read", "row_read", "query", "fetch", "search", "index_read"]
+      }
     ]
   },
   "effectEmoji": {
@@ -1794,7 +1965,7 @@
     "entity_cache": "🗃️",
     "object_store": "📦",
     "io": "📁",
-    "throw": "⚠️",
+    "throw": "↯",
     "lock": "🔒",
     "async_lock": "🔐",
     "fhir": "🏥",

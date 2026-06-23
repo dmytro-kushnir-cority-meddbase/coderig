@@ -2,23 +2,14 @@ using Rig.Domain.Data;
 
 namespace Rig.Analysis.Rules;
 
-// Bridges the internal AnalysisRuleSet to Rig.Domain's FactRenderRules: loads the `render` rule
-// section (built-in + global ~/.rig + local rig.rules.json + --rules) and projects it to the
-// fact-matchable FactRenderRule. Same cascade + layering as FactHandoffRuleProvider — render data
-// flows in from this (the only layer that can read AnalysisRuleSet); the matcher lives in Domain.
-public static class FactRenderRuleProvider
+// Projects the merged `render` rule section to Rig.Domain's FactRenderRules. Rule data flows in through
+// RuleSetLoader; the matcher lives in Domain.
+internal static class FactRenderRuleProvider
 {
-    public static FactRenderRules LoadForWorkingDirectory(string workingDirectory, IReadOnlyList<string>? extraRulesPaths = null)
-    {
-        var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
-        return Project(AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths));
-    }
-
-    // Project off an already-merged rule set, so RuleSet.Load can project this slice without a second load.
-    internal static FactRenderRules Project(AnalysisRuleSet ruleSet) =>
+    internal static FactRenderRules Project(AnalysisRulesDocument doc) =>
         new(
-            CollapseSeams: ruleSet.RenderCollapseSeams.Select(Project).ToArray(),
-            OpaqueTypes: ruleSet.RenderOpaqueTypes.Select(Project).ToArray()
+            CollapseSeams: (doc.Render?.CollapseSeams ?? []).Select(Project).ToArray(),
+            OpaqueTypes: (doc.Render?.OpaqueTypes ?? []).Select(Project).ToArray()
         );
 
     private static FactRenderRule Project(RenderRule rule) => new(Pattern: rule.Pattern, Label: rule.Label ?? rule.Reason ?? rule.Pattern);

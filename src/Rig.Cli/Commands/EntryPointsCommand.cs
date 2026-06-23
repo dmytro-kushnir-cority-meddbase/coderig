@@ -37,32 +37,29 @@ internal static class EntryPointsCommand
                 error,
                 () =>
                     RunAsync(
-                        extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
-                        format: pr.GetValue(format),
-                        limit: pr.GetValue(limit),
-                        output: output,
-                        workingDirectory: workingDirectory,
-                        storeRef: pr.GetValue(store)
+                        new Options(
+                            ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                            Format: pr.GetValue(format),
+                            Limit: pr.GetValue(limit)
+                        ),
+                        new CommandIo(Output: output, Error: error, WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
                     )
             )
         );
         return cmd;
     }
 
-    private static async Task<int> RunAsync(
-        IReadOnlyList<string> extraRules,
-        string? format,
-        int? limit,
-        TextWriter output,
-        string workingDirectory,
-        string? storeRef
-    )
-    {
-        var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
-        var max = limit ?? int.MaxValue; // --limit absent => unbounded (this IS the listing)
+    // Bound option values for `rig entrypoints`. IO wiring (output, error, workingDirectory, storeRef)
+    // lives in CommandIo; only the command-specific user options live here.
+    private sealed record Options(IReadOnlyList<string> ExtraRules, string? Format, int? Limit);
 
-        var rules = RuleSet.Load(workingDirectory, extraRules);
-        await using var context = OpenReadContext(workingDirectory, storeRef);
+    private static async Task<int> RunAsync(Options opts, CommandIo io)
+    {
+        var tsv = CommonOptions.IsTsv(opts.Format);
+        var max = opts.Limit ?? int.MaxValue; // --limit absent => unbounded (this IS the listing)
+
+        var rules = RuleSetLoader.Load(io.WorkingDirectory, opts.ExtraRules);
+        await using var context = OpenReadContext(io.WorkingDirectory, io.StoreRef);
 
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
         var epSet = await DeriveEntryPointsAsync(context, epData, rules);
@@ -77,7 +74,7 @@ internal static class EntryPointsCommand
             .ThenBy(e => e.Route, StringComparer.Ordinal)
             .ToList();
 
-        var deployments = await LoadDeploymentsAsync(context, workingDirectory);
+        var deployments = await LoadDeploymentsAsync(context, io.WorkingDirectory);
 
         // --format tsv: one row per EP — kind, route, file, line, requires, loaded services, active services
         // (the last two comma-joined; empty without deployments.json).
@@ -87,7 +84,7 @@ internal static class EntryPointsCommand
             {
                 var loaded = deployments.ServicesForFile(e.FilePath);
                 var active = deployments.ActiveServices(loadedServices: loaded, requires: e.Requires);
-                output.WriteLine(
+                io.Output.WriteLine(
                     $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}"
                 );
             }
@@ -95,21 +92,21 @@ internal static class EntryPointsCommand
             return 0;
         }
 
-        output.WriteLine($"Entry points: {eps.Count}");
+        io.Output.WriteLine($"Entry points: {eps.Count}");
         foreach (var kindGroup in eps.GroupBy(e => e.Kind, StringComparer.Ordinal).OrderByDescending(g => g.Count()))
         {
-            output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
+            io.Output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup.Take(max))
             {
-                WriteEntryPointLine(output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
+                WriteEntryPointLine(io.Output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
             }
 
-            WriteSampleTruncationNote(output, total: kindGroup.Count(), shown: max, kind: kindGroup.Key);
+            WriteSampleTruncationNote(io.Output, total: kindGroup.Count(), shown: max, kind: kindGroup.Key);
         }
 
         if (!deployments.IsEmpty)
         {
-            WriteServiceSummary(eps.Select(e => (e.Kind, (string?)e.FilePath, e.Requires)), deployments, output);
+            WriteServiceSummary(eps.Select(e => (e.Kind, (string?)e.FilePath, e.Requires)), deployments, io.Output);
         }
 
         return 0;
