@@ -280,14 +280,18 @@ mutation-under-concurrency *candidate*; FR-3 N+1 looped read; FR-4/1e per-EP eff
   (or its keyed variant) reachable on an EP whose reach lacks a corresponding invalidation call for the same
   key/region. Design first: what counts as an "invalidation", per-key vs blanket, and how to avoid the FP class
   FR-1 hit (disclose candidate, don't claim proof). Ship with a corpus fixture per mapped case.
-- **FR-1 PRECISION (not recall) — the pinned `_Gap_` sub-patterns.** FR-1 already fires (recall is fine); the
-  gap is false positives + uncoupled findings: (a) **#4246** lock-attribution across a wrapper/callback boundary
-  (the guard isn't attributed to the guarded mutation → guarded code looks unguarded); (b) **#2930** TOCTOU
-  coupling (surfaces the write candidate but not the check-then-act pairing); (c) **#2892** no quantified per-EP
-  query-count estimate. **This is the same work as UX panel item #2** (hazard dedup + severity, see
-  `docs/ux-research-2026-06.md`): the panel's FP clusters (conditional-overwrite-as-RMW, `#cctor`-as-lazy-init,
-  severity inversion) are precisely the "FR-1 is a triage list, not a prover" honesty the RCA doc states. Doing
-  FR-1 precision kills the panel's hazard noise AND closes #4246/#2930. Highest-leverage detector work.
+- **FR-1 PRECISION (not recall) — the pinned `_Gap_` sub-patterns. PARTIALLY DONE (`039d2eec`).** FR-1 already
+  fires (recall is fine); the gap is false positives + uncoupled findings.
+  - **DONE this pass** (the triage half — UX panel #2, no new extraction): `#cctor` exemption (CLR type-init
+    lock → not a race; was a `lazy_init_race` FP class), per-`(type, method)` dedup with a `×N` count in the
+    rollup (the 26-site `HandleSettingsToBeLogged` cluster → one row), and a `--exclude-namespace` filter for
+    framework/vendored noise. Validated on MedDBase (`#cctor` 16→0, real findings survive).
+  - **STILL OPEN** (needs NEW extraction + a re-index, NOT query-side): (a) **#2930** TOCTOU coupling /
+    conditional-overwrite-vs-true-RMW — distinguishing `S.X = f(S.X)` (real RMW) from `S.X = independentValue`
+    (conditional overwrite, agent C's dominant `high`-tier FP) needs a fact for whether a write's RHS DEPENDS
+    on the read cell; the extractor doesn't capture it today. (b) **#4246** lock-attribution across a
+    wrapper/callback boundary — needs cross-method happens-before/span propagation. (c) **#2892** quantified
+    per-EP query-count. These are the FR-1 follow-up; until then race_window stays a disclosed candidate.
 - **FR-2 — AsyncLocal/ThreadStatic flow + deadlock / lock-ordering. WON'T DO (declined by design).** Motivating
   bugs (!10208 ThreadStatic→AsyncLocal, !7194 SQL background deadlock, #311) stay pinned in the corpus as named
   targets, but detecting them needs AsyncLocal/ThreadStatic *flow* modeling and lock-ordering analysis — both
