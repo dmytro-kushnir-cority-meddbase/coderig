@@ -26,6 +26,7 @@ internal static class DeriveCommand
         var limit = CommonOptions.Limit(40);
         var only = CommonOptions.Only();
         var exclude = CommonOptions.Exclude();
+        var excludeNamespace = CommonOptions.ExcludeNamespace();
         var format = CommonOptions.Format();
         var store = CommonOptions.Store();
         var listProviders = new Option<bool>("--list-providers")
@@ -38,6 +39,7 @@ internal static class DeriveCommand
             limit,
             only,
             exclude,
+            excludeNamespace,
             format,
             store,
             listProviders,
@@ -53,6 +55,7 @@ internal static class DeriveCommand
                             Limit: pr.GetValue(limit),
                             Only: CommonOptions.FilterSet(pr.GetValue(only)),
                             Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
+                            ExcludeNamespaces: CommonOptions.NamespacePrefixes(pr.GetValue(excludeNamespace)),
                             Format: pr.GetValue(format),
                             ListProviders: pr.GetValue(listProviders)
                         ),
@@ -68,6 +71,7 @@ internal static class DeriveCommand
         int Limit,
         HashSet<string> Only,
         HashSet<string> Exclude,
+        IReadOnlyList<string> ExcludeNamespaces,
         string? Format,
         bool ListProviders = false
     );
@@ -165,6 +169,14 @@ internal static class DeriveCommand
         // Fed to BOTH the tsv `hazard` emission AND the rendered Hazards section so neither view misses a source.
         var allHazards = new List<HazardFinding>(HazardFindings(effects));
         allHazards.AddRange(cycleFindings);
+
+        // --exclude-namespace: drop hazard findings whose enclosing DocID namespace starts with any of the
+        // given prefixes (case-insensitive). Applied BEFORE both tsv and human output for consistency.
+        // Effects are unaffected — this filter touches only the hazard surface.
+        if (opts.ExcludeNamespaces.Count > 0)
+        {
+            allHazards.RemoveAll(h => CommonOptions.MatchesExcludedNamespace(h.Enclosing, opts.ExcludeNamespaces));
+        }
 
         // Machine-readable mode: emit full-fidelity rows (full DocIDs/paths) for tooling that joins
         // effects/entry points against the call graph. `rig derive --format tsv`.
@@ -385,11 +397,13 @@ internal static class DeriveCommand
     // Confidence tiers in disclosure order (high first), so a per-type breakdown reads worst-first.
     private static readonly string[] ConfidenceOrder = ["high", "medium", "low"];
 
-    // The Hazards section: per hazard type a total + a confidence-tier breakdown, then a capped sample of
-    // sites (cell/context + enclosing method + file:line + reason) with a tsv-for-all hint. Types are ordered
-    // by total count desc (busiest hazard first), ties broken by type name. The tier breakdown parenthetical
-    // is shown UNLESS the only tier present is "high" (the default tier — a bare "(high N)" is noise: see
-    // n_plus_1 / unserializable_payload, which are always high). Pure render over a finding list — internal so
+    // The Hazards section: per hazard type, findings are DEDUPED by ENCLOSING METHOD and rendered as ONE line
+    // per method with a ×N site count (N = sites for that method + type), ordered worst-first (highest
+    // confidence among the method's findings, then by site count desc). The per-type header reports BOTH
+    // counts, e.g. "race_window: 88 site(s) across 31 method(s)". The confidence-tier breakdown uses SITE
+    // counts (consistent with the pre-dedup behavior). NOTE: dedup is HUMAN-ONLY — the `--format tsv` `hazard`
+    // rows (HazardTsvRow, one per finding/site) stay per-site for tooling. Types are ordered by total site
+    // count desc (busiest hazard first), ties broken by type name. Pure render over a finding list — internal so
     // it can be exercised against a synthetic finding set without wiring a full DeriveCommand run.
     internal static void WriteHazards(TextWriter output, IReadOnlyList<HazardFinding> findings, int limit)
     {
@@ -400,6 +414,7 @@ internal static class DeriveCommand
 
         output.WriteLine();
         output.WriteLine($"Hazards (pattern findings): {findings.Count}");
+        // perTypeSample caps the number of METHOD rows shown (not sites).
         var perTypeSample = limit / 8 + 1;
         var byType = findings
             .GroupBy(f => f.Type, StringComparer.Ordinal)
@@ -407,6 +422,7 @@ internal static class DeriveCommand
             .ThenBy(g => g.Key, StringComparer.Ordinal);
         foreach (var typeGroup in byType)
         {
+            // Site-level tier counts (for the per-type breakdown parenthetical — unchanged from pre-dedup).
             var tierCounts = typeGroup
                 .GroupBy(f => f.Confidence, StringComparer.Ordinal)
                 .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
@@ -428,16 +444,53 @@ internal static class DeriveCommand
                             )
                     )
                     + ")";
-            output.WriteLine($"{Indent.L1}{typeGroup.Key}: {typeGroup.Count()}{breakdown}");
 
-            foreach (var f in typeGroup.Take(perTypeSample))
+            // Dedup by enclosing method: one row per method, showing ×N when the method has multiple sites.
+            // Ordered worst-first: highest confidence tier first (high < medium < low), then site count desc.
+            var byMethod = typeGroup
+                .GroupBy(f => f.Enclosing, StringComparer.Ordinal)
+                .Select(g =>
+                {
+                    // Best (worst-severity) confidence among this method's sites — the most urgent signal.
+                    var worstConfidence = g.Select(f => f.Confidence).OrderBy(HazardConfidenceRank).First();
+                    // Representative site: the one with the worst confidence (or first alphabetically on tie).
+                    var representative = g.OrderBy(f => HazardConfidenceRank(f.Confidence))
+                        .ThenBy(f => f.FilePath, StringComparer.Ordinal)
+                        .ThenBy(f => f.Line)
+                        .First();
+                    return (Representative: representative, SiteCount: g.Count(), WorstConfidence: worstConfidence);
+                })
+                .OrderBy(m => HazardConfidenceRank(m.WorstConfidence))
+                .ThenByDescending(m => m.SiteCount)
+                .ThenBy(m => m.Representative.Enclosing, StringComparer.Ordinal)
+                .ToList();
+
+            var siteCount = typeGroup.Count();
+            var methodCount = byMethod.Count;
+            // When all sites are in a single method the "across N method(s)" is noise — suppress it for clarity.
+            var methodSuffix = methodCount > 1 ? $" across {methodCount} method(s)" : "";
+            output.WriteLine($"{Indent.L1}{typeGroup.Key}: {siteCount} site(s){methodSuffix}{breakdown}");
+
+            foreach (var (representative, siteCountForMethod, _) in byMethod.Take(perTypeSample))
             {
+                var siteTag = siteCountForMethod > 1 ? $" ×{siteCountForMethod}" : "";
                 output.WriteLine(
-                    $"{Indent.L3}{ShortName(f.Context)}  <- {ShortName(f.Enclosing)}  {ShortenPath(f.FilePath)}:{f.Line}  [{f.Reason}]"
+                    $"{Indent.L3}{ShortName(representative.Context)}  <- {ShortName(representative.Enclosing)}  {ShortenPath(representative.FilePath)}:{representative.Line}  [{representative.Reason}]{siteTag}"
                 );
             }
 
-            WriteSampleTruncationNote(output, total: typeGroup.Count(), shown: perTypeSample, kind: typeGroup.Key);
+            WriteSampleTruncationNote(output, total: methodCount, shown: perTypeSample, kind: typeGroup.Key);
         }
     }
+
+    // Confidence sort key for hazard rollup ordering: high=0, medium=1, low=2. OrderBy picks worst (most
+    // urgent) first — so a "high" finding sorts before "medium" and "low". Unknown tiers sort last.
+    private static int HazardConfidenceRank(string confidence) =>
+        confidence switch
+        {
+            "high" => 0,
+            "medium" => 1,
+            "low" => 2,
+            _ => 3,
+        };
 }

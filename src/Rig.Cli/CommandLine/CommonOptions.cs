@@ -33,6 +33,17 @@ internal static class CommonOptions
 
     internal static Option<string[]> Exclude() => FilterList(name: "--exclude", description: "Drop these effects (e.g. --exclude throw).");
 
+    // --exclude-namespace <prefix>... (repeatable): drop hazard findings whose enclosing DocID namespace
+    // starts with the given prefix (case-insensitive). Filters HAZARD output only — effects are unaffected.
+    // Useful to suppress framework/vendored noise (e.g. --exclude-namespace Echo.Process --exclude-namespace System.).
+    internal static Option<string[]> ExcludeNamespace() =>
+        new("--exclude-namespace")
+        {
+            Description =
+                "Drop hazard findings whose enclosing method namespace starts with this prefix (repeatable; case-insensitive). Filters hazards only — effects are unaffected. Example: --exclude-namespace Echo.Process --exclude-namespace System.",
+            CustomParser = r => r.Tokens.Select(t => t.Value).ToArray(),
+        };
+
     // A repeatable list option whose value is split on commas OR whitespace (also ';' / tab) with empties
     // trimmed — so `--exclude throw`, `--exclude throw,llblgen:read`, `--exclude "throw cache"`, and
     // repeated flags all parse identically. The case-insensitive set is built by FilterSet at read time.
@@ -105,6 +116,32 @@ internal static class CommonOptions
 
     // The case-insensitive effect-filter set from a parsed --only/--exclude value (null when the flag was absent).
     internal static HashSet<string> FilterSet(string[]? tokens) => new(tokens ?? [], StringComparer.OrdinalIgnoreCase);
+
+    // Returns the parsed --exclude-namespace prefixes as a list (empty when the flag was absent).
+    internal static IReadOnlyList<string> NamespacePrefixes(string[]? tokens) => tokens ?? [];
+
+    // Returns true when the enclosing DocID matches any of the given namespace prefixes. Matching strips the
+    // leading "M:" kind prefix (and any other single-char kind prefix) and compares the namespace portion of
+    // the remainder against each prefix, case-insensitively. An empty prefix list never matches (pass-through).
+    internal static bool MatchesExcludedNamespace(string enclosing, IReadOnlyList<string> excludedPrefixes)
+    {
+        if (excludedPrefixes.Count == 0)
+        {
+            return false;
+        }
+
+        // Strip the "M:" (or other) kind prefix.
+        var id = enclosing.Length > 2 && enclosing[1] == ':' ? enclosing[2..] : enclosing;
+        foreach (var prefix in excludedPrefixes)
+        {
+            if (id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     // --rules is null when absent; callers want an empty list.
     internal static IReadOnlyList<string> RulesOf(string[]? rules) => rules ?? [];

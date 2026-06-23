@@ -377,6 +377,43 @@ public sealed class ProductionFixCorpusRaceWindowTests
         context.Detail.ShouldStartWith("Corpus.cs:");
     }
 
+    // #CCTOR EXEMPTION: a read→write in a STATIC CONSTRUCTOR emits NO race observation. The CLR type-init
+    // lock serializes #cctor execution — only one thread ever runs a given #cctor, so the read→write pair
+    // cannot race. The mutate effect still fires (annotate-only), but no race_window or lazy_init_race is
+    // attached. (Note: instance .#ctor is NOT exempted — it classifies normally as lazy_init_race.)
+    [Test]
+    public void Static_ctor_cctor_read_before_write_emits_no_race_or_lazy_init_observation()
+    {
+        var result = ProductionFixCorpus.Analyze(
+            """
+            namespace App
+            {
+                public static class AppState
+                {
+                    public static int Ready;
+
+                    // Static constructor: CLR type-init lock serializes this — cannot race.
+                    static AppState()
+                    {
+                        if (Ready == 0)
+                        {
+                            Ready = 1;
+                        }
+                    }
+                }
+            }
+            """
+        );
+
+        // The mutate fires (annotate-only; effect list is untouched).
+        result.SharedStateMutationsIn("#cctor").Count.ShouldBe(1);
+
+        // No race_window — the CLR type-init lock makes this safe.
+        result.RaceWindowsIn("#cctor").ShouldBeEmpty();
+        // No lazy_init_race either — the exemption fires BEFORE the lazy-init classification.
+        result.LazyInitRacesIn("#cctor").ShouldBeEmpty();
+    }
+
     // TASK A guard: a READ of a static READONLY cell is immutable ⇒ cannot be a TOCTOU check ⇒ the read arm
     // must not emit it. The write to a separate mutable cell still fires but pairs with no read → no finding.
     [Test]

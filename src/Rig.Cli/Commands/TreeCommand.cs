@@ -60,6 +60,7 @@ internal static class TreeCommand
         var depth = CommonOptions.Depth();
         var only = CommonOptions.Only();
         var exclude = CommonOptions.Exclude();
+        var excludeNamespace = CommonOptions.ExcludeNamespace();
         var noCache = CommonOptions.NoCache();
         var time = CommonOptions.Time();
         var format = CommonOptions.Format(
@@ -85,6 +86,7 @@ internal static class TreeCommand
             depth,
             only,
             exclude,
+            excludeNamespace,
             noCache,
             time,
             format,
@@ -164,6 +166,7 @@ internal static class TreeCommand
                             Depth: pr.GetValue(depth),
                             Only: CommonOptions.FilterSet(pr.GetValue(only)),
                             Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
+                            ExcludeNamespaces: CommonOptions.NamespacePrefixes(pr.GetValue(excludeNamespace)),
                             NoCache: pr.GetValue(noCache),
                             Time: pr.GetValue(time),
                             Format: pr.GetValue(format),
@@ -191,6 +194,7 @@ internal static class TreeCommand
         int? Depth,
         HashSet<string> Only,
         HashSet<string> Exclude,
+        IReadOnlyList<string> ExcludeNamespaces,
         bool NoCache,
         bool Time,
         string? Format,
@@ -382,6 +386,15 @@ internal static class TreeCommand
             );
             effects = hazardEffects.Where(e => e.EnclosingSymbolId is not null && treeMethods.Contains(e.EnclosingSymbolId)).ToList();
             hazardFindings = DeriveCommand.HazardFindings(effects).Where(f => treeMethods.Contains(f.Enclosing)).ToList();
+            // --exclude-namespace: drop hazard findings whose enclosing DocID namespace starts with any of the
+            // given prefixes. Applied to both the summary section (WriteHazards) and the tsv `hazard` rows.
+            if (opts.ExcludeNamespaces.Count > 0)
+            {
+                hazardFindings = hazardFindings
+                    .Where(f => !CommonOptions.MatchesExcludedNamespace(f.Enclosing, opts.ExcludeNamespaces))
+                    .ToList();
+            }
+
             hazardsByMethod = hazardFindings
                 .GroupBy(f => f.Enclosing, StringComparer.Ordinal)
                 .ToDictionary(keySelector: g => g.Key, elementSelector: FormatHazardMark, comparer: StringComparer.Ordinal);

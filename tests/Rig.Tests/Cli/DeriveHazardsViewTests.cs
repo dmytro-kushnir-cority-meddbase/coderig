@@ -85,16 +85,18 @@ public sealed class DeriveHazardsViewTests
         var text = sw.ToString();
 
         text.ShouldContain("Hazards (pattern findings): 183");
-        // race_window is busiest → first, with its high/medium tier breakdown.
-        text.ShouldContain("race_window: 147 (high 121, medium 26)");
+        // race_window is busiest → first. Header now reports site(s) count; tier breakdown uses site counts.
+        // All 147 sites are in the same enclosing method (M:App.Cache.Bump) → no "across N method(s)" suffix.
+        text.ShouldContain("race_window: 147 site(s) (high 121, medium 26)");
         // lazy_init_race shows its (single) low tier — a non-high tier is informative.
-        text.ShouldContain("lazy_init_race: 32 (low 32)");
+        text.ShouldContain("lazy_init_race: 32 site(s) (low 32)");
         // n_plus_1 is always high → the bare "(high N)" parenthetical is suppressed as noise.
-        text.ShouldContain("n_plus_1: 4");
-        text.ShouldNotContain("n_plus_1: 4 (high");
-        // The capped sample carries the reason and points at the tsv for the full list.
+        text.ShouldContain("n_plus_1: 4 site(s)");
+        text.ShouldNotContain("n_plus_1: 4 site(s) (high");
+        // The method row carries the reason. (No tsv-pointer note here: with per-method dedup all 147 race
+        // sites collapse to ONE method row, which is <= the sample cap — the truncation note only fires when
+        // the number of METHOD rows exceeds the cap. Method-count truncation is covered in HazardPrecisionTests.)
         text.ShouldContain("rmw_no_isolation_on_path");
-        text.ShouldContain("rig derive --format tsv");
     }
 
     [Test]

@@ -162,6 +162,16 @@ public static class FactHazardDeriver
                 continue;
             }
 
+            // STATIC CONSTRUCTOR EXEMPTION: the CLR type-init lock serializes #cctor execution — only one
+            // thread ever runs a given #cctor, so a read→write pair inside a static constructor cannot race.
+            // Emit NO observation; add the effect unchanged and move on.
+            // NOTE: instance .#ctor, getters, and Init-named methods are NOT exempted — they classify normally.
+            if (SimpleMemberName(e.EnclosingSymbolId!) == "#cctor")
+            {
+                result.Add(e);
+                continue;
+            }
+
             // CLASSIFY the pair. The lazy-init / do-once archetype (lazy singletons, do-once init flags) is a
             // separate, LOW-severity finding (lazy_init_race) — disclosed as a heuristic. Everything else is
             // the higher-signal race_window ("check-then-act on state that already has a value"), tiered by
