@@ -261,3 +261,35 @@ the open rows; F6's non-derive instances want `RulesFingerprint` to accept pre-r
   (`861bd0c4`). `TruncationCause { None, AlreadyExpanded, DepthCapped, BudgetCapped }` is set by precedence in
   `BuildTree`; the llm `seen` flag maps only to AlreadyExpanded, with distinct `depth-capped`/`budget-capped`
   flags and `seen:<id>` back-ref only for AlreadyExpanded. Tree payload-schema version bumped v1→v2.
+
+---
+
+## Detector coverage gaps (RCA production corpus)
+
+Source: `meddbase-analysis/docs/rca-corpus-meddbase.md` (real production reverts/fixes), made executable by
+`tests/Rig.Tests/Fixtures/ProductionFixCorpus.cs` + `…/Analysis/ProductionFixCorpusTests.cs` — each bug is
+compiled in-memory and run through the real extract→derive with shipped rules; `_Gap_`-named tests pin a
+KNOWN blind spot. **Status (2026-06-23): 4 of 7 FR families implemented + corpus-proven** (FR-1/1b shared-
+mutation-under-concurrency *candidate*; FR-3 N+1 looped read; FR-4/1e per-EP effect/read-set + hazard delta in
+`impact`; FR-6 unserializable `object_store` payload). The uncovered families, promoted here:
+
+- **FR-7 — cache coherence (entity_cache write with no matching invalidation). NOT IMPLEMENTED — biggest open
+  opportunity.** Maps the largest RCA cluster: !7721 (Redis entity-cache invalidation), #4199 (import doesn't
+  invalidate person cache), #3941 (billing↔import invalidation missing), #4367/#4235 (signing-key cache miss),
+  #940 (corrupted cache keys via race). Likely shape: a derive-side reachability rule — an `entity_cache:write`
+  (or its keyed variant) reachable on an EP whose reach lacks a corresponding invalidation call for the same
+  key/region. Design first: what counts as an "invalidation", per-key vs blanket, and how to avoid the FP class
+  FR-1 hit (disclose candidate, don't claim proof). Ship with a corpus fixture per mapped case.
+- **FR-1 PRECISION (not recall) — the pinned `_Gap_` sub-patterns.** FR-1 already fires (recall is fine); the
+  gap is false positives + uncoupled findings: (a) **#4246** lock-attribution across a wrapper/callback boundary
+  (the guard isn't attributed to the guarded mutation → guarded code looks unguarded); (b) **#2930** TOCTOU
+  coupling (surfaces the write candidate but not the check-then-act pairing); (c) **#2892** no quantified per-EP
+  query-count estimate. **This is the same work as UX panel item #2** (hazard dedup + severity, see
+  `docs/ux-research-2026-06.md`): the panel's FP clusters (conditional-overwrite-as-RMW, `#cctor`-as-lazy-init,
+  severity inversion) are precisely the "FR-1 is a triage list, not a prover" honesty the RCA doc states. Doing
+  FR-1 precision kills the panel's hazard noise AND closes #4246/#2930. Highest-leverage detector work.
+- **FR-2 — AsyncLocal/ThreadStatic flow + deadlock / lock-ordering. WON'T DO (declined by design).** Motivating
+  bugs (!10208 ThreadStatic→AsyncLocal, !7194 SQL background deadlock, #311) stay pinned in the corpus as named
+  targets, but detecting them needs AsyncLocal/ThreadStatic *flow* modeling and lock-ordering analysis — both
+  beyond the fact-based, query-time reachability model (same boundary as the "no path-sensitive analysis"
+  principle). Recorded so it isn't re-attempted; revisit only if rig ever grows a real type/value-flow pass.
