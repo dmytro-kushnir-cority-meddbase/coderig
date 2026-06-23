@@ -169,6 +169,13 @@ public static partial class FactPathFinder
                 continue;
             }
 
+            // Precision marks whether this producer→handler binding is trustworthy. A channel with a SINGLE
+            // handler is unambiguous (the raise can only reach that one handler) — Exact. A channel with
+            // MANY handlers means the join (by event symbol / process-name token, with no instance or
+            // call-site identity) fanned the producer out to every same-symbol subscriber regardless of
+            // which caller wired which handler — Fanout, the imprecise binding the default --async walk
+            // quarantines (see docs/FIX-event-raise-overapproximation.md).
+            var precision = channelHandlers.Count == 1 ? DeliveryPrecisions.Exact : DeliveryPrecisions.Fanout;
             foreach (var handler in channelHandlers)
             {
                 if (seen.Add((producer.Caller, handler, producer.Tag)))
@@ -180,7 +187,8 @@ public static partial class FactPathFinder
                             Kind: EdgeKinds.Handoff,
                             FilePath: producer.FilePath,
                             Line: producer.Line,
-                            HandoffDispatcher: producer.Tag
+                            HandoffDispatcher: producer.Tag,
+                            DeliveryPrecision: precision
                         )
                     );
                 }

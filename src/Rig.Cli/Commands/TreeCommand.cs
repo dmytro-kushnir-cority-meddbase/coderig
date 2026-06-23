@@ -49,6 +49,7 @@ internal static class TreeCommand
         };
         view.AcceptOnlyFromAmong("paths", "full", "effects", "summary", "hazards");
         var async = CommonOptions.Async();
+        var includeDelivery = CommonOptions.IncludeDelivery();
         var raw = CommonOptions.Raw();
         var files = CommonOptions.Files();
         var signatures = CommonOptions.Signatures();
@@ -78,6 +79,7 @@ internal static class TreeCommand
             from,
             view,
             async,
+            includeDelivery,
             raw,
             files,
             signatures,
@@ -158,6 +160,7 @@ internal static class TreeCommand
                             FromPattern: pr.GetValue(from)!,
                             View: pr.GetValue(view) ?? "paths",
                             Async: pr.GetValue(async),
+                            IncludeDelivery: pr.GetValue(includeDelivery),
                             Raw: pr.GetValue(raw),
                             Files: pr.GetValue(files),
                             Signatures: pr.GetValue(signatures),
@@ -186,6 +189,7 @@ internal static class TreeCommand
         string FromPattern,
         string View,
         bool Async,
+        bool IncludeDelivery,
         bool Raw,
         bool Files,
         bool Signatures,
@@ -218,7 +222,7 @@ internal static class TreeCommand
         var suppressSet = llmFormat || llmIds ? ParseSuppressSet(opts.Suppress) : SuppressSet.Default;
 
         var maxDepth = CommonOptions.DepthOrUnbounded(opts.Depth);
-        var mode = CommonOptions.Mode(opts.Async);
+        var mode = CommonOptions.Mode(async: opts.Async, includeDelivery: opts.IncludeDelivery);
 
         // One merged load for the whole command; --raw zeroes the graph-shaping + render rules (the exact
         // unfiltered tree), else they're applied. Render rules are presentation-only — never affect reach.

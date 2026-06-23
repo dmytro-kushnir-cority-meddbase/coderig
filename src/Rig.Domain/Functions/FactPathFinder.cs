@@ -29,9 +29,42 @@ public static partial class FactPathFinder
     // machinery) so `--async` can show the scheduled reach distinctly. sync ⊆ async by construction.
     public enum TraversalMode
     {
+        // No handoff edge is crossed: a scheduled/deferred callback is not a synchronous call, so the
+        // registrar does not reach the callback. The default for every traversal command.
         SyncCut,
+
+        // The default for `--async`: cross handoff edges EXCEPT symbol-blind delivery FAN-OUT
+        // (DeliveryPrecisions.Fanout). Sound handoffs are walked — event `+= H` registrant→handler,
+        // scheduler/timer/spawn dispatch, and single-subscriber (Exact) delivery — but a producer→handler
+        // fan-out that joined a raise to every same-symbol subscriber is NOT, because it crosses caller/
+        // instance boundaries it cannot prove (see CutsHandoff + docs/FIX-event-raise-overapproximation.md).
+        AsyncExact,
+
+        // `--async --include-delivery`: cross EVERY handoff edge, including the imprecise delivery fan-out.
+        // The historical `--async` behavior, kept as an explicit opt-in for the over-approximate superset.
         AsyncInclude,
     }
+
+    // The SINGLE handoff-gate predicate, shared by the forward (Dispatch) and reverse (GraphIndex) walks so
+    // they cut identically. Returns true when `edge` must NOT be crossed in `mode`:
+    //   * SyncCut       — cut ALL handoff edges (a deferred callback is not a synchronous call).
+    //   * AsyncExact    — cut ONLY delivery fan-out edges (Kind=handoff, DeliveryPrecision=Fanout). These
+    //                     join a publish to every same-symbol subscriber with no instance/call-site
+    //                     identity, so they connect unrelated callers to unrelated handlers — empirically
+    //                     false (22/22 sampled on MedDBase). The sound registrant→handler `event` edge,
+    //                     scheduler/spawn handoffs, and single-subscriber `exact` delivery are all kept, so
+    //                     real deferred reach is preserved; only the manufactured cross-product is dropped.
+    //   * AsyncInclude  — cut nothing (walk every handoff, incl. the fan-out superset).
+    // Non-handoff edges are never cut here. NOT a blanket "disable handoff search": it is precision-targeted
+    // — see docs/FIX-event-raise-overapproximation.md for why fan-out delivery is the only class removed.
+    public static bool CutsHandoff(TraversalMode mode, CallEdge edge) =>
+        edge.Kind == EdgeKinds.Handoff
+        && mode switch
+        {
+            TraversalMode.SyncCut => true,
+            TraversalMode.AsyncExact => string.Equals(edge.DeliveryPrecision, DeliveryPrecisions.Fanout, StringComparison.Ordinal),
+            _ => false,
+        };
 
     public static IReadOnlyList<PathStep>? Find(
         FactGraphData graph,
@@ -942,7 +975,8 @@ public static partial class FactPathFinder
         string? LoopKind,
         string? LoopDetail,
         string? ReceiverType,
-        string? HandoffDispatcher
+        string? HandoffDispatcher,
+        string? DeliveryPrecision
     )> AllCallEdges(FactGraphData graph)
     {
         foreach (var edge in graph.CallEdges)
@@ -956,7 +990,8 @@ public static partial class FactPathFinder
                 edge.LoopKind,
                 edge.LoopDetail,
                 edge.ReceiverType,
-                edge.HandoffDispatcher
+                edge.HandoffDispatcher,
+                edge.DeliveryPrecision
             );
         }
     }

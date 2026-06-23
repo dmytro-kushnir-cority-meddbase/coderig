@@ -23,6 +23,17 @@ internal static class CommonOptions
     internal static Option<bool> Async() =>
         new("--async") { Description = "Also walk async handoff edges (scheduled/cross-thread), tagged ⤳." };
 
+    // --include-delivery: with --async, ALSO cross the imprecise publish→consumer delivery FAN-OUT edges
+    // (an event raise / actor tell joined to EVERY same-symbol subscriber, no instance identity). Off by
+    // default because that join over-approximates — it links unrelated callers to unrelated handlers
+    // (see docs/FIX-event-raise-overapproximation.md). No effect without --async.
+    internal static Option<bool> IncludeDelivery() =>
+        new("--include-delivery")
+        {
+            Description =
+                "With --async, also cross imprecise delivery fan-out edges (event_raise/actor_tell to all subscribers). Over-approximate.",
+        };
+
     internal static Option<bool> Raw() => new("--raw") { Description = "Bypass graph shaping (factory/cut/context rules)." };
 
     // --maxdepth / --depth (alias): unbounded when absent (the action substitutes int.MaxValue).
@@ -97,9 +108,14 @@ internal static class CommonOptions
 
     // --- value readers (the invariant translations every command shares) ---
 
-    // Traversal DEFAULTS to SYNC-CUT: handoff edges aren't crossed unless --async opts in.
-    internal static FactPathFinder.TraversalMode Mode(bool async) =>
-        async ? FactPathFinder.TraversalMode.AsyncInclude : FactPathFinder.TraversalMode.SyncCut;
+    // Traversal DEFAULTS to SYNC-CUT: handoff edges aren't crossed unless --async opts in. Under --async the
+    // default is AsyncExact (cross sound handoffs but NOT imprecise delivery fan-out); --include-delivery
+    // escalates to AsyncInclude (cross the fan-out too — the over-approximate superset). --include-delivery
+    // without --async is a no-op (stays SyncCut).
+    internal static FactPathFinder.TraversalMode Mode(bool async, bool includeDelivery = false) =>
+        async
+            ? (includeDelivery ? FactPathFinder.TraversalMode.AsyncInclude : FactPathFinder.TraversalMode.AsyncExact)
+            : FactPathFinder.TraversalMode.SyncCut;
 
     // --maxdepth/--depth absent => unbounded (int.MaxValue); the closure + node cap + cycle dedup still terminate.
     internal static int DepthOrUnbounded(int? depth) => depth ?? int.MaxValue;

@@ -206,6 +206,21 @@ feeds the cycle's confidence tier (a cycle through any `heuristic` delivery edge
    member-path convention and is the prerequisite for real MedDBase actor coverage (the `ProcessNames.X =
    "..."` literals become joinable values). Calibrate FP rate on the MedDBase store before on-by-default.
 
+## Precision: fan-out is quarantined from default `--async`
+
+A symbol/name channel join is EXACT per symbol but blind to instance/call-site identity: a raise of event
+`E` (or a tell of process `P`) is joined to EVERY `+= H` / handler registered to that symbol anywhere. When
+a channel has one handler that's unambiguous; when it has many (a reused dialog/proxy event with N
+subscribers), the producer fans out to ALL of them, manufacturing false cross-caller edges (MedDBase:
+`AccountSelected` has 64 subscribers; 22/22 sampled `event_raise` paths were wrong — see
+`FIX-event-raise-overapproximation.md`). So `AddDeliveryEdges` stamps `CallEdge.DeliveryPrecision`:
+`exact` for a single-handler channel, `fanout` for a multi-handler one. The traversal gate
+(`FactPathFinder.CutsHandoff`) cuts `fanout` delivery from the default `--async` (`TraversalMode.AsyncExact`)
+and crosses it only under `--include-delivery` (`AsyncInclude`). The sound registrant→handler `event` edge
+(from `MarkEventSubscriptionHandoffs`), scheduler/spawn handoffs, and `exact` delivery are always walked
+under `--async`. `FactCycleDeriver` reads `CallEdges` directly, so `event_cycle` still considers all
+delivery edges regardless of mode.
+
 ## Deferred / open
 
 - **MedDBase's `ProcessId`↔`ProcessName` split is its own local wrinkle** and only half-solved by

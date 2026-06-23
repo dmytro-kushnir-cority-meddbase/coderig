@@ -49,6 +49,7 @@ internal static class ImpactCommand
             Description = "HEAD (after) side: an indexed commit store ref (sha / short-sha / store-id). Required.",
         };
         var async = CommonOptions.Async();
+        var includeDelivery = CommonOptions.IncludeDelivery();
         var rules = CommonOptions.Rules();
         var format = CommonOptions.Format();
         var limit = CommonOptions.Limit();
@@ -78,6 +79,7 @@ internal static class ImpactCommand
             @base,
             head,
             async,
+            includeDelivery,
             rules,
             format,
             limit,
@@ -108,6 +110,7 @@ internal static class ImpactCommand
                             BaseRef: pr.GetValue(@base)!,
                             HeadRef: pr.GetValue(head)!,
                             Async: pr.GetValue(async),
+                            IncludeDelivery: pr.GetValue(includeDelivery),
                             ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                             Format: pr.GetValue(format),
                             Limit: pr.GetValue(limit),
@@ -128,6 +131,7 @@ internal static class ImpactCommand
         string BaseRef,
         string HeadRef,
         bool Async,
+        bool IncludeDelivery,
         IReadOnlyList<string> ExtraRules,
         string? Format,
         int? Limit,
@@ -140,7 +144,7 @@ internal static class ImpactCommand
     {
         var tsv = CommonOptions.IsTsv(opts.Format);
         var max = opts.Limit ?? int.MaxValue;
-        var mode = CommonOptions.Mode(opts.Async); // --async => walk handoff edges (reverse + forward), else sync-cut
+        var mode = CommonOptions.Mode(async: opts.Async, includeDelivery: opts.IncludeDelivery); // --async => walk sound handoffs (delivery fan-out excluded unless --include-delivery)
 
         // One rule load for the whole run — rules are working-dir-scoped, so the SAME set serves both stores.
         var (rules, baseDbPath, cacheRaw, cacheKey) = ResolveStoresAndCache(opts, io, mode);
@@ -1535,7 +1539,12 @@ internal static class ImpactCommand
         ImpactDiff diff
     )
     {
-        var asyncNote = mode == FactPathFinder.TraversalMode.AsyncInclude ? "  (--async: handoffs included)" : "";
+        var asyncNote = mode switch
+        {
+            FactPathFinder.TraversalMode.AsyncExact => "  (--async: handoffs included; delivery fan-out excluded)",
+            FactPathFinder.TraversalMode.AsyncInclude => "  (--async --include-delivery: delivery fan-out included)",
+            _ => "",
+        };
 
         output.WriteLine(DiffSummary(baseProv, diff));
         output.WriteLine();

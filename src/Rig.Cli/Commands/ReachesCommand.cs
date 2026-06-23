@@ -21,6 +21,7 @@ internal static class ReachesCommand
     {
         var from = CommonOptions.Pattern(name: "from", description: "Entry-point method pattern.");
         var async = CommonOptions.Async();
+        var includeDelivery = CommonOptions.IncludeDelivery();
         var raw = CommonOptions.Raw();
         var rules = CommonOptions.Rules();
         var depth = CommonOptions.Depth();
@@ -33,6 +34,7 @@ internal static class ReachesCommand
         {
             from,
             async,
+            includeDelivery,
             raw,
             rules,
             depth,
@@ -51,6 +53,7 @@ internal static class ReachesCommand
                         new Options(
                             FromPattern: pr.GetValue(from)!,
                             Async: pr.GetValue(async),
+                            IncludeDelivery: pr.GetValue(includeDelivery),
                             Raw: pr.GetValue(raw),
                             ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                             Depth: pr.GetValue(depth),
@@ -71,6 +74,7 @@ internal static class ReachesCommand
     private sealed record Options(
         string FromPattern,
         bool Async,
+        bool IncludeDelivery,
         bool Raw,
         IReadOnlyList<string> ExtraRules,
         int? Depth,
@@ -85,7 +89,7 @@ internal static class ReachesCommand
         var maxDepth = CommonOptions.DepthOrUnbounded(opts.Depth);
         var max = opts.Limit ?? int.MaxValue; // --limit absent => unbounded
         var tsv = CommonOptions.IsTsv(opts.Format);
-        var mode = CommonOptions.Mode(opts.Async);
+        var mode = CommonOptions.Mode(async: opts.Async, includeDelivery: opts.IncludeDelivery);
 
         var rules = RuleSetLoader.Load(io.WorkingDirectory, opts.ExtraRules);
         WarnUnknownFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: rules, errorWriter: io.Error);
@@ -182,7 +186,13 @@ internal static class ReachesCommand
         );
         var reachFromRoot = reachable.Where(kv => kv.Value.Depth == 0).Select(kv => kv.Key).FirstOrDefault();
         io.Output.WriteLine(
-            $"From: {opts.FromPattern}{(mode == FactPathFinder.TraversalMode.AsyncInclude ? "  (--async: handoffs included)" : "")}"
+            $"From: {opts.FromPattern}"
+                + mode switch
+                {
+                    FactPathFinder.TraversalMode.AsyncExact => "  (--async: handoffs included; delivery fan-out excluded)",
+                    FactPathFinder.TraversalMode.AsyncInclude => "  (--async --include-delivery: delivery fan-out included)",
+                    _ => "",
+                }
                 + (reachFromRoot is null ? "" : HeaderSuffix(reachEpContext, reachFromRoot))
         );
         io.Output.WriteLine($"Reachable methods (<= depth {maxDepth}): {reachable.Count}");

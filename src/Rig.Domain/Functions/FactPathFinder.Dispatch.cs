@@ -97,7 +97,9 @@ public static partial class FactPathFinder
                 var outBinding = ExtendBinding(incomingBinding, edge.TypeArguments);
                 if (edge.Kind == EdgeKinds.Handoff)
                 {
-                    if (mode == TraversalMode.SyncCut)
+                    // SyncCut cuts every handoff; AsyncExact cuts only delivery fan-out; AsyncInclude crosses
+                    // all. CutsHandoff is the shared gate (same policy as the reverse GraphIndex walk).
+                    if (CutsHandoff(mode, edge))
                     {
                         continue;
                     }

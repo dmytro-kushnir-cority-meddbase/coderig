@@ -20,6 +20,7 @@ internal static class PathCommand
         var from = CommonOptions.Pattern(name: "from", description: "Source method pattern.");
         var to = CommonOptions.Pattern(name: "to", description: "Target method pattern.");
         var async = CommonOptions.Async();
+        var includeDelivery = CommonOptions.IncludeDelivery();
         var raw = CommonOptions.Raw();
         var rules = CommonOptions.Rules();
         var depth = CommonOptions.Depth();
@@ -30,6 +31,7 @@ internal static class PathCommand
             from,
             to,
             async,
+            includeDelivery,
             raw,
             rules,
             depth,
@@ -46,6 +48,7 @@ internal static class PathCommand
                             FromPattern: pr.GetValue(from)!,
                             ToPattern: pr.GetValue(to)!,
                             Async: pr.GetValue(async),
+                            IncludeDelivery: pr.GetValue(includeDelivery),
                             Raw: pr.GetValue(raw),
                             ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                             Depth: pr.GetValue(depth),
@@ -64,6 +67,7 @@ internal static class PathCommand
         string FromPattern,
         string ToPattern,
         bool Async,
+        bool IncludeDelivery,
         bool Raw,
         IReadOnlyList<string> ExtraRules,
         int? Depth,
@@ -73,7 +77,7 @@ internal static class PathCommand
     private static async Task<int> RunAsync(Options opts, CommandIo io)
     {
         var tsv = CommonOptions.IsTsv(opts.Format);
-        var mode = CommonOptions.Mode(opts.Async);
+        var mode = CommonOptions.Mode(async: opts.Async, includeDelivery: opts.IncludeDelivery);
         // --raw bypasses all shaping (the exact unfiltered plumbing); else monomorphize factories + cut +
         // context-narrow, honoured symmetrically by the reverse/forward traversal.
         var rules = RuleSetLoader.Load(io.WorkingDirectory, opts.ExtraRules);

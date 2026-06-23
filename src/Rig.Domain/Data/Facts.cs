@@ -200,7 +200,15 @@ public sealed record CallEdge(
     // forwarded T:/M: positions against the parent node's instantiation and substitute the label's
     // declaring + method arity placeholders. Do NOT affect dispatch (that uses the open `ReceiverType`).
     string? DeclaringTypeArgBinding = null,
-    string? MethodTypeArgBinding = null
+    string? MethodTypeArgBinding = null,
+    // Precision of a publish→consumer DELIVERY handoff edge (FactPathFinder.AddDeliveryEdges):
+    // DeliveryPrecisions.Exact when the channel resolved to a single handler, DeliveryPrecisions.Fanout
+    // when it fanned a producer out to many same-symbol subscribers (the imprecise, instance-blind join).
+    // Null on every non-delivery edge (ordinary calls, methodGroup, event `+= H` registrant→handler
+    // handoffs, scheduler/spawn handoffs). The traversal cuts Fanout edges from the default --async walk
+    // (TraversalMode.AsyncExact) and only crosses them under --include-delivery (AsyncInclude); the cycle
+    // deriver, which reads CallEdges directly, ignores this and keeps every delivery edge.
+    string? DeliveryPrecision = null
 );
 
 // An "implType implements ifaceType" edge (from a type-relation fact).

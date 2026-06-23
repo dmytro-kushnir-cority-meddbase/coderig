@@ -360,7 +360,8 @@ public static class GraphMaterializer
                 LoopKind     TEXT,
                 LoopDetail   TEXT,
                 ReceiverType TEXT,
-                HandoffDispatcher TEXT
+                HandoffDispatcher TEXT,
+                DeliveryPrecision TEXT
             );
             """,
             cancellationToken
@@ -381,6 +382,16 @@ public static class GraphMaterializer
             connection,
             table: "call_edges",
             column: "HandoffDispatcher",
+            type: "TEXT",
+            cancellationToken: cancellationToken
+        );
+        // And DeliveryPrecision (exact|fanout) on delivery handoff edges, so the bounded in-memory graph can
+        // tell sound delivery from symbol-blind fan-out and the default --async walk can quarantine the latter.
+        // A store predating this column degrades to NULL precision (treated as exact = walked) until re-graphed.
+        await AddColumnIfMissingAsync(
+            connection,
+            table: "call_edges",
+            column: "DeliveryPrecision",
             type: "TEXT",
             cancellationToken: cancellationToken
         );
@@ -437,8 +448,8 @@ public static class GraphMaterializer
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
-            "INSERT INTO call_edges (FromSym, ToSym, Kind, FilePath, Line, LoopKind, LoopDetail, ReceiverType, HandoffDispatcher) "
-            + "VALUES ($from, $to, $kind, $file, $line, $loopKind, $loopDetail, $receiver, $handoff);";
+            "INSERT INTO call_edges (FromSym, ToSym, Kind, FilePath, Line, LoopKind, LoopDetail, ReceiverType, HandoffDispatcher, DeliveryPrecision) "
+            + "VALUES ($from, $to, $kind, $file, $line, $loopKind, $loopDetail, $receiver, $handoff, $precision);";
         var pFrom = AddParam(command, "$from");
         var pTo = AddParam(command, "$to");
         var pKind = AddParam(command, "$kind");
@@ -448,6 +459,7 @@ public static class GraphMaterializer
         var pLoopDetail = AddParam(command, "$loopDetail");
         var pReceiver = AddParam(command, "$receiver");
         var pHandoff = AddParam(command, "$handoff");
+        var pPrecision = AddParam(command, "$precision");
 
         var count = 0;
         foreach (var edge in FactPathFinder.AllCallEdges(graph))
@@ -461,6 +473,7 @@ public static class GraphMaterializer
             pLoopDetail.Value = (object?)edge.LoopDetail ?? DBNull.Value;
             pReceiver.Value = (object?)edge.ReceiverType ?? DBNull.Value;
             pHandoff.Value = (object?)edge.HandoffDispatcher ?? DBNull.Value;
+            pPrecision.Value = (object?)edge.DeliveryPrecision ?? DBNull.Value;
             await command.ExecuteNonQueryAsync(cancellationToken);
             if (++count % InsertBatchSize == 0)
             {

@@ -46,11 +46,12 @@ public static partial class FactPathFinder
         var rev = new ReverseMaps { NarrowDispatch = narrowDispatch };
         foreach (var edge in graph.CallEdges)
         {
-            // Sync-cut: an async handoff edge is NOT a synchronous caller->callee link, so it must not
-            // make the registrar a predecessor of the callback (else `callers` would claim the
-            // registrar reaches the callback synchronously, and the callback wouldn't surface as a
-            // background origin via `--roots`). --async keeps the link.
-            if (mode == TraversalMode.SyncCut && edge.Kind == EdgeKinds.Handoff)
+            // A handoff edge is NOT a synchronous caller->callee link, so under SyncCut it must not make
+            // the registrar a predecessor of the callback (else `callers` would claim the registrar reaches
+            // the callback synchronously, and the callback wouldn't surface as a background origin via
+            // `--roots`). Under AsyncExact the link is kept EXCEPT for delivery fan-out; AsyncInclude keeps
+            // all. CutsHandoff centralizes the policy so this reverse walk and the forward Dispatch walk agree.
+            if (CutsHandoff(mode, edge))
             {
                 continue;
             }

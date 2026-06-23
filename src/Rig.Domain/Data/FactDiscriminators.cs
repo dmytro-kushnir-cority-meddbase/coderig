@@ -43,6 +43,21 @@ public static class EdgeKinds
     public const string Handoff = "handoff";
 }
 
+// CallEdge.DeliveryPrecision — set ONLY on publish→consumer delivery handoff edges emitted by
+// FactPathFinder.AddDeliveryEdges (event_raise / actor_tell). Records whether the producer→handler
+// binding is unambiguous or a symbol-blind fan-out, so the traversal can trust the exact ones and
+// quarantine the imprecise ones from the default --async walk. Null on every non-delivery edge.
+public static class DeliveryPrecisions
+{
+    // The channel resolved to exactly ONE handler — the producer→handler edge is unambiguous.
+    public const string Exact = "exact";
+
+    // The channel resolved to MANY handlers and the join is by symbol/name only (no instance/call-site
+    // identity), so the producer fans out to every subscriber of that symbol regardless of which caller
+    // wired which handler. Empirically the source of false reach (see docs/FIX-event-raise-overapproximation.md).
+    public const string Fanout = "fanout";
+}
+
 // dispatch_facts.Kind — the member-level correspondence direction.
 public static class DispatchKinds
 {

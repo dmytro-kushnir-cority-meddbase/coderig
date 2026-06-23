@@ -35,6 +35,7 @@ internal static class CallersCommand
                 "Precise: rule-detected entry points only (same set as `rig derive`). Subset of --roots; may miss test/bench or unbound-interface origins.",
         };
         var async = CommonOptions.Async();
+        var includeDelivery = CommonOptions.IncludeDelivery();
         var raw = CommonOptions.Raw();
         var rules = CommonOptions.Rules();
         var depth = CommonOptions.Depth();
@@ -47,6 +48,7 @@ internal static class CallersCommand
             orphans,
             entrypoints,
             async,
+            includeDelivery,
             raw,
             rules,
             depth,
@@ -73,6 +75,7 @@ internal static class CallersCommand
                             RootsOnly: pr.GetValue(orphans),
                             EntrypointsOnly: pr.GetValue(entrypoints),
                             Async: pr.GetValue(async),
+                            IncludeDelivery: pr.GetValue(includeDelivery),
                             Raw: pr.GetValue(raw),
                             ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                             Depth: pr.GetValue(depth),
@@ -93,6 +96,7 @@ internal static class CallersCommand
         bool RootsOnly,
         bool EntrypointsOnly,
         bool Async,
+        bool IncludeDelivery,
         bool Raw,
         IReadOnlyList<string> ExtraRules,
         int? Depth,
@@ -105,7 +109,7 @@ internal static class CallersCommand
         var tsv = CommonOptions.IsTsv(opts.Format);
         var max = opts.Limit ?? int.MaxValue; // --limit absent => unbounded
         var maxDepth = CommonOptions.DepthOrUnbounded(opts.Depth);
-        var mode = CommonOptions.Mode(opts.Async);
+        var mode = CommonOptions.Mode(async: opts.Async, includeDelivery: opts.IncludeDelivery);
 
         // --raw bypasses shaping (the exact unfiltered reverse closure); else monomorphize factories + cut +
         // context, honoured symmetrically by the reverse traversal (a cut node yields no successors forward,
@@ -316,8 +320,11 @@ internal static class CallersCommand
                 // defeats the security-reachability use case. Only paid on the 0-result path, so no per-query cost.
                 if (mode == FactPathFinder.TraversalMode.SyncCut)
                 {
+                    // Probe with AsyncExact — the default `--async` semantics we'd point the user at — so the
+                    // hint never suggests `--async` on the strength of a fan-out-only (imprecise) reach that
+                    // `--async` itself would then exclude.
                     var asyncReachable = FactPathFinder
-                        .ReachedBy(graph, toPattern, maxDepth, mode: FactPathFinder.TraversalMode.AsyncInclude)
+                        .ReachedBy(graph, toPattern, maxDepth, mode: FactPathFinder.TraversalMode.AsyncExact)
                         .Keys.ToHashSet(StringComparer.Ordinal);
                     var asyncSites = graph
                         .Methods.Where(m => asyncReachable.Contains(m.SymbolId))
@@ -358,7 +365,12 @@ internal static class CallersCommand
         }
         output.WriteLine(
             $"Rule-detected entry points reaching '{toPattern}': {touching.Count}"
-                + (mode == FactPathFinder.TraversalMode.AsyncInclude ? "  (--async: incl. scheduled paths)" : "")
+                + mode switch
+                {
+                    FactPathFinder.TraversalMode.AsyncExact => "  (--async: incl. scheduled paths; delivery fan-out excluded)",
+                    FactPathFinder.TraversalMode.AsyncInclude => "  (--async --include-delivery: incl. delivery fan-out)",
+                    _ => "",
+                }
         );
         foreach (var kindGroup in touching.GroupBy(e => e.Kind, StringComparer.Ordinal).OrderByDescending(g => g.Count()))
         {

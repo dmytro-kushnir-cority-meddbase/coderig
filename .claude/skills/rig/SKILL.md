@@ -60,6 +60,17 @@ handoffs, tagged (`reaches` splits direct / async-scheduled ⚡ / fan-out; `tree
 <dispatcher>`). Dispatchers are rule DATA (`handoffDispatchers`; re-run `rig graph` after edits, no
 re-index). Co-location-based; BCL (`Task.Run`)/lambda callbacks fall to the unclassified residual.
 
+**`--async` excludes imprecise DELIVERY FAN-OUT (use `--include-delivery` to restore it).** Publish→consumer
+delivery edges (`event_raise`, `actor_tell`) join a raise to its subscribers by SYMBOL/name only — no
+instance or call-site identity. When a channel has many subscribers (e.g. a reused dialog/proxy event with
+N `+= Handler` sites), the join fans the raise out to ALL of them, manufacturing false cross-caller paths
+(MedDBase: 22/22 sampled were wrong — see docs/FIX-event-raise-overapproximation.md). So plain `--async`
+walks the SOUND handoffs (registrant→handler `event`, scheduler/timer/spawn, and single-subscriber `exact`
+delivery) but CUTS the multi-subscriber fan-out. `--async --include-delivery` walks the fan-out too (the
+over-approximate superset). Trust the `--async` default for reachability/auth questions; reach for
+`--include-delivery` only when you want every theoretically-possible delivery edge. The cycle hazard
+(`event_cycle`) is unaffected — it always considers all delivery edges.
+
 ## Detectors & render rules (DATA, query-side, NO re-index)
 - **Add an effect**: append to `effects` in `rig.rules.json` (`{provider, operation, methods:[…],
   receiverTypes|declaringTypes:[…], resource}`), re-run `derive`/`reaches`. Match the API at its
