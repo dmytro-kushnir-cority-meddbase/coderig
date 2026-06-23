@@ -88,6 +88,7 @@ internal static class ReachesCommand
         var mode = CommonOptions.Mode(opts.Async);
 
         var rules = RuleSetLoader.Load(io.WorkingDirectory, opts.ExtraRules);
+        WarnUnknownFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: rules, errorWriter: io.Error);
         // --raw zeroes cut/context; reaches keeps Factory (it monomorphizes generic factories even under
         // --raw, a long-standing asymmetry vs path/tree/callers).
         var shaped = opts.Raw ? rules with { Cut = [], Context = [] } : rules;

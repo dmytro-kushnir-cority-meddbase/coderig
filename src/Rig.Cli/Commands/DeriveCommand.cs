@@ -28,6 +28,10 @@ internal static class DeriveCommand
         var exclude = CommonOptions.Exclude();
         var format = CommonOptions.Format();
         var store = CommonOptions.Store();
+        var listProviders = new Option<bool>("--list-providers")
+        {
+            Description = "Print the known effect providers and provider:operation pairs from the effective rule set, then exit.",
+        };
         var cmd = new Command(name: "derive", description: "Re-derive effects + entry points from facts (no Roslyn).")
         {
             rules,
@@ -36,6 +40,7 @@ internal static class DeriveCommand
             exclude,
             format,
             store,
+            listProviders,
         };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
@@ -48,7 +53,8 @@ internal static class DeriveCommand
                             Limit: pr.GetValue(limit),
                             Only: CommonOptions.FilterSet(pr.GetValue(only)),
                             Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
-                            Format: pr.GetValue(format)
+                            Format: pr.GetValue(format),
+                            ListProviders: pr.GetValue(listProviders)
                         ),
                         new CommandIo(Output: output, Error: error, WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
                     )
@@ -62,7 +68,8 @@ internal static class DeriveCommand
         int Limit,
         HashSet<string> Only,
         HashSet<string> Exclude,
-        string? Format
+        string? Format,
+        bool ListProviders = false
     );
 
     private static async Task<int> RunAsync(Options opts, CommandIo io)
@@ -75,6 +82,30 @@ internal static class DeriveCommand
             extraRules: opts.ExtraRules,
             loadedPaths: out var loadedRulePaths
         );
+
+        // --list-providers: print the known provider / provider:operation tokens from the effective rule
+        // set and exit. No store access required — the rule set is available after Load().
+        if (opts.ListProviders)
+        {
+            var knownProviders = KnownProviders(rules);
+            var knownProviderOps = KnownProviderOps(rules);
+            io.Output.WriteLine("Known effect providers (use with --only / --exclude):");
+            foreach (var provider in knownProviders.OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+            {
+                io.Output.WriteLine($"  {provider}");
+            }
+
+            io.Output.WriteLine();
+            io.Output.WriteLine("Known provider:operation pairs:");
+            foreach (var op in knownProviderOps.OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+            {
+                io.Output.WriteLine($"  {op}");
+            }
+
+            return 0;
+        }
+
+        WarnUnknownFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: rules, errorWriter: io.Error);
         // F7: use the out-param overload so the resolved store dir is available for the StoreKey computation
         // below without a second ResolveReadStoreDir call (io:read ×7).
         await using var context = OpenReadContext(workingDirectory: io.WorkingDirectory, storeRef: io.StoreRef, storeDir: out var rigDir);

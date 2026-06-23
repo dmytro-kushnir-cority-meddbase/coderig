@@ -150,4 +150,49 @@ internal static class EffectDerivation
 
         static bool InSet(DerivedEffect e, HashSet<string> set) => set.Contains(e.Provider) || set.Contains($"{e.Provider}:{e.Operation}");
     }
+
+    // The distinct provider strings (e.g. "http", "throw") known from the effective rule set.
+    // A bare-provider --only/--exclude token is valid iff it appears here.
+    internal static HashSet<string> KnownProviders(RuleSet rules) =>
+        new(rules.Effects.Select(r => r.Provider), StringComparer.OrdinalIgnoreCase);
+
+    // The distinct provider:operation strings (e.g. "http:GET", "throw:access_denied") known from
+    // the effective rule set. A provider:operation token is valid iff it appears here.
+    internal static HashSet<string> KnownProviderOps(RuleSet rules) =>
+        new(rules.Effects.Select(r => $"{r.Provider}:{r.Operation}"), StringComparer.OrdinalIgnoreCase);
+
+    // Warn to STDERR for any --only/--exclude token that cannot match any known provider or
+    // provider:operation from the effective rule set. Non-fatal: the command still runs. A token is
+    // "unknown" only when it matches neither a bare provider NOR any provider:op — so "http" is valid
+    // when ANY http:* rule exists, and "http:GET" is valid iff that exact pair exists. Token-matching
+    // mirrors ApplyEffectFilters exactly (case-insensitive, bare provider matches any op of that provider).
+    internal static void WarnUnknownFilterTokens(HashSet<string> only, HashSet<string> exclude, RuleSet rules, TextWriter errorWriter)
+    {
+        if (only.Count == 0 && exclude.Count == 0)
+        {
+            return;
+        }
+
+        var knownProviders = KnownProviders(rules);
+        var knownProviderOps = KnownProviderOps(rules);
+
+        // Compute the sorted provider list once — only consumed when at least one unknown token is found.
+        string? sortedProvidersLabel = null;
+
+        foreach (var token in only.Concat(exclude))
+        {
+            if (!TokenIsKnown(token, knownProviders, knownProviderOps))
+            {
+                sortedProvidersLabel ??= string.Join(", ", knownProviders.OrderBy(p => p, StringComparer.OrdinalIgnoreCase));
+                errorWriter.WriteLine(
+                    $"warning: --only/--exclude token '{token}' matched no known effect (providers: {sortedProvidersLabel}). Run 'rig derive --list-providers' to see the full set."
+                );
+            }
+        }
+    }
+
+    // A token is known when it is a bare provider ("http") present in the known-provider set, OR a
+    // provider:operation pair ("http:GET") present in the known-provider-op set. Mirrors InSet above.
+    private static bool TokenIsKnown(string token, HashSet<string> knownProviders, HashSet<string> knownProviderOps) =>
+        token.Contains(':') ? knownProviderOps.Contains(token) : knownProviders.Contains(token);
 }

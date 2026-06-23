@@ -225,6 +225,7 @@ internal static class TreeCommand
             extraRules: opts.ExtraRules,
             loadedPaths: out var loadedRulePaths
         );
+        WarnUnknownFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: rules, errorWriter: io.Error);
         var shaped = opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
         var renderRules = opts.Raw ? FactRenderRules.Empty : rules.Render;
 
