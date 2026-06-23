@@ -34,9 +34,11 @@ The rules that make this produce mergeable code, not plausible diffs:
   regression was caught *only* in review). Independently confirm the suite is green AND do the real-data
   validation (the agent can't touch the MedDBase store) before committing.
 - **Prompt tightly or get the wrong thing.** Each agent task states: the exact problem, a PRECEDENT to
-  mirror (e.g. "mirror the existing X machinery"), hard constraints (annotate-only / full suite green / **do
-  NOT commit** / don't touch docs), the explicit ACCEPTANCE test, and the gotchas (TUnit filter syntax,
-  csharpier-first, named-args, this list).
+  mirror (e.g. "mirror the existing X machinery"), the EXPLICIT owned-files list, hard constraints
+  (annotate-only / full suite green / **do NOT commit** / don't touch docs), the explicit ACCEPTANCE test
+  (as a RUNNABLE check), a STRUCTURED report (what changed / tests added / any existing test updated), and
+  the gotchas (TUnit filter syntax, csharpier-first, named-args, NEW test file not the shared one,
+  verify-assertions-against-real-`rig`-output, this list).
 - **One agent at a time on shared files** — `FactEffectDeriver`/`FactHazardDeriver`/`builtin-rules.json`/the
   derive+impact paths all contend; concurrent agents just merge-conflict. Parallel only on disjoint work.
 - **Run code agents in the MAIN checkout, NOT `isolation: worktree`** — worktree isolation branches from a
@@ -48,6 +50,21 @@ The rules that make this produce mergeable code, not plausible diffs:
   to the user; autopilot the rest.
 - **Don't dispatch for small/exploratory work** — root-causing, calibration queries, one-file fixes, and
   doc edits are faster inline. Agents earn their keep only on self-contained builds with a clear acceptance test.
+- **Subagent verifies test assertions against REAL output, not its imagination.** Subagents can't build (bin/
+  clobber) but CAN run the installed global `rig` (read-only). Any rendering/output change → the prompt MUST
+  say: "run `rig <cmd>` on a real input, paste the ACTUAL output, write assertions against THAT paste." The
+  recurring review failure was agents asserting (e.g.) namespace-qualified names against `ShortName` output —
+  3 dead tests in one dispatch, caught only in review. One prompt line turns a round-trip into zero.
+- **Agent-authored tests go in a NEW `<Feature>Tests.cs`, NEVER the shared `CliApplicationTests.cs`** —
+  concurrent agents editing the shared file clobber each other. If an EXISTING test pins old behavior the
+  change breaks, have the agent FLAG it (not edit the shared file) and fix it yourself at review.
+- **Capture the real-store baseline BEFORE you dispatch.** Snapshot the relevant MedDBase counts/tsv (e.g.
+  `rig derive --format tsv | awk …`) while the agent works — a clean before/after A/B for recalibration, on
+  the orchestrator's otherwise-idle time. (The FR-1 hazard recalibration AND the parallelise-loads revert
+  both turned on a pre-captured baseline.)
+- **Independent verify for trust-critical work** — for a risky detector / large diff, a SECOND fresh-context
+  agent adversarially verifies the diff against the acceptance check + the real store BEFORE you commit; the
+  builder rationalizes its own false positives. (The 6-agent UX panel worked because the agents were independent.)
 
 ## Build / test / ship
 
