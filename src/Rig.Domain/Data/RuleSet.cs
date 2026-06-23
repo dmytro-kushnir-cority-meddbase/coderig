@@ -16,6 +16,10 @@ namespace Rig.Domain.Data;
 public sealed record RuleSet
 {
     public IReadOnlyList<FactHandoffRule> Handoff { get; init; } = [];
+
+    // External-virtual-override-orphan redirects (docs/backlog.md): rewrite a call to an external convenience
+    // overload to the virtual hatch it trampolines into, applied at the reference→edge projection.
+    public IReadOnlyList<FactRedirectRule> Redirect { get; init; } = [];
     public IReadOnlyList<FactGenericFactoryRule> Factory { get; init; } = [];
     public IReadOnlyList<FactTraversalCutRule> Cut { get; init; } = [];
     public IReadOnlyList<FactContextDispatchRule> Context { get; init; } = [];

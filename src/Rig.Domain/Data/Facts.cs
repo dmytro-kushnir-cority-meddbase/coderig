@@ -488,6 +488,16 @@ public sealed record HandoffEntryPoint(
 // is the execution-origin kind the promoted callback gets (background|timer|actor|event); Repeating
 // flags a re-firing schedule (vs one-shot). Rule data, not code — see the "detectors are data"
 // agreement; the generic matcher lives in HandoffClassifier.
+// Redirect rule data for the external-virtual-override orphan (see docs/backlog.md). A call that statically
+// binds to an EXTERNAL convenience overload (e.g. `EntityBase.Save()`) is dropped by the TargetInSource graph
+// filter, orphaning the first-party override the convenience method trampolines into INSIDE the external DLL.
+// `Method` is the signature-stripped DocID of the convenience family (e.g. "M:…EntityBase.Save"); every
+// overload matching it — EXCEPT `RedirectTo` itself (no self-redirect) — is rewritten to `RedirectTo` (the
+// virtual hatch, e.g. "M:…EntityBase.Save(…IPredicate,System.Boolean)") and KEPT past the filter, so existing
+// receiver-narrowed dispatch resolves it to the first-party override. Rule data, not code; matcher in
+// RedirectClassifier. The mapping is authored from the decompiled trampoline bodies (offline aid).
+public sealed record FactRedirectRule(string Method, string RedirectTo);
+
 public sealed record FactHandoffRule(
     string Id,
     string Kind,

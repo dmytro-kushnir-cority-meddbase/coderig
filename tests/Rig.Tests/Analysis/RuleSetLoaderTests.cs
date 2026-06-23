@@ -166,6 +166,29 @@ public sealed class RuleSetLoaderTests
         rule.Registration.Methods.ShouldBe(["spawn", "register"]);
     }
 
+    [Test]
+    public void RedirectRules_round_trip_into_RuleSet_Redirect_through_the_cascade_merge()
+    {
+        // Regression: the cascade Merge must carry the local `redirectRules` section into RuleSet.Redirect.
+        // It was initially omitted from Merge, so a colocated rule silently vanished — caught only on the real
+        // store (the suite missed it because tests that construct rules directly bypass the loader cascade).
+        using var workspace = TempRulesWorkspace.Create(
+            """
+            {
+              "redirectRules": [
+                { "method": "M:Ext.EntityBase.Save", "redirectTo": "M:Ext.EntityBase.Save(Ext.IPredicate,System.Boolean)" }
+              ]
+            }
+            """
+        );
+
+        var redirect = RuleSetLoader.Load(workspace.DirectoryPath).Redirect;
+
+        var rule = redirect.ShouldHaveSingleItem();
+        rule.Method.ShouldBe("M:Ext.EntityBase.Save");
+        rule.RedirectTo.ShouldBe("M:Ext.EntityBase.Save(Ext.IPredicate,System.Boolean)");
+    }
+
     private sealed class TempRulesWorkspace : IDisposable
     {
         private TempRulesWorkspace(string directory, string solutionPath, string extraRulesPath)

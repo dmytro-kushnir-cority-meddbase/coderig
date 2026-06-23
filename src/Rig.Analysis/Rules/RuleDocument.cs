@@ -119,6 +119,16 @@ internal sealed record HandoffDispatcherRule(
     IReadOnlyList<string>? Requires = null
 );
 
+// A redirect rule for the external-virtual-override orphan (docs/backlog.md). A call binding to an EXTERNAL
+// convenience overload — matched by the signature-stripped DocID `method` (e.g.
+// "M:SD.LLBLGen.Pro.ORMSupportClasses.EntityBase.Save", which covers Save()/Save(bool)/Save(IPredicate)) — is
+// rewritten to the external VIRTUAL hatch it trampolines into (`redirectTo`, the full DocID, e.g.
+// "...EntityBase.Save(SD.LLBLGen.Pro.ORMSupportClasses.IPredicate,System.Boolean)") and KEPT past the
+// TargetInSource graph filter, so receiver-narrowed dispatch resolves it to the first-party override. The
+// virtual target itself is never self-redirected. Authored from decompiled trampoline bodies; projected to
+// FactRedirectRule for the Domain RedirectClassifier.
+internal sealed record RedirectRule(string Method, string RedirectTo);
+
 // A `rig tree` render rule: a DocID substring `Pattern` + a human `Label`/`Reason` shown in the
 // rendered marker. Used for both collapse-seams (fold a fan-out hub's children) and opaque-types
 // (draw a node as a leaf). Codebase-specific presentation data; projected to FactRenderRule.
@@ -211,6 +221,9 @@ internal sealed class AnalysisRulesDocument
     public List<DiRegistrationRule>? DiRegistrations { get; set; }
 
     public List<HandoffDispatcherRule>? HandoffDispatchers { get; set; }
+
+    // Top-level key "redirectRules": external-convenience-overload → virtual-hatch redirects (see RedirectRule).
+    public List<RedirectRule>? RedirectRules { get; set; }
 
     // Top-level key "deliveryRules": list of publish→consumer delivery mechanisms (events, actors).
     public List<DeliveryRuleDocument>? DeliveryRules { get; set; }

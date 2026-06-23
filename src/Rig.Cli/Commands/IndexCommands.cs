@@ -61,7 +61,9 @@ internal static class IndexCommands
                         factoryRules: ruleSet.Factory,
                         // The `deliveryRules` section drives the publish→consumer delivery edges (events +
                         // actors), threaded in like factoryRules (data, not hardcoded) — see GraphMaterializer.
-                        deliveryRules: ruleSet.Delivery
+                        deliveryRules: ruleSet.Delivery,
+                        // The `redirectRules` section bakes external-virtual-override redirects into call_edges.
+                        redirectRules: ruleSet.Redirect
                     );
                     output.WriteLine(
                         $"Graph: {stats.CallEdges} call edge(s), {stats.DispatchEdges} dispatch edge(s) "
@@ -422,7 +424,7 @@ internal static class IndexCommands
         // Kind="handoff" baked in; generic-factory rules flow to BuildFromGraphAsync so the factory
         // monomorphization is baked into call_edges (so the SQL bounding walk sees the rewritten edges the
         // in-memory traversal does — no effect-path divergence).
-        var graph = FactGraphProjection.FromAnalysis(result, rules.Handoff);
+        var graph = FactGraphProjection.FromAnalysis(result, rules.Handoff, rules.Redirect);
         var stats = await GraphMaterializer.BuildFromGraphAsync(
             context,
             graph,

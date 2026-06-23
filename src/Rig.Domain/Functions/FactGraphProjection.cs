@@ -14,30 +14,38 @@ namespace Rig.Domain.Functions;
 // agree on a real solution; keep them in lockstep.
 public static class FactGraphProjection
 {
-    public static FactGraphData FromAnalysis(AnalysisResult result, IReadOnlyList<FactHandoffRule>? handoffRules = null)
+    public static FactGraphData FromAnalysis(
+        AnalysisResult result,
+        IReadOnlyList<FactHandoffRule>? handoffRules = null,
+        IReadOnlyList<FactRedirectRule>? redirectRules = null
+    )
     {
         // First-party callees only (TargetInSource): BCL/runtime targets are leaves that add width, not
-        // reach, and have no source symbol. Mirrors LoadFactGraphAsync's WHERE exactly.
+        // reach, and have no source symbol. Mirrors LoadFactGraphAsync's WHERE exactly. EXCEPTION: a call
+        // matched by a redirect rule (external convenience overload → virtual hatch) is KEPT despite being
+        // out-of-source and its callee rewritten to the hatch — the external-virtual-override-orphan fix
+        // (docs/backlog.md); receiver-narrowed dispatch then resolves the kept hatch to the first-party override.
         var callEdges = (result.References ?? [])
             .Where(r =>
                 r.EnclosingSymbolId != null
-                && r.TargetInSource
                 && (r.RefKind == RefKinds.Invocation || r.RefKind == RefKinds.MethodGroup || r.RefKind == RefKinds.Ctor)
             )
-            .Select(r => new CallEdge(
-                Caller: r.EnclosingSymbolId!,
-                Callee: r.TargetSymbolId,
-                Kind: r.RefKind,
-                FilePath: r.FilePath,
-                Line: r.Line,
-                LoopKind: r.EnclosingLoopKind,
-                LoopDetail: r.EnclosingLoopDetail,
-                ReceiverType: r.ReceiverType,
+            .Select(r => (r, redirect: RedirectClassifier.Redirect(r.TargetSymbolId, redirectRules)))
+            .Where(x => x.r.TargetInSource || x.redirect != null)
+            .Select(x => new CallEdge(
+                Caller: x.r.EnclosingSymbolId!,
+                Callee: x.redirect ?? x.r.TargetSymbolId,
+                Kind: x.r.RefKind,
+                FilePath: x.r.FilePath,
+                Line: x.r.Line,
+                LoopKind: x.r.EnclosingLoopKind,
+                LoopDetail: x.r.EnclosingLoopDetail,
+                ReceiverType: x.r.ReceiverType,
                 HandoffDispatcher: null,
-                TypeArguments: r.TypeArguments,
-                DelegateConsumer: r.DelegateConsumer,
-                DeclaringTypeArgBinding: r.DeclaringTypeArgBinding,
-                MethodTypeArgBinding: r.MethodTypeArgBinding
+                TypeArguments: x.r.TypeArguments,
+                DelegateConsumer: x.r.DelegateConsumer,
+                DeclaringTypeArgBinding: x.r.DeclaringTypeArgBinding,
+                MethodTypeArgBinding: x.r.MethodTypeArgBinding
             ))
             .Distinct()
             .ToList();

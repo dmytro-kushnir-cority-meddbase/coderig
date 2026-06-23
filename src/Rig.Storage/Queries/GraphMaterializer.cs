@@ -35,14 +35,21 @@ public static class GraphMaterializer
         Action<string>? progress = null,
         CancellationToken cancellationToken = default,
         IReadOnlyList<FactGenericFactoryRule>? factoryRules = null,
-        IReadOnlyList<DeliveryRule>? deliveryRules = null
+        IReadOnlyList<DeliveryRule>? deliveryRules = null,
+        IReadOnlyList<FactRedirectRule>? redirectRules = null
     )
     {
         progress?.Invoke("Loading facts");
         // Classify dispatcher-consumed method-group edges here (the materializer owns the call_edges
         // table) so the persisted Kind="handoff" + HandoffDispatcher flow to every SQL reader; the
-        // in-memory oracle classifies identically by being given the same rules.
-        var graph = await Reads.LoadFactGraphAsync(context, handoffRules, cancellationToken);
+        // in-memory oracle classifies identically by being given the same rules. Redirect rules are applied
+        // in LoadFactGraphAsync so the external-virtual-override redirects bake into call_edges too.
+        var graph = await Reads.LoadFactGraphAsync(
+            context,
+            handoffRules: handoffRules,
+            redirectRules: redirectRules,
+            cancellationToken: cancellationToken
+        );
         return await BuildFromGraphAsync(context, graph, factoryRules, progress, cancellationToken, deliveryRules: deliveryRules);
     }
 

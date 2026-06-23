@@ -37,7 +37,8 @@ internal static class TraversalGraphLoader
         RigDbContext context,
         string pattern,
         SqlReachability.Direction direction,
-        IReadOnlyList<FactHandoffRule> handoffRules
+        IReadOnlyList<FactHandoffRule> handoffRules,
+        IReadOnlyList<FactRedirectRule> redirectRules
     )
     {
         // SQL path: call_edges already carry the persisted handoff classification (from `rig graph`),
@@ -48,7 +49,7 @@ internal static class TraversalGraphLoader
             return await SqlReachability.LoadBoundedGraphAsync(context, pattern, direction);
         }
 
-        return await Reads.LoadFactGraphAsync(context, handoffRules);
+        return await Reads.LoadFactGraphAsync(context, handoffRules, redirectRules);
     }
 
     // The SHAPED traversal graph: LoadTraversalGraphAsync + the single FactPathFinder.ShapeGraph pass
@@ -66,7 +67,7 @@ internal static class TraversalGraphLoader
         RuleSet rules
     )
     {
-        var graph = await LoadTraversalGraphAsync(context, pattern, direction, rules.Handoff);
+        var graph = await LoadTraversalGraphAsync(context, pattern, direction, rules.Handoff, rules.Redirect);
         return FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context);
     }
 
@@ -83,7 +84,7 @@ internal static class TraversalGraphLoader
     {
         var inputs = await SqlReachability.HasGraphAsync(context)
             ? await SqlReachability.LoadReachInputsAsync(context, pattern, direction)
-            : await LoadReachInputsFromRowsAsync(context, rules.Handoff);
+            : await LoadReachInputsFromRowsAsync(context, rules.Handoff, rules.Redirect);
 
         // The single shaping pass (monomorphize generic factories + carry cut/context rules on the graph)
         // so reaches/tree walk the same shaped graph as path/callers. Edges with no concrete construct
@@ -97,10 +98,11 @@ internal static class TraversalGraphLoader
 
     internal static async Task<SqlReachability.ReachInputs> LoadReachInputsFromRowsAsync(
         RigDbContext context,
-        IReadOnlyList<FactHandoffRule> handoffRules
+        IReadOnlyList<FactHandoffRule> handoffRules,
+        IReadOnlyList<FactRedirectRule> redirectRules
     )
     {
-        var graph = await Reads.LoadFactGraphAsync(context, handoffRules);
+        var graph = await Reads.LoadFactGraphAsync(context, handoffRules, redirectRules);
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
         var epData = await Reads.LoadFactEntryPointDataAsync(context);

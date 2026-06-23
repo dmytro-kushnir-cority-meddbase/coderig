@@ -63,27 +63,37 @@ public static class FactProjection
         );
     }
 
-    public static FactGraphData GraphData(AnalysisResult result, IReadOnlyList<FactHandoffRule>? handoffRules = null)
+    public static FactGraphData GraphData(
+        AnalysisResult result,
+        IReadOnlyList<FactHandoffRule>? handoffRules = null,
+        IReadOnlyList<FactRedirectRule>? redirectRules = null
+    )
     {
         var callEdges = result
             .References!.Where(r =>
-                r.EnclosingSymbolId != null
-                && r.TargetInSource
-                && (r.RefKind == "invocation" || r.RefKind == "methodGroup" || r.RefKind == "ctor")
+                r.EnclosingSymbolId != null && (r.RefKind == "invocation" || r.RefKind == "methodGroup" || r.RefKind == "ctor")
             )
-            .Select(r => new CallEdge(
-                Caller: r.EnclosingSymbolId!,
-                Callee: r.TargetSymbolId,
-                Kind: r.RefKind,
-                FilePath: r.FilePath,
-                Line: r.Line,
-                LoopKind: r.EnclosingLoopKind,
-                LoopDetail: r.EnclosingLoopDetail,
-                DelegateConsumer: r.DelegateConsumer,
-                // Render-only generic monomorphization bindings (do NOT set ReceiverType/TypeArguments here —
-                // those switch on dispatch narrowing and would perturb other tests using this degraded graph).
-                DeclaringTypeArgBinding: r.DeclaringTypeArgBinding,
-                MethodTypeArgBinding: r.MethodTypeArgBinding
+            .Select(r => (r, redirect: RedirectClassifier.Redirect(r.TargetSymbolId, redirectRules)))
+            // Keep an edge if its target is first-party OR a redirect rule rewrites it to the virtual hatch
+            // (the redirect target is itself external, so it would otherwise be dropped — that is the fix).
+            .Where(x => x.r.TargetInSource || x.redirect != null)
+            .Select(x => new CallEdge(
+                Caller: x.r.EnclosingSymbolId!,
+                Callee: x.redirect ?? x.r.TargetSymbolId,
+                Kind: x.r.RefKind,
+                FilePath: x.r.FilePath,
+                Line: x.r.Line,
+                LoopKind: x.r.EnclosingLoopKind,
+                LoopDetail: x.r.EnclosingLoopDetail,
+                // Carry the receiver ONLY on redirected edges so dispatch narrows the kept virtual node to the
+                // receiver's first-party override (not the full CHA fan). Non-redirected edges keep the prior
+                // behaviour (no ReceiverType — see the generic-monomorphization note below).
+                ReceiverType: x.redirect != null ? x.r.ReceiverType : null,
+                DelegateConsumer: x.r.DelegateConsumer,
+                // Render-only generic monomorphization bindings (do NOT set TypeArguments here — it switches on
+                // dispatch narrowing and would perturb other tests using this degraded graph).
+                DeclaringTypeArgBinding: x.r.DeclaringTypeArgBinding,
+                MethodTypeArgBinding: x.r.MethodTypeArgBinding
             ))
             .Distinct()
             .ToArray();

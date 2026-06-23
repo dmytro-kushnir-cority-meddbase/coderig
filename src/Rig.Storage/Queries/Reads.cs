@@ -309,6 +309,7 @@ public static class Reads
     public static async Task<FactGraphData> LoadFactGraphAsync(
         RigDbContext context,
         IReadOnlyList<FactHandoffRule>? handoffRules = null,
+        IReadOnlyList<FactRedirectRule>? redirectRules = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -344,6 +345,44 @@ public static class Reads
             .ToListAsync(cancellationToken);
 
         var callEdges = callRows.Distinct().ToList();
+
+        // Redirect (external-virtual-override-orphan fix, docs/backlog.md): a call binding to an EXTERNAL
+        // convenience overload (TargetInSource=0, so dropped by the WHERE above) is rewritten to the virtual
+        // hatch it trampolines into INSIDE the external DLL and KEPT, so receiver-narrowed dispatch resolves
+        // it to the first-party override. RedirectClassifier can't translate to SQL, so fetch the (few)
+        // external rows each rule targets — by its stripped-method prefix — and rewrite client-side. Mirrors
+        // FactGraphProjection.FromAnalysis's in-memory redirect so the two projections stay field-identical.
+        foreach (var rule in redirectRules ?? [])
+        {
+            var openParen = rule.Method + "(";
+            var redirectRows = await context
+                .ReferenceFacts.AsNoTracking()
+                .Where(r =>
+                    r.EnclosingSymbolId != null
+                    && !r.TargetInSource
+                    && (r.RefKind == RefKinds.Invocation || r.RefKind == RefKinds.MethodGroup || r.RefKind == RefKinds.Ctor)
+                    && r.TargetSymbolId != rule.RedirectTo
+                    && (r.TargetSymbolId == rule.Method || r.TargetSymbolId.StartsWith(openParen))
+                )
+                .Select(r => new CallEdge(
+                    Caller: r.EnclosingSymbolId!,
+                    Callee: rule.RedirectTo,
+                    Kind: r.RefKind,
+                    FilePath: r.FilePath,
+                    Line: r.Line,
+                    LoopKind: r.EnclosingLoopKind,
+                    LoopDetail: r.EnclosingLoopDetail,
+                    ReceiverType: r.ReceiverType,
+                    HandoffDispatcher: null,
+                    TypeArguments: r.TypeArguments,
+                    DelegateConsumer: r.DelegateConsumer,
+                    DeclaringTypeArgBinding: r.DeclaringTypeArgBinding,
+                    MethodTypeArgBinding: r.MethodTypeArgBinding
+                ))
+                .ToListAsync(cancellationToken);
+            callEdges.AddRange(redirectRows);
+        }
+        callEdges = callEdges.Distinct().ToList();
 
         // Project straight to the domain record in the SELECT (EF builds it in the materializer) — no
         // anonymous intermediate, no second client mapping pass. (These are PROJECTIONS, so AsNoTracking is
@@ -405,7 +444,12 @@ public static class Reads
     // impact and cycle detection now also walks delivery edges — the intentional gap closure.
     public static async Task<FactGraphData> LoadShapedGraphAsync(RigDbContext context, RuleSet rules, CancellationToken ct = default)
     {
-        var graph = await LoadFactGraphAsync(context: context, handoffRules: rules.Handoff, cancellationToken: ct);
+        var graph = await LoadFactGraphAsync(
+            context: context,
+            handoffRules: rules.Handoff,
+            redirectRules: rules.Redirect,
+            cancellationToken: ct
+        );
         graph = FactPathFinder.ShapeGraph(graph: graph, factoryRules: rules.Factory, cutRules: rules.Cut, contextRules: rules.Context);
         // ORDER IS LOAD-BEARING: AddDeliveryEdges resolves an event's handlers by joining event-read sites to
         // co-located `methodGroup` subscription edges (`someEvent += H`), so it MUST run while those edges are
@@ -881,7 +925,7 @@ public static class Reads
         // Fallback: no materialized graph (`rig graph` not run) — derive from the full reference graph.
         // When the caller already holds the shaped graph (e.g. DeriveCommand which built it for FR-10),
         // reuse it here instead of reloading (fixes F1 double-load).
-        var fallbackEdges = (graph ?? await LoadFactGraphAsync(context, rules, cancellationToken)).CallEdges;
+        var fallbackEdges = (graph ?? await LoadFactGraphAsync(context, rules, cancellationToken: cancellationToken)).CallEdges;
         return HandoffClassifier.HandoffEntryPoints(fallbackEdges, rules).Take(limit).ToList();
     }
 
