@@ -29,6 +29,7 @@ public static class HazardKinds
         FactHazardDeriver.ThreadLocalContextType,
         FactHazardDeriver.DualWriteType,
         FactCycleDeriver.EventCycleType,
+        FactCacheCoherenceDeriver.CacheCoherenceType,
         NPlusOne,
         UnserializablePayload,
     };

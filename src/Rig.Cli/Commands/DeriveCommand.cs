@@ -165,10 +165,26 @@ internal static class DeriveCommand
         //     exactly the cycles the materialized call_edges carry. ---
         var cycleFindings = EventCycleFindings(FactCycleDeriver.DeriveEventCycles(shapedGraph));
 
+        // --- cache_coherence (FR-7, another GRAPH-tier hazard): a BULK/collection write to a cached entity whose
+        //     forward closure has NO reachable invalidation of that entity's cache. Like event_cycle it is a
+        //     property of the call graph (NOT effect-attached), derived here over the shaped graph and added as a
+        //     hazard source. Opt-in: only when the `cacheCoherence` rule section is present. ---
+        var cacheCoherenceFindings = rules.CacheCoherence is { } cc
+            ? CacheCoherenceFindings(
+                FactCacheCoherenceDeriver.DeriveCacheCoherence(
+                    graph: shapedGraph,
+                    cachedEntities: new HashSet<string>(cc.CachedEntities, StringComparer.Ordinal),
+                    bulkWriteMethods: cc.BulkWriteMethods,
+                    invalidationMethods: cc.InvalidationMethods
+                )
+            )
+            : [];
+
         // Both hazard sources unioned: the over-effects pattern findings + the graph-tier event_cycle findings.
         // Fed to BOTH the tsv `hazard` emission AND the rendered Hazards section so neither view misses a source.
         var allHazards = new List<HazardFinding>(HazardFindings(effects));
         allHazards.AddRange(cycleFindings);
+        allHazards.AddRange(cacheCoherenceFindings);
 
         // --exclude-namespace: drop hazard findings whose enclosing DocID namespace starts with any of the
         // given prefixes (case-insensitive). Applied BEFORE both tsv and human output for consistency.
@@ -386,6 +402,36 @@ internal static class DeriveCommand
         }
 
         return findings;
+    }
+
+    // Map each graph-tier cache_coherence finding (FR-7) into a HazardFinding so it flows through the SAME
+    // Hazards view + tsv split as the other sources. Like event_cycle it is NOT effect-attached, so it has no
+    // owning effect: the SITE is the bulk-write's enclosing Method / FilePath / Line. Context is the cached
+    // entity whose cache may go stale; Detail is empty (the entity is the whole signal). Pure + internal so the
+    // mapping is unit-testable without a store.
+    internal static IReadOnlyList<HazardFinding> CacheCoherenceFindings(IReadOnlyList<CacheCoherenceFinding> findings)
+    {
+        var mapped = new List<HazardFinding>(findings.Count);
+        foreach (var f in findings)
+        {
+            mapped.Add(
+                new HazardFinding(
+                    Type: FactCacheCoherenceDeriver.CacheCoherenceType,
+                    // Candidate, not certain: entity↔cache pairing is a NAME heuristic and v1 reach is
+                    // forward-from-the-write-site + depth-capped (a sibling/deep invalidation can be missed).
+                    // Disclosed as medium so it reads as "verify", like the other inferred hazards.
+                    Confidence: "medium",
+                    Reason: "bulk_write_without_cache_invalidation",
+                    Context: f.Entity,
+                    Detail: "",
+                    Enclosing: f.Method,
+                    FilePath: f.FilePath,
+                    Line: f.Line
+                )
+            );
+        }
+
+        return mapped;
     }
 
     // The tsv `hazard` row for one finding (see the column reference in RunAsync): the full per-hazard

@@ -20,6 +20,10 @@ public sealed record RuleSet
     // External-virtual-override-orphan redirects (docs/backlog.md): rewrite a call to an external convenience
     // overload to the virtual hatch it trampolines into, applied at the reference→edge projection.
     public IReadOnlyList<FactRedirectRule> Redirect { get; init; } = [];
+
+    // FR-7 cache-coherence rule data (cached entities + bulk-write + invalidation method names) for the
+    // FactCacheCoherenceDeriver graph hazard. A single object; null when the `cacheCoherence` section is absent.
+    public FactCacheCoherenceRule? CacheCoherence { get; init; }
     public IReadOnlyList<FactGenericFactoryRule> Factory { get; init; } = [];
     public IReadOnlyList<FactTraversalCutRule> Cut { get; init; } = [];
     public IReadOnlyList<FactContextDispatchRule> Context { get; init; } = [];

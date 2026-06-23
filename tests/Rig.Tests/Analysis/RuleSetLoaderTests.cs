@@ -189,6 +189,32 @@ public sealed class RuleSetLoaderTests
         rule.RedirectTo.ShouldBe("M:Ext.EntityBase.Save(Ext.IPredicate,System.Boolean)");
     }
 
+    [Test]
+    public void CacheCoherence_round_trips_into_RuleSet_through_the_cascade_merge()
+    {
+        // Regression mirror of the redirectRules test: the cascade Merge must carry the local `cacheCoherence`
+        // section (a single object, last-writer-wins) into RuleSet.CacheCoherence. A section omitted from Merge
+        // silently vanishes from the cascade.
+        using var workspace = TempRulesWorkspace.Create(
+            """
+            {
+              "cacheCoherence": {
+                "cachedEntities": ["Account", "Person"],
+                "bulkWriteMethods": ["UpdateMulti", "DeleteMulti"],
+                "invalidationMethods": ["Clear", "Remove"]
+              }
+            }
+            """
+        );
+
+        var cacheCoherence = RuleSetLoader.Load(workspace.DirectoryPath).CacheCoherence;
+
+        cacheCoherence.ShouldNotBeNull();
+        cacheCoherence!.CachedEntities.ShouldBe(["Account", "Person"]);
+        cacheCoherence.BulkWriteMethods.ShouldBe(["UpdateMulti", "DeleteMulti"]);
+        cacheCoherence.InvalidationMethods.ShouldBe(["Clear", "Remove"]);
+    }
+
     private sealed class TempRulesWorkspace : IDisposable
     {
         private TempRulesWorkspace(string directory, string solutionPath, string extraRulesPath)

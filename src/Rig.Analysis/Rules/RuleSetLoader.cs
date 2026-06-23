@@ -62,6 +62,7 @@ public static class RuleSetLoader
         {
             Handoff = FactHandoffRuleProvider.Project(doc),
             Redirect = FactRedirectRuleProvider.Project(doc),
+            CacheCoherence = FactCacheCoherenceRuleProvider.Project(doc),
             Factory = FactGenericFactoryRuleProvider.Project(doc),
             Cut = FactTraversalCutRuleProvider.Project(doc),
             Context = FactContextDispatchRuleProvider.Project(doc),
@@ -180,6 +181,7 @@ public static class RuleSetLoader
         acc.DiRegistrations = Concat(acc.DiRegistrations, next.DiRegistrations);
         acc.HandoffDispatchers = Concat(acc.HandoffDispatchers, next.HandoffDispatchers);
         acc.RedirectRules = Concat(acc.RedirectRules, next.RedirectRules);
+        acc.CacheCoherence = next.CacheCoherence ?? acc.CacheCoherence;
         acc.DeliveryRules = Concat(acc.DeliveryRules, next.DeliveryRules);
         acc.StaticDiMappings = Concat(acc.StaticDiMappings, next.StaticDiMappings);
         acc.XmlDiFiles = ConcatDistinct(acc.XmlDiFiles, next.XmlDiFiles);
