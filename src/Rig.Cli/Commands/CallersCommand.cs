@@ -24,10 +24,15 @@ internal static class CallersCommand
     internal static Command Build(TextWriter output, TextWriter error, string workingDirectory)
     {
         var to = CommonOptions.Pattern(name: "to", description: "Target method pattern (who reaches this?).");
-        var orphans = new Option<bool>("--orphans", "--roots") { Description = "Only no-predecessor entry-point candidates (heuristic)." };
+        var orphans = new Option<bool>("--orphans", "--roots")
+        {
+            Description =
+                "Heuristic: all no-predecessor origins that reach the target (includes test/bench/unbound-interface origins). Superset of --entrypoints.",
+        };
         var entrypoints = new Option<bool>("--entrypoints")
         {
-            Description = "Only RULE-DETECTED entry points that reach the target (precise).",
+            Description =
+                "Precise: rule-detected entry points only (same set as `rig derive`). Subset of --roots; may miss test/bench or unbound-interface origins.",
         };
         var async = CommonOptions.Async();
         var raw = CommonOptions.Raw();
@@ -165,7 +170,7 @@ internal static class CallersCommand
             {
                 if (!tsv)
                 {
-                    io.Output.WriteLine($"No entry-point candidates reach '{opts.ToPattern}' (or no symbol matches).");
+                    io.Output.WriteLine($"No root callers (no-predecessor origins) reach '{opts.ToPattern}' (or no symbol matches).");
                 }
 
                 return 1;
@@ -180,7 +185,7 @@ internal static class CallersCommand
 
                 return 0;
             }
-            io.Output.WriteLine($"Entry-point candidates reaching '{opts.ToPattern}': {roots.Count}");
+            io.Output.WriteLine($"Root callers (heuristic — no-predecessor origins) reaching '{opts.ToPattern}': {roots.Count}");
             foreach (var r in roots.Take(max))
             {
                 io.Output.WriteLine($"{Indent.L1}{r}{HeaderSuffix(epContext, r)}");
@@ -204,6 +209,8 @@ internal static class CallersCommand
             return 1;
         }
         // --format tsv: depth + full DocID per reaching method (default unbounded; --limit caps it).
+        // Depth-0 rows are the BFS start nodes (the matched target(s) and their lambdas), distinctly
+        // identified by their `0` depth value — TSV consumers can filter depth > 0 for upstream callers only.
         if (tsv)
         {
             foreach (var kv in reachable.OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).Take(max))
@@ -213,11 +220,27 @@ internal static class CallersCommand
 
             return 0;
         }
-        io.Output.WriteLine($"Methods that reach '{opts.ToPattern}': {reachable.Count}");
-        foreach (var kv in reachable.OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).Take(max))
+        // Separate the BFS start nodes (depth=0, the matched target(s) and their lambdas) from actual
+        // upstream callers (depth≥1). The headline count and --limit budget reflect upstream callers only
+        // — the matched nodes are the SUBJECT of the query, not its answer.
+        var matched = reachable.Where(k => k.Value == 0).OrderBy(k => k.Key, StringComparer.Ordinal).ToList();
+        var callers = reachable.Where(k => k.Value > 0).OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).ToList();
+        io.Output.WriteLine($"Methods that reach '{opts.ToPattern}': {callers.Count}");
+        if (matched.Count > 0)
+        {
+            io.Output.WriteLine($"{Indent.L1}Matched nodes ({matched.Count}):");
+            foreach (var kv in matched)
+            {
+                io.Output.WriteLine($"{Indent.L2}{ShortName(kv.Key)}");
+            }
+        }
+        foreach (var kv in callers.Take(max))
         {
             io.Output.WriteLine($"{Indent.L1}d{kv.Value}  {ShortName(kv.Key)}");
         }
+        // The truncation guard uses the full reverse-closure count (matched + callers) so that --limit
+        // never silently drops nodes visible in `--format tsv`. Callers already shown up to max; if
+        // the total exceeds max, the user may want to raise the limit or switch to tsv for the full set.
         if (reachable.Count > max)
         {
             io.Output.WriteLine($"{Indent.L1}… +{reachable.Count - max} more (raise --limit, or --format tsv for all)");

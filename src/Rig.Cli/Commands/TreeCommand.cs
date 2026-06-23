@@ -63,7 +63,7 @@ internal static class TreeCommand
         var noCache = CommonOptions.NoCache();
         var time = CommonOptions.Time();
         var format = CommonOptions.Format(
-            description: "Output format: tsv — machine-readable DFS rows; llm — compact LLM TSV (6-col); llm-ids — LLM TSV with explicit id/parent_id linkage (8-col). llm and llm-ids compose with --view paths/full/effects only.",
+            description: "Output format: tsv — machine-readable DFS rows; llm — compact LLM TSV (6-col for --view paths/full; 7-col for --view effects, which adds a parent column); llm-ids — LLM TSV with explicit id/parent_id linkage (8-col, all views). In --view effects, parent_id is the nearest EFFECTFUL ancestor (not the direct caller) and depth is the original-tree depth. llm and llm-ids compose with --view paths/full/effects only.",
             allowedValues: ["tsv", "llm", "llm-ids"]
         );
         var store = CommonOptions.Store();

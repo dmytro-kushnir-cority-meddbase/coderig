@@ -144,7 +144,7 @@ public sealed class CliApplicationTests
             var exitCode = await CliApplication.RunAsync(["tree", "Whatever"], output, error, emptyDir);
 
             exitCode.ShouldBe(2);
-            error.ToString().ShouldContain("No indexed store");
+            error.ToString().ShouldContain("No .rig store found in");
             error.ToString().ShouldNotContain("SqliteException");
         }
         finally
@@ -154,17 +154,18 @@ public sealed class CliApplicationTests
     }
 
     [Test]
-    public async Task Files_requires_skipped_flag()
+    public async Task Files_without_skipped_is_no_longer_rejected_by_a_validator()
     {
         var output = new StringWriter();
         var error = new StringWriter();
 
-        var exitCode = await CliApplication.RunAsync(["files"], output, error);
+        _ = await CliApplication.RunAsync(["files"], output, error);
 
-        // The required-flag validator fails up front (exit 1); its message goes to stderr, framework help to
-        // stdout.
-        exitCode.ShouldBe(1);
-        error.ToString().ShouldContain("Usage: rig files --skipped");
+        // The bare-`files` dead-end validator was removed: it used to fail up front (exit 1) with
+        // "Usage: rig files --skipped". Bare `files` now proceeds to the command and prints an indexed-file
+        // count summary (or, with no store in the test cwd, fails cleanly on the missing store) — never the
+        // usage validator. Pin that the validator is gone.
+        error.ToString().ShouldNotContain("Usage: rig files --skipped");
     }
 
     [Test]

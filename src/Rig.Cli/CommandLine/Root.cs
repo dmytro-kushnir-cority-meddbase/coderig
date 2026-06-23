@@ -10,7 +10,19 @@ namespace Rig.Cli.CommandLine;
 internal static class Root
 {
     internal static RootCommand Build(TextWriter output, TextWriter error, string workingDirectory) =>
-        new("Runtime Intelligence Graph")
+        new(
+            """
+            Runtime Intelligence Graph
+
+            Query commands (tree, reaches, callers, …) read the .rig store from the current directory.
+            Run them from the directory that contains the .rig/ folder, or create one with:
+
+              rig index <solution>          # one-time: build the fact store
+              rig runs                      # what's indexed
+              rig entrypoints               # list entry points
+              rig tree <EP> --view summary  # what an entry point touches
+            """
+        )
         {
             IndexCommands.BuildIndex(output, error, workingDirectory),
             IndexCommands.BuildGraph(output, error, workingDirectory),

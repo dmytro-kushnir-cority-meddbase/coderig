@@ -41,8 +41,8 @@ internal static class CommandGuard
         var dbPath = StoreLayout.DbPath(workingDirectory);
         if (!File.Exists(dbPath))
         {
-            error.WriteLine($"No indexed store at {dbPath}.");
-            error.WriteLine("Run `rig index <solution>` here first, or cd to the directory that owns the .rig store.");
+            error.WriteLine($"No .rig store found in '{workingDirectory}'.");
+            error.WriteLine("Run `rig index <solution>` to create one, or cd to the directory that contains .rig/.");
         }
         else if (
             exception.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase)
