@@ -5,6 +5,21 @@ effect observations, and deployment attribution live in [README.md](README.md). 
 [docs/ubiquitous-language.md](docs/ubiquitous-language.md). Handover notes: [docs/handover.md](docs/handover.md).
 This file is only the things that aren't obvious from those and that you'd otherwise re-derive.
 
+## The `rig` skill — source of truth is THIS REPO
+
+The canonical `rig` skill lives in-repo at **`.claude/skills/rig/`** (`SKILL.md` + `REFERENCE.md`) — version
+it here, update it here when CLI surface/flags change. The globally-INSTALLED copy at
+`~/.claude/skills/rig/` is **read-only and DISPOSABLE**: never hand-edit it (edits get clobbered on reinstall
+and drift from the repo). Edit the repo copy, then **install via a CLI copy**:
+
+```pwsh
+Copy-Item -Recurse -Force .claude/skills/rig "$env:USERPROFILE/.claude/skills/rig"   # pwsh
+# or bash:  cp -rf .claude/skills/rig ~/.claude/skills/
+```
+
+(There's no native `claude skill install`; the copy IS the install. `--plugin-dir`/`--plugin-url` load a
+plugin for one session only.) If the installed skill ever looks stale, reinstall — don't patch it in place.
+
 ## Orchestration — director → orchestrator → coding agents
 
 > **Role check — read FIRST.** This section describes the **orchestrator** (the top-level session the user

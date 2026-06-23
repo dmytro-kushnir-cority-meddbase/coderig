@@ -26,13 +26,13 @@ query/rule changes. Tool repo: `C:\git\coderig` (global tool `rig`).
 rig index Sln.slnx --parallelism 16          # whole solution, ONE call (internal parallel build + extract)
 rig index Sln.slnx --from Entry.csproj       # entry-scoped: Entry's transitive ProjectReference closure
 rig reaches "Type.Method" [--async]          # effects reachable from a node (sync; --async also walks handoffs)
-rig tree "Type.Method" [--full|--effects] [--exclude throw] [--raw] [--no-cache]   # call tree (default: only effectful paths)
+rig tree "Type.Method" [--view paths|full|effects|summary|hazards] [--format llm|llm-ids] [--suppress ctors,lambdas] [--exclude throw] [--raw]   # call tree (default --view paths = effectful paths)
 rig callers "Type.Method" [--roots|--entrypoints]  # reverse (roots = no-predecessor origins; entrypoints = rule-detected EPs)
 rig path "From" "To" [--async]               # one concrete path
-rig derive                                   # ALL effects + entry points from facts
+rig derive [--list-providers] [--exclude-namespace <ns>]   # ALL effects + EPs; --list-providers = the valid --only/--exclude token set
 rig entrypoints                              # rule-detected EPs by kind (--format tsv)
-rig refs "IFoo"  |  rig symbols "Foo" --kind method
-rig impact --base <ref> [--per-ep] [--format tsv]   # blast radius + behavioral delta vs another commit
+rig refs "IFoo"  |  rig symbols "Foo" --kind method [--limit n] [--no-lambdas]
+rig impact --base <ref> --head <ref> [--structural] [--format tsv]   # blast radius + behavioral delta (both refs REQUIRED; per-EP diff is the default)
 rig reaches "X" --store <id|sha>             # query a SPECIFIC commit's store
 ```
 **Patterns = case-insensitive substring over DocIDs — use the DOTTED form (`Type.Method`).** The `▶` and
@@ -42,14 +42,15 @@ route-form pattern first.
 
 ## Reading output (don't misread it)
 Effects are emoji-tagged `provider:op` (💾write 🔍read 📥fetch 🌐http 📤queue 📣echo 🗃️cache 📦object-store
-📁io ↯throw 🧵parallel 🛢️db_command; + EF Core `efcore:*`, raw ADO `db_command|db_connection|db_reader`).
+📁io ⚠️throw 🧵parallel 🛢️db_command; + EF Core `efcore:*`, raw ADO `db_command|db_connection|db_reader`).
 Per-repo glyphs via `rig.effect-emoji.json`.
 - **N occurrences = N static call-SITES (branches included), NOT N runtime writes** — "places in code," never execution count.
 - **`~heuristic` = INFERRED dispatch** (Roslyn couldn't bind, net48 `!:`; name/arity fallback, ~99% — verify). Unmarked dispatch = exact mined fact, trust it.
 - **Fan-out `×N` = "could be any of these N," NOT "calls all N"** (CHA over-approximation). `reaches` buckets fan-out-only targets as "NOT a real call"; a resolved target is not re-dispatched (one hop).
 - **`derive` totals ≠ reachable**: an effect surfaces in `reaches`/`tree` only if its enclosing id is a call-graph node (`M:`/accessor/lambda/ctor). Effects keyed to `P:`/`F:` show in `derive` but never reach.
 - `tree` children are source-ordered (≈ execution order). Generic labels show the REAL instantiation (monomorphized down the chain), not `<T,U>`.
-- **Filter**: `--only`/`--exclude <list>` (comma/space-sep, repeatable; `provider` or `provider:op`; exclude wins). Headline: `--exclude throw`.
+- **Filter**: `--only`/`--exclude <list>` (comma/space-sep, repeatable; `provider` or `provider:op`; exclude wins). Headline: `--exclude throw`. An UNKNOWN token now WARNS (stderr) instead of silently matching nothing — `rig derive --list-providers` prints the valid set for the current rules.
+- **Hazards** (`tree --view hazards`, `derive` rollup): per-method deduped (one row `×N` sites; the per-type header reads "N site(s) across M method(s)"). `race_window`/`lazy_init_race` are TRIAGE CANDIDATES, not proofs — sort/read by method, not raw count; `#cctor` static-init is exempt (CLR type-init lock). `--exclude-namespace <prefix>` (repeatable) drops framework/vendored hazard noise (e.g. `--exclude-namespace Echo.Process`); hazards-only, effects unaffected.
 
 ## Async handoffs — SYNC-CUT by default
 A delegate handed to a dispatcher to run later/elsewhere is a `handoff` edge, NOT a call. Default CUT: a
@@ -71,49 +72,28 @@ re-index). Co-location-based; BCL (`Task.Run`)/lambda callbacks fall to the uncl
   `opaqueTypes {pattern,label}` draws a type/namespace as a leaf (anchor a namespace with `M:`). `tree
   --raw` bypasses them.
 
-## Hazards — pattern findings over effects (CANDIDATES, never verdicts)
-A third layer over effects + reachability: detectors match PATTERNS across the effect graph and emit ranked,
-confidence-tiered findings for an LLM reviewer (suspicion maps, not proofs — **annotate, never suppress**;
-calibrate FP rate before on-by-default). Shipped finding types (catalog: `HazardKinds`): `race_window`
-(read→write of the same cell, same method, no tx — TOCTOU/lost-update; high, medium when tx-bracketed),
-`lazy_init_race` (the lazy-init/do-once shape, low/heuristic), `thread_local_context` (FR-2: an RMW on a
-`[ThreadStatic]` cell — thread-confined so NOT a race, rerouted here from race_window; the value can be lost
-across an `await`/thread boundary, low/disclosed; detected via the existing `[ThreadStatic]`-attribute ctor
-ref, no re-index), `n_plus_1` (looped read, key varies per iteration), `unserializable_payload` (`Option<T>`
-/etc. into a store/serialize), `dual_write` (≥2 distinct durable systems written in one method — db/queue/
-search/cache/http).
-- **See them**: `rig derive` prints a **Hazards** section (named, counted, per-confidence-tier) + a
-  `hazard` tsv row (`type/confidence/reason/cell/enclosing/file:line`).
-- **Diff them**: `rig impact` reports a per-EP hazard DELTA (`+/- hazard <type>(<conf>)` base→head). NB
-  `--expect-no-effect-change` is effect-set-only and does NOT trip on a hazard-only delta.
-- **Drill into one EP**: `rig tree <ep> --hazards` — a ⚠ marker per hazard-bearing node (`type(conf)`, ×N
-  for repeats) + a summary section + `--format tsv` `hazard` rows. Re-derives the EP's bounded closure with
-  the static-field refs threaded in + the hazard post-pass; the augmented effects aren't cached, so a plain
-  `tree` is unaffected. This is the surface that shows the field-fed `shared_state:read/mutate` effects a
-  plain `tree` omits (it doesn't thread field refs).
-- **Not yet wired**: `event_cycle` (blocked on a missing publish→consumer graph edge). Hazards need static
-  field read/write effects → **re-index** after the field-emission/structural-context extraction changes.
-- **Design**: [docs/hazards.md](../../docs/hazards.md) (abstract, in-repo). MedDBase-grounded roadmap + RCA
-  corpus live in `meddbase-analysis/docs/` (backlog-bug-detection.md, rca-corpus-meddbase.md).
-
 ## Core workflow
 1. **Health-check**: `rig runs` (EP/effect/symbol counts). Thousands of EPs+effects expected; near-zero with healthy symbols = base-type binding flake (REFERENCE).
-2. Forward "what does X touch": `rig reaches X` / `rig tree X --full`.  Reverse "who reaches X": `rig callers X --roots`.  Path: `rig path X Y`.  Inventory: `rig derive`.  Change blast radius: `rig impact --base <ref>`.
+2. Forward "what does X touch": `rig reaches X` / `rig tree X --view full`.  Reverse "who reaches X": `rig callers X --roots`.  Path: `rig path X Y`.  Inventory: `rig derive`.  Change blast radius: `rig impact --base <ref> --head <ref>`.
 3. **Validate against SOURCE, not the DB** (it's the fallible Roslyn pass's output): trace from source → replicate with the SHIPPED engine (`reaches`/`path`, never a BFS reimpl) → fix the RULE, not the test.
 
 ## Blast radius & behavioral diff (`rig impact`)
 Diffs the derived graph between two commits (immune to format/rename churn). Needs BOTH commits indexed +
-the source git diff. `--base <ref>` (branch = LATEST store). `--per-ep` = per-entry-point effect-set diff —
-the precise lens; surfaces deltas the global diff masks (one EP losing a sink others still reach; `-` on
-some EPs + `+` on others = a relocation). Three layers: changed set (v1 FILE-granular → over-approx),
-affected EPs (by service), behavioral delta (`±effect`/`+observation`, param-free keyed).
-- **Cross-check surprising deltas against UNBOUNDED `tree`/`reaches` (the oracle), two known gaps:** (a)
-  `--per-ep` reach can be depth-capped while `tree`/`reaches` aren't — a path crossing the cap reports a
-  spurious `±`; verify with `tree "<EP>" --effects --store <head>` vs `<base>`. (b) reverse layers
+the source git diff. **BOTH `--base <ref>` AND `--head <ref>` are REQUIRED** (each resolves a ref→sha→store;
+there is no LATEST defaulting). The **per-entry-point effect-set diff is the DEFAULT output** — the precise
+lens; surfaces deltas the global diff masks (one EP losing a sink others still reach; `-` on some EPs + `+`
+on others = a relocation). Three layers: changed set (FILE-granular → over-approx), affected EPs (by
+service), behavioral delta (`±effect`/`+observation`, param-free keyed). **`--structural`** expands the
+one-line structural-only summary into the full list of EPs whose reachable TREE changed (incl. the usually
+large set rippled only by a data-shape change). **`--expect-no-effect-change`** is the CI gate (exit 1 if any
+EP's effect set changed).
+- **Cross-check surprising deltas against UNBOUNDED `tree`/`reaches` (the oracle), two known gaps:** (a) the
+  per-EP reach can be depth-capped while `tree`/`reaches` aren't — a path crossing the cap reports a spurious
+  `±`; verify with `tree "<EP>" --view effects --store <head>` vs `<base>`. (b) reverse layers
   (`callers`/`--roots`/affected-EP) can MISS an EP reached only via interface-dispatch/lambda — confirm
   forward with `rig path "<EP>" "<target>"`.
 - Setup: index base then branch (each → its own store); `--repo <path>` for a separate source tree.
-  `--per-ep` is minutes on a big store (in-process, parallel — no N shell-outs).
+  A full impact run is minutes on a big store (in-process, parallel — no N shell-outs).
 
 ## Deployment attribution (`deployments.json`, opt-in)
 Drop `deployments.json` next to `.rig/` → every EP line annotates the hosting service(s) `⟦Service (kind)⟧`.
