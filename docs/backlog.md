@@ -190,17 +190,30 @@ edge-creating output** to `call_edges` (cut/context stay traversal-time, as toda
   persisted `call_edges` count unchanged; full suite green.
 - [ ] `dead`'s unshaped-CHA-superset requirement still met (the raw/`--raw` path bypasses delivery shaping).
 
-### Related: parallelise the independent query-side loads
+### Related: parallelise the independent query-side loads — INVESTIGATED, DOES NOT PAY (do not rebuild)
 
 The derive (and impact) commands issue several **data-independent** loads — graph edges, EP data, delivery
-sites, effect inputs — that today run **sequentially** on one `DbContext`. They are temporally decoupled (no
-data dependency), so they are candidates to overlap. The constraint: EF Core's `DbContext` is **not**
-concurrency-safe (a second operation on the same context while one is in flight throws), and a single SQLite
-connection serialises. Parallelising therefore needs **separate read `DbContext`s / connections** (sound — the
-store is opened read-only and SQLite allows concurrent readers), not `Task.WhenAll` on one context. Whether
-it pays is empirical: the big reads (`reference_facts`) are deserialisation- + I/O-bound, so overlapping them
-across connections *may* use multiple cores and overlap I/O — **profile before building**. Sequence after the
-single-entry-point refactor, which first establishes *what* the independent loads are.
+sites, effect inputs — that run **sequentially** on one `DbContext`. They are temporally decoupled, so they
+*looked* like candidates to overlap across **separate read `DbContext`s / connections** (sound — the store is
+opened read-only and SQLite allows concurrent readers; not `Task.WhenAll` on one context, which throws).
+
+**Profiled + built the lowest-risk slice + measured on the real store → reverted.** Findings (2026-06-23,
+MedDBase, Threadripper 32-logical, NVMe):
+- The synthetic raw-SQLite concurrency experiment looked promising: 2 concurrent `reference_facts` scans on
+  separate connections ran **1.94–2.75× faster** than sequential. The reads ARE CPU/marshaling-bound, not
+  single-disk-serialised, so in isolation they overlap.
+- **But the real `derive` command got no win — a slight regression.** Built the cleanest slice
+  (`LoadShapedGraphAsync ∥ LoadFactEntryPointDataAsync` via `Task.WhenAll` on a second read context, in both
+  `derive` and impact's `LoadHeadSideDataAsync`). Output stayed **byte-identical** (correctness fine), but warm
+  `derive` went **~13.2 s → ~13.7 s median** (5+ runs each). The DB-load region is only ~33–36 % of wall-clock
+  (Amdahl ceiling ~1.1–1.3 ×), and even that didn't materialise: the two big loads contend on EF marshaling /
+  memory bandwidth, and the second context's setup (per-connection `mmap_size=1 GB` + 256 MB page cache) +
+  EF compiled-model warmup outweigh the DB-layer overlap.
+- **Conclusion:** adding a second `DbContext` + concurrency for net-negative perf is the trade we explicitly
+  rule out. The bottleneck is the single-threaded CPU passes (`FactEffectDeriver.Derive`, `FactCycleDeriver`)
+  + EF row materialisation, which DB-connection parallelism can't touch. If derive latency ever matters,
+  attack THAT (the CPU passes / marshaling), not the load sequencing. Do not re-attempt the connection
+  parallelisation without a materially different store profile.
 
 ---
 
