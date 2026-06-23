@@ -244,17 +244,20 @@ the open rows; F6's non-derive instances want `RulesFingerprint` to accept pre-r
 
 ### Residual follow-ups surfaced by the work
 
-- **Route EF-fallback `TraversalGraphLoader` through `LoadShapedGraphAsync`.** The consolidation (`9caef5d1`)
-  routed derive + impact through the single shaped-graph loader, closing impact's `--async` delivery-edge
-  gap — but the EF-fallback traversal loader (reaches/tree/path/callers when not on the SQL `call_edges`
-  path) was left doing its own `LoadFactGraphAsync + ShapeGraph + MarkEventSubscriptionHandoffs` WITHOUT
-  `AddDeliveryEdges`, so those fall back paths still don't see delivery edges. Low urgency (the SQL path —
-  the common case — has them baked), but it's the last scattered shaping site. ORDER CAVEAT (load-bearing,
-  see `Reads.LoadShapedGraphAsync`): `AddDeliveryEdges` must precede `MarkEventSubscriptionHandoffs`, else
-  the reclassified `+= H` methodGroup subscription edges starve the event-delivery join (cost us a 24→0
-  `event_cycle` regression, caught by the real-store check).
-- **`seen` flag: split into `seen` vs `depth-capped` via a `TruncationCause` on `TraceNode`.** Today the llm
-  `seen` flag (and `llm-ids`' `seen:<id>` canonical-ref) maps to `TraceNode.Truncated`, which conflates
-  already-expanded / depth-cap / budget-cap. Only genuinely-already-expanded rows are redundancy signals; a
-  depth-capped row flagged `seen` is a false positive. The fix needs a `TruncationCause` enum threaded
-  through `BuildTree`; then `seen` carries a real canonical-ref and `depth-capped` is its own flag.
+- **Route EF-fallback `TraversalGraphLoader` through `LoadShapedGraphAsync`. — WON'T DO.** The consolidation
+  (`9caef5d1`) routed derive + impact through the single shaped-graph loader, closing impact's `--async`
+  delivery-edge gap — but the EF-fallback traversal loader (reaches/tree/path/callers when not on the SQL
+  `call_edges` path) was left doing its own `LoadFactGraphAsync + ShapeGraph + MarkEventSubscriptionHandoffs`
+  WITHOUT `AddDeliveryEdges`, so those fallback paths don't see delivery edges. **Decided not to fix
+  (2026-06-23):** it's a corner case — the EF-fallback only triggers when `rig graph` hasn't run (no
+  `call_edges`: `--no-graph` or pre-graph stores), and every modern graph-by-default index takes the SQL path
+  where delivery edges are baked into `call_edges`. The fix is delicate (shaping is split between the loader's
+  `ShapeGraph` and the command's `MarkEventSubscriptionHandoffs`, so threading `AddDeliveryEdges` in with the
+  load-bearing ordering — `AddDeliveryEdges` must precede `MarkEventSubscriptionHandoffs`, the one that cost a
+  24→0 `event_cycle` regression — is fiddly) and is not validatable on the MedDBase store (which has
+  `call_edges` and never hits the fallback) without constructing a `--no-graph` store. The risk to the
+  contended shaping path outweighs fixing a fallback modern indexes don't reach; left as a known limitation.
+- **`seen` flag: split into `seen` vs `depth-capped` via a `TruncationCause` on `TraceNode`. — DONE**
+  (`861bd0c4`). `TruncationCause { None, AlreadyExpanded, DepthCapped, BudgetCapped }` is set by precedence in
+  `BuildTree`; the llm `seen` flag maps only to AlreadyExpanded, with distinct `depth-capped`/`budget-capped`
+  flags and `seen:<id>` back-ref only for AlreadyExpanded. Tree payload-schema version bumped v1→v2.
