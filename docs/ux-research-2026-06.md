@@ -70,12 +70,14 @@ Severity reflects how badly it misleads or blocks, × how many agents independen
    `--entrypoints` *sounds* more authoritative but is actually **narrower** (rule-gated; misses benchmark/test
    origins `--roots` finds) — users get the super/subset relationship backwards. Pick one term; in `--help`
    contrast them in one line: "`--roots` = heuristic (all no-predecessor); `--entrypoints` = precise (rule-
-   matched only, may miss test/bench origins)."
+   matched only, may miss test/bench origins)." **⟶ REFRAME: fix the output header + add the help contrast;
+   KEEP the `--orphans` alias (removing it is a needless breaking change) — see Editorial verdicts.**
 
 6. **TSV is an API — give it headers, a fan-out column, and a documented per-view schema.** `[tool]`+`[doc]` — *Sev: med-high (A, B, F).*
    - A: the pretty `reaches` view has a labeled "dispatch fan-out (NOT a real call)" bucket, but in `--format
      tsv` the fan-out rows are **interleaved** with real rows, distinguishable only by a non-empty 8th column;
-     A nearly counted 7 CHA-fanned writes as guaranteed. Add an explicit `isFanout`/`kind` column or `--no-fanout`.
+     A nearly counted 7 CHA-fanned writes as guaranteed. Add an explicit `isFanout`/`kind` column. **⟶ REFRAME:
+     add the column; do NOT add a `--no-fanout` hide-flag (it re-creates the silent-omission of #1) — see Editorial verdicts.**
    - B: `impact --format tsv`'s `structural_summary` row is **six unlabeled integers**. Add a `# header` row.
    - F: `--format llm` is **6 columns** for `--view paths/full` but **7** (adds `parent`) for `--view effects`
      — undocumented; a parser told "6-col" misparses. Document the per-view schema in `--help` + REFERENCE.
@@ -83,8 +85,8 @@ Severity reflects how badly it misleads or blocks, × how many agents independen
 7. **Document the LLM-format semantics that shift between views/formats.** `[doc]` `[cheap]` — *Sev: med (F).*
    - `seen` (bare) in `--format llm` vs `seen:<id>` (back-ref) in `llm-ids` — a parser switching formats breaks.
    - `parent_id` means *call-graph parent* in `paths/full` but *nearest effectful ancestor* in `effects` — a
-     silent semantic shift that is a correctness hazard for LLM reasoning. Document, or rename the column to
-     `effectful_parent_id` in the effects view.
+     silent semantic shift that is a correctness hazard for LLM reasoning. **⟶ REFRAME: DOCUMENT it (done —
+     REFERENCE "column contract" block + `tree --format` help); do NOT rename the column (breaking) — see Editorial verdicts.**
    - In `--view effects`, the `depth` column is the original-tree depth (non-contiguous) — note that structure
      must be read from `parent`/`parent_id`, not `depth`.
 
@@ -98,11 +100,11 @@ Severity reflects how badly it misleads or blocks, × how many agents independen
      hazards (Echo/ConfigurationManager) that reach every EP. Consider a first-class `rig hazards [--kind]
      [--severity] [--min-count] [--first-party]` command (today hazards are only reachable via TSV grep).
 
-9. **Shorten DocIDs by default in `path`/`callers`/`tree`; put `[invocation @ file:line]` on its own line.** `[tool]` `[cheap]` — *Sev: med (D, A).*
+9. **Shorten DocIDs by default in `path`/`callers`/`tree`; put `[invocation @ file:line]` on its own line.** `[tool]` `[cheap]` — *Sev: med (D, A).* **⟶ REFRAME (see Editorial verdicts).**
    Full DocIDs with 20+ params line-wrap unreadably and bury the file:line annotation at the end. Default to
    `Type.Method(…)`; add `--full-ids` for scripting.
 
-10. **A combined "inventory" view: `provider:op  Type.Method  file:line  [fanout]` in one command.** `[tool]` — *Sev: med (A).*
+10. **A combined "inventory" view: `provider:op  Type.Method  file:line  [fanout]` in one command.** `[tool]` — *Sev: med (A).* **⟶ DECLINE as a new format (see Editorial verdicts) — fold into the two existing views instead.**
     Today A had to run `tree --view effects` (names, no line) AND `reaches --format tsv` (line, verbose) and
     cross-reference. A `reaches --format inventory` would be the ideal compliance/audit artifact.
 
@@ -141,7 +143,7 @@ Severity reflects how badly it misleads or blocks, × how many agents independen
     `derive`'s own `io:write IO.TextWriter ×16` is just stdout, but the folder emoji implies a filesystem
     sink. Distinguish `console:write` from `io:write IO.File`.
 
-18. **Missing detector families: audit/log, outbound webhook.** `[tool]` `[design]` — *Sev: med (A, C).*
+18. **Missing detector families: audit/log, outbound webhook.** `[tool]` `[design]` — *Sev: med (A, C).* **⟶ DECLINE as builtins (see Editorial verdicts) — belongs in user rules + #1's unmodeled-call surfacing + a doc note.**
     The headline compliance task ("every DB write preceded by an audit-log call") is unanswerable — rig models
     `llblgen:write` beautifully but can't see the `auditLogEvent.Log()` beside it. At minimum the docs should
     say audit/logging/webhooks aren't modeled. (Note: `unserializable_payload` is documented but didn't fire
@@ -155,6 +157,53 @@ Severity reflects how badly it misleads or blocks, × how many agents independen
     Summary counts call-SITES, effects counts effectful METHODS; the two numbers differ with no explanation.
     Print "81 call-site(s) across 37 effectful method(s)". Also: the root node's `calls=1` is a meaningless
     sentinel in llm output — emit `0`/empty for roots.
+
+---
+
+## Editorial verdicts — what NOT to build (decline / reframe), applied 2026-06-23
+
+The panel was told to be maximally critical, so a few findings are real-as-observations but bad-as-features.
+These are declined or reframed; the throughline is rig's design: **fact-based, *disclose-don't-hide*,
+detectors-are-data, no path-sensitive/dataflow analysis at query time.**
+
+**Decline (do not build):**
+- **#18 builtin `audit`/`log`/`webhook` detectors** + the implied "is every write preceded by an audit call?"
+  capability. Audit/logging conventions are per-codebase, so a builtin is false universality + maintenance;
+  and "X before Y on every path" is path-sensitive ordering, a different/harder analysis than
+  reachability+effects. → Reframed as **rules additions** below, not core work.
+- **#6 `--no-fanout` hide-flag.** The fan-out *column* is the fix; a flag that hides fan-out rows re-creates
+  the silent-omission of #1. Keep the disclosure.
+- **#10 a new `--format inventory`** and **the LLM `seen`-count footer.** Aggregation is the consumer's job
+  and a third format mode is maintenance cost — fold the need into the two existing views (`--view effects`
+  gains file:line; tsv gains the fan-out column).
+- **`rig status` command.** Redundant — `rig runs` + the new `--help` quick-start already cover orientation.
+
+**Reframe (do the cheap/non-breaking part, skip the rest):**
+- **#9 DocID shortening:** do NOT shorten by default (the full DocID is the queryable identity; short form
+  re-introduces overload ambiguity + breaks copy-paste-to-query). Only move `[invocation @ file:line]` to its
+  own line; a `--short` opt-in is fine.
+- **#7 rename `parent_id`→`effectful_parent_id`:** breaking. DOCUMENT it (done) instead of renaming.
+- **#5 remove the `--orphans` alias:** breaking for no gain. Fix the output header + add the help contrast; keep the alias.
+
+### Missing effects / EPs → RULES additions per repo (not core detectors)
+
+Every "rig didn't see sink/effect X" finding (agent A's `TriggerDocumentWebhook` outbound call invisible to
+`reaches --only http`; the audit-log call; any unmodeled first-party sink) is **not a core gap** — detectors
+are data. The fix is a rule appended to the relevant repo's rule file, where the API is called first-party:
+
+- **MedDBase** (`c:/git/meddbase-analysis/rig.rules.json`): add effect rules for the real sinks the panel
+  surfaced — the webhook dispatcher (`TriggerDocumentWebhook` / `WebhookEvents.*` → e.g. `{provider:"webhook",
+  operation:"emit", methods:[…], resource:"argument_name"}`), and the audit/log call
+  (`auditLogEvent.Log()` / `CreateDocumentEvent(...).Log()` → `{provider:"audit", operation:"write"}`) so the
+  "write must be audited" pattern becomes a *visible* effect pair on the path.
+- **coderig** (its own working-dir rules / `rig.rules.json`): add first-party effect rules for any rig-internal
+  sink not yet modeled (none critical surfaced, but the same mechanism applies — e.g. distinguish
+  `console:write` from `io:write IO.File`, see #17).
+
+The *engine* contribution that makes this discoverable is **#1's unmodeled-call surfacing** (flag first-party
+calls on a path that matched no effect rule) + **#16's `--list-providers` and unknown-token warning** — those
+turn "silent empty = looks safe" into "here's what isn't modeled yet, add a rule." That is the principled
+split: the engine discloses coverage; the *rules* (per repo) close it.
 
 ---
 
