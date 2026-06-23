@@ -68,6 +68,45 @@ public sealed class FactExtractorCaptureTests
     }
 
     [Test]
+    public void Bare_instance_call_records_the_enclosing_type_as_the_implicit_this_receiver()
+    {
+        // Per C# spec a bare `Foo()` instance call runs on the implicit `this`, so its receiver type is the
+        // enclosing type — same as an explicit `this.Foo()`. Recording it lets dispatch narrow the call to the
+        // enclosing type's family instead of CHA-fanning to every override. A bare STATIC call has no receiver.
+        var source = """
+            namespace App
+            {
+                public class Widget
+                {
+                    public virtual void Save() { }
+                    public static void StaticHelper() { }
+
+                    public void Cancel()
+                    {
+                        Save();          // bare instance call -> receiver is `this` (App.Widget)
+                        this.Save();     // explicit this  -> receiver App.Widget
+                        StaticHelper();  // bare STATIC call -> no `this` receiver
+                    }
+
+                    public static void FromStatic() => StaticHelper(); // static context -> no receiver
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        var saveCalls = result.References.Where(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Widget.Save")).ToList();
+        saveCalls.Count.ShouldBe(2); // bare + explicit this
+        saveCalls.ShouldAllBe(r => r.ReceiverType == "App.Widget");
+
+        var staticCalls = result
+            .References.Where(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Widget.StaticHelper"))
+            .ToList();
+        staticCalls.Count.ShouldBe(2);
+        staticCalls.ShouldAllBe(r => r.ReceiverType == null);
+    }
+
+    [Test]
     public void Declaring_type_arg_binding_records_concrete_and_forwarded_receiver_args()
     {
         var source = """

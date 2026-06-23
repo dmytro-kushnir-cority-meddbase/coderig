@@ -202,7 +202,12 @@ internal static class IndexCommands
             }
         }
 
-        var rules = RuleSetLoader.Load(target);
+        // Rules are anchored at the WORKING DIRECTORY (cwd) and honor `--rules`, exactly like the `graph`
+        // and query commands (which all load via Load(workingDirectory, extraRules)). The index runs the
+        // graph bake at its tail, so it MUST shape with the same rule set the oracle uses at query time —
+        // anchoring at `target` (the solution dir) instead silently baked call_edges with only builtin rules
+        // (no colocated/`--rules` MedDBase rules), diverging from query-time reachability.
+        var rules = RuleSetLoader.Load(workingDirectory, extraRules);
 
         // Capture provenance + the destination store-id up front, so the store location and commit can be
         // announced BEFORE the (long) analysis — useful when monitoring a re-index. The commit IS the

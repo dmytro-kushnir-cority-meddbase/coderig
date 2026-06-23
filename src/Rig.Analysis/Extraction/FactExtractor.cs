@@ -809,6 +809,27 @@ internal static class FactExtractor
             return symbolCache.TypeDisplay(model.GetTypeInfo(conditional.Expression).Type);
         }
 
+        // Bare `Foo()` — the receiver is the implicit `this` (C# spec: an instance method invoked with no
+        // explicit receiver runs on `this`), whose static type is the type lexically containing the call.
+        // Recording it lets dispatch narrow `this.VirtualMethod()` to the enclosing type's family instead of
+        // the full CHA fan (e.g. AppointmentEntity.Cancel's bare `Save()` resolves to AppointmentEntity, not
+        // all 114 EntityBase.Save overrides). Static calls / local functions / delegate invokes have no `this`
+        // receiver, and an unresolved target (net48 error type) leaves it null — both fall through.
+        if (
+            name.Parent is InvocationExpressionSyntax invocation
+            && invocation.Expression == name
+            // The call target is an instance method (so it HAS a receiver) ...
+            && model.GetSymbolInfo(name).Symbol is IMethodSymbol { IsStatic: false, MethodKind: MethodKind.Ordinary }
+            // ... AND `this` actually exists here: the enclosing executable is non-static (instance method /
+            // accessor / non-static lambda / instance field-initializer). In valid C# the first condition
+            // implies the second, but checking it directly keeps us correct on error code and self-evident.
+            && model.GetEnclosingSymbol(name.SpanStart) is { IsStatic: false } enclosing
+            && enclosing.ContainingType is { } thisType
+        )
+        {
+            return symbolCache.TypeDisplay(thisType);
+        }
+
         return null;
     }
 
