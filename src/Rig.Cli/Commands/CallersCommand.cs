@@ -309,6 +309,34 @@ internal static class CallersCommand
         {
             if (!tsv)
             {
+                // BUG-rig-missed-entrypoints-healthcode (Defect 2): a sync 0 reads as "not reachable from any
+                // entry point", but the scheduled / actor-message surface is sync-cut by default. Before
+                // claiming "none", probe --async — a target reachable ONLY via a handoff (a background worker,
+                // an actor message, an event) would otherwise be wrongly reported as dead/background-only, which
+                // defeats the security-reachability use case. Only paid on the 0-result path, so no per-query cost.
+                if (mode == FactPathFinder.TraversalMode.SyncCut)
+                {
+                    var asyncReachable = FactPathFinder
+                        .ReachedBy(graph, toPattern, maxDepth, mode: FactPathFinder.TraversalMode.AsyncInclude)
+                        .Keys.ToHashSet(StringComparer.Ordinal);
+                    var asyncSites = graph
+                        .Methods.Where(m => asyncReachable.Contains(m.SymbolId))
+                        .Select(m => (m.FilePath, m.Line))
+                        .ToHashSet();
+                    var asyncCount = derivedEps
+                        .Concat(promoted)
+                        .Where(e => asyncSites.Contains((e.FilePath, e.Line)))
+                        .GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line))
+                        .Count();
+                    if (asyncCount > 0)
+                    {
+                        output.WriteLine(
+                            $"No entry points reach '{toPattern}' synchronously — but {asyncCount} reach it via async/scheduled handoff. Re-run with --async."
+                        );
+                        return 1;
+                    }
+                }
+
                 output.WriteLine($"No rule-detected entry points reach '{toPattern}'.");
             }
 
