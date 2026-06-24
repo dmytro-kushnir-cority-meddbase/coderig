@@ -34,6 +34,7 @@ internal static class Root
             TreeCommand.Build(output, error, workingDirectory),
             CallersCommand.Build(output, error, workingDirectory),
             ReachesCommand.Build(output, error, workingDirectory),
+            DispatchFansCommand.Build(output, error, workingDirectory),
             DeriveCommand.Build(output, error, workingDirectory),
             EntryPointsCommand.Build(output, error, workingDirectory),
             ImpactCommand.Build(output, error, workingDirectory),
