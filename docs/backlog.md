@@ -58,6 +58,86 @@ abstraction generalizes beyond `absence` before touching the DSL.
 
 ---
 
+## Feature: Dispatch-fan disclosure + generic monomorphization (the dispatch-precision substrate)
+
+**Status:** proposed · **Found:** 2026-06-24 (reverse receiver-narrowing fix `c7fe4f0f` + the design dialogue).
+This is the concrete spec for the "dispatch-precision substrate" the CEP feature is gated on, and it folds in
+the old perf note (precise full-closure reverse `O(E)` not `O(N×reach)`) and the forward/reverse asymmetry.
+
+### Why
+After per-edge receiver narrowing (`c7fe4f0f`), forward and reverse share the dispatch PRIMITIVE
+(`DispatchTargets`) but are not the same ALGORITHM: forward is a context-carrying traversal (threads
+`incomingReceiver`/`carriedBinding`/this-type along the path), reverse is a static edge-inverted map (raw
+`edge.ReceiverType`, no binding). They agree where narrowing is edge-local (the receiver win); they diverge
+where it is path-dependent (generic type-arg flow). The residual over-approximation concentrates at generic
+seams: e.g. `BillingRuleHelper.SaveServices<TEntity>` → `s1.Delete()` with stored receiver `"TEntity"` (open
+type parameter) → `ResolveNarrowRoot` can't place a type-parameter → full CHA cone over the 97-way mined
+`EntityBase.Delete` fan.
+
+### Calibration (MedDBase store caa9373ffbf6-dirty)
+- Mined dispatch dominates: **9,981 roslyn** vs **266 heuristic** edges (97.4% precise). Roslyn binding is NOT
+  the problem; we are not reimplementing the compiler.
+- Pure CHA-fallback (heuristic basis) is tiny: 266 edges, **1** high-fan source (`GenericImportEntity.Save~λ0`,
+  fan 26), the rest fan-1 (precise anyway).
+- The REAL over-approximation is **mined multi-target fans that receiver-narrowing fails to trim**: 103 mined
+  sources fan ≥10 (26 of them ≥40); `EntityBase.Delete` = 97 mined targets. Dominant cause is the receiver
+  gap: **212,357 / 613k call edges (34%) carry NO receiver** → narrowing can't even start → full CHA cone.
+- ⇒ The actionable signal is NOT "heuristic basis"; it is "**un-narrowed multi-target dispatch site**", and the
+  cause to disclose is *why the receiver couldn't narrow* (absent / type-parameter / base-typed / unbound).
+
+### The model (reified generics → monomorphization)
+C# generics are reified: every `Foo<Account>`/`Foo<Invoice>` is a distinct monomorphic type at runtime; an open
+`SaveServices<TEntity>` never executes — only concrete instantiations do. So the precise analysis treats a
+generic method as a TEMPLATE and materializes it per concrete type arg seen at call sites (RTA/VTA-style).
+Three outcomes per generic/dispatch site:
+1. **Monomorphize** where the concrete type arg is in scope — precise; kills the fan (`SaveServices<ServiceEntity>`
+   → `s1.Delete()` resolves to `ServiceEntity.Delete`, not all 97).
+2. **CHA cone over the constraint** where it isn't — SOUND, never a dead node. "Can't resolve" ≠ "dead": the
+   binding may be supplied at runtime (framework/DI/reflection-bound open entry point), the constraint
+   (`where TEntity : EntityBase`) still bounds the runtime type to a cone, and monomorphization can be
+   unbounded (`F<List<T>>` recursion) so it must cap and fall back. Treating unresolved as dead is the one
+   UNSOUND move (silent false negative) — the direction rig never takes.
+3. **Prune (RTA)** only where the program-wide instantiation set is empty — the *only* place "dead" is sound
+   (a generic whose type is never instantiated anywhere is genuinely unreachable).
+
+### Disclosure as diagnostic (load-bearing)
+Every CHA-cone fallback is DISCLOSED, attributed to a site, and **classified**:
+- **actionable** (`likely missing rule / EP def`): open-generic entry point bound by the host, DI open
+  registration, a type-arg or receiver that flows from a seam we could capture with a rule — fixing the
+  rule/EP def monomorphizes it. This is the valuable worklist.
+- **irreducible** (`hard boundary`): polymorphic-recursion past the fuel cap, fully-dynamic
+  `MakeGenericType(Type.GetType(...))` — no rule fixes these; tag, don't TODO.
+Rank by fan degree × incoming-edge count (a ×97 fallback is a "go write a rule" flag; a ×2 is noise). Builds on
+existing disclosure infra (`~heuristic` tag, the "dispatch fan-out (NOT a real call)" bucket, the `×N fan-out`
+annotation) — makes it attributed + prioritized instead of merely present.
+
+### End-state
+Narrowing becomes a PURE FUNCTION OF THE (instantiated) EDGE → materialize ONE narrowed graph; forward and
+reverse traverse the identical edge set → **forward ≡ reverse by construction** (closes the asymmetry) and
+precise full-closure reverse is `O(E)` (closes the perf note).
+
+### Increments (playground-first: synthetic unit tests green → validate on the real store → iterate)
+1. **Dispatch-fan disclosure / diagnostic** (this is also the calibration that orders 2–3, and is pure-additive
+   / zero traversal-behaviour change → low risk). A report over un-narrowed multi-target dispatch sites:
+   per site the mined fan, whether the receiver narrowed it, and the classified cause (absent-receiver /
+   type-parameter-receiver / base-typed-receiver / heuristic-unbound), ranked by fan × edge-count. Playground:
+   synthetic graphs exercising each cause assert correct classification; big-boy: the ranked worklist.
+2. **Monomorphization for the type-parameter-receiver bucket**: thread `carriedBinding` so a type-param
+   receiver narrows when a concrete arg is in scope, else CHA-cone-over-constraint (disclosed via #1).
+   Gated on #1 showing this bucket is worth it. Playground: the `SaveServices<T>` shape; big-boy: fan reduction.
+3. **Materialized unified narrowed graph** (forward ≡ reverse, `O(E)` reverse). Last; gated on narrowing being
+   a pure edge function. Residual only shrinks further if a real type-flow (VTA) pass replaces CHA at the
+   remaining type-parameter receivers.
+
+### Hard constraints
+- **Playground → green → big-boy → iterate**, unit-test coverage required (mirror `ReverseReceiverNarrowingTests`
+  / `OneHopDispatchTests` synthetic-`FactGraphData` style).
+- **Unresolved generic → CHA cone, NEVER dead** (soundness; disclose, don't drop).
+- **Disclose + classify every fallback**; a high-fan actionable fallback is a hypothesis that a rule or EP def
+  is incomplete.
+
+---
+
 ## Detector: `static_init_capture` — config/mutable value frozen in a static field initializer (NEW, corpus GI-862)
 
 **Status:** proposed · **Family:** staleness/cache-coherence (sibling to FR-7) · **Found:** 2026-06-24 (MedDBase GI-862 RCA)
