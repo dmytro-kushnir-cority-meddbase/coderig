@@ -163,4 +163,28 @@ The 4 remaining confirmed EPs: `Contact/Edit.Delete` (the real, guarded contact-
 receivers (`LoginEntity` in ChambersDb, `PathwayTaskStateAppointmentEntity` in Pathways) are first-party but
 their `Delete` overrides are **cross-assembly** and absent from the external `EntityBase.Delete` mined dispatch
 target set (all 49 are `MedDBase.DataAccessTier`), so receiver-narrowing finds no in-scope target and falls
-back to full CHA. #3 (cross-assembly receiver narrowing) is the remaining hard, deferred gap.
+back to full CHA.
+
+### Mechanism #3 (inherited-receiver no-fan) — shipped 2026-06-24 (query-side, one line)
+
+The "cross-asm override not mined" framing was **wrong** (verified): `LoginEntity` / `PathwayTaskStateAppointmentEntity`
+**genuinely have no first-party `Delete` override** — no symbol, no dispatch fact; they *inherit* the external
+`EntityBase.Delete`. The real bug was the narrowing fallback in `FactPathFinder.NarrowByReceiver`: for a
+**reliable** receiver (past the `narrowRoot is null` guard) whose candidate overrides are all on *sibling*
+branches (empty `subtree` **and** empty `ancestors`), it returned the **full candidate set** (CHA) — fanning
+`login.Delete()` to all ~49 entity `Delete` overrides incl. `ContactEntity.Delete`.
+
+**Fix:** return **empty** there instead. `narrowRoot` resolving guarantees the receiver→declaring-type
+base-edge chain is intact — the *same* closure the override scan (`Descendants(declaringType)`) walked — so an
+empty in-scope set means the receiver has **no first-party override on its line**: it runs the inherited impl,
+which is reached via the **direct call edge** (separate from the override fan). So the sibling fan is spurious;
+dropping it loses no real reach (an inherited *first-party* base impl is kept via the direct edge; an external
+base inherits to a boundary). Unreliable base/interface receivers (`narrowRoot is null`) early-return and are
+untouched. **Query-side — no re-index.**
+
+Result on the store: `callers ContactEntity.RemovePersonContactLinks --entrypoints` **4 → 1** (only the real,
+guarded `Contact/Edit.Delete`; `Import`/`ImportInstances`/`AppointmentSync` phantoms dropped). No recall
+regression: `cache_coherence` 4-high stable, EPs 9936 / effects 183707 unchanged, full suite 608 green. The raw
+reverse closure is unaffected (this is a forward-narrowing fix; `--entrypoints` is forward-verified) — the
+remaining reverse-only bloat is the reverse-gate first-reach follow-up + the `ReverseDispatchReaches`
+`AnyUnreliable` lever. Tests: `InheritedReceiverNoFanTests`.

@@ -814,7 +814,17 @@ public static partial class FactPathFinder
             .ToList();
         if (ancestors.Count == 0)
         {
-            return targets; // no candidate on the receiver's line at all — suspect binding, keep CHA
+            // No candidate override is on the receiver's line (neither it/a subtype nor an ancestor). We are
+            // past the `narrowRoot is null` guard, so the receiver is a RELIABLE first-party type whose
+            // base-edge chain up to the declaring type is intact (ResolveNarrowRoot proved it) — the same
+            // closure the override scan walked. So "no candidate on the line" means the receiver has NO
+            // first-party override of this member: it runs the INHERITED impl (the declaring base's own — an
+            // external LLBLGen base like EntityBase.Delete, or a first-party base). That inherited impl is
+            // reached via the DIRECT call edge (separate from this override fan), so returning EMPTY here
+            // drops only the spurious sibling-override fan, not a real target. (Was: fall back to full CHA,
+            // which fanned e.g. `login.Delete()` to all ~49 entity Delete overrides — see
+            // docs/bug-callers-reverse-overreach.md mechanism #3.)
+            return NoTargets;
         }
 
         // Among ancestor overrides, keep only the NEAREST to the receiver: one with no other ancestor
