@@ -148,3 +148,19 @@ either treat a base node reached *via-dispatch* vs *via-direct* as distinct BFS 
 or have reverse override-dispatch yield the base's **virtual** callers DIRECTLY (excluding non-virtual
 `base.M()` callers), bypassing the shared base node. This is essentially the documented hard part of fix #1
 (symmetric path-precise reverse narrowing).
+
+### Mechanism #2 (method-group receiver) — shipped 2026-06-24
+
+`FactExtractor.ReceiverTypeOf` now runs for `RefKinds.MethodGroup` too, so a `Retry(cert.Delete)`-style
+method group carries its receiver (`CertificateEntity`) and dispatch narrows it instead of CHA-fanning ×49.
+(Static-class qualifiers capture their type harmlessly — no overrides to fan; a bare implicit-`this` method
+group still gets null, a minor accepted gap.) Result on the store: `callers
+ContactEntity.RemovePersonContactLinks --entrypoints` went **5 → 4 confirmed** — `CertificateTransactions.Inbox`
+(a method-group phantom) is gone (`rig path … = No path`); `cache_coherence` 4-high stable, no regression.
+
+The 4 remaining confirmed EPs: `Contact/Edit.Delete` (the real, guarded contact-delete) + `Import.Inbox` /
+`ImportInstances.Inbox` / `AppointmentSync.Inbox` — the latter three are **mechanism #3**: their delete
+receivers (`LoginEntity` in ChambersDb, `PathwayTaskStateAppointmentEntity` in Pathways) are first-party but
+their `Delete` overrides are **cross-assembly** and absent from the external `EntityBase.Delete` mined dispatch
+target set (all 49 are `MedDBase.DataAccessTier`), so receiver-narrowing finds no in-scope target and falls
+back to full CHA. #3 (cross-assembly receiver narrowing) is the remaining hard, deferred gap.

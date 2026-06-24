@@ -141,7 +141,14 @@ internal static class FactExtractor
             }
 
             var invocation = refKind == RefKinds.Invocation ? InvocationOf(name) : null;
-            var receiverType = refKind == RefKinds.Invocation ? ReceiverTypeOf(name, model, symbolCache) : null;
+            // Capture the receiver for INVOCATIONS and METHOD GROUPS alike. A method group `x.M` (e.g.
+            // `Retry(cert.Delete)`, `evt += handler.OnX`) binds a delegate to receiver `x`; recording `x`'s
+            // type lets dispatch narrow the (deferred) call to `x`'s override instead of the full CHA fan,
+            // same as an invocation. A static-class qualifier (`Type.M`) captures the declaring type too, but
+            // it is INERT — a static method has no overrides, so dispatch never fans it. A bare implicit-`this`
+            // method group gets null (it isn't an invocation, so the implicit-`this` arm doesn't fire) — a
+            // minor, accepted gap.
+            var receiverType = refKind is RefKinds.Invocation or RefKinds.MethodGroup ? ReceiverTypeOf(name, model, symbolCache) : null;
             var (firstArgTemplate, firstArgType, firstArgName) = FirstArgumentOf(
                 FirstArgumentExpressionOf(name, refKind, invocation),
                 model,
