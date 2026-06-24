@@ -2,10 +2,9 @@ using Rig.Domain.Data;
 
 namespace Rig.Analysis.Rules;
 
-// Projects the merged `cacheCoherence` rule section to the domain FactCacheCoherenceRule the
-// FactCacheCoherenceDeriver consumes (FR-7). A SINGLE object, not a list: null when the section is absent or
-// empty (no cached entities AND no bulk-write methods AND no invalidation methods). Mirrors
-// FactRedirectRuleProvider.
+// Projects the merged `cacheCoherence` rule section to the domain FactCacheCoherenceRule the cache-coherence
+// correlation INSTANCE consumes (FR-7). A SINGLE object, not a list: null when the section is absent or empty
+// (no cachedEntities AND no excludeEnclosingNamespaceSuffix). Mirrors FactRedirectRuleProvider.
 internal static class FactCacheCoherenceRuleProvider
 {
     internal static FactCacheCoherenceRule? Project(AnalysisRulesDocument doc)
@@ -17,17 +16,12 @@ internal static class FactCacheCoherenceRuleProvider
         }
 
         var cachedEntities = rule.CachedEntities ?? [];
-        var bulkWriteMethods = rule.BulkWriteMethods ?? [];
-        var invalidationMethods = rule.InvalidationMethods ?? [];
-        if (cachedEntities.Count == 0 && bulkWriteMethods.Count == 0 && invalidationMethods.Count == 0)
+        var excludeEnclosingNamespaceSuffix = rule.ExcludeEnclosingNamespaceSuffix;
+        if (cachedEntities.Count == 0 && (excludeEnclosingNamespaceSuffix is null || excludeEnclosingNamespaceSuffix.Count == 0))
         {
             return null;
         }
 
-        return new FactCacheCoherenceRule(
-            CachedEntities: cachedEntities,
-            BulkWriteMethods: bulkWriteMethods,
-            InvalidationMethods: invalidationMethods
-        );
+        return new FactCacheCoherenceRule(CachedEntities: cachedEntities, ExcludeEnclosingNamespaceSuffix: excludeEnclosingNamespaceSuffix);
     }
 }

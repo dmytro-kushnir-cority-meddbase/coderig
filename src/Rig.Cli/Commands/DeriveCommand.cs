@@ -154,6 +154,10 @@ internal static class DeriveCommand
             useCache: true,
             epData: epData // #1b: reuse the EP data loaded above; skip the redundant load on a cache miss.
         );
+        // cache_coherence (below) MUST see the PRE-filter effects: --exclude cache would otherwise hide the
+        // cache:invalidate companions and manufacture false missing-invalidation findings. Capture the
+        // unfiltered list before --only/--exclude is applied, and feed THAT to the correlation deriver.
+        var unfilteredEffects = effects;
         effects = ApplyEffectFilters(effects: effects, only: opts.Only, exclude: opts.Exclude); // --only / --exclude (e.g. --exclude throw)
 
         // --- event_cycle (the GRAPH-tier hazard): a feedback cycle that closes through ≥1 publish→consumer
@@ -165,17 +169,26 @@ internal static class DeriveCommand
         //     exactly the cycles the materialized call_edges carry. ---
         var cycleFindings = EventCycleFindings(FactCycleDeriver.DeriveEventCycles(shapedGraph));
 
-        // --- cache_coherence (FR-7, another GRAPH-tier hazard): a BULK/collection write to a cached entity whose
-        //     forward closure has NO reachable invalidation of that entity's cache. Like event_cycle it is a
-        //     property of the call graph (NOT effect-attached), derived here over the shaped graph and added as a
-        //     hazard source. Opt-in: only when the `cacheCoherence` rule section is present. ---
+        // --- cache_coherence (FR-7): the cache-specific INSTANCE of the GENERIC effect-correlation deriver. An
+        //     ANCHOR effect (llblgen:bulk_write to a collection of a cached entity) whose forward closure lacks a
+        //     same-key COMPANION (cache:invalidate of that entity) is flagged. Like event_cycle it is a property of
+        //     the call graph (NOT effect-attached), derived here and added as a hazard source. Opt-in: only when the
+        //     `cacheCoherence` rule section is present. The provider:op names + normalize suffixes below are the
+        //     LLBLGen-shaped instance definition — hardcoded here with the intent that they move to rule data once
+        //     a correlation DSL lands; only the POLICY (cached entities + the noise filter) is rule data today. ---
         var cacheCoherenceFindings = rules.CacheCoherence is { } cc
             ? CacheCoherenceFindings(
-                FactCacheCoherenceDeriver.DeriveCacheCoherence(
+                FactCorrelationDeriver.Derive(
                     graph: shapedGraph,
-                    cachedEntities: new HashSet<string>(cc.CachedEntities, StringComparer.Ordinal),
-                    bulkWriteMethods: cc.BulkWriteMethods,
-                    invalidationMethods: cc.InvalidationMethods
+                    effects: unfilteredEffects,
+                    spec: new CorrelationSpec(
+                        Anchor: new EffectPredicate("llblgen", "bulk_write"),
+                        Companion: new EffectPredicate("cache", "invalidate"),
+                        AnchorNormalize: new NormalizeSpec(SimpleTypeName: true, StripSuffix: ["EntityCollection", "Collection", "DAO"]),
+                        CompanionNormalize: new NormalizeSpec(SimpleTypeName: true, StripSuffix: ["Cache"]),
+                        ExcludeEnclosingNamespaceSuffix: cc.ExcludeEnclosingNamespaceSuffix ?? ["CollectionClasses", "DaoClasses"],
+                        InScopeKeys: BuildCacheInScopeKeys(cachedEntities: cc.CachedEntities, effects: unfilteredEffects)
+                    )
                 )
             )
             : [];
@@ -404,25 +417,25 @@ internal static class DeriveCommand
         return findings;
     }
 
-    // Map each graph-tier cache_coherence finding (FR-7) into a HazardFinding so it flows through the SAME
+    // Map each cache_coherence correlation finding (FR-7) into a HazardFinding so it flows through the SAME
     // Hazards view + tsv split as the other sources. Like event_cycle it is NOT effect-attached, so it has no
-    // owning effect: the SITE is the bulk-write's enclosing Method / FilePath / Line. Context is the cached
-    // entity whose cache may go stale; Detail is empty (the entity is the whole signal). Pure + internal so the
-    // mapping is unit-testable without a store.
-    internal static IReadOnlyList<HazardFinding> CacheCoherenceFindings(IReadOnlyList<CacheCoherenceFinding> findings)
+    // owning effect: the SITE is the anchor (bulk-write) enclosing Method / FilePath / Line. Context is the
+    // normalized resource key (the cached entity whose cache may go stale); Detail is empty (the entity is the
+    // whole signal). Confidence rides from the finding's Certainty token: a DECLARED-contract entity is "high",
+    // an entity merely inferred from cache reads is "medium", and an untiered finding defaults to "medium" (it
+    // reads as "verify", like the other inferred hazards). Pure + internal so the mapping is unit-testable
+    // without a store.
+    internal static IReadOnlyList<HazardFinding> CacheCoherenceFindings(IReadOnlyList<CorrelationFinding> findings)
     {
         var mapped = new List<HazardFinding>(findings.Count);
         foreach (var f in findings)
         {
             mapped.Add(
                 new HazardFinding(
-                    Type: FactCacheCoherenceDeriver.CacheCoherenceType,
-                    // Candidate, not certain: entity↔cache pairing is a NAME heuristic and v1 reach is
-                    // forward-from-the-write-site + depth-capped (a sibling/deep invalidation can be missed).
-                    // Disclosed as medium so it reads as "verify", like the other inferred hazards.
-                    Confidence: "medium",
+                    Type: HazardKinds.CacheCoherence,
+                    Confidence: f.Certainty ?? "medium",
                     Reason: "bulk_write_without_cache_invalidation",
-                    Context: f.Entity,
+                    Context: f.ResourceKey,
                     Detail: "",
                     Enclosing: f.Method,
                     FilePath: f.FilePath,
@@ -432,6 +445,52 @@ internal static class DeriveCommand
         }
 
         return mapped;
+    }
+
+    // Build the tiered in-scope key map for the cache_coherence correlation instance: resource key -> certainty
+    // token. Two sources, declared wins on overlap:
+    //   * MEDIUM tier (DISCOVERY): every entity that the code READS from its cache (entity_cache:read effect),
+    //     normalized to its simple entity name (strip a trailing "Entity"). Keyed off READS — NOT off the
+    //     companion (invalidation) — on purpose: if an accidental merge deletes every cache bust, the reads
+    //     remain, so the entity stays in scope and the missing-invalidation still flags. Keying off the
+    //     companion would self-silence the detector exactly when the bug is worst.
+    //   * HIGH tier (DECLARED CONTRACT): every entity named in the rule's `cachedEntities`. This is the
+    //     intentional invariant ("X is cached and MUST be invalidated"); declared overwrites a discovered key.
+    internal static IReadOnlyDictionary<string, string> BuildCacheInScopeKeys(
+        IReadOnlyList<string> cachedEntities,
+        IReadOnlyList<DerivedEffect> effects
+    )
+    {
+        var keys = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        // entity_cache:read resolves to a MIX on the real store: "AccountCache" (the *Cache.New rule,
+        // resource:receiver_type) AND "Account" (the generic Entity.New<T> factory, resource:type_argument).
+        // Strip BOTH "Cache" and "Entity" so either form lands on the bare entity name ("Account"), aligning
+        // with the anchor key (from "AccountEntityCollection") and the companion key (from "AccountCache").
+        var readNormalize = new NormalizeSpec(SimpleTypeName: true, StripSuffix: ["Cache", "Entity"]);
+        foreach (var e in effects)
+        {
+            if (
+                !string.Equals(e.Provider, "entity_cache", StringComparison.Ordinal)
+                || !string.Equals(e.Operation, "read", StringComparison.Ordinal)
+            )
+            {
+                continue;
+            }
+
+            var key = ResourceKey.Of(e.ResourceType, readNormalize);
+            if (key is not null && !keys.ContainsKey(key))
+            {
+                keys[key] = "medium";
+            }
+        }
+
+        foreach (var entity in cachedEntities)
+        {
+            keys[entity] = "high"; // declared wins on overlap
+        }
+
+        return keys;
     }
 
     // The tsv `hazard` row for one finding (see the column reference in RunAsync): the full per-hazard

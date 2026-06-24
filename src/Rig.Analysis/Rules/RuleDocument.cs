@@ -129,15 +129,15 @@ internal sealed record HandoffDispatcherRule(
 // FactRedirectRule for the Domain RedirectClassifier.
 internal sealed record RedirectRule(string Method, string RedirectTo);
 
-// FR-7 (cache coherence): a BULK/collection write (UpdateMulti / DeleteMulti / …) to a CACHED entity bypasses
-// the per-entity Save that would invalidate that entity's cache, so unless the writing closure ALSO calls an
-// invalidation on the entity's XCache, the cache goes stale. The single `cacheCoherence` section names the
-// cached entities, the bulk-write method names, and the invalidation method names; projected to
-// FactCacheCoherenceRule for the Domain FactCacheCoherenceDeriver. One object, not a list (last-writer-wins).
+// FR-7 (cache coherence), now a cache-specific INSTANCE of the generic effect-correlation deriver. The
+// bulk-write + invalidation method names moved out to ordinary effect rules (llblgen:bulk_write /
+// cache:invalidate); the single `cacheCoherence` section now carries only the POLICY: `cachedEntities` (the
+// DECLARED contract — high-certainty in-scope keys) and an optional `excludeEnclosingNamespaceSuffix`
+// (generated-ORM-noise filter, overriding the wiring default). Projected to FactCacheCoherenceRule. One
+// object, not a list (last-writer-wins).
 internal sealed record CacheCoherenceRule(
     IReadOnlyList<string> CachedEntities,
-    IReadOnlyList<string> BulkWriteMethods,
-    IReadOnlyList<string> InvalidationMethods
+    IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null
 );
 
 // A `rig tree` render rule: a DocID substring `Pattern` + a human `Label`/`Reason` shown in the

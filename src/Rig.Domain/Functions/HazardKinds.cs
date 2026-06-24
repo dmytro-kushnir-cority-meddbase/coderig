@@ -20,6 +20,12 @@ public static class HazardKinds
     public const string NPlusOne = "n_plus_1";
     public const string UnserializablePayload = "unserializable_payload";
 
+    // cache_coherence is the cache-specific INSTANCE of the generic effect-correlation deriver
+    // (FactCorrelationDeriver): a bulk_write anchor whose forward closure lacks a same-key cache:invalidate
+    // companion. It has no single owning deriver class anymore (it is wired in DeriveCommand), so the type
+    // string lives HERE — referenced by both the All set below and the DeriveCommand finding mapping.
+    public const string CacheCoherence = "cache_coherence";
+
     // The closed set of hazard finding types. Membership test for "promote this observation into the Hazards
     // view (and drop it from the generic Observations block)".
     public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
@@ -29,7 +35,7 @@ public static class HazardKinds
         FactHazardDeriver.ThreadLocalContextType,
         FactHazardDeriver.DualWriteType,
         FactCycleDeriver.EventCycleType,
-        FactCacheCoherenceDeriver.CacheCoherenceType,
+        CacheCoherence,
         NPlusOne,
         UnserializablePayload,
     };

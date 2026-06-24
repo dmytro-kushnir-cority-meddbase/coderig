@@ -506,13 +506,15 @@ public sealed record HandoffEntryPoint(
 // RedirectClassifier. The mapping is authored from the decompiled trampoline bodies (offline aid).
 public sealed record FactRedirectRule(string Method, string RedirectTo);
 
-// FR-7 (cache coherence): the cached entities + bulk-write + invalidation method names the
-// FactCacheCoherenceDeriver matches over the call graph. Rule data, not code; projected from the
+// FR-7 (cache coherence), reframed as a cache-specific INSTANCE of the generic effect-correlation deriver
+// (FactCorrelationDeriver). The bulk-write/invalidation METHOD names moved out to ordinary effect rules
+// (llblgen:bulk_write / cache:invalidate); this section now only carries the cache-coherence POLICY: the
+// DECLARED-contract cached entities (high-certainty in-scope keys) and an optional generated-ORM-noise
+// namespace-suffix filter (overriding the wiring default). Rule data, not code; projected from the
 // `cacheCoherence` section by FactCacheCoherenceRuleProvider. A single object (not a list).
 public sealed record FactCacheCoherenceRule(
     IReadOnlyList<string> CachedEntities,
-    IReadOnlyList<string> BulkWriteMethods,
-    IReadOnlyList<string> InvalidationMethods
+    IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null
 );
 
 public sealed record FactHandoffRule(

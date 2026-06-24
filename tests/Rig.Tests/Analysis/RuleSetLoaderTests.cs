@@ -200,8 +200,7 @@ public sealed class RuleSetLoaderTests
             {
               "cacheCoherence": {
                 "cachedEntities": ["Account", "Person"],
-                "bulkWriteMethods": ["UpdateMulti", "DeleteMulti"],
-                "invalidationMethods": ["Clear", "Remove"]
+                "excludeEnclosingNamespaceSuffix": ["CollectionClasses", "DaoClasses"]
               }
             }
             """
@@ -211,8 +210,7 @@ public sealed class RuleSetLoaderTests
 
         cacheCoherence.ShouldNotBeNull();
         cacheCoherence!.CachedEntities.ShouldBe(["Account", "Person"]);
-        cacheCoherence.BulkWriteMethods.ShouldBe(["UpdateMulti", "DeleteMulti"]);
-        cacheCoherence.InvalidationMethods.ShouldBe(["Clear", "Remove"]);
+        cacheCoherence.ExcludeEnclosingNamespaceSuffix.ShouldBe(["CollectionClasses", "DaoClasses"]);
     }
 
     private sealed class TempRulesWorkspace : IDisposable

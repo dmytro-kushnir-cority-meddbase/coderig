@@ -21,8 +21,9 @@ public sealed record RuleSet
     // overload to the virtual hatch it trampolines into, applied at the reference→edge projection.
     public IReadOnlyList<FactRedirectRule> Redirect { get; init; } = [];
 
-    // FR-7 cache-coherence rule data (cached entities + bulk-write + invalidation method names) for the
-    // FactCacheCoherenceDeriver graph hazard. A single object; null when the `cacheCoherence` section is absent.
+    // FR-7 cache-coherence POLICY (declared cached entities + an optional generated-ORM-noise namespace-suffix
+    // filter) for the cache-coherence INSTANCE of the generic effect-correlation deriver (wired in
+    // DeriveCommand). A single object; null when the `cacheCoherence` section is absent.
     public FactCacheCoherenceRule? CacheCoherence { get; init; }
     public IReadOnlyList<FactGenericFactoryRule> Factory { get; init; } = [];
     public IReadOnlyList<FactTraversalCutRule> Cut { get; init; } = [];
