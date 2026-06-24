@@ -813,3 +813,56 @@ fixed per-repo; this is the orthogonal engine half.)
 Recommend #1 (the footer) — it preserves sync semantics and kills the "0 = dead" misread. Touches CallersCommand
 / ReachesCommand rendering + the traversal's handoff-skipped count (already computed at the sync-cut point in
 FactPathFinder.Successors / GraphIndex). Cheap, high-value for the reachability use case.
+
+---
+
+## Monomorphization rework — pending (session 2026-06-24 wrap-up)
+
+The static-monomorphization rework shipped transitive + lambda-closure materialization (real-store
+validated: `DebtorOverride.SaveIncludedServices` 665→38 reach, Haiku-confirmed sound) on a uniform EF load
+path behind the `meta` schema-version gate. Open items:
+
+### Re-enable the SQL reads fast path (binding-aware) — undo the temporary EF-only regression
+`TraversalGraphLoader.SqlFastPathEnabled = false` forces every query through the full-EF-graph load (~22s on
+MedDBase vs ~8s bounded) so the monomorphization seam sees the `reference_facts` type-arg bindings. Re-enable
+the bounded **SQLite recursive-CTE unroll** walk, made BINDING-AWARE: the bounded `call_edges` views drop
+`DeclaringTypeArgBinding`/`MethodTypeArgBinding`, so the SQL path must carry or re-attach them from
+`reference_facts` (a 4c prototype re-attach did NOT deliver the binding to the rendered node — needs a real
+graph-views integration test). **Inline the SQL constants.** Flip `SqlFastPathEnabled` back to true once
+binding-aware. Prereq DONE: the schema gate lets the SQL path trust graph presence via
+`SchemaGate.GraphAvailableAsync` instead of per-table probes.
+
+### Single static SQL connection across the app
+Each query currently opens its own `RigDbContext`/connection. Move to ONE shared (static) SQLite connection
+app-wide — read pragmas + mmap/cache applied once, warm across queries. (User request.)
+
+### forward ≡ reverse on the real store (the architectural prize) + reconcile the 8 parked tests
+Monomorphization gives forward≡reverse by construction for materialized seams, but only FORWARD narrowing is
+validated (665→38). Validate the REVERSE direction (`callers`/`ReachedBy`) over the materialized graph
+matches forward on the real store. **8** reverse-dispatch tests are `[Skip]`-parked (corrects the earlier
+"5" note) — they guard reverse reachability through interface / base-virtual / mined dispatch and currently
+under-narrow (all 8 FAIL un-skipped). Reconcile their assertions to the narrowed truth once forward≡reverse
+is validated — they are the regression net, do NOT drop. Files: `CallersForwardVerificationTests`,
+`CallersForwardVerifiedClosureTests` (×2), `FactPathFinderFanoutTests` (×2), `MinedDispatchTests`,
+`ReachedByAnyTests`, `ReverseInterfaceDispatchTests`.
+
+### Monomorphization FP-calibration before trusting on-by-default
+Validated on ONE EP (DebtorOverride, sound). Broaden: sweep more generic-heavy EPs; confirm no
+over-narrowing; measure clone count + the per-method (50) / total (100k) caps at real-store scale.
+`Reads.MonomorphizeEnabled = true` is hardcoded — decide the real default after calibration.
+
+### Misc rework debt
+- **Re-index MedDBase**: the meta gate rejects the pre-meta store ("re-index") BY DESIGN — re-index to query
+  again and to pick up the full rework.
+- **`<T,U>` label gap**: plain method-generic instantiation labels don't render concrete even on the EF path
+  (`PrettyGenericName` / renderer, separate from narrowing + load-path).
+- **Phase-3 collapse of mono-lambda ids**: verify display-collapse folds `{M}~λN~mono⟨…⟩` on real
+  `tree`/`callers` output (`MonomorphizedNodeId.BaseOf` should handle it; untested on the store).
+- **CallersCommand auxiliary `ReachedBy` sites** (≈203/371/420) left un-collapsed — wrap with
+  `MonomorphCollapse` if `~mono` ids surface through those join paths.
+- **`SchemaVersion.Index`/`.Graph` bump discipline**: the gate is only safe if the C# consts are bumped on a
+  schema-shape change (that's the whole tripwire).
+- **Cleanup**: `StorageProbes` header comment still mentions `ADD COLUMN` (stale post column-probe removal);
+  `TableExistsAsync` now used only by `SchemaMeta` bootstrap + `Writes` assemblies merge-bootstrap.
+- **EntryPointSiteStore** `entry_point_sites_meta` probe kept (rules-hash cache, orthogonal to schema
+  version) — could fold into a rules-hash stamp later.
