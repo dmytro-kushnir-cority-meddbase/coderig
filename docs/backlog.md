@@ -117,17 +117,39 @@ reverse traverse the identical edge set → **forward ≡ reverse by constructio
 precise full-closure reverse is `O(E)` (closes the perf note).
 
 ### Increments (playground-first: synthetic unit tests green → validate on the real store → iterate)
-1. **Dispatch-fan disclosure / diagnostic** (this is also the calibration that orders 2–3, and is pure-additive
-   / zero traversal-behaviour change → low risk). A report over un-narrowed multi-target dispatch sites:
-   per site the mined fan, whether the receiver narrowed it, and the classified cause (absent-receiver /
-   type-parameter-receiver / base-typed-receiver / heuristic-unbound), ranked by fan × edge-count. Playground:
-   synthetic graphs exercising each cause assert correct classification; big-boy: the ranked worklist.
-2. **Monomorphization for the type-parameter-receiver bucket**: thread `carriedBinding` so a type-param
-   receiver narrows when a concrete arg is in scope, else CHA-cone-over-constraint (disclosed via #1).
-   Gated on #1 showing this bucket is worth it. Playground: the `SaveServices<T>` shape; big-boy: fan reduction.
-3. **Materialized unified narrowed graph** (forward ≡ reverse, `O(E)` reverse). Last; gated on narrowing being
-   a pure edge function. Residual only shrinks further if a real type-flow (VTA) pass replaces CHA at the
-   remaining type-parameter receivers.
+1. **Dispatch-fan disclosure / diagnostic** — ✅ **SHIPPED** (`027819ca`, `rig dispatch-fans`). Pure-additive,
+   zero traversal change. Calibration result: 841 un-narrowed hubs / 71 actionable; top irreducible
+   `IGenericServiceProvider.ProvideService``1` (fan 5 × 980 edges — a service-locator seam); top type-parameter
+   actionable `EntityBase.Save` (115 × 11), `EntityBase.Delete` (49 × 8), `Construct``N.New` factories.
+2. **Static monomorphization** (was "increments 2 + 3" — they COLLAPSE; see revision below). The single change
+   that kills the type-parameter over-fan AND delivers forward ≡ reverse + `O(E)` reverse. DESIGN-FIRST.
+
+### Revision (2026-06-24): increments 2 and 3 are the SAME change
+Empirical finding while scoping #2 — the concrete type arg IS already in the facts: the call
+`DebtorOverride.SaveIncludedServices → SaveServices<…>` carries `TypeArguments =
+BillingRule…IncludedEntity,int` (reference_facts), and `NarrowByTypeArguments` already monomorphizes a fan
+against `carriedBinding`. So a query-side "thread carriedBinding" fix LOOKS cheap — but it is **structurally
+defeated**: the forward traversal is NODE-MEMOIZED (`Enqueue` keys `visited` by node id, FactPathFinder.cs),
+while `carriedBinding` is PATH-dependent. `EntityBase.Delete` is a hub reached from thousands of sites, so
+**first-reach-wins**: whichever path hits the hub first expands its dispatch fan with its (usually empty)
+binding and marks the node visited; the binding-carrying path arrives to an already-expanded node. Binding
+narrowing therefore can't fire at exactly the shared hubs that matter. (Same node-memoization-vs-path-dependent
+conflict as the forward/reverse asymmetry.)
+⇒ The only robust fix is to make each instantiation a **distinct node** — STATIC monomorphization (clone the
+instantiated generic body, keyed by its type-arg binding), which IS the materialized-graph change. There is no
+cheap separate query-side increment. 2 ≡ 3.
+
+### Design forks for static monomorphization (decide before building)
+- **(node, binding)-keyed traversal** vs **static body-cloning into distinct nodes.** Keying risks
+  combinatorial blowup; cloning needs an instantiation INVENTORY (which `<T=concrete>` actually occur) and a
+  fuel cap for polymorphic recursion (`F<List<T>>`). Cloning is the principled end-state (pure edge function →
+  forward ≡ reverse); keying is a smaller but leakier step.
+- **Instantiation source**: the per-call-site `TypeArguments` / `MethodTypeArgBinding` already in
+  reference_facts (loaded onto `CallEdge`, Reads.cs) supply the inventory — no re-index needed for v1.
+- **Service-locator bucket is SEPARATE** (`ProvideService``1`, the #1 actionable by blast radius): not a
+  monomorphization case — resolve via the existing `di_registrations` facts (table present in the store) to the
+  registered impl, instead of CHA-fanning. A small targeted build, independent of the monomorphization work.
+- **Bound**: instantiation count cap + CHA-cone fallback on overflow (NEVER dead; disclose via #1).
 
 ### Hard constraints
 - **Playground → green → big-boy → iterate**, unit-test coverage required (mirror `ReverseReceiverNarrowingTests`
