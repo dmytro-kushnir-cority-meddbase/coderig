@@ -275,8 +275,11 @@ internal static class CallersCommand
     )
     {
         // Reverse closure of the target (every method that reaches it) over the SAME shaped graph the caller
-        // loaded — so the rule-detected entry points are intersected with the cut-shaped reach.
-        var reachable = FactPathFinder.ReachedBy(graph, toPattern, maxDepth, mode: mode).Keys.ToHashSet(StringComparer.Ordinal);
+        // loaded — so the rule-detected entry points are intersected with the cut-shaped reach. Keep the
+        // depth-bearing result: the depth-0 entries are the matched TARGET nodes, the forward-verify pass
+        // (below) reaches each candidate EP toward them.
+        var reachedBy = FactPathFinder.ReachedBy(graph, toPattern, maxDepth, mode: mode);
+        var reachable = reachedBy.Keys.ToHashSet(StringComparer.Ordinal);
         if (reachable.Count == 0)
         {
             if (!tsv)
@@ -349,22 +352,58 @@ internal static class CallersCommand
 
             return 1;
         }
-        // --format tsv: one row per touching EP (full path), with the loaded + capability-active services.
-        // Columns: kind, route, file, line, requires, loadedServices, activeServices (comma-joined).
+        // FORWARD-VERIFY each candidate EP against the SAME graph (recall-safe partition, NOT a drop).
+        // Reverse reachability is set-based BFS, so once a shared base/interface virtual node enters the
+        // reverse closure ALL its callers rejoin — including callers whose FORWARD (receiver-narrowed)
+        // dispatch resolves to a DIFFERENT sibling override, never the target's (the documented "reverse
+        // narrowing is dispatch-hop-precise, not path-precise" limitation). For each candidate EP we
+        // forward-reach its handler-method nodes (the graph.Methods declared at the EP's (file,line)) and
+        // keep it as CONFIRMED iff one of them forward-reaches a matched target node; the rest are listed
+        // under a caveat (reverse-only) rather than dropped — a forward reach can legitimately miss an
+        // interface-dispatch/lambda-only reach, so dropping would risk a false negative.
+        var targetIds = reachedBy.Where(kv => kv.Value == 0).Select(kv => kv.Key).ToHashSet(StringComparer.Ordinal);
+        // (FilePath,Line) -> the method symbol ids declared there, inverting the same graph.Methods set
+        // reachableSites was built from — the candidate EP's handler nodes to seed the forward reach with.
+        var methodsBySite = new Dictionary<(string, int), List<string>>();
+        foreach (var m in graph.Methods)
+        {
+            var key = (m.FilePath, m.Line);
+            if (!methodsBySite.TryGetValue(key, out var ids))
+            {
+                ids = new List<string>();
+                methodsBySite[key] = ids;
+            }
+
+            ids.Add(m.SymbolId);
+        }
+
+        var seedGroups = touching
+            .Select(e => (IReadOnlyList<string>)(methodsBySite.TryGetValue((e.FilePath, e.Line), out var ids) ? ids : []))
+            .ToList();
+        var confirmedFlags = FactPathFinder.SeedsReachTarget(graph, seedGroups, targetIds, maxDepth, mode);
+        var confirmed = touching.Where((_, i) => confirmedFlags[i]).ToList();
+        var reverseOnly = touching.Where((_, i) => !confirmedFlags[i]).ToList();
+
+        // --format tsv: one row per touching EP (full path), with the loaded + capability-active services
+        // plus a trailing forwardConfirmed flag (ADDITIVE column — existing columns are unchanged). ALL
+        // touching EPs are emitted (confirmed + reverse-only) so TSV consumers can filter on the flag.
+        // Columns: kind, route, file, line, requires, loadedServices, activeServices, forwardConfirmed.
         if (tsv)
         {
-            foreach (var e in touching)
+            for (var i = 0; i < touching.Count; i++)
             {
+                var e = touching[i];
                 var loaded = deployments.ServicesForFile(e.FilePath);
                 var active = deployments.ActiveServices(loadedServices: loaded, requires: e.Requires);
                 output.WriteLine(
-                    $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}"
+                    $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}\t{(confirmedFlags[i] ? "true" : "false")}"
                 );
             }
             return 0;
         }
+        // Headline count is the PRECISE answer — confirmed (forward-verified) EPs only.
         output.WriteLine(
-            $"Rule-detected entry points reaching '{toPattern}': {touching.Count}"
+            $"Rule-detected entry points reaching '{toPattern}': {confirmed.Count}"
                 + mode switch
                 {
                     FactPathFinder.TraversalMode.AsyncExact => "  (--async: incl. scheduled paths; delivery fan-out excluded)",
@@ -372,7 +411,7 @@ internal static class CallersCommand
                     _ => "",
                 }
         );
-        foreach (var kindGroup in touching.GroupBy(e => e.Kind, StringComparer.Ordinal).OrderByDescending(g => g.Count()))
+        foreach (var kindGroup in confirmed.GroupBy(e => e.Kind, StringComparer.Ordinal).OrderByDescending(g => g.Count()))
         {
             output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup)
@@ -380,9 +419,24 @@ internal static class CallersCommand
                 WriteEntryPointLine(output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
             }
         }
+        // Reverse-only: in the reverse closure but no forward path found — list under a caveat instead of
+        // dropping (preserves recall against the forward/reverse dispatch asymmetry).
+        if (reverseOnly.Count > 0)
+        {
+            output.WriteLine($"Reverse-only (no forward path found — confirm with `rig path`): {reverseOnly.Count}");
+            foreach (var kindGroup in reverseOnly.GroupBy(e => e.Kind, StringComparer.Ordinal).OrderByDescending(g => g.Count()))
+            {
+                output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
+                foreach (var e in kindGroup)
+                {
+                    WriteEntryPointLine(output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
+                }
+            }
+        }
+        // The service summary reflects the precise answer (confirmed EPs).
         if (!deployments.IsEmpty)
         {
-            WriteServiceSummary(touching.Select(t => (t.Kind, (string?)t.FilePath, t.Requires)), deployments, output);
+            WriteServiceSummary(confirmed.Select(t => (t.Kind, (string?)t.FilePath, t.Requires)), deployments, output);
         }
 
         return 0;

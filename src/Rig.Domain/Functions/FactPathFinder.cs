@@ -266,6 +266,63 @@ public static partial class FactPathFinder
         return results;
     }
 
+    // Forward-VERIFY a set of candidate seed GROUPS against a target id set: for each group, true iff ANY
+    // seed in that group forward-reaches ANY id in `targetIds` (one-hop narrowed dispatch, same engine as
+    // `rig impact`). Backs `rig callers --entrypoints` forward-confirmation: reverse reachability is set-
+    // based BFS, so a shared base/interface virtual node pulls in ALL its callers — including callers whose
+    // FORWARD (receiver-narrowed) dispatch resolves to a DIFFERENT sibling override, never the target's.
+    // This pass re-checks each emitted EP's handler methods FORWARD (where narrowDispatch prunes the sibling
+    // override) and partitions confirmed vs reverse-only — recall-safe, since narrowing never drops a real
+    // target. Implemented by flattening the groups to DISTINCT seeds, reusing ReachesFromEachSeed (one shared
+    // index, parallel per-seed), then OR-reducing each group's seeds' reach sets against targetIds. The
+    // returned bool[] is aligned to `seedGroups` order.
+    public static bool[] SeedsReachTarget(
+        FactGraphData graph,
+        IReadOnlyList<IReadOnlyList<string>> seedGroups,
+        IReadOnlyCollection<string> targetIds,
+        int maxDepth,
+        TraversalMode mode
+    )
+    {
+        var targets = targetIds as HashSet<string> ?? new HashSet<string>(targetIds, StringComparer.Ordinal);
+        // Distinct seed ids across all groups — reach each once, then index back per group.
+        var distinct = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var group in seedGroups)
+        foreach (var seed in group)
+        {
+            if (seen.Add(seed))
+            {
+                distinct.Add(seed);
+            }
+        }
+
+        var reachSets = ReachesFromEachSeed(graph, distinct, maxDepth, maxNodes: 20000, narrowDispatch: true, mode: mode);
+        var reachOf = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        for (var i = 0; i < distinct.Count; i++)
+        {
+            reachOf[distinct[i]] = reachSets[i];
+        }
+
+        var result = new bool[seedGroups.Count];
+        for (var g = 0; g < seedGroups.Count; g++)
+        {
+            var confirmed = false;
+            foreach (var seed in seedGroups[g])
+            {
+                if (reachOf.TryGetValue(seed, out var reach) && reach.Overlaps(targets))
+                {
+                    confirmed = true;
+                    break;
+                }
+            }
+
+            result[g] = confirmed;
+        }
+
+        return result;
+    }
+
     // Exact-id forward reach from EACH seed independently, returning the FULL per-node ReachInfo per seed
     // (NOT just the reachable-node set, as ReachesFromEachSeed does). Same index/dispatch semantics; the
     // extra payload is the loop context (NearestLoopKind) and depth/dispatch tags already computed by the
