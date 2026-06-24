@@ -34,6 +34,11 @@ internal static class CallersCommand
             Description =
                 "Precise: rule-detected entry points only (same set as `rig derive`). Subset of --roots; may miss test/bench or unbound-interface origins.",
         };
+        var includeReverseOnly = new Option<bool>("--include-reverse-only")
+        {
+            Description =
+                "With --entrypoints: also LIST the reverse-only entry points (a reverse-dispatch over-approximation with no forward path). Default lists only forward-confirmed hits + a count footer.",
+        };
         var async = CommonOptions.Async();
         var includeDelivery = CommonOptions.IncludeDelivery();
         var raw = CommonOptions.Raw();
@@ -47,6 +52,7 @@ internal static class CallersCommand
             to,
             orphans,
             entrypoints,
+            includeReverseOnly,
             async,
             includeDelivery,
             raw,
@@ -74,6 +80,7 @@ internal static class CallersCommand
                             ToPattern: pr.GetValue(to)!,
                             RootsOnly: pr.GetValue(orphans),
                             EntrypointsOnly: pr.GetValue(entrypoints),
+                            IncludeReverseOnly: pr.GetValue(includeReverseOnly),
                             Async: pr.GetValue(async),
                             IncludeDelivery: pr.GetValue(includeDelivery),
                             Raw: pr.GetValue(raw),
@@ -95,6 +102,7 @@ internal static class CallersCommand
         string ToPattern,
         bool RootsOnly,
         bool EntrypointsOnly,
+        bool IncludeReverseOnly,
         bool Async,
         bool IncludeDelivery,
         bool Raw,
@@ -149,6 +157,7 @@ internal static class CallersCommand
                 io.WorkingDirectory,
                 tsv,
                 io.Output,
+                opts.IncludeReverseOnly,
                 epDeployments
             );
         }
@@ -271,6 +280,7 @@ internal static class CallersCommand
         string workingDirectory,
         bool tsv,
         TextWriter output,
+        bool includeReverseOnly = false,
         DeploymentMap? deployments = null
     )
     {
@@ -419,9 +429,11 @@ internal static class CallersCommand
                 WriteEntryPointLine(output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
             }
         }
-        // Reverse-only: in the reverse closure but no forward path found — list under a caveat instead of
-        // dropping (preserves recall against the forward/reverse dispatch asymmetry).
-        if (reverseOnly.Count > 0)
+        // Reverse-only = in the reverse closure but with NO forward path: a reverse-dispatch over-approximation
+        // (a shared base/interface seam — e.g. EntityBase.Delete — pulls in every caller of ANY override, which
+        // can dwarf the real answer by 100s–1000s). By DEFAULT we DON'T list these; we always print a count
+        // footer with how to reveal them. `--include-reverse-only` lists them under a caveat (recall escape hatch).
+        if (includeReverseOnly && reverseOnly.Count > 0)
         {
             output.WriteLine($"Reverse-only (no forward path found — confirm with `rig path`): {reverseOnly.Count}");
             foreach (var kindGroup in reverseOnly.GroupBy(e => e.Kind, StringComparer.Ordinal).OrderByDescending(g => g.Count()))
@@ -432,6 +444,16 @@ internal static class CallersCommand
                     WriteEntryPointLine(output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
                 }
             }
+        }
+        else if (reverseOnly.Count > 0)
+        {
+            output.WriteLine(
+                $"{Indent.L1}… +{reverseOnly.Count} reverse-only entry point(s) reach this via reverse-dispatch over-approximation (no forward path) — list with --include-reverse-only; confirm any with `rig path <entry-point> {toPattern}`."
+            );
+        }
+        else
+        {
+            output.WriteLine($"{Indent.L1}(all reachable entry points are forward-confirmed)");
         }
         // The service summary reflects the precise answer (confirmed EPs).
         if (!deployments.IsEmpty)
