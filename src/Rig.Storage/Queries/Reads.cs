@@ -463,31 +463,29 @@ public static class Reads
         return map;
     }
 
+    // Static-monomorphization toggle, HARDCODED (no env var) — mirrors TraversalGraphLoader.SqlFastPathEnabled.
+    // ON during the monomorphization rework: the SQL fast path is hardcoded OFF so every load goes through the
+    // EF path that carries the reference_facts type-arg bindings, and materialization is currently observably a
+    // NO-OP (v1 narrows nothing real yet — the real fans are lambda-enclosed / redirected), so on-by-default
+    // just exercises the materialize path on every query. Flip to false to disable. (Design constraint
+    // "no on-by-default until FP-calibrated" still holds for RELEASE — this is the dev-phase toggle.)
+    private static readonly bool MonomorphizeEnabled = true;
+
     // The SINGLE static-monomorphization flag read (Phase 4): returns the symbol-signature map (the
-    // type-param-name source) when the `RIG_MONOMORPHIZE` env var is set to a truthy value, else NULL.
-    // NULL is the OFF path — ShapeGraph then materializes nothing and stays byte-identical to today; the DB
-    // query is only issued when the flag is on (zero overhead when off). The loader passes the result
-    // straight into ShapeGraph's `monomorphizeSignatures` parameter.
+    // type-param-name source) when MonomorphizeEnabled, else NULL. NULL is the OFF path — ShapeGraph then
+    // materializes nothing and stays byte-identical; the DB query is only issued when on (zero overhead off).
+    // The loader passes the result straight into ShapeGraph's `monomorphizeSignatures` parameter.
     public static async Task<IReadOnlyDictionary<string, string>?> LoadMonomorphizationSignaturesAsync(
         RigDbContext context,
         CancellationToken cancellationToken = default
     )
     {
-        if (!IsMonomorphizeFlagOn())
+        if (!MonomorphizeEnabled)
         {
             return null;
         }
 
         return await LoadSymbolSignaturesAsync(context, cancellationToken);
-    }
-
-    // Truthy parse of the RIG_MONOMORPHIZE env var: "1" or "true" (case-insensitive) => ON; null / empty /
-    // anything else => OFF (default). Kept a tiny private helper so the gate is unambiguous and single-sourced.
-    private static bool IsMonomorphizeFlagOn()
-    {
-        var value = Environment.GetEnvironmentVariable("RIG_MONOMORPHIZE");
-        return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
     }
 
     // The FULLY in-memory-shaped graph: handoff-classified load → ShapeGraph (factory rewrite +

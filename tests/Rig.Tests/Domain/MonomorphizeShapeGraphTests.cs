@@ -147,17 +147,18 @@ public sealed class MonomorphizeShapeGraphTests(AnalyzedPlaygrounds playgrounds)
         signatures.Keys.ShouldContain(k => k.StartsWith("M:", StringComparison.Ordinal) || k.StartsWith("T:", StringComparison.Ordinal));
     }
 
-    // LoadMonomorphizationSignaturesAsync returns NULL when RIG_MONOMORPHIZE is unset — the default-OFF
-    // guarantee (no DB query, no materialization). The env var is unset in the test process.
+    // LoadMonomorphizationSignaturesAsync returns the symbol-signature map when monomorphization is enabled
+    // (Reads.MonomorphizeEnabled is hardcoded on for the rework — the toggle replaced the RIG_MONOMORPHIZE env
+    // var). When flipped off it returns null (no DB query, no materialization); that OFF path is covered by the
+    // ShapeGraph `monomorphizeSignatures: null` seam tests above.
     [Test]
-    public async Task LoadMonomorphizationSignatures_is_null_when_flag_unset()
+    public async Task LoadMonomorphizationSignatures_returns_signatures_when_enabled()
     {
-        Environment.GetEnvironmentVariable("RIG_MONOMORPHIZE").ShouldBeNullOrEmpty();
-
         var playground = await playgrounds.LegacyNet48Async();
         var monoSigs = await LoadFromStoreAsync(playground.Result, context => Reads.LoadMonomorphizationSignaturesAsync(context));
 
-        monoSigs.ShouldBeNull();
+        monoSigs.ShouldNotBeNull();
+        monoSigs!.ShouldNotBeEmpty();
     }
 
     private static async Task<T> LoadFromStoreAsync<T>(AnalysisResult result, Func<RigDbContext, Task<T>> load)

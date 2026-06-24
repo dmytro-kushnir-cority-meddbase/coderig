@@ -13,6 +13,16 @@ namespace Rig.Cli.Graph;
 // thus walk the identical shaped graph.
 internal static class TraversalGraphLoader
 {
+    // SQL FAST PATH HARDCODED OFF (2026-06-24, monomorphization rework): the bounded `call_edges` views
+    // drop the reference_facts type-arg bindings (DeclaringTypeArgBinding/MethodTypeArgBinding), so the
+    // monomorphization seam in ShapeGraph sees no bindings on the SQL path and materializes nothing. Route
+    // every traversal/effect-reach load through the EF path (Reads.LoadFactGraphAsync /
+    // LoadReachInputsFromRowsAsync), which projects those bindings onto CallEdge — so materialization has
+    // the data UNIFORMLY. Correctness/uniformity first; the SqlReachability code is kept intact to
+    // RE-OPTIMIZE later (make the views binding-aware), at which point flip this back to true.
+    // (static readonly, not const, so the disabled SQL branches don't trip unreachable-code warnings.)
+    private static readonly bool SqlFastPathEnabled = false;
+
     // Every query command opens the store READ-ONLY (see RigDbContext.readOnly): the engine rejects any
     // write to the main DB, so a read command can never mutate the index. Writers (index/mine/graph) use
     // the default read-write constructor.
@@ -44,7 +54,7 @@ internal static class TraversalGraphLoader
         // SQL path: call_edges already carry the persisted handoff classification (from `rig graph`),
         // so the bounded graph is classified by construction. EF fallback: classify the loaded graph
         // with the rules so the in-memory traversal sees the same handoff edges.
-        if (await SqlReachability.HasGraphAsync(context))
+        if (SqlFastPathEnabled && await SqlReachability.HasGraphAsync(context))
         {
             return await SqlReachability.LoadBoundedGraphAsync(context, pattern, direction);
         }
@@ -83,7 +93,7 @@ internal static class TraversalGraphLoader
         RuleSet rules
     )
     {
-        var inputs = await SqlReachability.HasGraphAsync(context)
+        var inputs = SqlFastPathEnabled && await SqlReachability.HasGraphAsync(context)
             ? await SqlReachability.LoadReachInputsAsync(context, pattern, direction)
             : await LoadReachInputsFromRowsAsync(context, rules.Handoff, rules.Redirect);
 
