@@ -154,6 +154,44 @@ the flag stays OFF and the 5 parked reverse-dispatch tests (backlog.md) are NOT 
    MutableNode → TraceNode → renderer` is confirmed intact, so the gap is purely the bounded-path delivery.
    (A concrete generic LABEL on the SQL path is the cheapest proof-of-life; `derive`/EF-path tests won't catch it.)
 
+## Revised plan (2026-06-24, session 2) — full template monomorphization from roots
+
+The v1 framing (DIRECT concrete binding on the immediate edge into a generic; clone IMMEDIATE body edges)
+was a scoping error — it under-captured the actual intent. The target is a **deferred-template / RTA-style**
+materialization: propagate concrete type-args **TRANSITIVELY from roots** down the whole call chain (and
+INTO lambda sub-nodes), materializing every reachable instantiation — as close to what Roslyn/the CLR
+reify at runtime as static analysis allows. The real fans (calibration finding #1) live exactly where v1
+doesn't reach: a type-param receiver inside a lambda, bound by the enclosing method's caller N hops up
+(canonical real instance: `ExternalId.cs:132/143`, `e.Save()` / `entity.Save()` inside `.Select(…)` lambdas
+in a generic method). So:
+
+- **Transitive binding flow**: an instantiation `M<C>` whose body calls `N<…C…>` (or forwards `C` to a
+  lambda) enqueues `N`'s instantiation with the propagated binding — the fixpoint the design always
+  described, now actually required (not the deferred "later refinement").
+- **Lambda propagation**: a generic method's lambda sub-nodes inherit the instantiation, so a type-param
+  receiver inside a lambda substitutes too.
+- **CHA is the explicit, FLAGGED backup** — not the silent default. Where no static instantiation exists
+  (truly-generic methods bound by reflection / `MakeGenericType`, runtime CLR-generated impls), fall back to
+  the CHA cone and DISCLOSE it (why + where), never dead. This is a deliberate, attributed boundary.
+
+### Build sequencing for the rework
+1. **Disable the SQL fast path; go uniform first.** Route every traversal/effect-reach load through the EF
+   path (`Reads.LoadFactGraphAsync`), which already projects the type-arg bindings onto `CallEdge` from
+   `reference_facts` — so materialization has the data it needs UNIFORMLY (kills calibration blocker #2 at
+   the root instead of re-attaching bindings onto the bounded SQL graph). Correctness + uniformity first,
+   then RE-OPTIMIZE: defend/keep the parts of `SqlReachability` worth keeping (the bounded depth/set CTEs,
+   `dispatch_edges`/`nodes` materialization) by making them binding-aware, rather than maintaining two
+   divergent load paths during the rework.
+2. **Transitive + lambda template materialization** in the inventory/materializer (the §Mechanism fixpoint,
+   now load-bearing).
+3. **Real-world synthetic fixtures** (calibration finding #5): the synthetic graphs were too clean (they
+   matched v1's assumptions, hiding the gap). Add fixtures mirroring the REAL shapes — lambda-enclosed
+   type-param receiver, multi-hop binding from root, nested generic `N<List<C>>` — so the tests fail when
+   transitive/lambda propagation is missing.
+4. **Calibrate on the real store with opaque masking OFF** (the `meddbase.llblgen.orm-runtime` opaqueType is
+   disabled in the analysis `rig.rules.json` for calibration so the real first-party dispatch fans are
+   visible in `tree --view full`).
+
 ## Hard constraints
 - **Unresolved/over-cap generic → CHA cone, NEVER dead** (soundness; disclose via `dispatch-fans`).
 - **Playground → green → big-boy → iterate**, unit coverage required (mirror `OneHopDispatchTests` /
