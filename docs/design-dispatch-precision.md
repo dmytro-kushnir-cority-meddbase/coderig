@@ -118,6 +118,42 @@ the residual honest during the build.
 4. **Wire into the real load path behind a flag**; big-boy: `dispatch-fans` type-param bucket shrinks,
    reaches/tree/callers re-validated, forward ≡ reverse spot-checks, FP-calibrate before on-by-default.
 
+## Phase 4 status + calibration findings (2026-06-24)
+
+**Phase 4a SHIPPED** (`dee67655`): materialization is wired into the shared `ShapeGraph` pass behind the
+`RIG_MONOMORPHIZE` env var, default OFF. Wiring is correct + full-suite green; flag-off is byte-identical.
+**It does NOT yet narrow anything on the real MedDBase store** — calibration (4b) surfaced two blockers, so
+the flag stays OFF and the 5 parked reverse-dispatch tests (backlog.md) are NOT yet recovered.
+
+1. **v1's coverage ∩ the real high-fan hubs ≈ ∅ (the substantive gap).** The `dispatch-fans` type-parameter
+   hubs (`EntityBase.Save` 115×11, `EntityBase.Delete` 49×8, `Construct``3.New` 47×2) are reached via a
+   type-parameter receiver (`x.Save()`, receiver token `TEnt`/`TEntity`) whose binding lives NOT on that
+   edge but on the edge into the **enclosing** generic method — and frequently inside a **lambda** (`~λN`)
+   in that method's body (verified in `reference_facts`: those Save/Delete call rows carry empty
+   `MethodTypeArgBinding`/`DeclaringTypeArgBinding`). v1 (Phase 1 inventory = DIRECT, concrete binding ON the
+   immediate edge into a generic; Phase 2 = clone that method's IMMEDIATE body edges) covers neither: it does
+   no transitive binding flow and does not propagate an instantiation into lambda sub-nodes. The clean
+   method-generic case it DOES cover (`BillingRuleHelper.SaveServices``2`, concrete `MethodTypeArgBinding`
+   `["C:…IncludedEntity","C:int"]` on the edge) is real but its one type-param body dispatch
+   (`EntityBase.Delete`) renders `«opaque: LLBLGen ORM runtime»` (a `render.opaqueTypes` leaf) so it never
+   fanned to first-party overrides — nothing to narrow. ⇒ **Next increment: transitive + lambda binding
+   propagation** (the refinement Phase 1/2 explicitly deferred). Until then monomorphization is a no-op on
+   observable reachability here (firing-but-invisible at best — not wrong, just not reaching the cases).
+
+2. **Bounded SQL graph drops the type-arg binding columns (a real prerequisite bug).** `reaches`/`tree`/
+   `path`/`callers` use the SQL bounded loader (`SqlReachability.LoadGraphFromReachSetAsync`), and the
+   persisted `call_edges` views carry NO `DeclaringTypeArgBinding`/`MethodTypeArgBinding`/`TypeArguments`
+   columns (those live in `reference_facts`; only the EF `Reads.LoadFactGraphAsync` path projects them onto
+   `CallEdge`). So on every real SQL-path query the inventory sees no bindings ⇒ materialization is a silent
+   no-op. The fix is a query-side re-attach in `LoadGraphFromReachSetAsync` mirroring the EXISTING
+   `TypeArguments` bulk-load (one pass over `reference_facts` keyed by `(caller, callee, line)`) to also
+   carry the two binding columns — **no re-index**. A prototype matched the join key (both `Line=50` for the
+   `SaveServices` edge) but the SQL-path tree label stayed `<T,U>` (binding still not reaching the rendered
+   node), so it needs a focused **integration test on a real graph-views store** (the `AnalyzedPlaygrounds`
+   fixture) to land correctly — the in-memory plumbing chain `edge → Successors.OutMethodBinding →
+   MutableNode → TraceNode → renderer` is confirmed intact, so the gap is purely the bounded-path delivery.
+   (A concrete generic LABEL on the SQL path is the cheapest proof-of-life; `derive`/EF-path tests won't catch it.)
+
 ## Hard constraints
 - **Unresolved/over-cap generic → CHA cone, NEVER dead** (soundness; disclose via `dispatch-fans`).
 - **Playground → green → big-boy → iterate**, unit coverage required (mirror `OneHopDispatchTests` /
