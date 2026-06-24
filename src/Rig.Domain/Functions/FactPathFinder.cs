@@ -894,9 +894,6 @@ public static partial class FactPathFinder
     )
     {
         var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
-        // Whether a node was reached via the reverse override-dispatch fan — passed into Predecessors so a
-        // base method climbed up from its override drops its non-virtual `base.M()` callers (see Predecessors).
-        var viaReverseDispatchOf = new Dictionary<string, bool>(StringComparer.Ordinal);
         var queue = new Queue<string>();
         foreach (var start in index.Nodes.Where(n => Contains(value: n, pattern: toPattern)))
         {
@@ -906,7 +903,6 @@ public static partial class FactPathFinder
             }
 
             depthOf[start] = 0;
-            viaReverseDispatchOf[start] = false;
             queue.Enqueue(start);
         }
 
@@ -919,9 +915,7 @@ public static partial class FactPathFinder
                 continue;
             }
 
-            foreach (
-                var (pred, viaDispatch) in Predecessors(current, index, rev, viaReverseDispatchOf.TryGetValue(current, out var vd) && vd)
-            )
+            foreach (var (pred, _) in Predecessors(current, index, rev))
             {
                 if (depthOf.ContainsKey(pred))
                 {
@@ -929,7 +923,6 @@ public static partial class FactPathFinder
                 }
 
                 depthOf[pred] = depth + 1;
-                viaReverseDispatchOf[pred] = viaDispatch;
                 queue.Enqueue(pred);
             }
         }
@@ -957,7 +950,6 @@ public static partial class FactPathFinder
         var rev = BuildReverseMaps(graph, narrowDispatch, mode, descendantsFrom: index);
 
         var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
-        var viaReverseDispatchOf = new Dictionary<string, bool>(StringComparer.Ordinal);
         var queue = new Queue<string>();
         foreach (var seed in seeds)
         {
@@ -966,7 +958,6 @@ public static partial class FactPathFinder
             if (index.Nodes.Contains(seed) && !depthOf.ContainsKey(seed))
             {
                 depthOf[seed] = 0;
-                viaReverseDispatchOf[seed] = false;
                 queue.Enqueue(seed);
             }
         }
@@ -980,9 +971,7 @@ public static partial class FactPathFinder
                 continue;
             }
 
-            foreach (
-                var (pred, viaDispatch) in Predecessors(current, index, rev, viaReverseDispatchOf.TryGetValue(current, out var vd) && vd)
-            )
+            foreach (var (pred, _) in Predecessors(current, index, rev))
             {
                 if (depthOf.ContainsKey(pred))
                 {
@@ -990,7 +979,6 @@ public static partial class FactPathFinder
                 }
 
                 depthOf[pred] = depth + 1;
-                viaReverseDispatchOf[pred] = viaDispatch;
                 queue.Enqueue(pred);
             }
         }
