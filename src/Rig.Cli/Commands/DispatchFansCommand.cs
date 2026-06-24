@@ -124,6 +124,9 @@ internal static class DispatchFansCommand
         io.Output.WriteLine(
             "(actionable = some un-narrowed edge has an absent or type-parameter receiver — likely a missing rule/EP def to capture the receiver/binding.)"
         );
+        io.Output.WriteLine(
+            "(traversal-cut seams — service-locator / reflection hubs in rig.rules.json `traversalCuts` — are excluded: their fan never materialises in reaches/tree/path.)"
+        );
         foreach (var r in rows.Take(opts.Top))
         {
             io.Output.WriteLine(

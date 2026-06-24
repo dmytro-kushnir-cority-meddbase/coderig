@@ -225,4 +225,27 @@ public sealed class DispatchFanReportTests
         filtered[0].Hub.ShouldBe("M:N.Animal.Speak");
         filtered.ShouldNotContain(r => r.Hub == "M:N.Shape.Area");
     }
+
+    [Test]
+    public void A_traversal_cut_hub_is_excluded_from_the_worklist()
+    {
+        // A hub that is a configured traversal-cut seam (the ProvideService<T> / service-locator case) never
+        // expands its dispatch fan in reaches/tree/path — Successors `yield break`s on a cut node before
+        // emitting dispatch — so its raw fan does NOT pollute real reachability and must not appear in the
+        // worklist. Cutting Animal.Speak drops it entirely (it was the only hub, with 4 un-narrowed edges).
+        var g = FanShape();
+        var cut = new FactGraphData(
+            g.CallEdges,
+            g.ImplementsEdges,
+            g.Methods,
+            g.BaseEdges,
+            g.MinedDispatch,
+            CutRules: new[] { new FactTraversalCutRule(Pattern: "M:N.Animal.Speak", Label: "test service-locator cut") }
+        );
+
+        var rows = FactPathFinder.DispatchFanReport(cut);
+
+        rows.ShouldNotContain(r => r.Hub == "M:N.Animal.Speak");
+        rows.ShouldBeEmpty();
+    }
 }

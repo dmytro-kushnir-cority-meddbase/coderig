@@ -98,6 +98,17 @@ public static partial class FactPathFinder
                 continue;
             }
 
+            // Cut-aware: a hub that is a configured traversal-cut seam (e.g. the ProvideService<T> /
+            // CreateService service-locator) NEVER expands its dispatch fan in reaches/tree/path — Successors
+            // `yield break`s on a cut node BEFORE emitting dispatch — so its raw fan does not pollute real
+            // reachability and must NOT appear in the worklist. Likewise a cut CALLER never has its edges
+            // walked. Mirrors Successors (IsTraversalCut) / Predecessors. Without this the report over-reports
+            // already-handled seams (ProvideService``1 topped the list at fan 5 × 980 though it is fully cut).
+            if (index.ApplyTraversalCuts && (index.IsTraversalCut(edge.Callee) || index.IsTraversalCut(edge.Caller)))
+            {
+                continue;
+            }
+
             var blindFan = FanCount(edge.Callee, null);
             if (blindFan < 2)
             {
