@@ -7,6 +7,194 @@ externally.
 
 ---
 
+## Feature: CEP over effects — a pattern engine for hazard detectors ⭐ HIGHEST PRIORITY (deferred)
+
+**Status:** highest-priority forward work, DEFERRED (gated on the dispatch-precision substrate fix in
+[bug-callers-reverse-overreach.md](bug-callers-reverse-overreach.md) + a design pass). Conceptual model:
+memory `project_coderig_effect_correlation_model` + the shipped `FactCorrelationDeriver` (FR-7
+`cache_coherence` is its first instance).
+
+### Idea
+Treat the program's effects as an EVENT STREAM and express hazard detectors as declarative PATTERN QUERIES
+over it (Complex Event Processing). `FactCorrelationDeriver` is already one CEP operator (absence-join);
+generalize it into a small operator set + a JSON pattern DSL, and migrate the bespoke hazard derivers onto it.
+
+### Mapping
+- **event** = effect (`provider:op` + resource + enclosing + location + structural context already captured:
+  loop, `EnclosingScopes` (using/lock), `EnclosingInvocations`).
+- **correlation key** = `ResourceKey` (resolve + normalize).
+- **"time"** = reachability + lexical happens-before (NOT wall-clock).
+- **window** = method | forward-tree | EP-reach | held-scope | loop.
+- **operators** = absence · co-presence/join · divergence (XOR) · sequence (followed-by) · aggregate-in-window.
+  `dominance` is OUT (needs a CFG rig doesn't have).
+
+### Detectors as patterns (migration map)
+- `cache_coherence` = absence(bulk_write, cache:invalidate, key, fwd-tree) — **shipped instance**
+- `dual_write` = divergence(db_write, cache/index/bus_write, key, common-origin)
+- `read_before_commit` = sequence(read, commit, key, method)
+- `N+1` = aggregate(read, loop-window)
+- `event_cycle` = closure over delivery edges — migrate `FactCycleDeriver`
+- `lock_coverage` = dominance(mutate, acquire) — OUT until a CFG pass exists
+- `static_init_capture` = co-presence(config/mutable-derived read, enclosing = static-field initializer) — config-derived value frozen at type-init → stale until restart (see dedicated section below; corpus: GI-862)
+
+### Phased plan
+0. design doc (`docs/design-effect-cep.md`): event model, reachability-as-time + path-insensitivity ceiling, operators, migration map.
+1. generalize the operator seam in `FactCorrelationDeriver` (relation/polarity → operator set).
+2. windows first-class (method/tree/EP/held-scope/loop).
+3. JSON `patterns` DSL (the composability path — CEP *is* the deferred DSL).
+4. migrate bespoke derivers onto it (golden-oracle byte-equivalence; delete each as migrated, as `FactCacheCoherenceDeriver` was).
+5. new detectors as pure data (dual_write, …); FP-calibrate each on the real store before on-by-default.
+
+### Hard constraints
+- **Substrate dependency (why deferred):** CEP runs over the reachability graph; the dispatch
+  over-approximation (the `base.M()` ×49 fan + receiver-less calls) pollutes happens-before → phantom pattern
+  matches. The dispatch-precision fixes are a **prerequisite** for trustworthy CEP.
+- **Path-insensitivity ceiling:** ordering is structural reachability, not execution → sound findings
+  (structural absence/presence), **unsound clears**; `dominance` needs a CFG. Disclose, don't pretend.
+
+### First slice (after the design doc)
+Add the `sequence` operator + migrate `read_before_commit` (today an observation) onto it — proves the
+abstraction generalizes beyond `absence` before touching the DSL.
+
+---
+
+## Detector: `static_init_capture` — config/mutable value frozen in a static field initializer (NEW, corpus GI-862)
+
+**Status:** proposed · **Family:** staleness/cache-coherence (sibling to FR-7) · **Found:** 2026-06-24 (MedDBase GI-862 RCA)
+
+### The hazard
+A value that can change at runtime — a feature flag, a `Settings.*`/config read, or anything derived from
+one — is captured into a `static` / `static readonly` **field initializer**. Field initializers run **once**
+at CLR type-initialization and never re-evaluate, so the value is frozen for the AppDomain lifetime. The
+symptom is the classic *"wrong until the app is restarted"* — a restart re-runs the static initializer.
+Distinct from FR-7: FR-7 is a missing *invalidation* of an instrumented cache; this is a value baked into
+**immutable static state with no invalidation surface at all** (there is nothing to invalidate — only a
+process recycle clears it).
+
+### Corpus case — GI-862 ("Cache in consultation … wording not updated until app restart")
+- Flag: `Configuration.Settings.DisableTentativeForClinicalDecisionSupport` (persisted + cluster-propagated
+  correctly on save — the config layer is NOT stale).
+- Display wording derived from it: `ConceptView.TentativeText`, `PatientSnomedCodes.TentativeTextSetting`.
+- Of the 4 read sites of those props (store `caa9373f`, `reference_facts`), exactly **one** has an `F:`
+  (field) enclosing symbol — `F:ConceptView.ConceptStatus @ ConceptView.cs:92`, a `static readonly DomMap`.
+  That one freezes; the other 3 are `M:` method/getter bodies that re-evaluate live. The single `F:` vs `M:`
+  distinction in the fact table IS the bug (form view stale, list view live).
+- **Prevention nuance:** rig would NOT flag the *original* defect (a missing `if` is not a modelled hazard).
+  It WOULD flag the *incomplete fix* — wiring `TentativeText` to read `Settings.*` while leaving
+  `ConceptStatus` a `static readonly` capture — which is exactly the trap (fix the property, miss the static
+  capture, still-broken-until-restart). That is the high-value framing: catch the insufficient fix.
+
+### Pattern (CEP form)
+`co-presence(read of T, enclosing(read) is a static-field initializer)` where `T` transitively reads a
+`config:*`/`Settings.*` effect (or a flagged "mutable source"). Window = the field initializer. Single-event
+classification with a taint condition; no ordering needed → not gated on the dispatch-precision substrate
+like the ordering operators are.
+
+### Prerequisites / what rig needs
+1. **Static-field-initializer enclosing identity.** `reference_facts.EnclosingSymbolId` already carries the
+   `F:` prefix; need to confirm rig can tell a `static` field init from an instance field init (instance
+   fields re-run per construction, so only `static` qualifies). May need a `static` modifier fact on the
+   field symbol, or treat the synthetic `.cctor`/type-init enclosure as the signal.
+2. **Mutable-source taint.** A rule-declared set of "mutable sources" — `Settings.*` getters, config
+   providers, feature-flag reads — and transitive reachability from the captured expression to one of them.
+   (Today `TentativeText` hardcodes a constant, so there is no taint to trace until the flag-read fix lands;
+   the detector is exercised against the *fixed* tree.)
+3. FP calibration: legitimate static caches of genuinely-immutable derived constants must not trip it — gate
+   strictly on the mutable-source taint, and consider excluding `const`/compile-time-constant captures.
+
+### Validation
+Build the rule against store `caa9373f` *after* adding the `Settings.DisableTentative…` read to
+`ConceptView.TentativeText`; assert exactly one hazard at `F:ConceptView.ConceptStatus @ :92` and none at the
+three `M:` sites. Synthetic fixture: a `static readonly` field initialized from a `Settings`-backed property
+vs a method returning the same — only the field trips.
+
+---
+
+## MedDBase staleness/cache-coherence corpus (validates FR-7 + `static_init_capture`)
+
+Recent `Bug 🐛`-tagged GitLab issues confirming the cache/staleness family is a live, recurring defect class
+(probed 2026-06-24, `mms/meddbase-main-application`). Use as FR-7 / `static_init_capture` regression corpus.
+
+| Issue | Shape | Maps to |
+|---|---|---|
+| **GI-862** Consultation SNOMED wording wrong until restart | config value frozen in `static readonly` field init | `static_init_capture` (NEW) |
+| **GI-4199** Existing document import does not invalidate person cache | write (doc import) with no companion cache:invalidate on patient-record cache; "wait 30 min" lifetime flush | reads textbook but **FR-7 misses it as configured** — see validation below |
+| **GI-4448** Location name change doesn't reach existing SbS sessions | write (location rename) not invalidating cached sessions; "eventually updates" on unrelated event | FR-7 variant, **cross-resource** (location → cached session) — same hard cross-resource shape as 862 |
+| **GI-4367** Entra signing key cache should invalidate on cache miss | cache lacks negative/miss revalidation on external key rotation | staleness, but **not** FR-7 (no local mutation; external change) — a "cache miss should revalidate" pattern; track as a distinct future detector |
+
+Takeaway: FR-7's "missing invalidation after a mutation" plus the new "frozen-in-static" capture cover GI-862,
+GI-4199, GI-4448. The cross-resource cases (4448, 862, **4199**) need the resource-correlation to bridge a
+derived dependency, which FR-7's same-resource scoping does not yet do — the known cross-resource limit.
+GI-4367 is a separate "stale cache on external change / revalidate-on-miss" class worth a future entry.
+
+### GI-4199 validation (2026-06-24, store `caa9373f` — substrate YES, current rule NO)
+Traced the import write path against the store (the bug is OPEN, so the buggy code is in `LATEST`):
+- **Substrate sees it:** `DocumentEntity.SaveImportedDocument` reaches **5 `llblgen` writes and 0
+  `cache:invalidate`** (`rig reaches … --only cache,llblgen`). The person-cache invalidation API it should call
+  exists (`Application.Core.Messages.PersonModelCacheAddOrUpdate*.Tell(...)`). The missing-invalidation fact is
+  present and queryable.
+- **FR-7 as configured does NOT fire, for TWO reasons:** (1) **anchor mismatch** — the rule anchors on
+  `llblgen:bulk_write`; this is a *per-entity* `DocumentEntity.Save` (FR-7 deliberately skips per-entity saves,
+  assuming self-invalidation). (2) **same-entity scoping** — the mutation is on **Document**, the stale cache is
+  the **Person** record (patient record aggregates its documents). The rule requires a *same-entity*
+  invalidate; it cannot express "Document.write ⇒ Person cache:invalidate."
+- **Conclusion:** GI-4199 demotes from high→**medium** fit, gated on the SAME cross-resource enhancement as
+  862/4448. Three proven cases now justify the **declared cross-resource dependency** feature for FR-7
+  (`{ownerEntity: Person, partEntity: Document, …}` → a write on `partEntity` obligates an invalidate on
+  `ownerEntity`'s cache). This is the single highest-leverage FR-7 upgrade; the substrate already supports the
+  query.
+
+---
+
+## Detector: `write_set_divergence` — import/API path writes fewer tables than the UI path (NEW, corpus-surfaced)
+
+**Status:** proposed · **Family:** consistency/dual-write sibling · **Found:** 2026-06-24 (100-bug GitLab triage, `docs/meddbase-bug-corpus.md`)
+
+### The hazard
+Two entry points that perform the "same" logical operation on the same entity — typically the **canonical UI
+save path** and an **import / Enterprise-API path** — write **different sets** of tables. The
+secondary/derived tables the UI path maintains (`PERSON_EVENT`, junction/link tables, counter or denormalized
+columns, audit rows) are silently skipped by the import path, leaving them stale or inconsistent. No
+exception, no missing row in the primary table — just a quietly-incomplete write-set.
+
+### Corpus evidence (the standout pattern from the 100-bug sweep)
+- **GI-4385** — import updates `DOCUMENT` but leaves `PERSON_EVENT` untouched (status read goes stale).
+- **GI-3951** — import path misses ~5 junction tables that the UI write maintains.
+- Recurs across the dual_write cluster; the triage flagged this as a class NOT captured by FR-1..7 +
+  `static_init_capture`. Full evidence in `docs/meddbase-bug-corpus.md`.
+
+### Why it's rig-shaped (cheap — no new extraction)
+rig already has per-EP reachable `db:write`/`llblgen:*` resource-sets. The detector is a **structural set-diff**:
+for a pair of EPs (import-EP, ui-EP) operating on entity T, compute each EP's reachable write-set and flag
+tables in `writes(ui) \ writes(import)` (and vice-versa) as candidate divergence. Set-algebra over facts rig
+already derives.
+
+### The hard part — pairing the EPs (the real design question)
+"Same logical operation" is not a fact rig has. Options, cheapest-first:
+1. **Rule-declared pairs** — `{entity, uiEntryPoint, importEntryPoint}` triples in `rig.rules.json`. Precise,
+   zero false pairs, but manual; good for a first slice on known import/UI dyads.
+2. **Anchor-table heuristic** — EPs whose write-set contains the same *primary* entity table T are treated as
+   peers; diff their full write-sets. Automatic but noisier (an EP that legitimately does a narrower op trips
+   it) → emit as a disclosed CANDIDATE, never a verdict.
+3. **Reference write-set** — pick the EP with the maximal write-set for T as the "canonical" baseline; flag the
+   others' shortfalls. Risky (maximal ≠ correct) — research only.
+Start with (1) on the corpus dyads to prove the set-diff core, then evaluate (2) for recall.
+
+### FP / honesty notes
+- A narrower write-set is often CORRECT (the import genuinely shouldn't touch T2). This is candidate
+  generation; significance needs the pairing rule or a human — same posture as FR-1.
+- Bounded by what's instrumented: an EP that maintains a secondary table via an in-memory/cache path rather
+  than a `db:write` won't show in the write-set.
+
+### Validation methodology (applies to the whole corpus — note the closed-bug trap)
+**A fixed/closed bug is already corrected in a recent index**, so the detector will show it absent there. To
+validate against a fixed case, index the **fix commit's PARENT** and run the detector on that store
+(`--store <parent-sha>`); confirm it fires, then confirm the fix commit's store is silent — a before/after
+golden check. Open bugs (e.g. GI-4199, GI-4385) are still present in current `LATEST` and validatable as-is.
+For `write_set_divergence`: build fixture dyads from GI-4385 / GI-3951 at their pre-fix commits.
+
+---
+
 ## Feature: LLM-optimised call-tree summary format (`--llm-summary`)
 
 ### Problem
