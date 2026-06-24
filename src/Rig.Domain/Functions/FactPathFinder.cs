@@ -98,6 +98,10 @@ public static partial class FactPathFinder
         var queue = new Queue<(string Node, int Depth)>();
         // Receiver of the edge that reached each node — narrows that node's dispatch when expanded.
         var receiverOf = new Dictionary<string, string?>(StringComparer.Ordinal);
+        // Whether the (first) edge that reached each node was a NON-VIRTUAL `base.M()` call — if so the
+        // node is not re-dispatched into sibling overrides (suppressed via `fromDispatch`, one-hop). Mirrors
+        // the dispatch-edge `fromDispatch` tracking; a parallel map, since the `parent` tuple is path-shape.
+        var viaNonVirtualOf = new Dictionary<string, bool>(StringComparer.Ordinal);
         foreach (var start in index.Nodes.Where(n => Contains(value: n, pattern: fromPattern)))
         {
             if (parent.ContainsKey(start))
@@ -131,13 +135,15 @@ public static partial class FactPathFinder
                     incomingReceiver: receiverOf.TryGetValue(key: current, value: out var rc) ? rc : null,
                     incomingBinding: null,
                     mode: mode,
-                    fromDispatch: parent.TryGetValue(current, out var pe) && pe is { } p && IsDispatchEdgeKind(p.Kind)
+                    fromDispatch: (parent.TryGetValue(current, out var pe) && pe is { } p && IsDispatchEdgeKind(p.Kind))
+                        || (viaNonVirtualOf.TryGetValue(current, out var nv) && nv)
                 )
             )
             {
                 if (!parent.ContainsKey(s.Node))
                 {
                     receiverOf[s.Node] = s.OutReceiver;
+                    viaNonVirtualOf[s.Node] = s.OutNonVirtual;
                 }
 
                 Enqueue(
@@ -457,7 +463,9 @@ public static partial class FactPathFinder
                     DispatchBasis: basis
                 );
                 receiverOf[s.Node] = s.OutReceiver;
-                viaDispatchOf[s.Node] = IsDispatchEdgeKind(s.Kind);
+                // Suppress re-dispatch of a node reached via a dispatch edge OR a non-virtual `base.M()`
+                // call — both resolve to exactly one concrete method whose own override fan-out is spurious.
+                viaDispatchOf[s.Node] = IsDispatchEdgeKind(s.Kind) || s.OutNonVirtual;
                 queue.Enqueue(s.Node);
             }
         }
@@ -624,7 +632,7 @@ public static partial class FactPathFinder
                     incomingReceiver: n.Receiver,
                     incomingBinding: n.Binding,
                     mode: mode,
-                    fromDispatch: IsDispatchEdgeKind(n.EdgeKind)
+                    fromDispatch: IsDispatchEdgeKind(n.EdgeKind) || n.ViaNonVirtual
                 )
             )
             {
@@ -671,7 +679,8 @@ public static partial class FactPathFinder
                     declaringTypeArgBinding: s.OutDeclaringBinding,
                     methodTypeArgBinding: s.OutMethodBinding,
                     callFile: s.File,
-                    callLine: s.Line
+                    callLine: s.Line,
+                    viaNonVirtual: s.OutNonVirtual
                 );
                 n.Kids.Add(kid);
             }
@@ -698,6 +707,10 @@ public static partial class FactPathFinder
         public readonly string? HandoffVia;
         public readonly string? DispatchBasis;
         public readonly int Fanout;
+
+        // True when the reaching edge was a NON-VIRTUAL `base.M()` call — suppresses this node's own
+        // override-dispatch fan when expanded (one-hop, like a node reached via a dispatch edge).
+        public readonly bool ViaNonVirtual;
 
         // Narrowing contexts carried to Successors when this node is expanded:
         public readonly string? Receiver;
@@ -732,11 +745,13 @@ public static partial class FactPathFinder
             string? declaringTypeArgBinding,
             string? methodTypeArgBinding,
             string? callFile,
-            int callLine
+            int callLine,
+            bool viaNonVirtual = false
         )
         {
             Symbol = symbol;
             EdgeKind = edgeKind;
+            ViaNonVirtual = viaNonVirtual;
             LoopKind = loopKind;
             LoopDetail = loopDetail;
             Depth = depth;
@@ -879,6 +894,9 @@ public static partial class FactPathFinder
     )
     {
         var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
+        // Whether a node was reached via the reverse override-dispatch fan — passed into Predecessors so a
+        // base method climbed up from its override drops its non-virtual `base.M()` callers (see Predecessors).
+        var viaReverseDispatchOf = new Dictionary<string, bool>(StringComparer.Ordinal);
         var queue = new Queue<string>();
         foreach (var start in index.Nodes.Where(n => Contains(value: n, pattern: toPattern)))
         {
@@ -888,6 +906,7 @@ public static partial class FactPathFinder
             }
 
             depthOf[start] = 0;
+            viaReverseDispatchOf[start] = false;
             queue.Enqueue(start);
         }
 
@@ -900,7 +919,9 @@ public static partial class FactPathFinder
                 continue;
             }
 
-            foreach (var pred in Predecessors(current, index, rev))
+            foreach (
+                var (pred, viaDispatch) in Predecessors(current, index, rev, viaReverseDispatchOf.TryGetValue(current, out var vd) && vd)
+            )
             {
                 if (depthOf.ContainsKey(pred))
                 {
@@ -908,6 +929,7 @@ public static partial class FactPathFinder
                 }
 
                 depthOf[pred] = depth + 1;
+                viaReverseDispatchOf[pred] = viaDispatch;
                 queue.Enqueue(pred);
             }
         }
@@ -935,6 +957,7 @@ public static partial class FactPathFinder
         var rev = BuildReverseMaps(graph, narrowDispatch, mode, descendantsFrom: index);
 
         var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
+        var viaReverseDispatchOf = new Dictionary<string, bool>(StringComparer.Ordinal);
         var queue = new Queue<string>();
         foreach (var seed in seeds)
         {
@@ -943,6 +966,7 @@ public static partial class FactPathFinder
             if (index.Nodes.Contains(seed) && !depthOf.ContainsKey(seed))
             {
                 depthOf[seed] = 0;
+                viaReverseDispatchOf[seed] = false;
                 queue.Enqueue(seed);
             }
         }
@@ -956,7 +980,9 @@ public static partial class FactPathFinder
                 continue;
             }
 
-            foreach (var pred in Predecessors(current, index, rev))
+            foreach (
+                var (pred, viaDispatch) in Predecessors(current, index, rev, viaReverseDispatchOf.TryGetValue(current, out var vd) && vd)
+            )
             {
                 if (depthOf.ContainsKey(pred))
                 {
@@ -964,6 +990,7 @@ public static partial class FactPathFinder
                 }
 
                 depthOf[pred] = depth + 1;
+                viaReverseDispatchOf[pred] = viaDispatch;
                 queue.Enqueue(pred);
             }
         }
@@ -1033,7 +1060,8 @@ public static partial class FactPathFinder
         string? LoopDetail,
         string? ReceiverType,
         string? HandoffDispatcher,
-        string? DeliveryPrecision
+        string? DeliveryPrecision,
+        bool NonVirtual
     )> AllCallEdges(FactGraphData graph)
     {
         foreach (var edge in graph.CallEdges)
@@ -1048,7 +1076,8 @@ public static partial class FactPathFinder
                 edge.LoopDetail,
                 edge.ReceiverType,
                 edge.HandoffDispatcher,
-                edge.DeliveryPrecision
+                edge.DeliveryPrecision,
+                edge.NonVirtual
             );
         }
     }

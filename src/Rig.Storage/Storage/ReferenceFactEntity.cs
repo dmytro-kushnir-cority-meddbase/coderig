@@ -26,4 +26,8 @@ public sealed class ReferenceFactEntity
     public string? ArgumentNames { get; set; }
     public string? DeclaringTypeArgBinding { get; set; }
     public string? MethodTypeArgBinding { get; set; }
+
+    // True when this reference is a non-virtual `base.M(...)` call (ReferenceFact.NonVirtual). Default
+    // false; old stores read it as false so behavior is unchanged until re-indexed.
+    public bool NonVirtual { get; set; }
 }

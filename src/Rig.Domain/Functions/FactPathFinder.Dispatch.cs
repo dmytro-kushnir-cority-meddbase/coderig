@@ -50,7 +50,13 @@ public static partial class FactPathFinder
         // MethodTypeArgBinding) — forwarded onto the reached node for RENDERING only (TraceNode label
         // substitution). Null for dispatch hops (no call-site) and non-generic callees.
         string? OutDeclaringBinding,
-        string? OutMethodBinding
+        string? OutMethodBinding,
+        // True when this successor was reached via a NON-VIRTUAL `base.M(...)` call edge (CallEdge.NonVirtual).
+        // A base call binds to exactly its static callee (the base body) and can never reach a sibling
+        // override — so the reached node must NOT be re-dispatched (its override fan-out is suppressed,
+        // exactly like a node reached via a dispatch edge / `fromDispatch`). The caller ORs this into the
+        // `fromDispatch` it passes when it later expands this node. False for every other edge.
+        bool OutNonVirtual
     )> Successors(
         string current,
         GraphIndex index,
@@ -118,7 +124,8 @@ public static partial class FactPathFinder
                         null,
                         outBinding,
                         edge.DeclaringTypeArgBinding,
-                        edge.MethodTypeArgBinding
+                        edge.MethodTypeArgBinding,
+                        false
                     );
                     continue;
                 }
@@ -136,7 +143,10 @@ public static partial class FactPathFinder
                     null,
                     outBinding,
                     edge.DeclaringTypeArgBinding,
-                    edge.MethodTypeArgBinding
+                    edge.MethodTypeArgBinding,
+                    // A `base.M()` edge resolves to exactly the base body; mark it so the reached node is not
+                    // re-dispatched into sibling overrides (forward fan suppression — one-hop, like dispatch).
+                    edge.NonVirtual
                 );
             }
         }
@@ -187,7 +197,8 @@ public static partial class FactPathFinder
                 d.Basis,
                 incomingBinding,
                 null,
-                null
+                null,
+                false
             );
         }
     }

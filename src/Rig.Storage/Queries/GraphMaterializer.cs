@@ -361,7 +361,8 @@ public static class GraphMaterializer
                 LoopDetail   TEXT,
                 ReceiverType TEXT,
                 HandoffDispatcher TEXT,
-                DeliveryPrecision TEXT
+                DeliveryPrecision TEXT,
+                NonVirtual INTEGER
             );
             """,
             cancellationToken
@@ -393,6 +394,16 @@ public static class GraphMaterializer
             table: "call_edges",
             column: "DeliveryPrecision",
             type: "TEXT",
+            cancellationToken: cancellationToken
+        );
+        // And NonVirtual (0/1) on `base.M()` call edges, so the in-memory traversal can resolve a non-virtual
+        // base call to its static callee only and keep it out of the override-dispatch fan (forward + reverse).
+        // A store predating this column reads NULL => false (treated as virtual = prior behavior) until re-graphed.
+        await AddColumnIfMissingAsync(
+            connection,
+            table: "call_edges",
+            column: "NonVirtual",
+            type: "INTEGER",
             cancellationToken: cancellationToken
         );
         await ExecuteAsync(connection, null, "CREATE INDEX IF NOT EXISTS IX_call_edges_FromSym ON call_edges(FromSym);", cancellationToken);
@@ -448,8 +459,8 @@ public static class GraphMaterializer
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
-            "INSERT INTO call_edges (FromSym, ToSym, Kind, FilePath, Line, LoopKind, LoopDetail, ReceiverType, HandoffDispatcher, DeliveryPrecision) "
-            + "VALUES ($from, $to, $kind, $file, $line, $loopKind, $loopDetail, $receiver, $handoff, $precision);";
+            "INSERT INTO call_edges (FromSym, ToSym, Kind, FilePath, Line, LoopKind, LoopDetail, ReceiverType, HandoffDispatcher, DeliveryPrecision, NonVirtual) "
+            + "VALUES ($from, $to, $kind, $file, $line, $loopKind, $loopDetail, $receiver, $handoff, $precision, $nonVirtual);";
         var pFrom = AddParam(command, "$from");
         var pTo = AddParam(command, "$to");
         var pKind = AddParam(command, "$kind");
@@ -460,6 +471,7 @@ public static class GraphMaterializer
         var pReceiver = AddParam(command, "$receiver");
         var pHandoff = AddParam(command, "$handoff");
         var pPrecision = AddParam(command, "$precision");
+        var pNonVirtual = AddParam(command, "$nonVirtual");
 
         var count = 0;
         foreach (var edge in FactPathFinder.AllCallEdges(graph))
@@ -474,6 +486,7 @@ public static class GraphMaterializer
             pReceiver.Value = (object?)edge.ReceiverType ?? DBNull.Value;
             pHandoff.Value = (object?)edge.HandoffDispatcher ?? DBNull.Value;
             pPrecision.Value = (object?)edge.DeliveryPrecision ?? DBNull.Value;
+            pNonVirtual.Value = edge.NonVirtual ? 1 : 0;
             await command.ExecuteNonQueryAsync(cancellationToken);
             if (++count % InsertBatchSize == 0)
             {

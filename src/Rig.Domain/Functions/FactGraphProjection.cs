@@ -45,7 +45,8 @@ public static class FactGraphProjection
                 TypeArguments: x.r.TypeArguments,
                 DelegateConsumer: x.r.DelegateConsumer,
                 DeclaringTypeArgBinding: x.r.DeclaringTypeArgBinding,
-                MethodTypeArgBinding: x.r.MethodTypeArgBinding
+                MethodTypeArgBinding: x.r.MethodTypeArgBinding,
+                NonVirtual: x.r.NonVirtual
             ))
             .Distinct()
             .ToList();

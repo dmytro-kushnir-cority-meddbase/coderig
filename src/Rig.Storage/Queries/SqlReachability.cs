@@ -449,6 +449,16 @@ public static class SqlReachability
             cancellationToken: cancellationToken
         );
         var precisionSelect = hasPrecision ? "c.DeliveryPrecision" : "NULL";
+        // NonVirtual (0/1) rides along so the in-memory FactPathFinder can resolve a `base.M()` call to its
+        // static callee only and keep it out of the override-dispatch fan (forward + reverse). NULL on a store
+        // built before this column (degrades to false = virtual = the pre-fix behavior) until re-graphed.
+        var hasNonVirtual = await StorageProbes.ColumnExistsAsync(
+            connection,
+            table: "call_edges",
+            column: "NonVirtual",
+            cancellationToken: cancellationToken
+        );
+        var nonVirtualSelect = hasNonVirtual ? "c.NonVirtual" : "NULL";
 
         // Call-site generic type arguments aren't stored on call_edges; they live on reference_facts
         // (B1 capture) and drive generic-dispatch narrowing in the in-memory FactPathFinder. Load them in
@@ -487,7 +497,7 @@ public static class SqlReachability
         await ReadAsync(
             connection,
             $"""
-            SELECT c.FromSym, c.ToSym, c.Kind, c.FilePath, c.Line, c.LoopKind, c.LoopDetail, {receiverSelect}, {handoffSelect}, {precisionSelect}
+            SELECT c.FromSym, c.ToSym, c.Kind, c.FilePath, c.Line, c.LoopKind, c.LoopDetail, {receiverSelect}, {handoffSelect}, {precisionSelect}, {nonVirtualSelect}
             FROM call_edges c JOIN reach_set r ON c.{edgeJoinCol} = r.sym;
             """,
             reader =>
@@ -508,7 +518,8 @@ public static class SqlReachability
                         ReceiverType: reader.IsDBNull(7) ? null : reader.GetString(7),
                         HandoffDispatcher: reader.IsDBNull(8) ? null : reader.GetString(8),
                         TypeArguments: typeArgs,
-                        DeliveryPrecision: reader.IsDBNull(9) ? null : reader.GetString(9)
+                        DeliveryPrecision: reader.IsDBNull(9) ? null : reader.GetString(9),
+                        NonVirtual: !reader.IsDBNull(10) && reader.GetInt64(10) != 0
                     )
                 );
             },

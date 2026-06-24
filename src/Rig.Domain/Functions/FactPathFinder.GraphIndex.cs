@@ -9,6 +9,17 @@ public static partial class FactPathFinder
     {
         public Dictionary<string, List<string>> Callers = new(StringComparer.Ordinal);
 
+        // callee -> the set of callers that reach it via a NON-VIRTUAL `base.M()` call (CallEdge.NonVirtual).
+        // These stay in `Callers` (a base call IS a real direct caller of the base BODY — direct
+        // `callers(base)` still lists them), but they are EXCLUDED when the callee was itself reached via the
+        // reverse override-dispatch fan: a `base.M()` binds to exactly the base and can never be a reverse-
+        // reacher of a SIBLING override, so it must not ride the override→base→hub-callers fan. A caller may
+        // reach a callee both virtually and non-virtually (two call sites); it's only excluded from the fan
+        // when EVERY edge from it to the callee is non-virtual — recorded here as "non-virtual edge present"
+        // and reconciled against `Callers` at query time.
+        public Dictionary<string, HashSet<string>> NonVirtualCallers = new(StringComparer.Ordinal);
+        public Dictionary<string, HashSet<string>> VirtualCallers = new(StringComparer.Ordinal);
+
         // target method -> the dispatch SOURCE methods that resolve to it. Built as the exact REVERSE
         // of the forward DispatchTargets (CHA, receiver-blind) over every node, so reverse traversal
         // sees precisely the edges the materialised dispatch_edges table carries (SQL == oracle by
@@ -63,6 +74,17 @@ public static partial class FactPathFinder
 
             list.Add(edge.Caller);
 
+            // Track whether THIS caller reaches the callee virtually vs via a non-virtual `base.M()` call.
+            // A caller excluded from the reverse override-dispatch fan only when ALL its edges to the callee
+            // are non-virtual (a single virtual call site keeps it on the fan), so record both and reconcile.
+            var bucket = edge.NonVirtual ? rev.NonVirtualCallers : rev.VirtualCallers;
+            if (!bucket.TryGetValue(edge.Callee, out var callerSet))
+            {
+                bucket[edge.Callee] = callerSet = new HashSet<string>(StringComparer.Ordinal);
+            }
+
+            callerSet.Add(edge.Caller);
+
             if (!rev.ReceiverProfileByCallee.TryGetValue(edge.Callee, out var profile))
             {
                 rev.ReceiverProfileByCallee[edge.Callee] = profile = new ReceiverProfile();
@@ -102,7 +124,17 @@ public static partial class FactPathFinder
         return rev;
     }
 
-    private static IEnumerable<string> Predecessors(string current, GraphIndex index, ReverseMaps rev)
+    private static IEnumerable<(string Pred, bool ViaReverseDispatch)> Predecessors(
+        string current,
+        GraphIndex index,
+        ReverseMaps rev,
+        // True when `current` was itself reached via the reverse override-dispatch fan (it is a base/virtual
+        // method climbed up from one of its overrides). Then its NON-VIRTUAL `base.M()` direct callers must
+        // be skipped: a `base.M()` binds to exactly THIS base and can never have run the SIBLING override we
+        // climbed from, so it isn't a reverse-reacher of that override. Direct `callers(base)` queries pass
+        // false, so those base callers are still listed. (Off => prior all-fan behavior, e.g. old graphs.)
+        bool currentViaReverseDispatch = false
+    )
     {
         // Cut symmetry: a cut node yields NO successors forward (Successors `yield break`s on it), so it
         // can never be the runtime caller/dispatcher of `current` — it must not surface as a predecessor
@@ -113,11 +145,26 @@ public static partial class FactPathFinder
 
         if (rev.Callers.TryGetValue(current, out var direct))
         {
+            // When `current` was reached via the override-dispatch fan, exclude callers whose ONLY edges to
+            // it are non-virtual `base.M()` calls (present in NonVirtualCallers and absent from VirtualCallers).
+            HashSet<string>? excluded = null;
+            if (currentViaReverseDispatch && rev.NonVirtualCallers.TryGetValue(current, out var nonVirtual))
+            {
+                rev.VirtualCallers.TryGetValue(current, out var virtualCallers);
+                foreach (var c in nonVirtual)
+                {
+                    if (virtualCallers is null || !virtualCallers.Contains(c))
+                    {
+                        (excluded ??= new HashSet<string>(StringComparer.Ordinal)).Add(c);
+                    }
+                }
+            }
+
             foreach (var c in direct)
             {
-                if (!cutting || !index.IsTraversalCut(c))
+                if ((excluded is null || !excluded.Contains(c)) && (!cutting || !index.IsTraversalCut(c)))
                 {
-                    yield return c;
+                    yield return (c, false);
                 }
             }
         }
@@ -138,7 +185,10 @@ public static partial class FactPathFinder
                     && (typeId is null || ReverseDispatchReaches(baseMethod: s, overrideTypeId: typeId, index: index, rev: rev))
                 )
                 {
-                    yield return s;
+                    // The source `s` is the base/virtual method `current` dispatches FROM — it was reached via
+                    // the reverse override-dispatch fan, so when its own predecessors are walked, its
+                    // non-virtual `base.M()` callers must be excluded (they can't have run `current`'s override).
+                    yield return (s, true);
                 }
             }
         }

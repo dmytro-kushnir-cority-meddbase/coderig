@@ -115,7 +115,14 @@ public sealed record ReferenceFact(
     string? DeclaringTypeArgBinding = null,
     // The callee's own METHOD type arguments at the call site (from the constructed method's TypeArguments;
     // explicit or inferred). Null for non-generic methods.
-    string? MethodTypeArgBinding = null
+    string? MethodTypeArgBinding = null,
+    // True when this reference is a NON-VIRTUAL call — specifically a `base.M(...)` invocation, whose
+    // instance receiver is the `base` keyword. By C# spec such a call emits CIL `call` (not `callvirt`):
+    // it binds to exactly the base implementation and can NEVER dispatch to a sibling override. The
+    // stage-2 traversal therefore resolves it to its static callee only and excludes it from the
+    // override-dispatch fan (forward AND reverse). False for ordinary virtual/interface/direct calls and
+    // on stores indexed before this flag existed (so old stores read as all-virtual = prior behavior).
+    bool NonVirtual = false
 );
 
 /// <summary>A base-type or implemented-interface edge between two types.</summary>
@@ -208,7 +215,14 @@ public sealed record CallEdge(
     // handoffs, scheduler/spawn handoffs). The traversal cuts Fanout edges from the default --async walk
     // (TraversalMode.AsyncExact) and only crosses them under --include-delivery (AsyncInclude); the cycle
     // deriver, which reads CallEdges directly, ignores this and keeps every delivery edge.
-    string? DeliveryPrecision = null
+    string? DeliveryPrecision = null,
+    // True when this edge is a NON-VIRTUAL `base.M(...)` call (ReferenceFact.NonVirtual). A `base.M()`
+    // call binds to exactly the base implementation (CIL `call`, not `callvirt`) and can never dispatch
+    // to a sibling override. The traversal resolves it to its static callee only and excludes it from
+    // the override-dispatch fan — FORWARD (no sibling-override successors) and REVERSE (the call's
+    // source is a direct caller of the base BODY, but not a reverse-reacher of sibling overrides). False
+    // on ordinary edges, synthesized dispatch hops, and pre-flag stores (read as all-virtual).
+    bool NonVirtual = false
 );
 
 // An "implType implements ifaceType" edge (from a type-relation fact).

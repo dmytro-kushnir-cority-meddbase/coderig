@@ -165,6 +165,14 @@ internal static class FactExtractor
                 : null;
             var structural = StructuralContextOf(structuralRoot, model, symbolCache);
             var delegateConsumer = refKind == RefKinds.MethodGroup ? DelegateConsumerOf(name, model) : null;
+            // A `base.M(...)` call is NON-VIRTUAL (C# spec: CIL `call`, not `callvirt`): the instance
+            // receiver is the `base` keyword, so it binds to exactly the base implementation and can never
+            // dispatch to a sibling override. Detect it here (only for an invocation through a member access
+            // whose receiver is `base`) so the traversal can keep it out of the override-dispatch fan.
+            var nonVirtual =
+                refKind == RefKinds.Invocation
+                && name.Parent is MemberAccessExpressionSyntax { Expression: BaseExpressionSyntax } baseMember
+                && baseMember.Name == name;
             AddReference(
                 references,
                 target,
@@ -180,7 +188,8 @@ internal static class FactExtractor
                 delegateConsumer: delegateConsumer,
                 argumentTemplates: argumentTemplates,
                 argumentNames: argumentNames,
-                symbolCache: symbolCache
+                symbolCache: symbolCache,
+                nonVirtual: nonVirtual
             );
 
             // 18c: a method-group ASSIGNED to a delegate field/property/event (not passed as an
@@ -633,7 +642,8 @@ internal static class FactExtractor
         int? lineOverride = null,
         string? argumentTemplates = null,
         string? argumentNames = null,
-        SymbolStringCache? symbolCache = null
+        SymbolStringCache? symbolCache = null,
+        bool nonVirtual = false
     )
     {
         // Generic type arguments at the CALL SITE — read from the constructed `target` BEFORE
@@ -715,7 +725,11 @@ internal static class FactExtractor
                 // Already null for non-first-party targets (computed only when inSource above) — only
                 // first-party nodes render, so a BCL callee's binding would be dead storage.
                 DeclaringTypeArgBinding: declaringTypeArgBinding,
-                MethodTypeArgBinding: methodTypeArgBinding
+                MethodTypeArgBinding: methodTypeArgBinding,
+                // True for a `base.M(...)` call — non-virtual (CIL `call`), binds to exactly the base
+                // implementation. The traversal resolves it to its static callee only and keeps it out of
+                // the override-dispatch fan. False for every ordinary call. (Detected by the caller.)
+                NonVirtual: nonVirtual
             )
         );
     }

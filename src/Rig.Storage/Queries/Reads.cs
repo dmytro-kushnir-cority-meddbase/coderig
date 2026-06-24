@@ -340,7 +340,9 @@ public static class Reads
                 TypeArguments: r.TypeArguments,
                 DelegateConsumer: r.DelegateConsumer,
                 DeclaringTypeArgBinding: r.DeclaringTypeArgBinding,
-                MethodTypeArgBinding: r.MethodTypeArgBinding
+                MethodTypeArgBinding: r.MethodTypeArgBinding,
+                DeliveryPrecision: null,
+                NonVirtual: r.NonVirtual
             ))
             .ToListAsync(cancellationToken);
 
@@ -377,7 +379,9 @@ public static class Reads
                     TypeArguments: r.TypeArguments,
                     DelegateConsumer: r.DelegateConsumer,
                     DeclaringTypeArgBinding: r.DeclaringTypeArgBinding,
-                    MethodTypeArgBinding: r.MethodTypeArgBinding
+                    MethodTypeArgBinding: r.MethodTypeArgBinding,
+                    DeliveryPrecision: null,
+                    NonVirtual: r.NonVirtual
                 ))
                 .ToListAsync(cancellationToken);
             callEdges.AddRange(redirectRows);

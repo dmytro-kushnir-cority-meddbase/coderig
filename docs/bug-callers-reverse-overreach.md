@@ -58,3 +58,93 @@ Net: **reverse traversal does not apply the receiver-type narrowing symmetricall
 `C:\Git\meddbase-analysis\paths-now-GetCompany.txt`, `paths-now-GetMedicalPerson.txt` — the per-EP `rig path` runs; the "No path" entries are exactly the reverse-only false positives (5 of 34 / 3 of 9). Store `caa9373f` in `C:\Git\meddbase-analysis\.rig`.
 
 Files to investigate: `Rig.Domain/Functions/FactPathFinder.GraphIndex.cs` (`BuildReverseMaps`, `ReverseDispatch`, `ReceiverProfileByCallee`, `ReverseDispatchReaches`), `Rig.Cli/Commands/CallersCommand.cs`.
+
+---
+
+## Root-cause refinement (2026-06-24): non-virtual `base.M()` calls dominate the fan — a cheaper, provably-correct sub-fix for #1
+
+Investigating the FR-7 `cache_coherence` finding (GitLab work-item 4460, target
+`ContactEntity.RemovePersonContactLinks`) pinned the **dominant** false-positive population of the open
+root cause (fix #1) to a specific, distinct sub-case that the section above describes only generically
+("when the call site's receiver is base/interface-typed or unresolved, CHA fallback"). It is sharper than
+that: most of the spurious reverse callers are **non-virtual `base.M(...)` calls from inside *sibling*
+override bodies** — which can be excluded with zero receiver-type analysis, because a `base.M()` call can
+*never* dispatch to a sibling override (C# spec).
+
+### Measured on store `caa9373f` (MedDBase, net48 + LLBLGen)
+
+`rig callers "ContactEntity.RemovePersonContactLinks" --entrypoints` → 5 forward-confirmed / **3325
+reverse-only**; reverse closure = **15,828** methods. The blow-up is one hop above the only true caller
+(`ContactEntity.Delete`, d1):
+
+```
+target ← ContactEntity.Delete ←[override-dispatch, climb up]← EntityBase.Delete ←[invocation]← {340 callers}
+```
+
+- `EntityBase.Delete(IPredicate)` has **340** real `call_edges` into it; `CommonEntityBase.Delete` 42.
+- **48 of those callers are sibling override bodies calling `base.Delete(pred)`** — `AppointmentEntity.Delete`,
+  `CaseEntity.Delete`, `DocumentEntity.Delete`, … Tell: `ReceiverType` is the LLBLGen intermediate base
+  `XxxEntityBase` (the static type of `base`), and `Kind = invocation` (NOT marked non-virtual).
+- The `override-dispatch` climb edge `EntityBase.Delete → ContactEntity.Delete` has **`Basis = roslyn`**
+  (exact) — so this is a *modeling gap*, not a `~heuristic` name/arity artifact.
+- Forward is correctly cut: `rig path "AppointmentEntity.Delete" "ContactEntity.Delete"` → No path;
+  `rig path "AppointmentEntity.Delete" "ContactEntity.RemovePersonContactLinks"` → No path.
+
+### Why these are *provably* impossible (not just CHA over-approximation)
+
+A `base.M()` call is **non-virtual by C# spec** — it binds to the base implementation and can never reach a
+sibling override, *regardless of receiver type*. rig currently records it as an ordinary `invocation`
+`call_edge` into the shared base node, and that node also carries the `override-dispatch` fan to every
+overrider. Reverse traversal climbs override→base, lands on the hub, then walks back down every hub caller —
+fanning the non-virtual base-call out to all 48 siblings. The RTA narrowing proposed in fix #1 *would* also
+reject these (`ReceiverType = XxxEntityBase` doesn't forward-resolve to `ContactEntity.Delete`), but the
+non-virtual observation gives a cheaper, judgement-free cut.
+
+### Proposed sub-fix (complements fix #1, smaller blast radius)
+
+Tag `base.M(...)` call-edges as non-virtual at extraction (`Kind = base_invocation`, or a `NonVirtual` flag
+on `call_edges`) and **exclude non-virtual edges from the reverse `override-dispatch` fan**. A non-virtual
+base call must not reverse-fan to sibling overrides — provably correct, no receiver-type machinery required.
+This alone removes the 48-entity LLBLGen population that dominates the MedDBase reverse-only set; the broader
+RTA narrowing (fix #1) then mops up the genuinely-virtual remainder (generic deleters: `ObjectStore.Delete`,
+`TEntity` repository code holding a base/abstract reference).
+
+Extraction site to mark base-calls: Roslyn `IInvocationOperation` where the instance receiver is a
+`BaseReferenceExpression` (`base.M()`), or `IMemberReferenceOperation` on `BaseReference`. Files as above,
+plus the extraction classifier (`Rig.Analysis/Extraction/FactExtractor.cs`).
+
+### Repro queries (run from `C:\git\meddbase-analysis`, `DB=.rig/caa9373ffbf6/rig.db`)
+
+```sql
+SELECT FromSym, ToSym, Kind, Basis FROM dispatch_edges WHERE ToSym LIKE '%ContactEntity.Delete(%';
+SELECT COUNT(*) FROM call_edges
+ WHERE FromSym LIKE '%Entity.Delete(SD.LLBLGen%IPredicate)' AND ToSym LIKE '%EntityBase.Delete(%';  -- 48
+SELECT ToSym, COUNT(*) FROM call_edges
+ WHERE ToSym LIKE '%EntityBase.Delete(%' OR ToSym LIKE '%CommonEntityBase.Delete(%' GROUP BY ToSym;  -- 340 / 42
+```
+
+### Validation (2026-06-24): FORWARD fixed; REVERSE gate partial (first-reach-wins) — follow-up
+
+Shipped the non-virtual `base.M()` flag end-to-end (extraction `ReferenceFact.NonVirtual` + `CallEdge`
+round-trip + forward `DispatchTargets` and reverse `BuildReverseMaps` gates) and re-indexed (store
+`caa9373f-dirty`, **1,239 `NonVirtual=1` edges**).
+
+- **FORWARD — fixed.** Base-call siblings no longer fan to the target: `rig path DocumentEntity.Delete →
+  ContactEntity.RemovePersonContactLinks` and `… AppointmentEntity.Delete …` both return **No path** (were
+  reachable via the ×49 forward fan). So `path`/`reaches`/`tree` precision is genuinely improved.
+- **REVERSE — only partial.** The reverse closure barely shrank (15,828 → 15,521 methods;
+  `callers --entrypoints` reverse-only 3325 → 3309). Cause = the reverse gate's `viaReverseDispatch` is
+  **first-reach-wins**: the base node (`CommonEntityBase.Delete`/`EntityBase.Delete`) is reached BOTH via the
+  override→base dispatch climb AND via a *direct* `base.Delete()` from the target's OWN override
+  (`ContactEntity.Delete` base-calls its base). When the direct reach wins, `currentViaReverseDispatch=false`,
+  so the sibling base-callers are never excluded.
+- **No regression / still correct:** `cache_coherence` 4-high stable, EP kinds healthy, baseline store
+  preserved (new store is `-dirty`). `callers --entrypoints` stays correct (5 confirmed; the 3309 are
+  correctly caveated via the forward-verification partition). Only the raw reverse closure
+  (`--roots`/`--include-reverse-only`, the disclosed-heuristic surface) is still inflated.
+
+**FOLLOW-UP (the remaining reverse half of fix #1):** make the reverse exclusion independent of first-reach —
+either treat a base node reached *via-dispatch* vs *via-direct* as distinct BFS states (2-colour / re-visit),
+or have reverse override-dispatch yield the base's **virtual** callers DIRECTLY (excluding non-virtual
+`base.M()` callers), bypassing the shared base node. This is essentially the documented hard part of fix #1
+(symmetric path-precise reverse narrowing).
