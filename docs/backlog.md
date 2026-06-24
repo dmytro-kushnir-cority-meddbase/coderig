@@ -158,6 +158,21 @@ cheap separate query-side increment. 2 ≡ 3.
 - **Disclose + classify every fallback**; a high-fan actionable fallback is a hypothesis that a rule or EP def
   is incomplete.
 
+### Reconcile-on-settle: parked reverse-dispatch tests (recover when the substrate settles)
+Five unit tests are `[Skip]`-parked, each pinning the PRE-substrate reverse-dispatch over-approximation that
+per-edge receiver narrowing (`c7fe4f0f`) intentionally changed. They document the phantom reverse reach that
+**forward ≡ reverse** (the monomorphization prize, design goal #2) is meant to eliminate — so they cannot pass
+until the substrate is on. **Trigger to recover: after static monomorphization (the materialized graph) is
+wired into the load path on-by-default AND FP-calibrated on the real MedDBase store** (Phase 4 of
+[design-dispatch-precision.md](design-dispatch-precision.md)). At that point, re-enable each and flip its
+assertion from "documents the over-approximation / includes the phantom" to the narrowed truth (no phantom
+caller; reverse == forward at the dispatch hop). The five:
+- `CallersForwardVerificationTests.Reverse_reach_includes_both_eps_documenting_the_over_approximation`
+- `CallersForwardVerifiedClosureTests.Reverse_closure_includes_the_phantom_caller_documenting_the_over_approximation`
+- `CallersForwardVerifiedClosureTests.Forward_verify_confirms_the_real_reacher_and_partitions_the_phantom_as_reverse_only`
+- `FactPathFinderFanoutTests.ReachedBy_finds_transitive_callers_including_interface_dispatch`
+- `FactPathFinderFanoutTests.Reverse_dispatch_narrows_by_receiver_at_the_dispatch_hop`
+
 ---
 
 ## Detector: `static_init_capture` — config/mutable value frozen in a static field initializer (NEW, corpus GI-862)
