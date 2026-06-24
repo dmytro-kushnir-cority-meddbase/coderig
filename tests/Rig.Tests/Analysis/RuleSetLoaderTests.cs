@@ -6,9 +6,31 @@ namespace Rig.Tests.Analysis;
 public sealed class RuleSetLoaderTests
 {
     [Test]
+    public void LoadForSolution_allows_comments_and_trailing_commas()
+    {
+        using var workspace = TempRulesWorkspace.Create(
+            // lang=json
+            // lang=json
+            """
+            {
+              "redirectRules": [
+               { "method": "M:Ext.EntityBase.Save1", "redirectTo": "M:Ext.EntityBase.Save(Ext.IPredicate,System.Boolean)" },
+               // { "method": "M:Ext.EntityBase.Save2", "redirectTo": "M:Ext.EntityBase.Save(Ext.IPredicate,System.Boolean)" },
+               { "method": "M:Ext.EntityBase.Save3", "redirectTo": "M:Ext.EntityBase.Save(Ext.IPredicate,System.Boolean)" },
+             ]
+            }
+            """
+        );
+
+        var ruleSet = RuleSetLoader.LoadForSolution(workspace.SolutionPath);
+        ruleSet.Redirect.Count.ShouldBe(2);
+    }
+
+    [Test]
     public void LoadForSolution_rejects_file_rules_without_id()
     {
         using var workspace = TempRulesWorkspace.Create(
+            // lang=json
             """
             {
               "files": {
@@ -27,6 +49,7 @@ public sealed class RuleSetLoaderTests
     public void LoadForSolution_rejects_file_rules_without_glob()
     {
         using var workspace = TempRulesWorkspace.Create(
+            // lang=json
             """
             {
               "files": {
@@ -45,14 +68,16 @@ public sealed class RuleSetLoaderTests
     public void LoadForSolution_merges_solution_and_extra_rules()
     {
         using var workspace = TempRulesWorkspace.Create(
-            solutionRulesJson: """
+            solutionRulesJson: // lang=json
+            """
             {
               "files": {
                 "testProjectPatterns": ["*.Tests"]
               }
             }
             """,
-            extraRulesJson: """
+            extraRulesJson: // lang=json
+            """
             {
               "projects": {
                 "exclude": ["*.AppHost"]
@@ -71,6 +96,7 @@ public sealed class RuleSetLoaderTests
     public void TypeEntryPoints_requires_is_parsed_and_projected_to_the_fact_rule()
     {
         using var workspace = TempRulesWorkspace.Create(
+            // lang=json
             """
             {
               "entrypoints": {
@@ -93,6 +119,7 @@ public sealed class RuleSetLoaderTests
         // The framework-specific `pageModel` key was generalised to `typeEntryPoints`; existing configs
         // using the old key must keep loading (merged into the same collection).
         using var workspace = TempRulesWorkspace.Create(
+            // lang=json
             """
             {
               "entrypoints": {
@@ -113,6 +140,7 @@ public sealed class RuleSetLoaderTests
     public void HandoffDispatcher_requires_is_parsed_and_projected()
     {
         using var workspace = TempRulesWorkspace.Create(
+            // lang=json
             """
             {
               "handoffDispatchers": [
@@ -131,6 +159,7 @@ public sealed class RuleSetLoaderTests
     public void DeliveryRules_round_trip_into_RuleSet_Delivery()
     {
         using var workspace = TempRulesWorkspace.Create(
+            // lang=json
             """
             {
               "deliveryRules": [
@@ -173,6 +202,7 @@ public sealed class RuleSetLoaderTests
         // It was initially omitted from Merge, so a colocated rule silently vanished — caught only on the real
         // store (the suite missed it because tests that construct rules directly bypass the loader cascade).
         using var workspace = TempRulesWorkspace.Create(
+            // lang=json
             """
             {
               "redirectRules": [
@@ -196,6 +226,7 @@ public sealed class RuleSetLoaderTests
         // section (a single object, last-writer-wins) into RuleSet.CacheCoherence. A section omitted from Merge
         // silently vanishes from the cascade.
         using var workspace = TempRulesWorkspace.Create(
+            // lang=json
             """
             {
               "cacheCoherence": {

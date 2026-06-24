@@ -15,7 +15,12 @@ namespace Rig.Analysis.Rules;
 // last-write-wins), which is then projected once. There is no per-project rule discovery.
 public static class RuleSetLoader
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+    };
 
     // Load the effective rule set rooted at <workingDirectory> (the directory holding the .rig store, or
     // the solution directory at index time). A non-solution anchor inside the working dir picks up a
