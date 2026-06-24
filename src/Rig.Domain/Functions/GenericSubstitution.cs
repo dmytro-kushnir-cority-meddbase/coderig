@@ -140,6 +140,43 @@ public static class GenericSubstitution
         return result;
     }
 
+    // True iff `binding` is a non-empty JSON array AND EVERY element's kind marker is `C:` (concrete) —
+    // i.e. each element starts with "C:". A binding with any `M:`/`T:` (forwarded type-parameter) or `?`
+    // (unresolved) element is NOT fully concrete. Null/empty/invalid -> false. Reuses the same JSON parse
+    // as ParseBinding (System.Text.Json) so commas inside generic args don't confuse element counting.
+    public static bool IsFullyConcrete(string? binding)
+    {
+        if (string.IsNullOrWhiteSpace(binding))
+        {
+            return false;
+        }
+
+        string[]? raw;
+        try
+        {
+            raw = JsonSerializer.Deserialize<string[]>(binding);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
+        if (raw is null || raw.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var element in raw)
+        {
+            if (element is null || !element.StartsWith("C:", StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     // Replace each WHOLE-IDENTIFIER occurrence of a type-param name in `receiverType` with its concrete
     // from `binding` (matched by index). Returns the substituted string, or `receiverType` UNCHANGED when
     // nothing matches / inputs don't line up. Matching is whole-token only (bounded by start/end or a
