@@ -418,64 +418,8 @@ public static class SqlReachability
     {
         var edgeJoinCol = direction == Direction.Forward ? "FromSym" : "ToSym";
 
-        // ReceiverType drives the in-memory edge-aware dispatch narrowing. Old stores (built before the
-        // column existed and never re-`rig graph`-ed) lack it — probe so the SELECT degrades to a null
-        // receiver (full CHA) instead of throwing.
-        var hasReceiver = await StorageProbes.ColumnExistsAsync(
-            connection,
-            table: "call_edges",
-            column: "ReceiverType",
-            cancellationToken: cancellationToken
-        );
-        var receiverSelect = hasReceiver ? "c.ReceiverType" : "NULL";
-        // HandoffDispatcher rides along so the bounded in-memory graph carries the async-handoff
-        // classification — the in-memory FactPathFinder applies the sync-cut / --async filter over the
-        // (superset) bounded graph, so this column is what lets it tell handoff edges apart. Null on a
-        // store built before classification (degrades to no handoffs = the pre-async behavior).
-        var hasHandoff = await StorageProbes.ColumnExistsAsync(
-            connection,
-            table: "call_edges",
-            column: "HandoffDispatcher",
-            cancellationToken: cancellationToken
-        );
-        var handoffSelect = hasHandoff ? "c.HandoffDispatcher" : "NULL";
-        // DeliveryPrecision (exact|fanout) rides along so the in-memory FactPathFinder can quarantine
-        // symbol-blind delivery fan-out from the default --async walk (TraversalMode.AsyncExact). NULL on a
-        // store built before this column (degrades to "walked" — the pre-fix --async behavior) until re-graphed.
-        var hasPrecision = await StorageProbes.ColumnExistsAsync(
-            connection,
-            table: "call_edges",
-            column: "DeliveryPrecision",
-            cancellationToken: cancellationToken
-        );
-        var precisionSelect = hasPrecision ? "c.DeliveryPrecision" : "NULL";
-        // NonVirtual (0/1) rides along so the in-memory FactPathFinder can resolve a `base.M()` call to its
-        // static callee only and keep it out of the override-dispatch fan (forward + reverse). NULL on a store
-        // built before this column (degrades to false = virtual = the pre-fix behavior) until re-graphed.
-        var hasNonVirtual = await StorageProbes.ColumnExistsAsync(
-            connection,
-            table: "call_edges",
-            column: "NonVirtual",
-            cancellationToken: cancellationToken
-        );
-        var nonVirtualSelect = hasNonVirtual ? "c.NonVirtual" : "NULL";
-
-        // Call-site generic type arguments aren't stored on call_edges; they live on reference_facts
-        // (B1 capture) and drive generic-dispatch narrowing in the in-memory FactPathFinder. Load them in
-        // ONE bulk pass keyed by (caller, callee, line) and attach in memory — NOT a per-edge correlated
-        // subquery, which is pathological here: reach_set is the receiver-BLIND CHA superset, so even a
-        // tiny query's bounded graph carries every fanned-out edge, and a per-edge subquery then runs
-        // thousands of times. The bulk query is bounded to reach_set on the caller-side index and returns
-        // only the (few) generic call sites. Probed so a store predating the column degrades to no
-        // narrowing (full CHA). Non-generic / synthesized dispatch edges have no entry -> null.
-        var hasTypeArgs = await StorageProbes.ColumnExistsAsync(
-            connection,
-            table: "reference_facts",
-            column: "TypeArguments",
-            cancellationToken: cancellationToken
-        );
         var typeArgsByEdge = new Dictionary<(string, string, int), string>();
-        if (hasTypeArgs)
+        if (true)
         {
             await ReadAsync(
                 connection,
@@ -497,7 +441,7 @@ public static class SqlReachability
         await ReadAsync(
             connection,
             $"""
-            SELECT c.FromSym, c.ToSym, c.Kind, c.FilePath, c.Line, c.LoopKind, c.LoopDetail, {receiverSelect}, {handoffSelect}, {precisionSelect}, {nonVirtualSelect}
+            SELECT c.FromSym, c.ToSym, c.Kind, c.FilePath, c.Line, c.LoopKind, c.LoopDetail, c.ReceiverType, c.HandoffDispatcher, c.DeliveryPrecision, c.NonVirtual
             FROM call_edges c JOIN reach_set r ON c.{edgeJoinCol} = r.sym;
             """,
             reader =>

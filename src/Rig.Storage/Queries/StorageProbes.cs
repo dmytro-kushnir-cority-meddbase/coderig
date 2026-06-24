@@ -57,27 +57,4 @@ internal static class StorageProbes
         command.Parameters.Add(p);
         return await command.ExecuteScalarAsync(cancellationToken) is not null;
     }
-
-    // True when `table` has a column named `column` (case-insensitive), via PRAGMA table_info — the only
-    // portable way to detect a column on a store that may predate a schema addition.
-    public static async Task<bool> ColumnExistsAsync(
-        DbConnection connection,
-        string table,
-        string column,
-        CancellationToken cancellationToken
-    )
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = $"PRAGMA table_info({table});";
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
 }

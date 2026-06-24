@@ -832,18 +832,6 @@ public static class Reads
     )
     {
         var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
-        if (
-            !await StorageProbes.ColumnExistsAsync(
-                connection,
-                table: "symbol_facts",
-                column: "EndLine",
-                cancellationToken: cancellationToken
-            )
-        )
-        {
-            return new Dictionary<string, int>(StringComparer.Ordinal);
-        }
-
         var endLines = new Dictionary<string, int>(StringComparer.Ordinal);
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT SymbolId, EndLine FROM symbol_facts WHERE Kind = $kind;";
@@ -876,18 +864,6 @@ public static class Reads
     )
     {
         var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
-        if (
-            !await StorageProbes.ColumnExistsAsync(
-                connection,
-                table: "symbol_facts",
-                column: "BodyHash",
-                cancellationToken: cancellationToken
-            )
-        )
-        {
-            return new Dictionary<string, string>(StringComparer.Ordinal);
-        }
-
         var hashes = new Dictionary<string, string>(StringComparer.Ordinal);
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT SymbolId, BodyHash FROM symbol_facts;";
@@ -951,15 +927,7 @@ public static class Reads
         // (~3.7s). call_edges.Kind is the SAME classification the rest of the SQL query path already trusts,
         // so this is equivalence-preserving; the classifier still attaches kind/requires from the passed
         // rules by HandoffDispatcher id.
-        if (
-            await StorageProbes.TableExistsAsync(connection, "call_edges", cancellationToken)
-            && await StorageProbes.ColumnExistsAsync(
-                connection,
-                table: "call_edges",
-                column: "HandoffDispatcher",
-                cancellationToken: cancellationToken
-            )
-        )
+        if (await StorageProbes.TableExistsAsync(connection, "call_edges", cancellationToken))
         {
             var edges = new List<CallEdge>();
             await using var command = connection.CreateCommand();

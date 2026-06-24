@@ -262,7 +262,7 @@ public static class GraphMaterializer
     {
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.Transaction = (DbTransaction)transaction;
+        command.Transaction = transaction;
         command.CommandText =
             "INSERT INTO symbol_fts(symbolid, name, kind, signature, filepath, line, assembly) "
             + "VALUES ($sid, $name, $kind, $sig, $file, $line, $asm);";
@@ -305,7 +305,7 @@ public static class GraphMaterializer
     {
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.Transaction = (DbTransaction)transaction;
+        command.Transaction = transaction;
         command.CommandText = "INSERT INTO ref_target_fts(symbolid) VALUES ($sid);";
         var pSid = AddParam(command, "$sid");
 
@@ -367,45 +367,7 @@ public static class GraphMaterializer
             """,
             cancellationToken
         );
-        // Add the ReceiverType column to a pre-existing call_edges (a store created before receiver-type
-        // dispatch narrowing). `rig graph` rebuilds the rows anyway; this just makes the column present
-        // so the INSERT/SELECT carry it. Reads degrade gracefully (NULL receiver => CHA) on old stores.
-        await AddColumnIfMissingAsync(
-            connection,
-            table: "call_edges",
-            column: "ReceiverType",
-            type: "TEXT",
-            cancellationToken: cancellationToken
-        );
-        // Likewise add HandoffDispatcher to a pre-existing table so the INSERT/SELECT carry it (a store
-        // created before async-handoff classification). Re-`rig graph` repopulates it from the rules.
-        await AddColumnIfMissingAsync(
-            connection,
-            table: "call_edges",
-            column: "HandoffDispatcher",
-            type: "TEXT",
-            cancellationToken: cancellationToken
-        );
-        // And DeliveryPrecision (exact|fanout) on delivery handoff edges, so the bounded in-memory graph can
-        // tell sound delivery from symbol-blind fan-out and the default --async walk can quarantine the latter.
-        // A store predating this column degrades to NULL precision (treated as exact = walked) until re-graphed.
-        await AddColumnIfMissingAsync(
-            connection,
-            table: "call_edges",
-            column: "DeliveryPrecision",
-            type: "TEXT",
-            cancellationToken: cancellationToken
-        );
-        // And NonVirtual (0/1) on `base.M()` call edges, so the in-memory traversal can resolve a non-virtual
-        // base call to its static callee only and keep it out of the override-dispatch fan (forward + reverse).
-        // A store predating this column reads NULL => false (treated as virtual = prior behavior) until re-graphed.
-        await AddColumnIfMissingAsync(
-            connection,
-            table: "call_edges",
-            column: "NonVirtual",
-            type: "INTEGER",
-            cancellationToken: cancellationToken
-        );
+        
         await ExecuteAsync(connection, null, "CREATE INDEX IF NOT EXISTS IX_call_edges_FromSym ON call_edges(FromSym);", cancellationToken);
         await ExecuteAsync(connection, null, "CREATE INDEX IF NOT EXISTS IX_call_edges_ToSym ON call_edges(ToSym);", cancellationToken);
         // Index on Kind so the handoff-EP read (DeriveHandoffEntryPoints) selects the ~5k handoff +
@@ -425,21 +387,14 @@ public static class GraphMaterializer
             """,
             cancellationToken
         );
-        // Add Basis to a pre-existing dispatch_edges (a store graphed before dispatch provenance).
-        // Render-only — the CTE set walk never reads it; re-`rig graph` repopulates the rows.
-        await AddColumnIfMissingAsync(
-            connection,
-            table: "dispatch_edges",
-            column: "Basis",
-            type: "TEXT",
-            cancellationToken: cancellationToken
-        );
+        
         await ExecuteAsync(
             connection,
             null,
             "CREATE INDEX IF NOT EXISTS IX_dispatch_edges_FromSym ON dispatch_edges(FromSym);",
             cancellationToken
         );
+        
         await ExecuteAsync(
             connection,
             null,
@@ -535,23 +490,7 @@ public static class GraphMaterializer
         progress?.Invoke($"dispatch_edges: {count} (done; {count - heuristic} roslyn-mined, {heuristic} heuristic)");
         return (count, heuristic);
     }
-
-    // Adds `column` to `table` when a pre-existing store doesn't already have it (idempotent). SQLite
-    // has no "ADD COLUMN IF NOT EXISTS", so probe PRAGMA table_info first.
-    private static async Task AddColumnIfMissingAsync(
-        DbConnection connection,
-        string table,
-        string column,
-        string type,
-        CancellationToken cancellationToken
-    )
-    {
-        if (!await StorageProbes.ColumnExistsAsync(connection, table, column, cancellationToken))
-        {
-            await ExecuteAsync(connection, null, $"ALTER TABLE {table} ADD COLUMN {column} {type};", cancellationToken);
-        }
-    }
-
+    
     private static DbParameter AddParam(DbCommand command, string name)
     {
         var p = command.CreateParameter();
