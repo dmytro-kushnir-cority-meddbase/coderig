@@ -405,11 +405,11 @@ public sealed class CliApplicationTests
         ).ShouldBe(0);
         output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Length.ShouldBe(1);
 
-        output.GetStringBuilder().Clear();
-        (
-            await CliApplication.RunAsync(["callers", "PaymentGatewayProcess.Tell", "--limit", "1"], output, error, workingDirectory)
-        ).ShouldBe(0);
-        output.ToString().ShouldContain("raise --limit");
+        // (Text-mode `--limit` truncation-note coverage was dropped here: `callers` now forward-verifies and
+        // its listing/headline key off the CONFIRMED-caller count, and `PaymentGatewayProcess.Tell` has a
+        // single confirmed caller — the dispatcher — so it is not truncatable. The `--limit` cap itself is
+        // verified by the tsv row-count check above; the truncation/footer behaviour over a forward-verified
+        // listing is exercised by CallersForwardVerifiedClosureTests.)
     }
 
     // `tree --hazards` — the third hazard SURFACE (after `derive`'s whole-store view + `impact`'s per-EP

@@ -37,7 +37,7 @@ internal static class CallersCommand
         var includeReverseOnly = new Option<bool>("--include-reverse-only")
         {
             Description =
-                "With --entrypoints: also LIST the reverse-only entry points (a reverse-dispatch over-approximation with no forward path). Default lists only forward-confirmed hits + a count footer.",
+                "Also LIST the reverse-only callers/roots/entry points (a reverse-dispatch over-approximation with no forward path). Default lists only forward-confirmed hits + a count footer.",
         };
         var async = CommonOptions.Async();
         var includeDelivery = CommonOptions.IncludeDelivery();
@@ -188,24 +188,65 @@ internal static class CallersCommand
 
                 return 1;
             }
-            // --format tsv: one full-DocID root per line (no chip/header).
+
+            // FORWARD-VERIFY each root against the SAME graph (mirrors RunEntryPointsAsync), unless --raw —
+            // which keeps the exact unfiltered reverse superset. Reverse reachability is set-based BFS, so a
+            // shared base/interface virtual node pulls in roots whose FORWARD (receiver-narrowed) dispatch
+            // resolves to a sibling override that never reaches the target. The depth-0 entries of the reverse
+            // closure are the matched target nodes; each root forward-reaches them or is partitioned as
+            // reverse-only (recall-safe — a forward reach can legitimately miss an interface/lambda-only path).
+            var rootsConfirmed = roots;
+            var rootsReverseOnly = (IReadOnlyList<string>)[];
+            if (!opts.Raw)
+            {
+                var targetIds = FactPathFinder
+                    .ReachedBy(graph, opts.ToPattern, maxDepth, mode: mode)
+                    .Where(kv => kv.Value == 0)
+                    .Select(kv => kv.Key)
+                    .ToHashSet(StringComparer.Ordinal);
+                var seedGroups = roots.Select(r => (IReadOnlyList<string>)new[] { r }).ToList();
+                var confirmedFlags = FactPathFinder.SeedsReachTarget(graph, seedGroups, targetIds, maxDepth, mode);
+                rootsConfirmed = roots.Where((_, i) => confirmedFlags[i]).ToList();
+                rootsReverseOnly = roots.Where((_, i) => !confirmedFlags[i]).ToList();
+            }
+
+            // --format tsv: one full-DocID root per line plus a trailing forwardConfirmed flag (ADDITIVE
+            // column — the existing single-DocID-per-line shape is unchanged). ALL roots are emitted (confirmed
+            // + reverse-only) so TSV consumers can filter on the flag. --raw emits the raw superset (all true).
             if (tsv)
             {
+                var reverseOnlySet = rootsReverseOnly.ToHashSet(StringComparer.Ordinal);
                 foreach (var r in roots.Take(max))
                 {
-                    io.Output.WriteLine(r);
+                    io.Output.WriteLine($"{r}\t{(reverseOnlySet.Contains(r) ? "false" : "true")}");
                 }
 
                 return 0;
             }
-            io.Output.WriteLine($"Root callers (heuristic — no-predecessor origins) reaching '{opts.ToPattern}': {roots.Count}");
-            foreach (var r in roots.Take(max))
+            io.Output.WriteLine($"Root callers (heuristic — no-predecessor origins) reaching '{opts.ToPattern}': {rootsConfirmed.Count}");
+            foreach (var r in rootsConfirmed.Take(max))
             {
                 io.Output.WriteLine($"{Indent.L1}{r}{HeaderSuffix(epContext, r)}");
             }
-            if (roots.Count > max)
+            if (rootsConfirmed.Count > max)
             {
-                io.Output.WriteLine($"{Indent.L1}… +{roots.Count - max} more (raise --limit)");
+                io.Output.WriteLine($"{Indent.L1}… +{rootsConfirmed.Count - max} more (raise --limit)");
+            }
+            // Reverse-only = in the reverse closure but with NO forward path: a reverse-dispatch
+            // over-approximation. By DEFAULT we DON'T list these; --include-reverse-only reveals them.
+            if (opts.IncludeReverseOnly && rootsReverseOnly.Count > 0)
+            {
+                io.Output.WriteLine($"Reverse-only (no forward path found — confirm with `rig path`): {rootsReverseOnly.Count}");
+                foreach (var r in rootsReverseOnly.Take(max))
+                {
+                    io.Output.WriteLine($"{Indent.L1}{r}{HeaderSuffix(epContext, r)}");
+                }
+            }
+            else if (rootsReverseOnly.Count > 0)
+            {
+                io.Output.WriteLine(
+                    $"{Indent.L1}… +{rootsReverseOnly.Count} reach this only via reverse-dispatch over-approximation (no forward path) — list with --include-reverse-only"
+                );
             }
 
             return 0;
@@ -221,24 +262,49 @@ internal static class CallersCommand
 
             return 1;
         }
-        // --format tsv: depth + full DocID per reaching method (default unbounded; --limit caps it).
-        // Depth-0 rows are the BFS start nodes (the matched target(s) and their lambdas), distinctly
-        // identified by their `0` depth value — TSV consumers can filter depth > 0 for upstream callers only.
-        if (tsv)
-        {
-            foreach (var kv in reachable.OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).Take(max))
-            {
-                io.Output.WriteLine($"{kv.Value}\t{kv.Key}");
-            }
-
-            return 0;
-        }
         // Separate the BFS start nodes (depth=0, the matched target(s) and their lambdas) from actual
         // upstream callers (depth≥1). The headline count and --limit budget reflect upstream callers only
         // — the matched nodes are the SUBJECT of the query, not its answer.
         var matched = reachable.Where(k => k.Value == 0).OrderBy(k => k.Key, StringComparer.Ordinal).ToList();
         var callers = reachable.Where(k => k.Value > 0).OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).ToList();
-        io.Output.WriteLine($"Methods that reach '{opts.ToPattern}': {callers.Count}");
+
+        // FORWARD-VERIFY each upstream caller against the SAME graph (mirrors RunEntryPointsAsync), unless
+        // --raw — which keeps the exact unfiltered reverse superset. Reverse reachability is set-based BFS, so
+        // a shared base/interface virtual node pulls in callers whose FORWARD (receiver-narrowed) dispatch
+        // resolves to a sibling override that never reaches the target. Each caller forward-reaches a matched
+        // (depth-0) target node or is partitioned as reverse-only (recall-safe — a forward reach can
+        // legitimately miss an interface/lambda-only path, so we caveat rather than drop).
+        var forwardConfirmed = new Dictionary<string, bool>(StringComparer.Ordinal);
+        if (!opts.Raw)
+        {
+            var targetIds = matched.Select(k => k.Key).ToHashSet(StringComparer.Ordinal);
+            var seedGroups = callers.Select(c => (IReadOnlyList<string>)new[] { c.Key }).ToList();
+            var confirmedFlags = FactPathFinder.SeedsReachTarget(graph, seedGroups, targetIds, maxDepth, mode);
+            for (var i = 0; i < callers.Count; i++)
+            {
+                forwardConfirmed[callers[i].Key] = confirmedFlags[i];
+            }
+        }
+        bool IsReverseOnly(string id) => !opts.Raw && forwardConfirmed.TryGetValue(id, out var ok) && !ok;
+
+        var confirmedCallers = callers.Where(kv => !IsReverseOnly(kv.Key)).ToList();
+        var reverseOnlyCallers = callers.Where(kv => IsReverseOnly(kv.Key)).ToList();
+
+        // --format tsv: depth + full DocID per reaching method, plus a trailing forwardConfirmed flag
+        // (ADDITIVE column — the existing depth\tdocid columns are unchanged). Depth-0 rows are the BFS start
+        // nodes (the matched target(s) and their lambdas, always forwardConfirmed=true), distinctly identified
+        // by their `0` depth — TSV consumers can filter depth > 0 for upstream callers only. ALL rows emitted
+        // (confirmed + reverse-only) so consumers can filter on the flag. --raw emits the raw superset (true).
+        if (tsv)
+        {
+            foreach (var kv in reachable.OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).Take(max))
+            {
+                io.Output.WriteLine($"{kv.Value}\t{kv.Key}\t{(IsReverseOnly(kv.Key) ? "false" : "true")}");
+            }
+
+            return 0;
+        }
+        io.Output.WriteLine($"Methods that reach '{opts.ToPattern}': {confirmedCallers.Count}");
         if (matched.Count > 0)
         {
             io.Output.WriteLine($"{Indent.L1}Matched nodes ({matched.Count}):");
@@ -247,16 +313,30 @@ internal static class CallersCommand
                 io.Output.WriteLine($"{Indent.L2}{ShortName(kv.Key)}");
             }
         }
-        foreach (var kv in callers.Take(max))
+        foreach (var kv in confirmedCallers.Take(max))
         {
             io.Output.WriteLine($"{Indent.L1}d{kv.Value}  {ShortName(kv.Key)}");
         }
-        // The truncation guard uses the full reverse-closure count (matched + callers) so that --limit
-        // never silently drops nodes visible in `--format tsv`. Callers already shown up to max; if
-        // the total exceeds max, the user may want to raise the limit or switch to tsv for the full set.
-        if (reachable.Count > max)
+        if (confirmedCallers.Count > max)
         {
-            io.Output.WriteLine($"{Indent.L1}… +{reachable.Count - max} more (raise --limit, or --format tsv for all)");
+            io.Output.WriteLine($"{Indent.L1}… +{confirmedCallers.Count - max} more (raise --limit, or --format tsv for all)");
+        }
+        // Reverse-only = in the reverse closure but with NO forward path: a reverse-dispatch over-approximation
+        // (a shared base/interface seam pulls in every caller of ANY override). By DEFAULT we DON'T list these;
+        // --include-reverse-only reveals them under a caveat (recall escape hatch).
+        if (opts.IncludeReverseOnly && reverseOnlyCallers.Count > 0)
+        {
+            io.Output.WriteLine($"Reverse-only (no forward path found — confirm with `rig path`): {reverseOnlyCallers.Count}");
+            foreach (var kv in reverseOnlyCallers.Take(max))
+            {
+                io.Output.WriteLine($"{Indent.L1}d{kv.Value}  {ShortName(kv.Key)}");
+            }
+        }
+        else if (reverseOnlyCallers.Count > 0)
+        {
+            io.Output.WriteLine(
+                $"{Indent.L1}… +{reverseOnlyCallers.Count} reach this only via reverse-dispatch over-approximation (no forward path) — list with --include-reverse-only"
+            );
         }
 
         return 0;

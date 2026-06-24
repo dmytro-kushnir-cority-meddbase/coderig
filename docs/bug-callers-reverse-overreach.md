@@ -149,6 +149,22 @@ or have reverse override-dispatch yield the base's **virtual** callers DIRECTLY 
 `base.M()` callers), bypassing the shared base node. This is essentially the documented hard part of fix #1
 (symmetric path-precise reverse narrowing).
 
+> **~~FOLLOW-UP retired~~ (2026-06-24): the reverse closure is now FORWARD-VERIFIED on ALL THREE caller
+> paths.** Forward-verification (fix #2) was extended from `--entrypoints` to the DEFAULT `callers` path and
+> `--roots` (same `FactPathFinder.SeedsReachTarget` engine): each reverse-reachable caller/root is forward-
+> reached toward the matched (depth-0) target nodes; confirmed = headline count, reverse-only = caveat footer
+> (listed only under `--include-reverse-only`). TSV gains an additive `forwardConfirmed` column on both paths.
+> **Reverse is now just a cheap, sound candidate generator; forward is the arbiter — they match by
+> construction**, so the callers↔path/tree invariant holds on the shaped path regardless of the reverse-gate
+> imprecision. Measured (god-seam `ContactEntity.RemovePersonContactLinks`, store `caa9373f`): default
+> `callers` **15,503 → 30 forward-confirmed** (+15,473 reverse-only); `--roots` 4,078 → 1 confirmed (the real
+> guarded `Contact/Edit.Delete`); forward-verifying the entire closure ~10 s (batched, parallel). **This
+> RETIRES the "symmetric path-precise reverse narrowing" / reverse-gate first-reach follow-up** — we no longer
+> need to make the *reverse* closure independently precise, because we forward-verify it. The raw reverse
+> superset is still available (`--include-reverse-only` to list, or `--raw` for the unshaped closure) — the
+> right tool for blast-radius / dead-code, where the sound superset is what you want. Test:
+> `tests/Rig.Tests/Domain/CallersForwardVerifiedClosureTests.cs`.
+
 ### Mechanism #2 (method-group receiver) — shipped 2026-06-24
 
 `FactExtractor.ReceiverTypeOf` now runs for `RefKinds.MethodGroup` too, so a `Retry(cert.Delete)`-style
