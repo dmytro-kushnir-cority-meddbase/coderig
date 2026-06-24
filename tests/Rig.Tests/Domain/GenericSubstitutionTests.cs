@@ -137,4 +137,42 @@ public sealed class GenericSubstitutionTests
         // The in-range param still substitutes within the same call.
         GenericSubstitution.Substitute(receiverType: "TEntity", typeParameterNames: names, binding: binding).ShouldBe(TEntityConcrete);
     }
+
+    // ---- Phase 2: the map overload (whole-token rewrite directly against a name->concrete map) ----------
+
+    [Test]
+    public void Substitute_map_overload_rewrites_whole_tokens()
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal) { ["TEntity"] = TEntityConcrete, ["Tv"] = "int" };
+
+        // Bare token, nested generic, and a substring-only near-miss in ONE call.
+        GenericSubstitution.Substitute(receiverType: "TEntity", map: map).ShouldBe(TEntityConcrete);
+        GenericSubstitution
+            .Substitute(receiverType: "System.Collections.Generic.Dictionary<TEntity, Tv>", map: map)
+            .ShouldBe("System.Collections.Generic.Dictionary<" + TEntityConcrete + ", int>");
+        GenericSubstitution.Substitute(receiverType: "TEntityCache", map: map).ShouldBe("TEntityCache");
+    }
+
+    [Test]
+    public void Substitute_map_overload_on_empty_map_or_no_match_is_unchanged()
+    {
+        var empty = new Dictionary<string, string>(StringComparer.Ordinal);
+        GenericSubstitution.Substitute(receiverType: "TEntity", map: empty).ShouldBe("TEntity");
+
+        var map = new Dictionary<string, string>(StringComparer.Ordinal) { ["TEntity"] = TEntityConcrete };
+        GenericSubstitution.Substitute(receiverType: "MedDBase.SomeConcreteType", map: map).ShouldBe("MedDBase.SomeConcreteType");
+    }
+
+    [Test]
+    public void Substitute_map_overload_agrees_with_positional_overload()
+    {
+        // The positional overload delegates to the map overload — same result for the same binding.
+        var names = GenericSubstitution.ParseTypeParameterNames(SaveServicesSignature);
+        var binding = GenericSubstitution.ParseBinding(SaveServicesBinding);
+        var map = new Dictionary<string, string>(StringComparer.Ordinal) { ["TEntity"] = TEntityConcrete, ["Tv"] = "int" };
+
+        var viaPositional = GenericSubstitution.Substitute(receiverType: "TEntity[]", typeParameterNames: names, binding: binding);
+        var viaMap = GenericSubstitution.Substitute(receiverType: "TEntity[]", map: map);
+        viaMap.ShouldBe(viaPositional);
+    }
 }

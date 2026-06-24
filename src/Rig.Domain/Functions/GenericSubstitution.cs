@@ -204,7 +204,19 @@ public static class GenericSubstitution
             map.TryAdd(name, binding[i]);
         }
 
-        if (map.Count == 0)
+        // Delegate the whole-token rewrite to the map overload (single substitution implementation).
+        return Substitute(receiverType, map);
+    }
+
+    // Map overload of the above (Phase 2): replace each WHOLE-IDENTIFIER occurrence of a type-param NAME
+    // in `receiverType` with its concrete from `map` directly, no positional zip. Same whole-token rewrite
+    // (C# identifier chars only, so `TEntityCache`/namespace segments containing a param name as a substring
+    // are NOT touched). Returns `receiverType` UNCHANGED when the map is empty or nothing matches. The
+    // monomorphizer builds a merged method+declaring-type param map once and substitutes every body
+    // receiver against it through here.
+    public static string Substitute(string receiverType, IReadOnlyDictionary<string, string> map)
+    {
+        if (string.IsNullOrEmpty(receiverType) || map.Count == 0)
         {
             return receiverType;
         }
