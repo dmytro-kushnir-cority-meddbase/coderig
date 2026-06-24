@@ -106,7 +106,9 @@ internal static class ReachesCommand
             graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
         }
 
-        var reachable = FactPathFinder.ReachesWithFanout(graph, opts.FromPattern, maxDepth, mode: mode);
+        var reachable = MonomorphCollapse.CollapseReachInfo(
+            FactPathFinder.ReachesWithFanout(graph, opts.FromPattern, maxDepth, mode: mode)
+        );
 
         var effects = DeriveEffects(
             rules.Effects,

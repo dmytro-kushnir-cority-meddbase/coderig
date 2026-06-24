@@ -117,6 +117,9 @@ internal static class PathCommand
             maxDepth: CommonOptions.DepthOrUnbounded(opts.Depth),
             mode: mode
         );
+        // Phase 3 display-collapse: fold any monomorphized (`~mono`) step ids back to their base method id
+        // before render (no-op until Phase 2's Materialize is wired into the load path).
+        path = path is null ? null : MonomorphCollapse.CollapsePath(path);
         if (path is null)
         {
             if (!tsv)

@@ -327,7 +327,7 @@ internal static class TreeCommand
                 graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
             }
 
-            roots = FactPathFinder.BuildTree(graph, opts.FromPattern, maxDepth, mode: mode);
+            roots = MonomorphCollapse.CollapseTree(FactPathFinder.BuildTree(graph, opts.FromPattern, maxDepth, mode: mode));
             timer.Lap("event marking + BuildTree");
             if (roots.Count == 0)
             {

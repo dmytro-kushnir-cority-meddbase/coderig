@@ -252,7 +252,7 @@ internal static class CallersCommand
             return 0;
         }
 
-        var reachable = FactPathFinder.ReachedBy(graph, opts.ToPattern, maxDepth, mode: mode);
+        var reachable = MonomorphCollapse.CollapseDepthMap(FactPathFinder.ReachedBy(graph, opts.ToPattern, maxDepth, mode: mode));
         if (reachable.Count == 0)
         {
             if (!tsv)
