@@ -68,7 +68,8 @@ internal static class TraversalGraphLoader
     )
     {
         var graph = await LoadTraversalGraphAsync(context, pattern, direction, rules.Handoff, rules.Redirect);
-        return FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context);
+        var monoSigs = await Reads.LoadMonomorphizationSignaturesAsync(context);
+        return FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context, monomorphizeSignatures: monoSigs);
     }
 
     // Like LoadTraversalGraphAsync, but also returns the effect-derivation inputs (invocations / ctor
@@ -89,9 +90,10 @@ internal static class TraversalGraphLoader
         // The single shaping pass (monomorphize generic factories + carry cut/context rules on the graph)
         // so reaches/tree walk the same shaped graph as path/callers. Edges with no concrete construct
         // keep their plumbing (the in-memory generic-dispatch narrowing covers those).
+        var monoSigs = await Reads.LoadMonomorphizationSignaturesAsync(context);
         inputs = inputs with
         {
-            Graph = FactPathFinder.ShapeGraph(inputs.Graph, rules.Factory, rules.Cut, rules.Context),
+            Graph = FactPathFinder.ShapeGraph(inputs.Graph, rules.Factory, rules.Cut, rules.Context, monomorphizeSignatures: monoSigs),
         };
         return inputs;
     }

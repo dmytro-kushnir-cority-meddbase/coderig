@@ -438,6 +438,58 @@ public static class Reads
         return new FactGraphData(classifiedEdges, implEdges, methods, baseEdges, minedDispatch);
     }
 
+    // The type-param-name source for static monomorphization (Phase 4, docs/design-dispatch-precision.md):
+    // an `id -> Signature` map over every METHOD and TYPE symbol. MethodRef/TypeSymbol on the graph carry no
+    // Signature, so ShapeGraph mines the ordered type-param names from these signatures (via
+    // GenericSubstitution.ParseTypeParameterNames) at materialize time. Dedupe on SymbolId first-wins,
+    // mirroring the method dedupe in LoadFactGraphAsync; a null Signature is stored as "".
+    public static async Task<IReadOnlyDictionary<string, string>> LoadSymbolSignaturesAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var rows = await context
+            .SymbolFacts.AsNoTracking()
+            .Where(s => s.Kind == SymbolKinds.Method || s.Kind == SymbolKinds.Type)
+            .Select(s => new { s.SymbolId, s.Signature })
+            .ToListAsync(cancellationToken);
+
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            map.TryAdd(row.SymbolId, row.Signature ?? "");
+        }
+
+        return map;
+    }
+
+    // The SINGLE static-monomorphization flag read (Phase 4): returns the symbol-signature map (the
+    // type-param-name source) when the `RIG_MONOMORPHIZE` env var is set to a truthy value, else NULL.
+    // NULL is the OFF path — ShapeGraph then materializes nothing and stays byte-identical to today; the DB
+    // query is only issued when the flag is on (zero overhead when off). The loader passes the result
+    // straight into ShapeGraph's `monomorphizeSignatures` parameter.
+    public static async Task<IReadOnlyDictionary<string, string>?> LoadMonomorphizationSignaturesAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (!IsMonomorphizeFlagOn())
+        {
+            return null;
+        }
+
+        return await LoadSymbolSignaturesAsync(context, cancellationToken);
+    }
+
+    // Truthy parse of the RIG_MONOMORPHIZE env var: "1" or "true" (case-insensitive) => ON; null / empty /
+    // anything else => OFF (default). Kept a tiny private helper so the gate is unambiguous and single-sourced.
+    private static bool IsMonomorphizeFlagOn()
+    {
+        var value = Environment.GetEnvironmentVariable("RIG_MONOMORPHIZE");
+        return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+    }
+
     // The FULLY in-memory-shaped graph: handoff-classified load → ShapeGraph (factory rewrite +
     // cut/context metadata) → MarkEventSubscriptionHandoffs → AddDeliveryEdges. The SINGLE entry point
     // for all in-memory consumers that need the complete shaped graph, so classify→factory→delivery→
@@ -454,7 +506,14 @@ public static class Reads
             redirectRules: rules.Redirect,
             cancellationToken: ct
         );
-        graph = FactPathFinder.ShapeGraph(graph: graph, factoryRules: rules.Factory, cutRules: rules.Cut, contextRules: rules.Context);
+        var monoSigs = await LoadMonomorphizationSignaturesAsync(context, ct);
+        graph = FactPathFinder.ShapeGraph(
+            graph: graph,
+            factoryRules: rules.Factory,
+            cutRules: rules.Cut,
+            contextRules: rules.Context,
+            monomorphizeSignatures: monoSigs
+        );
         // ORDER IS LOAD-BEARING: AddDeliveryEdges resolves an event's handlers by joining event-read sites to
         // co-located `methodGroup` subscription edges (`someEvent += H`), so it MUST run while those edges are
         // still methodGroup. MarkEventSubscriptionHandoffs reclassifies exactly those subscription edges to

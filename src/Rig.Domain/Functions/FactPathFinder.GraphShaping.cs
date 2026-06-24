@@ -205,14 +205,33 @@ public static partial class FactPathFinder
     // what makes `callers` agree with `path`/`reaches` — they all walk the same shaped graph rather than
     // each command shaping (or not) on its own. Empty rule sets => the unshaped graph (the `--raw` path,
     // and what `dead` uses — it needs the sound CHA superset, so it never calls this).
+    //
+    // STATIC-MONOMORPHIZATION SEAM (Phase 4, docs/design-dispatch-precision.md): when
+    // `monomorphizeSignatures` is NON-NULL, after the factory rewrite and BEFORE the cut/context attach, the
+    // reachable generic instantiations are materialized into distinct `~mono` nodes (Phase 1 inventory +
+    // Phase 2 Materialize) so the dispatch narrowing resolves the concrete override instead of CHA-fanning.
+    // The type-param NAMES come from `symbol_facts.Signature` (an `id -> Signature` map the loader supplies),
+    // since MethodRef/TypeSymbol carry no Signature on the graph. When `monomorphizeSignatures` is NULL (the
+    // default — every existing caller/test, and any run with the `RIG_MONOMORPHIZE` flag unset) NO inventory
+    // is built and NO materialization happens: the result is byte-identical to the pre-Phase-4 shaping.
     public static FactGraphData ShapeGraph(
         FactGraphData graph,
         IReadOnlyList<FactGenericFactoryRule> factoryRules,
         IReadOnlyList<FactTraversalCutRule> cutRules,
-        IReadOnlyList<FactContextDispatchRule> contextRules
+        IReadOnlyList<FactContextDispatchRule> contextRules,
+        IReadOnlyDictionary<string, string>? monomorphizeSignatures = null
     )
     {
         var shaped = RewriteGenericFactories(graph, factoryRules);
+
+        if (monomorphizeSignatures is not null)
+        {
+            var inventory = GenericInstantiationInventory.Build(shaped);
+            var typeParamNamesFor = (string id) =>
+                GenericSubstitution.ParseTypeParameterNames(monomorphizeSignatures.TryGetValue(id, out var sig) ? sig : null);
+            shaped = GenericMonomorphizer.Materialize(graph: shaped, inventory: inventory, typeParamNamesFor: typeParamNamesFor);
+        }
+
         if (cutRules.Count == 0 && contextRules.Count == 0)
         {
             return shaped;
