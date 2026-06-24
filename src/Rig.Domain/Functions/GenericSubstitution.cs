@@ -177,6 +177,119 @@ public static class GenericSubstitution
         return true;
     }
 
+    // One element of a call-site binding, kind-preserving (unlike ParseBinding, which strips the marker):
+    //   'C' (concrete, Value = the type), 'M' (forwarded ENCLOSING-METHOD type-param, Value = its index),
+    //   'T' (forwarded ENCLOSING-declaring-TYPE type-param, Value = index), '?' (unresolved, Value = "").
+    public readonly record struct BindingToken(char Kind, string Value);
+
+    // Parse the JSON-array binding form into KIND-PRESERVING tokens (`["C:Foo","M:0","?"]` ->
+    // [(C,Foo),(M,0),(?,"")]). Unlike ParseBinding (which drops the marker), this keeps the kind so a
+    // forwarded element can be resolved transitively against the enclosing instantiation. Null/empty/invalid
+    // -> empty list (no throw). Uses System.Text.Json so commas inside a concrete generic arg are safe.
+    public static IReadOnlyList<BindingToken> ParseBindingTokens(string? binding)
+    {
+        if (string.IsNullOrWhiteSpace(binding))
+        {
+            return Array.Empty<BindingToken>();
+        }
+
+        string[]? raw;
+        try
+        {
+            raw = JsonSerializer.Deserialize<string[]>(binding);
+        }
+        catch (JsonException)
+        {
+            return Array.Empty<BindingToken>();
+        }
+
+        if (raw is null)
+        {
+            return Array.Empty<BindingToken>();
+        }
+
+        var result = new List<BindingToken>(raw.Length);
+        foreach (var element in raw)
+        {
+            if (string.IsNullOrEmpty(element))
+            {
+                result.Add(new BindingToken('?', ""));
+                continue;
+            }
+
+            var colon = element.IndexOf(':');
+            if (colon <= 0)
+            {
+                // No "<kind>:" marker (e.g. "?") — treat as unresolved.
+                result.Add(new BindingToken('?', ""));
+                continue;
+            }
+
+            result.Add(new BindingToken(element[0], element[(colon + 1)..]));
+        }
+
+        return result;
+    }
+
+    // Resolve forwarded binding tokens against the ENCLOSING instantiation's already-resolved CONCRETE
+    // bindings: 'C' passes its type through; 'M':n -> enclosingMethodBinding[n]; 'T':n -> enclosingDeclaringBinding[n].
+    // Returns the fully-concrete resolved list, or NULL if ANY token is unresolved ('?', a non-numeric/out-of-
+    // range M/T index) — null means "leave this instantiation un-monomorphized" (the sound CHA backup). An empty
+    // token list resolves to an empty list (a non-generic side contributes nothing).
+    public static IReadOnlyList<string>? ResolveTokens(
+        IReadOnlyList<BindingToken> tokens,
+        IReadOnlyList<string> enclosingDeclaringBinding,
+        IReadOnlyList<string> enclosingMethodBinding
+    )
+    {
+        if (tokens.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var resolved = new string[tokens.Count];
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            switch (token.Kind)
+            {
+                case 'C':
+                    resolved[i] = token.Value;
+                    break;
+                case 'M':
+                    if (!TryResolveIndex(token.Value, enclosingMethodBinding, out resolved[i]!))
+                    {
+                        return null;
+                    }
+
+                    break;
+                case 'T':
+                    if (!TryResolveIndex(token.Value, enclosingDeclaringBinding, out resolved[i]!))
+                    {
+                        return null;
+                    }
+
+                    break;
+                default:
+                    return null; // '?' or unknown kind — unresolved.
+            }
+        }
+
+        return resolved;
+    }
+
+    private static bool TryResolveIndex(string indexText, IReadOnlyList<string> binding, out string value)
+    {
+        value = "";
+        if (!int.TryParse(indexText, out var index) || index < 0 || index >= binding.Count)
+        {
+            return false;
+        }
+
+        value = binding[index];
+        return true;
+    }
+
     // Replace each WHOLE-IDENTIFIER occurrence of a type-param name in `receiverType` with its concrete
     // from `binding` (matched by index). Returns the substituted string, or `receiverType` UNCHANGED when
     // nothing matches / inputs don't line up. Matching is whole-token only (bounded by start/end or a

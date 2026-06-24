@@ -2,118 +2,224 @@ using Rig.Domain.Data;
 
 namespace Rig.Domain.Functions;
 
-// Phase 2 of static monomorphization (docs/design-dispatch-precision.md): MATERIALIZE the monomorphized
-// subgraph as a PURE FUNCTION over an in-memory FactGraphData. Each reachable generic-method instantiation
-// (from the Phase-1 inventory) becomes a DISTINCT node whose body call edges have their type-param receiver
-// SUBSTITUTED with the concrete type the caller bound — so the EXISTING dispatch-narrowing machinery
-// (FactPathFinder.ResolveNarrowRoot / NarrowByReceiver, driven by CallEdge.ReceiverType) resolves the
-// concrete runtime override instead of CHA-fanning to every base-type override.
+// Static monomorphization (docs/design-dispatch-precision.md): MATERIALIZE the monomorphized subgraph as a
+// PURE FUNCTION over an in-memory FactGraphData. Each reachable generic-method instantiation (from the
+// inventory fixpoint) becomes a DISTINCT node whose CLOSURE edges (the method's body AND its lambda
+// sub-nodes', which close over its type-params) have their type-param receiver SUBSTITUTED with the concrete
+// type bound — so the EXISTING dispatch-narrowing (FactPathFinder.ResolveNarrowRoot / NarrowByReceiver,
+// driven by CallEdge.ReceiverType) resolves the concrete override instead of CHA-fanning.
 //
-// NO loader wiring, NO Roslyn, NO traversal-engine change. Returns a NEW FactGraphData (FactGraphData and
-// CallEdge are immutable records — never mutated). The base generic methods + their body edges are KEPT
-// unchanged (soundness: forwarded / unresolved / capped callers still reach base `M` with full CHA).
+// TRANSITIVE + LAMBDA-CLOSURE (session-2 rework): a cloned edge's CALLEE is also redirected —
+//   - a methodGroup edge into one of the method's OWN lambdas (`{M}~λN`) re-points to that lambda's
+//     instantiation node (mono-lambda), so the lambda body is walked under the instantiation; and
+//   - an edge into a nested generic whose binding FORWARDS this instantiation's type-args ("M:0"/"T:0") is
+//     resolved against this instantiation and re-pointed to the nested instantiation node (if inventoried).
+// So a concrete type flows from the root, through generic callers and into lambdas, to the concrete dispatch
+// — as close to runtime reification as the static facts allow.
 //
-// v1 scope (mirrors the inventory): DIRECT, CONCRETE-ONLY. Only the body edges' ReceiverType (the fan
-// driver) is substituted; nested TypeArguments / *Binding are left as-is — transitive/nested-binding
-// propagation is explicitly DEFERRED. Only an incoming edge whose bindings are FULLY CONCRETE and match an
-// inventory entry is redirected; anything else is left pointing at base `M` (sound CHA fallback).
+// NO loader wiring, NO Roslyn, NO traversal-engine change. Returns a NEW FactGraphData (immutable records).
+// Base generic methods + their bodies are KEPT unchanged (soundness: forwarded / unresolved / capped /
+// un-instantiated callers still reach base `M` with full CHA).
 public static class GenericMonomorphizer
 {
     public static FactGraphData Materialize(
         FactGraphData graph,
         GenericInstantiationInventory.InstantiationInventoryResult inventory,
         // Ordered type-parameter names for a symbol id (a METHOD id OR a declaring-TYPE id). MethodRef
-        // carries no Signature, so the names cannot be read off the graph — the caller supplies them
-        // (in real wiring, mined from symbol_facts.Signature via GenericSubstitution.ParseTypeParameterNames;
-        // in tests, supplied directly). May return empty for a non-generic / unknown id.
+        // carries no Signature, so the names cannot be read off the graph — the caller supplies them (in real
+        // wiring, mined from symbol_facts.Signature via GenericSubstitution.ParseTypeParameterNames).
         Func<string, IReadOnlyList<string>> typeParamNamesFor
     )
     {
-        // Index methods by id -> ContainingTypeId (for the declaring-type param zip), and call edges by
-        // Caller (to find a generic method's body edges to clone).
+        if (inventory.Instantiations.Count == 0)
+        {
+            return graph;
+        }
+
         var containingTypeOf = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (var m in graph.Methods)
         {
             containingTypeOf[m.SymbolId] = m.ContainingTypeId;
         }
 
+        // Body edges by caller, plus the lambda sub-nodes (`{method}~λN`) of each method — the closure we clone.
         var edgesByCaller = new Dictionary<string, List<CallEdge>>(StringComparer.Ordinal);
+        var lambdaCallersByMethod = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var edge in graph.CallEdges)
         {
             if (!edgesByCaller.TryGetValue(edge.Caller, out var list))
             {
-                list = new List<CallEdge>();
-                edgesByCaller[edge.Caller] = list;
+                edgesByCaller[edge.Caller] = list = new List<CallEdge>();
             }
 
             list.Add(edge);
         }
 
-        // Redirect lookup: (callee method id + parsed concrete declaring binding + parsed concrete method
-        // binding) -> the instantiation node id. Same key shape as the inventory dedupe. Also the per-
-        // instantiation cloned body edges, emitted after the (redirected) originals in a stable order.
-        var instIdByKey = new Dictionary<string, string>(StringComparer.Ordinal);
-        var clonedBodyEdges = new List<CallEdge>();
+        foreach (var caller in edgesByCaller.Keys)
+        {
+            var lambda = caller.IndexOf("~λ", StringComparison.Ordinal);
+            if (lambda > 0)
+            {
+                var baseMethod = caller[..lambda];
+                if (!lambdaCallersByMethod.TryGetValue(baseMethod, out var lambdas))
+                {
+                    lambdaCallersByMethod[baseMethod] = lambdas = new List<string>();
+                }
 
+                lambdas.Add(caller);
+            }
+        }
+
+        // The set of materialized instantiation node ids — the membership test for redirecting a cloned or
+        // incoming edge to a nested instantiation. Identity is MonomorphizedNodeId.For (deterministic).
+        var instIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var inst in inventory.Instantiations)
         {
-            var instId = MonomorphizedNodeId.For(
-                baseMethodId: inst.MethodId,
-                declaringBinding: inst.DeclaringBinding,
-                methodBinding: inst.MethodBinding
-            );
-            instIdByKey[KeyOf(methodId: inst.MethodId, declaring: inst.DeclaringBinding, method: inst.MethodBinding)] = instId;
+            instIds.Add(MonomorphizedNodeId.For(inst.MethodId, inst.DeclaringBinding, inst.MethodBinding));
+        }
 
-            // Merged type-param -> concrete map. DECLARING-type params first, METHOD params second so that
-            // on a (rare) name collision the METHOD param wins (later TryAdd is a no-op; so seed declaring,
-            // then overwrite-by-priority isn't needed — instead add method LAST with a plain indexer to win).
-            var map = new Dictionary<string, string>(StringComparer.Ordinal);
-            if (containingTypeOf.TryGetValue(inst.MethodId, out var containingType) && containingType is not null)
+        var clonedEdges = new List<CallEdge>();
+        foreach (var inst in inventory.Instantiations)
+        {
+            var instId = MonomorphizedNodeId.For(inst.MethodId, inst.DeclaringBinding, inst.MethodBinding);
+            var map = BuildNameMap(inst, typeParamNamesFor, containingTypeOf);
+
+            // Clone the method's own body edges onto the instantiation node.
+            CloneClosure(caller: inst.MethodId, newCaller: instId);
+
+            // Clone each lambda sub-node's edges onto its mono-lambda node (same binding as the method —
+            // lambdas close over the method's type-params).
+            if (lambdaCallersByMethod.TryGetValue(inst.MethodId, out var lambdas))
             {
-                ZipInto(map, names: typeParamNamesFor(containingType), binding: inst.DeclaringBinding, methodWins: false);
+                foreach (var lambdaCaller in lambdas)
+                {
+                    CloneClosure(
+                        caller: lambdaCaller,
+                        newCaller: MonomorphizedNodeId.For(lambdaCaller, inst.DeclaringBinding, inst.MethodBinding)
+                    );
+                }
             }
 
-            ZipInto(map, names: typeParamNamesFor(inst.MethodId), binding: inst.MethodBinding, methodWins: true);
-
-            // Clone each body edge of the generic method, substituting ONLY ReceiverType against the map.
-            if (edgesByCaller.TryGetValue(inst.MethodId, out var bodyEdges))
+            void CloneClosure(string caller, string newCaller)
             {
+                if (!edgesByCaller.TryGetValue(caller, out var bodyEdges))
+                {
+                    return;
+                }
+
                 foreach (var e in bodyEdges)
                 {
                     var newReceiver = e.ReceiverType is null ? null : GenericSubstitution.Substitute(e.ReceiverType, map);
-                    clonedBodyEdges.Add(e with { Caller = instId, ReceiverType = newReceiver });
+                    clonedEdges.Add(
+                        e with
+                        {
+                            Caller = newCaller,
+                            Callee = RedirectClonedCallee(e, inst, instIds),
+                            ReceiverType = newReceiver,
+                        }
+                    );
                 }
             }
         }
 
-        // REDIRECT incoming edges: for each original edge whose callee is a generic method with an
-        // instantiation, when this edge's present bindings are each fully concrete AND (callee, parsed decl,
-        // parsed meth) matches an inventory entry, REPLACE the edge's callee with the instId. Otherwise keep
-        // the original (pointing at base `M`) — the sound CHA fallback. REPLACE, not add: keeping both would
-        // still reach base `M` and re-explode the fan.
-        var outEdges = new List<CallEdge>(graph.CallEdges.Count + clonedBodyEdges.Count);
+        // REDIRECT incoming edges whose OWN binding is fully concrete and matches an inventory instantiation,
+        // REPLACING the callee with the instantiation node (keeping both would still reach base `M` and
+        // re-explode the fan). Forwarded incoming edges (from a generic caller) are left on base `M` — they
+        // are redirected by the CALLER's clone when that caller is materialized.
+        var outEdges = new List<CallEdge>(graph.CallEdges.Count + clonedEdges.Count);
         foreach (var e in graph.CallEdges)
         {
-            var instId = ResolveRedirect(e, instIdByKey);
-            outEdges.Add(instId is null ? e : e with { Callee = instId });
+            var redirect = IncomingRedirect(e, instIds);
+            outEdges.Add(redirect is null ? e : e with { Callee = redirect });
         }
 
-        // Cloned body edges AFTER the (redirected) originals, ordered by instId then by source-edge order
-        // (clonedBodyEdges already preserves the inventory order + per-method body order, which is stable;
-        // an explicit ordered-by-instId pass makes the emit order independent of inventory ordering).
-        clonedBodyEdges.Sort((a, b) => string.Compare(a.Caller, b.Caller, StringComparison.Ordinal));
-        outEdges.AddRange(clonedBodyEdges);
+        clonedEdges.Sort((a, b) => string.Compare(a.Caller, b.Caller, StringComparison.Ordinal));
+        outEdges.AddRange(clonedEdges);
 
-        // Every other field passes through unchanged.
         return graph with
         {
             CallEdges = outEdges,
         };
     }
 
-    // Zip ordered param NAMES with the concrete BINDING positionally into `map`. Out-of-range positions are
-    // skipped (arity mismatch tolerated, no throw). `methodWins` true => a name already present is
-    // OVERWRITTEN (method params shadow declaring-type params); false => first-writer (declaring) is kept.
+    // The callee of a cloned closure edge, redirected for transitivity / lambda-closure:
+    //   - a methodGroup into one of the instantiation method's OWN lambdas -> that lambda's mono node;
+    //   - an edge whose binding tokens RESOLVE (against this instantiation) to an inventoried instantiation
+    //     -> that nested instantiation node;
+    //   - otherwise the original callee (non-generic, unresolved, or un-inventoried -> sound CHA fallback).
+    private static string RedirectClonedCallee(
+        CallEdge edge,
+        GenericInstantiationInventory.GenericInstantiation inst,
+        HashSet<string> instIds
+    )
+    {
+        // A call into the method's own lambda closure: re-point to the lambda's instantiation (same binding).
+        if (edge.Callee.StartsWith(inst.MethodId + "~λ", StringComparison.Ordinal))
+        {
+            return MonomorphizedNodeId.For(edge.Callee, inst.DeclaringBinding, inst.MethodBinding);
+        }
+
+        var declTokens = GenericSubstitution.ParseBindingTokens(edge.DeclaringTypeArgBinding);
+        var methTokens = GenericSubstitution.ParseBindingTokens(edge.MethodTypeArgBinding);
+        if (declTokens.Count == 0 && methTokens.Count == 0)
+        {
+            return edge.Callee; // non-generic edge
+        }
+
+        var declaring = GenericSubstitution.ResolveTokens(declTokens, inst.DeclaringBinding, inst.MethodBinding);
+        var method = GenericSubstitution.ResolveTokens(methTokens, inst.DeclaringBinding, inst.MethodBinding);
+        if (declaring is null || method is null)
+        {
+            return edge.Callee; // a forwarded token didn't resolve here -> leave the callee CHA
+        }
+
+        var candidate = MonomorphizedNodeId.For(edge.Callee, declaring, method);
+        return instIds.Contains(candidate) ? candidate : edge.Callee;
+    }
+
+    // The instantiation node an ORIGINAL edge should be redirected to, or null to leave it at base. Only an
+    // edge whose own binding is FULLY CONCRETE (resolves against an empty enclosing context) and matches an
+    // inventory instantiation is redirected.
+    private static string? IncomingRedirect(CallEdge edge, HashSet<string> instIds)
+    {
+        var declTokens = GenericSubstitution.ParseBindingTokens(edge.DeclaringTypeArgBinding);
+        var methTokens = GenericSubstitution.ParseBindingTokens(edge.MethodTypeArgBinding);
+        if (declTokens.Count == 0 && methTokens.Count == 0)
+        {
+            return null;
+        }
+
+        var declaring = GenericSubstitution.ResolveTokens(declTokens, Array.Empty<string>(), Array.Empty<string>());
+        var method = GenericSubstitution.ResolveTokens(methTokens, Array.Empty<string>(), Array.Empty<string>());
+        if (declaring is null || method is null)
+        {
+            return null; // forwarded/unresolved -> the caller's clone handles it
+        }
+
+        var candidate = MonomorphizedNodeId.For(edge.Callee, declaring, method);
+        return instIds.Contains(candidate) ? candidate : null;
+    }
+
+    // Merged type-param NAME -> concrete map for an instantiation: declaring-type params (zipped to the
+    // declaring binding) first, then method params (zipped to the method binding) — method wins on a name
+    // collision. Out-of-range positions are skipped (arity mismatch tolerated). The same map substitutes the
+    // method's body AND its lambda bodies (lambdas close over the method's type-params).
+    private static Dictionary<string, string> BuildNameMap(
+        GenericInstantiationInventory.GenericInstantiation inst,
+        Func<string, IReadOnlyList<string>> typeParamNamesFor,
+        Dictionary<string, string?> containingTypeOf
+    )
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (containingTypeOf.TryGetValue(inst.MethodId, out var containingType) && containingType is not null)
+        {
+            ZipInto(map, names: typeParamNamesFor(containingType), binding: inst.DeclaringBinding, methodWins: false);
+        }
+
+        ZipInto(map, names: typeParamNamesFor(inst.MethodId), binding: inst.MethodBinding, methodWins: true);
+        return map;
+    }
+
     private static void ZipInto(Dictionary<string, string> map, IReadOnlyList<string> names, IReadOnlyList<string> binding, bool methodWins)
     {
         for (var i = 0; i < names.Count; i++)
@@ -134,41 +240,4 @@ public static class GenericMonomorphizer
             }
         }
     }
-
-    // The instantiation node id an incoming edge should be redirected to, or null to leave it at base `M`.
-    // Uses the SAME parse / fully-concrete logic as the inventory: each PRESENT binding must be fully
-    // concrete (else forwarded/unresolved — keep base `M`); the parsed key must match an inventory entry.
-    private static string? ResolveRedirect(CallEdge edge, Dictionary<string, string> instIdByKey)
-    {
-        if (instIdByKey.Count == 0)
-        {
-            return null;
-        }
-
-        var hasDeclaring = !string.IsNullOrWhiteSpace(edge.DeclaringTypeArgBinding);
-        var hasMethod = !string.IsNullOrWhiteSpace(edge.MethodTypeArgBinding);
-        if (!hasDeclaring && !hasMethod)
-        {
-            return null;
-        }
-
-        if (hasDeclaring && !GenericSubstitution.IsFullyConcrete(edge.DeclaringTypeArgBinding))
-        {
-            return null;
-        }
-
-        if (hasMethod && !GenericSubstitution.IsFullyConcrete(edge.MethodTypeArgBinding))
-        {
-            return null;
-        }
-
-        var declaring = hasDeclaring ? GenericSubstitution.ParseBinding(edge.DeclaringTypeArgBinding) : Array.Empty<string>();
-        var method = hasMethod ? GenericSubstitution.ParseBinding(edge.MethodTypeArgBinding) : Array.Empty<string>();
-        return instIdByKey.TryGetValue(KeyOf(methodId: edge.Callee, declaring: declaring, method: method), out var instId) ? instId : null;
-    }
-
-    // Stable key matching GenericInstantiationInventory.KeyOf: type names never contain the unit separator,
-    // so the join is unambiguous for an in-memory lookup.
-    private static string KeyOf(string methodId, IReadOnlyList<string> declaring, IReadOnlyList<string> method) =>
-        methodId + "" + string.Join("", declaring) + "" + string.Join("", method);
 }
