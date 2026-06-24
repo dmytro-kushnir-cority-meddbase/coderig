@@ -146,6 +146,13 @@ public static class GraphMaterializer
         await ExecuteAsync(connection, null, "PRAGMA analysis_limit=400;", cancellationToken);
         await ExecuteAsync(connection, null, "ANALYZE;", cancellationToken);
 
+        // Stamp the graph stage as current now the graph tables (call_edges/dispatch_edges/nodes/fts) are
+        // built. The read-time SchemaGate.GraphAvailableAsync gates every graph read on this version, so a
+        // store whose graph this build didn't (re)stamp reads as graph-absent and callers degrade. On a
+        // re-graph over a legacy store with no meta row, WriteGraphVersionAsync also stamps the current
+        // index version (the graph build proves the store is current-shaped).
+        await SchemaMeta.WriteGraphVersionAsync(connection, cancellationToken);
+
         return new GraphStats(CallEdges: callCount, DispatchEdges: dispatchCount, Nodes: nodeCount, HeuristicDispatchEdges: heuristicCount);
     }
 
@@ -367,7 +374,7 @@ public static class GraphMaterializer
             """,
             cancellationToken
         );
-        
+
         await ExecuteAsync(connection, null, "CREATE INDEX IF NOT EXISTS IX_call_edges_FromSym ON call_edges(FromSym);", cancellationToken);
         await ExecuteAsync(connection, null, "CREATE INDEX IF NOT EXISTS IX_call_edges_ToSym ON call_edges(ToSym);", cancellationToken);
         // Index on Kind so the handoff-EP read (DeriveHandoffEntryPoints) selects the ~5k handoff +
@@ -387,14 +394,14 @@ public static class GraphMaterializer
             """,
             cancellationToken
         );
-        
+
         await ExecuteAsync(
             connection,
             null,
             "CREATE INDEX IF NOT EXISTS IX_dispatch_edges_FromSym ON dispatch_edges(FromSym);",
             cancellationToken
         );
-        
+
         await ExecuteAsync(
             connection,
             null,
@@ -490,7 +497,7 @@ public static class GraphMaterializer
         progress?.Invoke($"dispatch_edges: {count} (done; {count - heuristic} roslyn-mined, {heuristic} heuristic)");
         return (count, heuristic);
     }
-    
+
     private static DbParameter AddParam(DbCommand command, string name)
     {
         var p = command.CreateParameter();

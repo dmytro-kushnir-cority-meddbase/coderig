@@ -1,5 +1,4 @@
 using System.Data.Common;
-using System.Globalization;
 using System.Text;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
@@ -24,20 +23,15 @@ public static class SqlReachability
         Reverse,
     }
 
-    // True when the derived edge views exist and are non-empty — i.e. `rig graph` has been run over
-    // this store. Callers fall back to the EF path (or prompt to run `rig graph`) when false.
+    // True when the store carries a CURRENT graph — i.e. `rig graph` (GraphMaterializer) has stamped the
+    // graph schema version into `meta`. Routed through SchemaGate.GraphAvailableAsync (the single source
+    // of graph-presence truth) rather than probing call_edges directly: the graph is built as a UNIT, so
+    // its presence is a property of the db file, not of any one table. Callers fall back to the EF path
+    // (or prompt to run `rig graph`) when false.
     public static async Task<bool> HasGraphAsync(RigDbContext context, CancellationToken cancellationToken = default)
     {
         var connection = await OpenAsync(context, cancellationToken);
-        if (!await StorageProbes.TableExistsAsync(connection, "call_edges", cancellationToken))
-        {
-            return false;
-        }
-
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT EXISTS(SELECT 1 FROM call_edges LIMIT 1);";
-        var result = await command.ExecuteScalarAsync(cancellationToken);
-        return Convert.ToInt64(result, CultureInfo.InvariantCulture) != 0;
+        return await SchemaGate.GraphAvailableAsync(connection, cancellationToken);
     }
 
     // The transitive set reachable from (Forward) / reaching (Reverse) the given seed symbols, over
@@ -96,7 +90,10 @@ public static class SqlReachability
     {
         var result = new Dictionary<string, int>(StringComparer.Ordinal);
         var connection = await OpenAsync(context, cancellationToken);
-        var hasNodes = await StorageProbes.TableExistsAsync(connection, "nodes", cancellationToken);
+        // `nodes` is built as part of the graph UNIT (GraphMaterializer), so it is present whenever this
+        // path runs — every caller gates on HasGraphAsync (→ SchemaGate.GraphAvailableAsync) first. No
+        // per-table probe: the gate owns graph-presence.
+        const bool hasNodes = true;
         var (frontier, next) = direction == Direction.Forward ? ("FromSym", "ToSym") : ("ToSym", "FromSym");
 
         // Iterative level-BFS in a temp table rather than one min-depth recursive CTE. A single CTE that
@@ -518,23 +515,19 @@ public static class SqlReachability
         // dispatch exact-first over it, matching the full-graph oracle (and the materialised
         // dispatch_edges, which are built from the same facts). Loaded WHOLE like the type relations —
         // the table is tiny relative to reference_facts, and an unbounded superset can only agree with
-        // the full graph. Probed: a pre-dispatch-facts store has no table → null → CHA fallback,
-        // exactly matching its dispatch_edges (also built heuristic-only).
-        IReadOnlyList<DispatchFact>? minedDispatch = null;
-        if (await StorageProbes.TableExistsAsync(connection, "dispatch_facts", cancellationToken))
-        {
-            var mined = new HashSet<DispatchFact>();
-            await ReadAsync(
-                connection,
-                "SELECT DISTINCT SourceMember, TargetMember, Kind FROM dispatch_facts;",
-                reader =>
-                    mined.Add(
-                        new DispatchFact(SourceMember: reader.GetString(0), TargetMember: reader.GetString(1), Kind: reader.GetString(2))
-                    ),
-                cancellationToken
-            );
-            minedDispatch = mined.ToArray();
-        }
+        // the full graph. dispatch_facts is a FACT table guaranteed by the open-time index gate (it is
+        // part of the v1 fact schema), so no per-table probe — an old store fails fast at open, not here.
+        var mined = new HashSet<DispatchFact>();
+        await ReadAsync(
+            connection,
+            "SELECT DISTINCT SourceMember, TargetMember, Kind FROM dispatch_facts;",
+            reader =>
+                mined.Add(
+                    new DispatchFact(SourceMember: reader.GetString(0), TargetMember: reader.GetString(1), Kind: reader.GetString(2))
+                ),
+            cancellationToken
+        );
+        IReadOnlyList<DispatchFact>? minedDispatch = mined.ToArray();
 
         return new FactGraphData(callEdges, implEdges.ToArray(), methodById.Values.ToArray(), baseEdges.ToArray(), minedDispatch);
     }

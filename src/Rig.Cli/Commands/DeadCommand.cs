@@ -81,7 +81,7 @@ internal static class DeadCommand
     {
         var tsv = CommonOptions.IsTsv(opts.Format);
 
-        await using var context = OpenReadContext(io.WorkingDirectory);
+        await using var context = await OpenReadContextGatedAsync(io.WorkingDirectory);
 
         // TODO(perf): `dead` still loads the full ~1.4M-row call graph into memory (LoadFactGraphAsync) and
         // runs ReachableFromAll(roots) in process. This is the last read command doing a full-graph load. It

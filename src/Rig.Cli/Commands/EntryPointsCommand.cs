@@ -59,7 +59,7 @@ internal static class EntryPointsCommand
         var max = opts.Limit ?? int.MaxValue; // --limit absent => unbounded (this IS the listing)
 
         var rules = RuleSetLoader.Load(io.WorkingDirectory, opts.ExtraRules);
-        await using var context = OpenReadContext(io.WorkingDirectory, io.StoreRef);
+        await using var context = await OpenReadContextGatedAsync(io.WorkingDirectory, io.StoreRef);
 
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
         var epSet = await DeriveEntryPointsAsync(context, epData, rules);

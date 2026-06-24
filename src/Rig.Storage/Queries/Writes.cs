@@ -25,6 +25,24 @@ public static class Writes
         return await StorageProbes.TableExistsAsync(connection, "assemblies", cancellationToken);
     }
 
+    // BEFORE an in-place APPEND (`--merge` / mine's `--identity`) into an EXISTING store: reject a store
+    // whose stamped index schema doesn't match the version this rig writes. Appending current-shaped facts
+    // into an old-shaped store would silently mix shapes; the store is disposable, so the fix is a re-index,
+    // not an append. A store with NO meta row (predates schema stamping) is left alone here — the existing
+    // assembly-registry guard already requires such a store to be re-mined for `--merge`, and SaveAsync will
+    // stamp the current version on the way out. Throws RigStoreException on a genuine version mismatch.
+    public static async Task AssertAppendableAsync(RigDbContext context, CancellationToken cancellationToken = default)
+    {
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        var (index, _) = await SchemaMeta.ReadAsync(connection, cancellationToken);
+        if (index is not null && index != SchemaVersion.Index)
+        {
+            throw new RigStoreException(
+                $"Store schema v{index}, this rig writes v{SchemaVersion.Index} — re-index, don't append (the .rig store is disposable; rebuild it with `rig index`)."
+            );
+        }
+    }
+
     public static async Task<string> SaveAsync(
         RigDbContext context,
         AnalysisResult result,
@@ -119,6 +137,12 @@ public static class Writes
             // completed fact write — degrade to a warning and leave the facts intact.
             progress?.Invoke($"WARN: assembly registry skipped ({exception.GetType().Name}: {exception.Message})");
         }
+
+        // Stamp the DB-file schema version now the facts are written: index=current, graph=NULL. A fresh
+        // index (or an append) invalidates any prior graph, so the graph stage resets to "absent" until
+        // GraphMaterializer re-stamps it. This is the row the read-time SchemaGate checks; SchemaMeta is
+        // raw SQL on the same connection EF holds open. NOT a migration — a tripwire (see SchemaGate).
+        await SchemaMeta.WriteIndexVersionAsync(connection, cancellationToken);
         return runId;
     }
 

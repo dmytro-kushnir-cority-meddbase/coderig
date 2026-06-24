@@ -31,7 +31,7 @@ internal static class FactCommands
                     var storeIds = StoreLayout.AvailableStoreIds(workingDirectory);
                     if (storeIds.Count == 0)
                     {
-                        await using var context = OpenReadContext(workingDirectory);
+                        await using var context = await OpenReadContextGatedAsync(workingDirectory);
                         output.WriteLine("Runs");
                         await RenderRunsAsync(context: context, output: output, idIndent: Indent.L1, detailIndent: Indent.L2);
                         return 0;
@@ -43,7 +43,7 @@ internal static class FactCommands
                     {
                         var marker = string.Equals(storeId, latest, StringComparison.OrdinalIgnoreCase) ? "  ← LATEST (read default)" : "";
                         output.WriteLine($"{Indent.L1}store {storeId}{marker}");
-                        await using var context = OpenReadContext(workingDirectory: workingDirectory, storeRef: storeId);
+                        await using var context = await OpenReadContextGatedAsync(workingDirectory: workingDirectory, storeRef: storeId);
                         await RenderRunsAsync(context: context, output: output, idIndent: Indent.L2, detailIndent: Indent.L3);
                     }
 
@@ -84,7 +84,7 @@ internal static class FactCommands
                 error,
                 async () =>
                 {
-                    await using var context = OpenReadContext(workingDirectory);
+                    await using var context = await OpenReadContextGatedAsync(workingDirectory);
                     var registrations = await Reads.LoadDiRegistrationsAsync(context);
                     if (registrations is null)
                     {
@@ -139,7 +139,7 @@ internal static class FactCommands
                 error,
                 async () =>
                 {
-                    await using var context = OpenReadContext(workingDirectory);
+                    await using var context = await OpenReadContextGatedAsync(workingDirectory);
                     if (pr.GetValue(skipped))
                     {
                         var sourceFiles = await Reads.LoadSkippedSourceFilesAsync(context);
@@ -202,7 +202,7 @@ internal static class FactCommands
                     var k = pr.GetValue(kind);
                     var cap = pr.GetValue(limit);
                     var filterLambdas = pr.GetValue(noLambdas);
-                    await using var context = OpenReadContext(workingDirectory);
+                    await using var context = await OpenReadContextGatedAsync(workingDirectory);
                     // Fetch beyond the display cap so we can compute the true post-filter total: the LIKE
                     // fallback hard-caps at 5000 unique rows, and the FTS path returns all matches.
                     var allHits = await Reads.SearchSymbolsAsync(context, pattern: p, kind: k, limit: int.MaxValue);
@@ -249,7 +249,7 @@ internal static class FactCommands
                     var p = pr.GetValue(pattern)!;
                     var fp = pr.GetValue(firstParty);
                     var refKind = pr.GetValue(kind);
-                    await using var context = OpenReadContext(workingDirectory);
+                    await using var context = await OpenReadContextGatedAsync(workingDirectory);
                     var hits = await Reads.FindReferencesAsync(
                         context,
                         pattern: p,

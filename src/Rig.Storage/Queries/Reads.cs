@@ -115,7 +115,10 @@ public static class Reads
     )
     {
         var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
-        if (pattern.Length >= 3 && await StorageProbes.TableExistsAsync(connection, "symbol_fts", cancellationToken))
+        // symbol_fts is built with the graph (GraphMaterializer); GraphAvailableAsync is the single
+        // graph-presence check (replaces the per-table probe). The LIKE fallback below stays for the
+        // graph-absent case (a --no-graph store still searches) and for short (<3-char) patterns.
+        if (pattern.Length >= 3 && await SchemaGate.GraphAvailableAsync(connection, cancellationToken))
         {
             var hits = new List<SymbolSearchHit>();
             await using var command = connection.CreateCommand();
@@ -198,7 +201,9 @@ public static class Reads
     )
     {
         var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
-        if (pattern.Length >= 3 && await StorageProbes.TableExistsAsync(connection, "ref_target_fts", cancellationToken))
+        // ref_target_fts is built with the graph; GraphAvailableAsync is the single graph-presence check.
+        // The LIKE fallback below stays for the graph-absent (--no-graph) case and short patterns.
+        if (pattern.Length >= 3 && await SchemaGate.GraphAvailableAsync(connection, cancellationToken))
         {
             var hits = new List<ReferenceHit>();
             await using var command = connection.CreateCommand();
@@ -762,13 +767,10 @@ public static class Reads
     )
     {
         // Reuse the caller's already-open connection when supplied (the LoadFactGraphAsync hot path); otherwise
-        // open it here. Either way the dispatch_facts existence probe runs once — a store predating the table
-        // returns null so FactPathFinder degrades to name/arity CHA instead of throwing on the read-only conn.
+        // open it here. dispatch_facts is a FACT table guaranteed by the open-time index gate (part of the v1
+        // fact schema), so no per-table probe — an old store fails fast at open. The return stays nullable for
+        // the caller's contract, but this path no longer returns null for a missing table.
         connection ??= await StorageProbes.OpenConnectionAsync(context, cancellationToken);
-        if (!await StorageProbes.TableExistsAsync(connection, "dispatch_facts", cancellationToken))
-        {
-            return null;
-        }
 
         // Direct DispatchFact projection (no anonymous intermediate / second pass; AsNoTracking is a no-op
         // on a projection, kept as intent). dispatch_facts has a higher dup ratio (~25%), but it's a small
@@ -927,7 +929,7 @@ public static class Reads
         // (~3.7s). call_edges.Kind is the SAME classification the rest of the SQL query path already trusts,
         // so this is equivalence-preserving; the classifier still attaches kind/requires from the passed
         // rules by HandoffDispatcher id.
-        if (await StorageProbes.TableExistsAsync(connection, "call_edges", cancellationToken))
+        if (await SchemaGate.GraphAvailableAsync(connection, cancellationToken))
         {
             var edges = new List<CallEdge>();
             await using var command = connection.CreateCommand();

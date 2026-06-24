@@ -153,7 +153,7 @@ internal static class ImpactCommand
 
         // The HEAD store: opened for the (cheap) deployment-map read on a hit, and the full derivation on a
         // miss. Opening issues no query — the cost is in the graph load + reach a hit skips.
-        await using var context = OpenReadContext(workingDirectory: io.WorkingDirectory, storeRef: opts.HeadRef);
+        await using var context = await OpenReadContextGatedAsync(workingDirectory: io.WorkingDirectory, storeRef: opts.HeadRef);
 
         // F4: load the DeploymentMap ONCE here so both the warm-path (cache hit) and cold-path share the
         // same result — eliminates the duplicate LoadDeploymentsAsync that previously appeared in each branch.

@@ -97,7 +97,7 @@ internal static class ReachesCommand
         // --raw, a long-standing asymmetry vs path/tree/callers).
         var shaped = opts.Raw ? rules with { Cut = [], Context = [] } : rules;
 
-        await using var context = OpenReadContext(io.WorkingDirectory, io.StoreRef);
+        await using var context = await OpenReadContextGatedAsync(io.WorkingDirectory, io.StoreRef);
 
         var inputs = await LoadEffectReachInputsAsync(context, opts.FromPattern, SqlReachability.Direction.Forward, shaped);
         var graph = inputs.Graph;

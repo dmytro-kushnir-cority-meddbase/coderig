@@ -38,6 +38,44 @@ internal static class TraversalGraphLoader
         return new(Path.Combine(storeDir, StoreLayout.DbFileName), readOnly: true);
     }
 
+    // The SINGLE schema-gate chokepoint for read/query commands. Opens the read context exactly as
+    // OpenReadContext does, then runs SchemaGate.AssertReadableAsync ONCE — the hard fail-fast that
+    // replaces the scattered per-table TableExistsAsync schema probes. Every query command opens through
+    // here so an uninitialized / schema-drifted store fails at open with a clear "re-index" message rather
+    // than a cryptic mid-query `no such column`. Writers (index/mine/graph) use the raw constructor — they
+    // CREATE the store and must not be gated. On a gate failure the context is disposed before rethrow.
+    internal static async Task<RigDbContext> OpenReadContextGatedAsync(string workingDirectory, string? storeRef = null)
+    {
+        var context = OpenReadContext(workingDirectory, storeRef);
+        await AssertReadableAsync(context);
+        return context;
+    }
+
+    // Gated counterpart of the F7 out-param overload (storeDir surfaced for StoreKey reuse).
+    internal static async Task<(RigDbContext Context, string StoreDir)> OpenReadContextGatedAsync(
+        string workingDirectory,
+        string? storeRef,
+        bool withStoreDir
+    )
+    {
+        var context = OpenReadContext(workingDirectory, storeRef, out var storeDir);
+        await AssertReadableAsync(context);
+        return (context, storeDir);
+    }
+
+    private static async Task AssertReadableAsync(RigDbContext context)
+    {
+        try
+        {
+            await SchemaGate.AssertReadableAsync(context);
+        }
+        catch
+        {
+            await context.DisposeAsync();
+            throw;
+        }
+    }
+
     // The call graph for a traversal command (reaches/tree/path/callers). When the derived edge views
     // exist (`rig graph` has been run) it returns the BOUNDED subgraph for `pattern` in the given
     // direction — loaded on disk via recursive CTE, sized to the result, not the 1.6GB store. Otherwise
@@ -93,9 +131,10 @@ internal static class TraversalGraphLoader
         RuleSet rules
     )
     {
-        var inputs = SqlFastPathEnabled && await SqlReachability.HasGraphAsync(context)
-            ? await SqlReachability.LoadReachInputsAsync(context, pattern, direction)
-            : await LoadReachInputsFromRowsAsync(context, rules.Handoff, rules.Redirect);
+        var inputs =
+            SqlFastPathEnabled && await SqlReachability.HasGraphAsync(context)
+                ? await SqlReachability.LoadReachInputsAsync(context, pattern, direction)
+                : await LoadReachInputsFromRowsAsync(context, rules.Handoff, rules.Redirect);
 
         // The single shaping pass (monomorphize generic factories + carry cut/context rules on the graph)
         // so reaches/tree walk the same shaped graph as path/callers. Edges with no concrete construct

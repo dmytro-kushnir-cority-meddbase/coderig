@@ -125,7 +125,7 @@ internal static class CallersCommand
         var rules = RuleSetLoader.Load(io.WorkingDirectory, opts.ExtraRules);
         var shaped = opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
 
-        await using var context = OpenReadContext(io.WorkingDirectory, io.StoreRef);
+        await using var context = await OpenReadContextGatedAsync(io.WorkingDirectory, io.StoreRef);
 
         // One shaped reverse subgraph (bounded when `rig graph` has run, else the full EF graph) drives all
         // three callers modes — the set, the no-predecessor roots, and the rule-detected entrypoints.

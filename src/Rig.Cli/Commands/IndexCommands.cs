@@ -336,6 +336,15 @@ internal static class IndexCommands
             }
         }
 
+        // BEFORE any in-place append (--merge / mine's --identity) into an existing store: fail fast on a
+        // store whose stamped index schema doesn't match this rig (don't mix shapes into a disposable store).
+        // No-op when the store doesn't exist yet (first append) or predates schema stamping.
+        if (appendMode && File.Exists(finalDbPath))
+        {
+            await using var schemaProbe = new RigDbContext(finalDbPath, pooling: false, readOnly: true);
+            await Writes.AssertAppendableAsync(schemaProbe);
+        }
+
         output.WriteLine(
             $"Progress: Saving run ({(fastBulkWrite ? "fast" : "durable")}{(atomicPublish ? ", atomic-publish" : ", in-place")})"
         );

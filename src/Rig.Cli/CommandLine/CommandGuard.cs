@@ -1,4 +1,5 @@
 using System.Data.Common;
+using Rig.Storage;
 
 namespace Rig.Cli.CommandLine;
 
@@ -22,6 +23,15 @@ internal static class CommandGuard
                     ? "Nothing is indexed here. Run `rig index <solution>` first."
                     : "Indexed stores: " + string.Join(separator: ", ", values: notFound.Available) + "."
             );
+            return 2;
+        }
+        catch (RigStoreException storeException)
+        {
+            // The open-time schema gate (SchemaGate.AssertReadableAsync) rejected the store: uninitialized,
+            // or an index-schema-version mismatch. Its Message is already actionable ("run `rig index`" /
+            // "re-index"), so render it directly at exit 2 — this is the fail-fast that replaces the
+            // scattered mid-query schema probes.
+            error.WriteLine(storeException.Message);
             return 2;
         }
         catch (DbException exception)

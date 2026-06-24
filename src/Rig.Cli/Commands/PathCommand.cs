@@ -83,7 +83,7 @@ internal static class PathCommand
         var rules = RuleSetLoader.Load(io.WorkingDirectory, opts.ExtraRules);
         var shaped = opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
 
-        await using var context = OpenReadContext(io.WorkingDirectory, io.StoreRef);
+        await using var context = await OpenReadContextGatedAsync(io.WorkingDirectory, io.StoreRef);
         // Any path from a `from` node lies entirely within that node's forward closure, so the BOUNDED
         // forward subgraph (loaded on disk via the derived edge views, sized to the result) finds the
         // same first path as the full graph. Falls back to the full EF graph when `rig graph` hasn't run.

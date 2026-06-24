@@ -237,7 +237,7 @@ internal static class TreeCommand
         var shaped = opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
         var renderRules = opts.Raw ? FactRenderRules.Empty : rules.Render;
 
-        await using var context = OpenReadContext(io.WorkingDirectory, io.StoreRef);
+        await using var context = await OpenReadContextGatedAsync(io.WorkingDirectory, io.StoreRef);
         var timer = new PhaseTimer(opts.Time, io.Error);
 
         // Query cache (best-effort, opt-out via --no-cache). A `rig tree` query recomputes the call-tree

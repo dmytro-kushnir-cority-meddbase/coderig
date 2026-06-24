@@ -111,8 +111,13 @@ internal static class DeriveCommand
 
         WarnUnknownFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: rules, errorWriter: io.Error);
         // F7: use the out-param overload so the resolved store dir is available for the StoreKey computation
-        // below without a second ResolveReadStoreDir call (io:read ×7).
-        await using var context = OpenReadContext(workingDirectory: io.WorkingDirectory, storeRef: io.StoreRef, storeDir: out var rigDir);
+        // below without a second ResolveReadStoreDir call (io:read ×7). Gated: schema fail-fast at open.
+        var (context, rigDir) = await OpenReadContextGatedAsync(
+            workingDirectory: io.WorkingDirectory,
+            storeRef: io.StoreRef,
+            withStoreDir: true
+        );
+        await using var contextScope = context;
 
         // Deployment attribution (opt-in: only when deployments.json sits next to .rig). Empty (no-op) when
         // the config is absent; `error` is the log sink so config problems surface.

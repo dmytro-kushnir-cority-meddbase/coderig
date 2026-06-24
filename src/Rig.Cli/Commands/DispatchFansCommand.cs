@@ -70,7 +70,7 @@ internal static class DispatchFansCommand
         var tsv = CommonOptions.IsTsv(opts.Format);
         var rules = RuleSetLoader.Load(io.WorkingDirectory, opts.ExtraRules);
 
-        await using var context = OpenReadContext(io.WorkingDirectory, io.StoreRef);
+        await using var context = await OpenReadContextGatedAsync(io.WorkingDirectory, io.StoreRef);
 
         // The full shaped graph (every call edge + mined dispatch facts), same load `rig derive` uses, so
         // the measured fan matches what the rest of the pipeline sees. This is a whole-graph diagnostic, not
