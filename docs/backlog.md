@@ -769,10 +769,12 @@ from source → only then are the proxies excludable. Until then, index everythi
 
 ---
 
-## FR-7 cache-coherence — ✅ SHIPPED, FILTERED, CALIBRATED-CLEAN, and validated with a real finding (2026-06-25)
+## FR-7 cache-coherence — ✅ SHIPPED, FILTERED, CALIBRATED; the single finding was a reviewed FALSE POSITIVE (2026-06-25)
 
-**STATUS: built + the generated-ORM filter shipped + calibrated clean on the real store + a confirmed real
-bug triaged.** Migrated onto `FactCorrelationDeriver` (the CEP absence-join — cache_coherence is its first
+**STATUS: built + the generated-ORM filter shipped + calibrated (48 generated → 4 app-code candidates); the one
+real-code finding was triaged and DISPROVEN by code review (benign staleness — see below).** A clean
+demonstration that FR-7 is a disclosed CANDIDATE generator, not a verdict. Migrated onto `FactCorrelationDeriver`
+(the CEP absence-join — cache_coherence is its first
 instance), NOT the original `FactCacheCoherenceDeriver` framing. Stays rule-gated (fires only when a repo
 supplies a `cacheCoherence` rule); MedDBase `rig.rules.json` carries one. Correct posture — `cachedEntities`
 is repo-specific, so this is never a builtin/on-by-default rule.
@@ -786,12 +788,21 @@ is repo-specific, so this is never a builtin/on-by-default rule.
 - **Calibration (fresh store, 2026-06-25): 48 generated-`CollectionClasses` candidates → filtered to 4 real
   app-code findings**, all high-confidence, all `ContactEntity.RemovePersonContactLinks` (hand-written
   `MMSEntityClasses`, lines 80/84/88/92), `bulk_write_without_cache_invalidation` on the `Person` cache.
-- **Triaged → CONFIRMED REAL BUG (GI-4199 class), zero FP risk.** `RemovePersonContactLinks` does 4
-  `UpdateMulti` bulk writes to `PersonEntity` (nulling Fk{Insurer,Employer,Legal,School}Contact) — `UpdateMulti`
-  is a direct DB update that bypasses entity save-hooks, so no cache invalidation fires. The ENTIRE
-  `ContactEntity.Delete` closure (200 methods) reaches only `AccountCache` *reads* — **zero `Person`-cache
-  invalidation anywhere** — while the correct API plainly exists and is unused on this path: `PersonCache.Remove(int)`
-  / `PersonCache.Remove(PersonRecord)` / `PersonCache.Clear`. Fix = invalidate Person cache after the bulk update.
+- **Triaged → FALSE POSITIVE (disproven by code review on the actual path, agent 2026-06-24).** rig's
+  structural signal IS present — `RemovePersonContactLinks` does 4 `UpdateMulti` bulk writes to `PersonEntity`
+  (nulling Fk{Insurer,Employer,Legal,School}Contact) bypassing save-hooks, and NO `Person`-cache invalidation
+  is reachable from the EP (`Contact/Edit.Delete`) in EITHER sync OR async reach (verified 2026-06-25). But the
+  staleness is UNOBSERVABLE, so it is not a bug: the nulled FKs point at the contact being deleted, whose own
+  cache is removed post-commit (`DoWhenCommitted(() => ContactCache.Remove(pkContact))`, ContactEntity.cs:68);
+  a cached PersonRecord holding a stale Fk*Contact still resolves via `GetContactRecord → ContactCache` to
+  EMPTY (contact gone) — identical to a null FK. No wrong data is ever shown. [Exact reasoning per the prior
+  code review — confirm/refine.]
+- **FP CLASS for FR-7 (record this):** "bulk write with no reachable invalidation" is a STRUCTURAL signal that
+  the detector cannot clear semantically. Benign-staleness — a stale FK whose target is also being deleted (so
+  it resolves to the same empty result), a cached projection that's never read on a path where it matters, or
+  a value that's overwritten before any read — are FPs no reach/name-pairing heuristic can rule out. FR-7
+  stays a DISCLOSED CANDIDATE generator (medium confidence), never a verdict; semantic review is required per
+  finding. This single MedDBase finding was a candidate, reviewed, and cleared.
 - **Calibration rule data** (in MedDBase `rig.rules.json`): `cachedEntities` = the ~36 `*Cache` types stripped
   of `Cache`; `bulkWriteMethods` = UpdateMulti(/Async)/DeleteMulti/UpdateEntitiesDirectly(/Async);
   `invalidationMethods` = Remove/RemoveKey/Clear/Invalidate; `excludeEnclosingNamespaceSuffix` =
