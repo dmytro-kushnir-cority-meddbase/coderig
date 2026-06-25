@@ -53,20 +53,19 @@ public sealed class CallersForwardVerifiedClosureTests
     }
 
     [Test]
-    [Skip("Pins pre-substrate reverse-dispatch over-approximation, intentionally changed by per-edge receiver narrowing (c7fe4f0f); reconcile after the dispatch-precision substrate settles — docs/backlog.md")]
-    public void Reverse_closure_includes_the_phantom_caller_documenting_the_over_approximation()
+    public void Reverse_closure_narrows_out_the_phantom_caller()
     {
-        // Both the real reacher (Configure.NewMaster) and the phantom (Edit.HandleX) are in the reverse
-        // closure — reverse BFS alone cannot tell them apart, which is what the forward pass compensates for.
+        // Post per-edge receiver narrowing (c7fe4f0f): the reverse closure keeps the real reacher
+        // (Configure.NewMaster) but drops the phantom (Edit.HandleX, a sibling-override receiver) — so it no
+        // longer needs the forward pass to tell them apart. (Reconciled 2026-06-25.)
         var graph = SiblingOverrideFan();
         var reached = FactPathFinder.ReachedBy(graph, "M:N.MasterA.GetCompany");
 
         reached.Keys.ShouldContain("M:N.Configure.NewMaster");
-        reached.Keys.ShouldContain("M:N.Edit.HandleX");
+        reached.Keys.ShouldNotContain("M:N.Edit.HandleX");
     }
 
     [Test]
-    [Skip("Pins pre-substrate reverse-dispatch over-approximation, intentionally changed by per-edge receiver narrowing (c7fe4f0f); reconcile after the dispatch-precision substrate settles — docs/backlog.md")]
     public void Forward_verify_confirms_the_real_reacher_and_partitions_the_phantom_as_reverse_only()
     {
         var graph = SiblingOverrideFan();
@@ -86,9 +85,11 @@ public sealed class CallersForwardVerifiedClosureTests
         var confirmed = callers.Where((_, i) => flags[i]).ToList();
         var reverseOnly = callers.Where((_, i) => !flags[i]).ToList();
 
-        // The real reacher forward-reaches the target; the phantom (sibling-override receiver) does not.
+        // The real reacher forward-reaches the target. Post-narrowing the reverse closure no longer
+        // over-includes the phantom, so there is NO reverse-only set left for forward-verify to partition —
+        // forward ≡ reverse on this seam, and the phantom is absent from the closure entirely.
         confirmed.ShouldContain("M:N.Configure.NewMaster");
-        reverseOnly.ShouldContain("M:N.Edit.HandleX");
-        confirmed.ShouldNotContain("M:N.Edit.HandleX");
+        reverseOnly.ShouldBeEmpty();
+        reached.Keys.ShouldNotContain("M:N.Edit.HandleX");
     }
 }

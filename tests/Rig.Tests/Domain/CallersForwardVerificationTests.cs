@@ -67,15 +67,16 @@ public sealed class CallersForwardVerificationTests
     }
 
     [Test]
-    [Skip("Pins pre-substrate reverse-dispatch over-approximation, intentionally changed by per-edge receiver narrowing (c7fe4f0f); reconcile after the dispatch-precision substrate settles — docs/backlog.md")]
-    public void Reverse_reach_includes_both_eps_documenting_the_over_approximation()
+    public void Reverse_reach_narrows_out_the_phantom_ep_matching_forward_verify()
     {
-        // The over-approximation the forward pass compensates for: reverse BFS from the target rejoins
-        // BOTH EPs (the base virtual pulls every caller in), so reverse alone cannot tell them apart.
+        // Post per-edge receiver narrowing (c7fe4f0f): reverse BFS from the target reaches the REAL reacher
+        // but NOT the phantom EP (the sibling-override receiver) — reverse now agrees with the forward-verify
+        // above (forward ≡ reverse on this seam) instead of over-approximating both. (Was skipped pending the
+        // dispatch-precision substrate; reconciled 2026-06-25.)
         var graph = SiblingOverrideShape();
         var reached = FactPathFinder.ReachedBy(graph, "M:N.MasterA.GetCompany");
 
-        reached.Keys.ShouldContain("M:N.Configure.NewMaster");
-        reached.Keys.ShouldContain("M:N.Edit.HandleX");
+        reached.Keys.ShouldContain("M:N.Configure.NewMaster"); // the real reacher
+        reached.Keys.ShouldNotContain("M:N.Edit.HandleX"); // the phantom, now narrowed out
     }
 }

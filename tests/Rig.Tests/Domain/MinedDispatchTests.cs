@@ -136,7 +136,6 @@ public sealed class MinedDispatchTests
     }
 
     [Test]
-    [Skip("Pins pre-substrate reverse-dispatch over-approximation, intentionally changed by per-edge receiver narrowing (c7fe4f0f); reconcile after the dispatch-precision substrate settles — docs/backlog.md")]
     public void Reverse_traversal_crosses_mined_dispatch_edges()
     {
         var edges = new[]
@@ -157,8 +156,10 @@ public sealed class MinedDispatchTests
 
         var reached = FactPathFinder.ReachedBy(graph, "Leaf.Do");
 
-        reached.Keys.ShouldContain("M:N.Impl.M");
-        reached.Keys.ShouldContain("M:N.IFoo.M");
-        reached.Keys.ShouldContain("M:N.EP.Run");
+        reached.Keys.ShouldContain("M:N.Impl.M"); // the concrete impl (direct caller of the leaf)
+        reached.Keys.ShouldContain("M:N.EP.Run"); // the caller, reached ACROSS the mined dispatch edge
+        // The interface DECLARATION is a dispatch waypoint, not a caller-origin — the narrowed reverse
+        // attributes through to the real caller (EP.Run) instead of surfacing it (reconciled 2026-06-25).
+        reached.Keys.ShouldNotContain("M:N.IFoo.M");
     }
 }
