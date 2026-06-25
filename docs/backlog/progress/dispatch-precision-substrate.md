@@ -4,25 +4,45 @@
 disclosure + static monomorphization; forward ≡ reverse on the synthetic seams; the `#4460` phantom gone).
 What's left to reach the end-state and trust it at scale:
 
-## 1. Narrow the residual actionable dispatch hubs (precision worklist)
-**Forward** (`Successors`, context-carrying) is the PRECISE path; **reverse** (`ReachableFromAll` all-hops
-oracle / `callers` edge-inversion) is a deliberately-sound fast OVER-APPROXIMATION that forward-verification
-partitions (`CallersForwardVerified*`). So the goal is **forward precision + reverse soundness, NOT
-forward ≡ reverse** — full equality is only the *materialized-graph* end-state (deferred with graph-time
-materialization). This item is just the precision worklist: shrink forward's residual over-fan by narrowing
-the actionable hubs. `rig dispatch-fans` (re-measured 2026-06-25): **676 un-narrowed hubs / 61 actionable**:
-- `EntityBase.Save` (115 × 11) / `EntityBase.Delete` (49 × 8) — type-parameter sites; capture the type-arg
-  binding via a rule/EP def to monomorphize them.
-- `Construct`N`.New` factories — type-parameter.
-- `IGenericServiceProvider.ProvideService``1` (the #1 by blast radius, 5 × 980) — **service-locator bucket,
-  NOT a monomorphization case**: resolve via the existing `di_registrations` facts to the registered impl
-  instead of CHA-fanning. A small targeted build, independent of the materialization work.
-- The rest are `irreducible` base-typed-receiver CHA cones (correctly disclosed, not bugs).
+## Precision worklist — RETIRED (2026-06-25, calibrated by demonstration, not assertion)
+The framing first: **forward** (`Successors`, context-carrying) is the PRECISE path; **reverse**
+(`ReachableFromAll` all-hops oracle / `callers` edge-inversion) is a deliberately-sound fast
+OVER-APPROXIMATION that forward-verification partitions (`CallersForwardVerified*`). So the goal is **forward
+precision + reverse soundness, NOT forward ≡ reverse** (full equality is only the materialized-graph
+end-state, item 2). The `rig dispatch-fans` "676 hubs / 61 actionable" looked like a worklist; on inspection
+**every bucket is redundant, runtime-scoped, or irreducible — there is nothing to build.** Verdicts:
+
+- **type-parameter hubs** (`EntityBase.Save` 115×11, `EntityBase.Delete` 49×8, `Construct`N`.New`) →
+  **LATENT, don't build.** Shipped static monomorphization already narrows the real concrete-caller paths
+  (`SaveServices<concrete>` → 175; `ValidatePostData<LoginData>` → `LoginData.Validate`). The wide fan is the
+  never-executed OPEN template; no real EP reaches it un-narrowed (verified: the one real EP that hits a
+  type-param hub, `PatientPortalHttpHandler` → `PostDataObject.Validate`, renders narrowed).
+- **service-locator** (`IGenericServiceProvider.ProvideService``1`, #1 by blast radius) → **❌ WON'T DO
+  (disclose-don't-resolve).** The body explodes (×113 → a 49,155-line raw tree vs 14 cut) over the BASE
+  `IService` via reflection; the type parameter `T` only casts the RETURN — it never enters the body's
+  dispatch — so monomorphization can't help and resolution would need runtime-scoped, per-provider-instance
+  DI facts (the `xml_di_miner` is already rig absorbing one project's bespoke registration). This generalizes:
+  ANY DI/service-locator bottoms out in reflection/codegen at construction (.NET DI included). The **cut is
+  the correct, complete handling** — it severs the T-independent reflection plumbing while the typed
+  result-call resolves PRECISELY via single-impl interface dispatch (demonstrated: `ReferralHelper.ReferralService`
+  getter → `ProvideService<IReferralService>()` **cut** → `…GetDefaultReferralSummaryText`
+  → `ReferralService.GetDefaultReferralSummaryText «via IReferralService»`, single impl, ×1). Multi-impl
+  service interfaces → a sound small CHA fan (which one runs is runtime DI scope → disclose). String locator
+  (`ProvideService(string)`/`CreateService(string)`) is dead in app code → deletable.
+- **base-typed-receiver** → irreducible CHA cones, correctly disclosed.
+
+⇒ **No precision-rule worklist.** The substrate's precision is done: shipped monomorphization + sound
+disclosure (cuts) cover it. The single open substrate item is graph-time materialization (item 2, perf).
+
+## 2. Graph-time materialization (perf / the end-state — the only open item)
+Monomorphization currently runs IN-MEMORY at query time (`ShapeGraph`), not baked into persisted `call_edges`.
+Bake it at `rig graph` time (`GenericInstantiationInventory` + `GenericMonomorphizer` in
+`GraphMaterializer.BuildAsync`, persist `~mono` nodes/edges) so the CTE walks an already-narrowed graph
+(smaller bounded pull; query-time inventory/materialize disappears; reverse over the baked graph ≡ forward by
+construction). Bumps `SchemaVersion.Graph`. Perf lever, not a correctness gap.
 
 _(Single static SQL connection was considered and dropped — ❌ WON'T DO, see done/monomorphization-rework.md.)_
 
-## Hard constraints (apply to all of the above)
-- Playground → green → real-store → iterate; synthetic-`FactGraphData` unit coverage required.
+## Hard constraints
 - **Unresolved generic → CHA cone, NEVER dead** (soundness; disclose, don't drop).
-- Disclose + classify every fallback; a high-fan actionable fallback is a hypothesis that a rule/EP def is
-  incomplete.
+- Disclose + classify every fallback.
