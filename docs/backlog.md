@@ -822,15 +822,27 @@ The static-monomorphization rework shipped transitive + lambda-closure materiali
 validated: `DebtorOverride.SaveIncludedServices` 665→38 reach, Haiku-confirmed sound) on a uniform EF load
 path behind the `meta` schema-version gate. Open items:
 
-### Re-enable the SQL reads fast path (binding-aware) — undo the temporary EF-only regression
-`TraversalGraphLoader.SqlFastPathEnabled = false` forces every query through the full-EF-graph load (~22s on
-MedDBase vs ~8s bounded) so the monomorphization seam sees the `reference_facts` type-arg bindings. Re-enable
-the bounded **SQLite recursive-CTE unroll** walk, made BINDING-AWARE: the bounded `call_edges` views drop
-`DeclaringTypeArgBinding`/`MethodTypeArgBinding`, so the SQL path must carry or re-attach them from
-`reference_facts` (a 4c prototype re-attach did NOT deliver the binding to the rendered node — needs a real
-graph-views integration test). **Inline the SQL constants.** Flip `SqlFastPathEnabled` back to true once
-binding-aware. Prereq DONE: the schema gate lets the SQL path trust graph presence via
-`SchemaGate.GraphAvailableAsync` instead of per-table probes.
+### Re-enable the SQL reads fast path (binding-aware) — ✅ DONE (2026-06-25, `71f35478`)
+`SqlReachability.LoadGraphFromReachSetAsync` now re-attaches `DeclaringTypeArgBinding`/`MethodTypeArgBinding`
+from `reference_facts` onto the bounded `CallEdge`s (one bulk pass keyed by caller/callee/line, alongside
+`TypeArguments`), so the ShapeGraph monomorphization seam fires on the bounded graph. `SqlFastPathEnabled =
+true`. The CTE only BOUNDS the load; the in-memory FactPathFinder+ShapeGraph runs over it, and reach_set is
+the CHA SUPERSET so it reproduces the full-EF narrowed reach (`Bounded_graph_reproduces_full_graph_reach` +
+`Sql_*` equivalence tests). Real-store: `DebtorOverride` → 38 via the SQL path, ~14s vs 22s full-EF.
+
+### Materialize the monomorphized subgraph at `rig graph` time (the next perf lever)
+The bounded SQL load above still pulls the receiver-blind **CHA superset** and narrows it IN MEMORY — so for
+a high-fan EP (e.g. `DebtorOverride`, narrowed answer 38 but CHA reach 665+) the bounded pull is large and the
+win over full-EF is modest (~14s vs 22s, not the old ~8s pure-bounded). The lever: **bake materialization
+into the persisted graph at `rig graph` time** — run `GenericInstantiationInventory` + `GenericMonomorphizer`
+during `GraphMaterializer.BuildAsync` and persist the `~mono` instantiation nodes + substituted/redirected
+edges into `call_edges`/`dispatch_edges` (and a base→mono collapse map for display). Then the CTE walks the
+ALREADY-NARROWED graph, so the bounded pull is sized to the narrowed reach (small) — the query-time
+inventory/materialize/collapse work disappears too. Cost: graph-build does the materialization once
+(amortized), bumps `SchemaVersion.Graph` (re-graph required), and the bounded loader's in-memory ShapeGraph
+materialize step is dropped for the SQL path (kept for the EF fallback / `--raw`). Display-collapse must run
+on the persisted `~mono` ids (already handled by `MonomorphCollapse`). Validate forward≡reverse + clone count
+on the real store before flipping it on.
 
 ### Single static SQL connection across the app
 Each query currently opens its own `RigDbContext`/connection. Move to ONE shared (static) SQLite connection
