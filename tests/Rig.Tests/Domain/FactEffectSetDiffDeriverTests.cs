@@ -4,9 +4,9 @@ using Shouldly;
 
 namespace Rig.Tests.Domain;
 
-// Unit tests for FactWriteSetDivergenceDeriver. The fixture helpers mirror FactCorrelationDeriverTests
+// Unit tests for FactEffectSetDiffDeriver. The fixture helpers mirror FactCorrelationDeriverTests
 // exactly (same FactGraphData builders, same DerivedEffect construction) so the test style is consistent.
-public sealed class FactWriteSetDivergenceDeriverTests
+public sealed class FactEffectSetDiffDeriverTests
 {
     // --- fixture helpers (mirror FactCorrelationDeriverTests) ---
 
@@ -38,15 +38,15 @@ public sealed class FactWriteSetDivergenceDeriverTests
             Line: line
         );
 
-    private static WriteSetDivergenceSpec Spec(WriteSetDivergencePair pair, IReadOnlyList<EffectPredicate>? writePredicates = null) =>
+    private static EffectSetDiffSpec Spec(EffectSetDiffPair pair, IReadOnlyList<EffectPredicate>? writePredicates = null) =>
         new(
             Pairs: [pair],
-            WritePredicates: writePredicates ?? [new EffectPredicate(Provider: "llblgen", Operation: "bulk_write")],
-            WriteNormalize: new NormalizeSpec(SimpleTypeName: true, StripSuffix: ["EntityCollection", "Collection", "DAO"])
+            Filter: writePredicates ?? [new EffectPredicate(Provider: "llblgen", Operation: "bulk_write")],
+            Normalize: new NormalizeSpec(SimpleTypeName: true, StripSuffix: ["EntityCollection", "Collection", "DAO"])
         );
 
-    private static WriteSetDivergencePair Pair(string entity, string primaryId, string secondaryId) =>
-        new(EntityLabel: entity, PrimaryEnclosingId: primaryId, SecondaryEnclosingId: secondaryId);
+    private static EffectSetDiffPair Pair(string entity, string primaryId, string secondaryId) =>
+        new(Label: entity, AId: primaryId, BId: secondaryId);
 
     // --- test cases ---
 
@@ -54,7 +54,7 @@ public sealed class FactWriteSetDivergenceDeriverTests
     public void Primary_writes_extra_table_secondary_lacks_it_yields_one_primary_only_finding()
     {
         // Primary EP reaches writes to Person + PersonEvent; secondary only reaches Person.
-        // Expected: ONE finding — PersonEvent, PrimaryOnly.
+        // Expected: ONE finding — PersonEvent, AOnly.
         var graph = Graph(Edge("M:N.UiSave.Save", "M:N.PersonEventRepo.Write"), Edge("M:N.ApiImport.Import", "M:N.PersonRepo.Write"));
         // "M:N.UiSave.Save" also directly writes Person (same enclosing).
         var effects = new List<DerivedEffect>
@@ -64,16 +64,16 @@ public sealed class FactWriteSetDivergenceDeriverTests
             Write("N.PersonEntityCollection", "M:N.ApiImport.Import"),
         };
 
-        var findings = FactWriteSetDivergenceDeriver.Derive(
+        var findings = FactEffectSetDiffDeriver.Derive(
             graph: graph,
             effects: effects,
             spec: Spec(Pair(entity: "Person", primaryId: "M:N.UiSave.Save", secondaryId: "M:N.ApiImport.Import"))
         );
 
         findings.Count.ShouldBe(1);
-        findings[0].EntityLabel.ShouldBe("Person");
+        findings[0].Label.ShouldBe("Person");
         findings[0].ResourceKey.ShouldBe("PersonEvent");
-        findings[0].Direction.ShouldBe(WriteSetDirection.PrimaryOnly);
+        findings[0].Direction.ShouldBe(EffectDiffSide.AOnly);
         findings[0].PresentEpId.ShouldBe("M:N.UiSave.Save");
         findings[0].AbsentEpId.ShouldBe("M:N.ApiImport.Import");
     }
@@ -89,7 +89,7 @@ public sealed class FactWriteSetDivergenceDeriverTests
             Write("N.PersonEntityCollection", "M:N.ApiImport.Import"),
         };
 
-        var findings = FactWriteSetDivergenceDeriver.Derive(
+        var findings = FactEffectSetDiffDeriver.Derive(
             graph: graph,
             effects: effects,
             spec: Spec(Pair(entity: "Person", primaryId: "M:N.UiSave.Save", secondaryId: "M:N.ApiImport.Import"))
@@ -112,22 +112,22 @@ public sealed class FactWriteSetDivergenceDeriverTests
             Write("N.PersonAuditEntityCollection", "M:N.ApiImport.Import"),
         };
 
-        var findings = FactWriteSetDivergenceDeriver.Derive(
+        var findings = FactEffectSetDiffDeriver.Derive(
             graph: graph,
             effects: effects,
             spec: Spec(Pair(entity: "Person", primaryId: "M:N.UiSave.Save", secondaryId: "M:N.ApiImport.Import"))
         );
 
         findings.Count.ShouldBe(2);
-        findings.Any(f => f.ResourceKey == "PersonAudit" && f.Direction == WriteSetDirection.SecondaryOnly).ShouldBeTrue();
-        findings.Any(f => f.ResourceKey == "PersonEvent" && f.Direction == WriteSetDirection.PrimaryOnly).ShouldBeTrue();
+        findings.Any(f => f.ResourceKey == "PersonAudit" && f.Direction == EffectDiffSide.BOnly).ShouldBeTrue();
+        findings.Any(f => f.ResourceKey == "PersonEvent" && f.Direction == EffectDiffSide.AOnly).ShouldBeTrue();
     }
 
     [Test]
     public void Findings_are_stably_ordered_by_entity_then_key_then_direction()
     {
         // Two entities (Alpha, Zeta) each with a primary-only table — verify sort order is stable on
-        // (EntityLabel, ResourceKey, Direction). Calling Derive twice must return the same order.
+        // (Label, ResourceKey, Direction). Calling Derive twice must return the same order.
         var graph = GraphNodes("M:N.AlphaUi.Save", "M:N.AlphaApi.Import", "M:N.ZetaUi.Save", "M:N.ZetaApi.Import");
         var effects = new List<DerivedEffect>
         {
@@ -139,25 +139,25 @@ public sealed class FactWriteSetDivergenceDeriverTests
             Write("N.ZetaEntityCollection", "M:N.ZetaApi.Import"),
         };
 
-        var spec = new WriteSetDivergenceSpec(
+        var spec = new EffectSetDiffSpec(
             Pairs:
             [
                 Pair(entity: "Alpha", primaryId: "M:N.AlphaUi.Save", secondaryId: "M:N.AlphaApi.Import"),
                 Pair(entity: "Zeta", primaryId: "M:N.ZetaUi.Save", secondaryId: "M:N.ZetaApi.Import"),
             ],
-            WritePredicates: [new EffectPredicate(Provider: "llblgen", Operation: "bulk_write")],
-            WriteNormalize: new NormalizeSpec(SimpleTypeName: true, StripSuffix: ["EntityCollection", "Collection", "DAO"])
+            Filter: [new EffectPredicate(Provider: "llblgen", Operation: "bulk_write")],
+            Normalize: new NormalizeSpec(SimpleTypeName: true, StripSuffix: ["EntityCollection", "Collection", "DAO"])
         );
 
-        var first = FactWriteSetDivergenceDeriver.Derive(graph: graph, effects: effects, spec: spec);
-        var second = FactWriteSetDivergenceDeriver.Derive(graph: graph, effects: effects, spec: spec);
+        var first = FactEffectSetDiffDeriver.Derive(graph: graph, effects: effects, spec: spec);
+        var second = FactEffectSetDiffDeriver.Derive(graph: graph, effects: effects, spec: spec);
 
         first.Count.ShouldBe(2);
-        first.Select(f => (f.EntityLabel, f.ResourceKey)).ShouldBe(second.Select(f => (f.EntityLabel, f.ResourceKey)));
+        first.Select(f => (f.Label, f.ResourceKey)).ShouldBe(second.Select(f => (f.Label, f.ResourceKey)));
 
         // Alpha comes before Zeta lexicographically.
-        first[0].EntityLabel.ShouldBe("Alpha");
-        first[1].EntityLabel.ShouldBe("Zeta");
+        first[0].Label.ShouldBe("Alpha");
+        first[1].Label.ShouldBe("Zeta");
     }
 
     [Test]
@@ -176,7 +176,7 @@ public sealed class FactWriteSetDivergenceDeriverTests
             // secondary does NOT call EventHelper — PersonRepo.Write has no write effect
         };
 
-        var findings = FactWriteSetDivergenceDeriver.Derive(
+        var findings = FactEffectSetDiffDeriver.Derive(
             graph: graph,
             effects: effects,
             spec: Spec(Pair(entity: "Person", primaryId: "M:N.UiSave.Save", secondaryId: "M:N.ApiImport.Import"))
@@ -184,7 +184,7 @@ public sealed class FactWriteSetDivergenceDeriverTests
 
         findings.Count.ShouldBe(1);
         findings[0].ResourceKey.ShouldBe("PersonEvent");
-        findings[0].Direction.ShouldBe(WriteSetDirection.PrimaryOnly);
+        findings[0].Direction.ShouldBe(EffectDiffSide.AOnly);
     }
 
     [Test]
@@ -208,7 +208,7 @@ public sealed class FactWriteSetDivergenceDeriverTests
             Write("N.PersonEntityCollection", "M:N.ApiImport.Import"),
         };
 
-        var findings = FactWriteSetDivergenceDeriver.Derive(
+        var findings = FactEffectSetDiffDeriver.Derive(
             graph: graph,
             effects: effects,
             spec: Spec(Pair(entity: "Person", primaryId: "M:N.UiSave.Save", secondaryId: "M:N.ApiImport.Import"))
@@ -223,13 +223,13 @@ public sealed class FactWriteSetDivergenceDeriverTests
         var graph = GraphNodes("M:N.UiSave.Save");
         var effects = new List<DerivedEffect> { Write("N.PersonEntityCollection", "M:N.UiSave.Save") };
 
-        var spec = new WriteSetDivergenceSpec(
+        var spec = new EffectSetDiffSpec(
             Pairs: [],
-            WritePredicates: [new EffectPredicate(Provider: "llblgen", Operation: "bulk_write")],
-            WriteNormalize: new NormalizeSpec(SimpleTypeName: true)
+            Filter: [new EffectPredicate(Provider: "llblgen", Operation: "bulk_write")],
+            Normalize: new NormalizeSpec(SimpleTypeName: true)
         );
 
-        var findings = FactWriteSetDivergenceDeriver.Derive(graph: graph, effects: effects, spec: spec);
+        var findings = FactEffectSetDiffDeriver.Derive(graph: graph, effects: effects, spec: spec);
 
         findings.ShouldBeEmpty();
     }

@@ -2,83 +2,77 @@ using Rig.Domain.Data;
 
 namespace Rig.Domain.Functions;
 
-// Stage-2 STRUCTURAL write-set divergence detector. Two entry points that perform the "same" logical
-// operation on an entity (e.g. a canonical UI/save path vs an import/API path) may write DIFFERENT
-// sets of tables: the secondary path silently skips junction/link/event/denormalized rows the primary
-// maintains, leaving stale/inconsistent data with no exception. This deriver surfaces the set-diff
-// over per-EP reachable write-sets declared in the rule.
+// Generic effect-set diff. Given two entry points A and B, computes each one's set of forward-reachable
+// effect RESOURCE KEYS (optionally filtered to a provider:operation set) and reports the SYMMETRIC
+// DIFFERENCE — every resource one reaches that the other doesn't. Purely mechanical: it has no opinion
+// about what the diff MEANS. "write-set divergence" (UI-save vs import-save writing different tables) is
+// one USAGE — run it with Filter = the write effects; the operator/agent supplies the interpretation.
 //
 // Architecture:
-//   - Pure: no I/O, input not mutated, deterministic (de-dup + stable sort by (EntityLabel, ResourceKey,
-//     Direction)).
-//   - Spec-driven: the caller (DeriveCommand) resolves entry-point PATTERNS to exact node DocIDs and
-//     passes the resolved pairs; the deriver does NOT do substring matching.
-//   - Write-set of an EP = the set of normalized resource keys of every effect that (a) matches one of
-//     the write predicates and (b) has its EnclosingSymbolId in that EP's forward reach set.
-//   - One finding per table in the SYMMETRIC difference: primary-only or secondary-only.
+//   - Pure: no I/O, input not mutated, deterministic (de-dup + stable sort by (Label, ResourceKey, Side)).
+//   - Spec-driven: the caller resolves entry-point PATTERNS to exact node DocIDs and passes resolved
+//     pairs; the deriver does NOT do substring matching.
+//   - An EP's effect-set = the normalized resource keys of every effect that (a) matches the Filter
+//     (EMPTY filter = match ALL effects) and (b) has its EnclosingSymbolId in that EP's forward reach.
 
-// One resolved (primary EP id, secondary EP id) pair for a declared entity.
-public sealed record WriteSetDivergencePair(string EntityLabel, string PrimaryEnclosingId, string SecondaryEnclosingId);
+// One resolved (A id, B id) pair, plus an optional display Label for output grouping (no semantics).
+public sealed record EffectSetDiffPair(string Label, string AId, string BId);
 
-// Spec handed to the deriver: already-resolved pairs + the predicates that define "write".
-public sealed record WriteSetDivergenceSpec(
-    IReadOnlyList<WriteSetDivergencePair> Pairs,
-    // The effects that count as a write (matched against DerivedEffect.Provider + Operation).
-    IReadOnlyList<EffectPredicate> WritePredicates,
-    // Normalize the effect's ResourceType to a comparable resource key (simple-type-name + suffix strip,
-    // same helper FactCorrelationDeriver uses). Mirror the LLBLGen-shaped defaults the caller passes.
-    NormalizeSpec WriteNormalize,
+public sealed record EffectSetDiffSpec(
+    IReadOnlyList<EffectSetDiffPair> Pairs,
+    // Effects that count, matched against DerivedEffect.Provider + Operation. EMPTY = match every effect.
+    IReadOnlyList<EffectPredicate> Filter,
+    // Normalize the effect's ResourceType to a comparable resource key (simple-type-name + optional
+    // suffix strip), so e.g. PersonEntity/PersonEntityCollection/PersonDAO collapse to one logical key.
+    NormalizeSpec Normalize,
     int MaxDepth = 20,
     FactPathFinder.TraversalMode Mode = FactPathFinder.TraversalMode.SyncCut
 );
 
-// "primary-only" = the table is written by the primary EP but NOT the secondary (the secondary path
-// silently skips it). "secondary-only" = the reverse (secondary writes something the primary doesn't —
-// also anomalous, but less common as the primary-only shape).
-public enum WriteSetDirection
+// Which side of the pair holds a resource the other lacks. AOnly = in A's effect-set, not B's; BOnly = reverse.
+public enum EffectDiffSide
 {
-    PrimaryOnly,
-    SecondaryOnly,
+    AOnly,
+    BOnly,
 }
 
-// One diverging table. PresentEpId = the EP that DOES write it; AbsentEpId = the EP that SHOULD but
-// doesn't. Site (Enclosing/FilePath/Line) anchors the ABSENT EP for the hazard finding site so the
-// engineer is sent to the path that is MISSING the write.
-public sealed record WriteSetDivergenceFinding(
-    string EntityLabel,
+// One diverging resource. PresentEpId = the EP whose effect-set CONTAINS it; AbsentEpId = the one that lacks it.
+public sealed record EffectSetDiffFinding(
+    string Label,
     string ResourceKey,
-    WriteSetDirection Direction,
+    EffectDiffSide Direction,
     string PresentEpId,
     string AbsentEpId
 );
 
-public static class FactWriteSetDivergenceDeriver
+public static class FactEffectSetDiffDeriver
 {
     // Returns every table in the symmetric write-set difference across the declared pairs. Determinism:
-    // de-duped, ordered stably by (EntityLabel ordinal, ResourceKey ordinal, Direction).
-    public static IReadOnlyList<WriteSetDivergenceFinding> Derive(
+    // de-duped, ordered stably by (Label ordinal, ResourceKey ordinal, Direction).
+    public static IReadOnlyList<EffectSetDiffFinding> Derive(
         FactGraphData graph,
         IReadOnlyList<DerivedEffect> effects,
-        WriteSetDivergenceSpec spec
+        EffectSetDiffSpec spec
     )
     {
-        if (spec.Pairs.Count == 0 || spec.WritePredicates.Count == 0)
+        if (spec.Pairs.Count == 0)
         {
             return [];
         }
+        // An empty Filter = match every effect (see MatchesFilter) — the generic "diff ALL effects" default.
 
         // 1. Collect all distinct EP ids that need a forward reach.
         var distinctEpIds = new List<string>();
         var epIdSet = new HashSet<string>(StringComparer.Ordinal);
         foreach (var pair in spec.Pairs)
         {
-            if (epIdSet.Add(pair.PrimaryEnclosingId))
+            if (epIdSet.Add(pair.AId))
             {
-                distinctEpIds.Add(pair.PrimaryEnclosingId);
+                distinctEpIds.Add(pair.AId);
             }
-            if (epIdSet.Add(pair.SecondaryEnclosingId))
+            if (epIdSet.Add(pair.BId))
             {
-                distinctEpIds.Add(pair.SecondaryEnclosingId);
+                distinctEpIds.Add(pair.BId);
             }
         }
 
@@ -107,12 +101,12 @@ public static class FactWriteSetDivergenceDeriver
                 continue;
             }
 
-            if (!MatchesAnyWrite(e, spec.WritePredicates))
+            if (!MatchesFilter(e, spec.Filter))
             {
                 continue;
             }
 
-            var key = ResourceKey.Of(e.ResourceType, spec.WriteNormalize);
+            var key = ResourceKey.Of(e.ResourceType, spec.Normalize);
             if (key is null)
             {
                 continue;
@@ -128,17 +122,17 @@ public static class FactWriteSetDivergenceDeriver
         }
 
         // 4. For each pair compute write-sets and emit symmetric-difference findings.
-        var findings = new List<WriteSetDivergenceFinding>();
+        var findings = new List<EffectSetDiffFinding>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var pair in spec.Pairs)
         {
             var primaryWrites = CollectWriteSet(
-                reachSet: reachOf.TryGetValue(pair.PrimaryEnclosingId, out var pr) ? pr : [],
+                reachSet: reachOf.TryGetValue(pair.AId, out var pr) ? pr : [],
                 writeKeysByEnclosing: writeKeysByEnclosing
             );
             var secondaryWrites = CollectWriteSet(
-                reachSet: reachOf.TryGetValue(pair.SecondaryEnclosingId, out var sr) ? sr : [],
+                reachSet: reachOf.TryGetValue(pair.BId, out var sr) ? sr : [],
                 writeKeysByEnclosing: writeKeysByEnclosing
             );
 
@@ -150,11 +144,11 @@ public static class FactWriteSetDivergenceDeriver
                     AddFinding(
                         findings: findings,
                         seen: seen,
-                        entityLabel: pair.EntityLabel,
+                        entityLabel: pair.Label,
                         resourceKey: key,
-                        direction: WriteSetDirection.PrimaryOnly,
-                        presentEpId: pair.PrimaryEnclosingId,
-                        absentEpId: pair.SecondaryEnclosingId
+                        direction: EffectDiffSide.AOnly,
+                        presentEpId: pair.AId,
+                        absentEpId: pair.BId
                     );
                 }
             }
@@ -167,21 +161,21 @@ public static class FactWriteSetDivergenceDeriver
                     AddFinding(
                         findings: findings,
                         seen: seen,
-                        entityLabel: pair.EntityLabel,
+                        entityLabel: pair.Label,
                         resourceKey: key,
-                        direction: WriteSetDirection.SecondaryOnly,
-                        presentEpId: pair.SecondaryEnclosingId,
-                        absentEpId: pair.PrimaryEnclosingId
+                        direction: EffectDiffSide.BOnly,
+                        presentEpId: pair.BId,
+                        absentEpId: pair.AId
                     );
                 }
             }
         }
 
-        // 5. Determinism: stable sort by (EntityLabel ordinal, ResourceKey ordinal, Direction).
+        // 5. Determinism: stable sort by (Label ordinal, ResourceKey ordinal, Direction).
         findings.Sort(
             (a, b) =>
             {
-                var byEntity = string.CompareOrdinal(a.EntityLabel, b.EntityLabel);
+                var byEntity = string.CompareOrdinal(a.Label, b.Label);
                 if (byEntity != 0)
                 {
                     return byEntity;
@@ -219,8 +213,13 @@ public static class FactWriteSetDivergenceDeriver
         return result;
     }
 
-    private static bool MatchesAnyWrite(DerivedEffect e, IReadOnlyList<EffectPredicate> predicates)
+    private static bool MatchesFilter(DerivedEffect e, IReadOnlyList<EffectPredicate> predicates)
     {
+        if (predicates.Count == 0)
+        {
+            return true; // empty filter = match every effect
+        }
+
         foreach (var p in predicates)
         {
             if (
@@ -236,11 +235,11 @@ public static class FactWriteSetDivergenceDeriver
     }
 
     private static void AddFinding(
-        List<WriteSetDivergenceFinding> findings,
+        List<EffectSetDiffFinding> findings,
         HashSet<string> seen,
         string entityLabel,
         string resourceKey,
-        WriteSetDirection direction,
+        EffectDiffSide direction,
         string presentEpId,
         string absentEpId
     )
@@ -250,8 +249,8 @@ public static class FactWriteSetDivergenceDeriver
         if (seen.Add(dedupeKey))
         {
             findings.Add(
-                new WriteSetDivergenceFinding(
-                    EntityLabel: entityLabel,
+                new EffectSetDiffFinding(
+                    Label: entityLabel,
                     ResourceKey: resourceKey,
                     Direction: direction,
                     PresentEpId: presentEpId,
