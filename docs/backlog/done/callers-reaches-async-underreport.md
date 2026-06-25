@@ -1,4 +1,4 @@
-## `callers`/`reaches` silently under-report when sync hides the async/scheduled surface (BUG-rig-missed-entrypoints-healthcode Defect 2)
+## ✅ SHIPPED: `callers`/`reaches` silently under-report when sync hides the async/scheduled surface (BUG-rig-missed-entrypoints-healthcode Defect 2)
 
 A sync `rig callers <m> --entrypoints` that yields **0** reads as "not reachable from any entry point" — but the
 entire scheduled + actor/message-dispatched surface is sync-cut by default and only appears under `--async`. In
@@ -19,7 +19,4 @@ Real-store: `Master.GetCompany` sync 14 → "+14 more" → `--async` 28; `Master
 Note the backlog's "handoff-skipped count already computed in FactPathFinder" was WRONG — no such count is
 exposed; the async re-probe (the proven 0-case pattern) was used instead.
 
-**Residual (not done):** the DEFAULT `callers` path and `--roots` still have no under-report hint (only
-`--entrypoints` does); `reaches` already discloses the scheduled bucket under `--async`. Extending the footer to
-default/`--roots` is a small follow-up if wanted (same helper). Fix #2 (`--async` default) remains an untaken,
-debatable fork.
+**Residual follow-ups:** see `docs/backlog/todo/callers-reaches-underreport-followups.md`.
