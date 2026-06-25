@@ -47,57 +47,25 @@ public static class Writes
         RigDbContext context,
         AnalysisResult result,
         CancellationToken cancellationToken = default,
-        bool fastBulkWrite = true,
         Action<string>? progress = null,
         GitProvenance? provenance = null
     )
     {
         var runId = Guid.NewGuid().ToString("n");
-
         await context.Database.EnsureCreatedAsync(cancellationToken);
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
 
-        // Hold the connection open for the whole save. The fast-path PRAGMAs below are PER-CONNECTION
-        // (synchronous / cache_size / locking_mode / journal_mode) and are lost the moment EF closes and
-        // reopens the connection between commands — so we open it once here and keep it open through the
-        // header write, the raw-ADO bulk insert (which reuses this same connection), and the registry
-        // upsert. No MigrateAsync: a store is immutable. EnsureCreated builds the full current schema on a
-        // fresh DB (the standalone atomic-publish path always writes a fresh temp); an old store is
-        // re-indexed/re-mined, never altered in place (declare + require — see the --merge guard and
-        // docs/multi-solution-storage.md).
-        var connection = context.Database.GetDbConnection();
-        if (connection.State != ConnectionState.Open)
-        {
-            await connection.OpenAsync(cancellationToken);
-        }
-
-        if (fastBulkWrite)
-        {
-            // No rollback journal, no fsync, in-memory temp, single-writer lock. A crash mid-write
-            // corrupts this file — acceptable because the caller publishes via atomic rename, so the live
-            // store is never the one being written.
-            //
-            // mmap_size + a 256 MB page cache are the key reads tuning: save is not only write-heavy, the
-            // END of save REBUILDS the dropped secondary indexes, each a full scan of its fact table (the
-            // ~1.7M-row reference_facts ×2). On SQLite defaults (mmap_size=0) those cold scans are a
-            // syscall-per-page read that re-reads what the prior index build just touched — the bulk of the
-            // phase's multi-GB disk reads. A 4 GB mmap covers the whole fact store, so those repeated scans
-            // are served from the OS page mapping instead of disk. Same template the graph/query paths use
-            // (GraphMaterializer / StorageProbes), which set it for exactly this reason.
-            foreach (
-                var pragma in new[]
-                {
-                    "PRAGMA journal_mode=OFF;",
-                    "PRAGMA synchronous=OFF;",
-                    "PRAGMA temp_store=MEMORY;",
-                    "PRAGMA mmap_size=4294967296;",
-                    "PRAGMA cache_size=-262144;",
-                    "PRAGMA locking_mode=EXCLUSIVE;",
-                }
-            )
-            {
-                await context.Database.ExecuteSqlRawAsync(pragma, cancellationToken);
-            }
-        }
+        const string pragma = 
+                     """
+                     PRAGMA journal_mode=OFF;
+                     PRAGMA synchronous=OFF;
+                     PRAGMA temp_store=MEMORY;
+                     PRAGMA mmap_size=4294967296;
+                     PRAGMA cache_size=-262144;
+                     PRAGMA locking_mode=EXCLUSIVE;
+                     """;
+        
+        await context.Database.ExecuteSqlRawAsync(pragma, cancellationToken);
 
         // Bulk insert: skip per-Add change detection (we never mutate tracked entities) and flush in
         // batches, clearing the tracker each time so memory stays flat over millions of fact rows.
@@ -126,7 +94,7 @@ public static class Writes
         await context.SaveChangesAsync(cancellationToken);
         context.ChangeTracker.Clear();
 
-        await SaveFactsBatchedAsync(context, runId, result, fastBulkWrite, progress, cancellationToken);
+        await SaveFactsBatchedAsync(context, runId, result, progress, cancellationToken);
         try
         {
             await WriteAssemblyRegistryAsync(context, result, progress, cancellationToken);
@@ -329,7 +297,6 @@ public static class Writes
         RigDbContext context,
         string runId,
         AnalysisResult result,
-        bool fastBulkWrite,
         Action<string>? progress,
         CancellationToken cancellationToken
     )
@@ -341,13 +308,9 @@ public static class Writes
         long total = symbols.Count + references.Count + relations.Count + dispatch.Count;
         long saved = 0;
 
-        var connection = (DbConnection)context.Database.GetDbConnection();
-        if (connection.State != ConnectionState.Open)
-        {
-            await connection.OpenAsync(cancellationToken);
-        }
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
 
-        var deferredIndexes = fastBulkWrite ? await DropSecondaryIndexesAsync(connection, FactTableNames, cancellationToken) : [];
+        var deferredIndexes = await DropSecondaryIndexesAsync(connection, FactTableNames, cancellationToken);
 
         await using (var transaction = await connection.BeginTransactionAsync(cancellationToken))
         {

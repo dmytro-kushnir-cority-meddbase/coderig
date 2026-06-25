@@ -30,7 +30,7 @@ public static class SqlReachability
     // (or prompt to run `rig graph`) when false.
     public static async Task<bool> HasGraphAsync(RigDbContext context, CancellationToken cancellationToken = default)
     {
-        var connection = await OpenAsync(context, cancellationToken);
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         return await SchemaGate.GraphAvailableAsync(connection, cancellationToken);
     }
 
@@ -52,7 +52,7 @@ public static class SqlReachability
             return result;
         }
 
-        var connection = await OpenAsync(context, cancellationToken);
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = BuildSetCte(command, seeds, direction, includeHandoff);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -89,7 +89,7 @@ public static class SqlReachability
     )
     {
         var result = new Dictionary<string, int>(StringComparer.Ordinal);
-        var connection = await OpenAsync(context, cancellationToken);
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         // `nodes` is built as part of the graph UNIT (GraphMaterializer), so it is present whenever this
         // path runs — every caller gates on HasGraphAsync (→ SchemaGate.GraphAvailableAsync) first. No
         // per-table probe: the gate owns graph-presence.
@@ -169,7 +169,7 @@ public static class SqlReachability
             return [];
         }
 
-        var connection = await OpenAsync(context, cancellationToken);
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         await ExecNonQueryAsync(connection, "DROP TABLE IF EXISTS reach_set;", null, cancellationToken);
         await ExecNonQueryAsync(connection, "CREATE TEMP TABLE reach_set(sym TEXT PRIMARY KEY);", null, cancellationToken);
         // The reverse closure already lives in `reach_depth` — built by ReachedWithDepthAsync above on this
@@ -285,7 +285,7 @@ public static class SqlReachability
         CancellationToken cancellationToken = default
     )
     {
-        var connection = await OpenAsync(context, cancellationToken);
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         await BuildReachSetAsync(connection, pattern, direction, cancellationToken);
         return await LoadGraphFromReachSetAsync(connection, direction, cancellationToken);
     }
@@ -314,7 +314,7 @@ public static class SqlReachability
         CancellationToken cancellationToken = default
     )
     {
-        var connection = await OpenAsync(context, cancellationToken);
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         await BuildReachSetAsync(connection, pattern, direction, cancellationToken);
         var graph = await LoadGraphFromReachSetAsync(connection, direction, cancellationToken);
 
@@ -625,7 +625,4 @@ public static class SqlReachability
         configure?.Invoke(command);
         return await command.ExecuteNonQueryAsync(cancellationToken);
     }
-
-    private static Task<DbConnection> OpenAsync(RigDbContext context, CancellationToken cancellationToken) =>
-        StorageProbes.OpenConnectionAsync(context, cancellationToken);
 }

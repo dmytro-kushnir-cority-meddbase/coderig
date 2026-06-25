@@ -297,7 +297,6 @@ internal static class IndexCommands
         // in place, dedup assemblies by content-hash via the registry, NO atomic-replace. See
         // docs/multi-solution-storage.md.
         var appendMode = identity is not null || merge; // mine, or --merge into an existing store
-        var fastBulkWrite = !appendMode; // fast pragmas on the standalone atomic-publish path
         var atomicPublish = !appendMode; // replace-via-rename for a standalone index
 
         // Per-commit store layout: write into .rig/<store-id>/ (storeId computed above, from the commit). On
@@ -345,9 +344,8 @@ internal static class IndexCommands
             await Writes.AssertAppendableAsync(schemaProbe);
         }
 
-        output.WriteLine(
-            $"Progress: Saving run ({(fastBulkWrite ? "fast" : "durable")}{(atomicPublish ? ", atomic-publish" : ", in-place")})"
-        );
+        output.WriteLine($"Progress: Saving run {(atomicPublish ? ", atomic-publish" : ", in-place")})");
+        
         var saveWatch = Stopwatch.StartNew();
         string runId;
         await using (var context = new RigDbContext(dbPath, pooling: !atomicPublish))
@@ -356,7 +354,6 @@ internal static class IndexCommands
             runId = await Writes.SaveAsync(
                 context,
                 result,
-                fastBulkWrite: fastBulkWrite,
                 progress: message => output.WriteLine($"Progress: {message}"),
                 provenance: provenance
             );
