@@ -38,8 +38,7 @@ internal static class StoreLayout
     // store (the default). A given ref must match an indexed per-commit store (by store-id, or a commit
     // sha prefix either way — see ResolveStoreDirByRef); an unmatched ref throws StoreRefNotFoundException
     // so CommandGuard can list what IS indexed instead of failing into a raw "no such file" open error.
-    internal static string DbPathForRef(WorkspaceLocation ws) =>
-        Path.Combine(ResolveReadStoreDir(ws), DbFileName);
+    internal static string DbPathForRef(WorkspaceLocation ws) => Path.Combine(ResolveReadStoreDir(ws), DbFileName);
 
     // The store DIRECTORY a read command should use, honoring `--store`. Empty/null => the LATEST store dir
     // (ResolveStoreDir). A given ref must match an indexed per-commit store; an unmatched ref throws
@@ -52,8 +51,7 @@ internal static class StoreLayout
             return ResolveStoreDir(ws.WorkingDirectory);
         }
 
-        return ResolveStoreDirByRef(ws)
-            ?? throw new StoreRefNotFoundException(ws.StoreRef, AvailableStoreIds(ws.WorkingDirectory));
+        return ResolveStoreDirByRef(ws) ?? throw new StoreRefNotFoundException(ws.StoreRef, AvailableStoreIds(ws.WorkingDirectory));
     }
 
     // The newest per-commit store dir — the LATEST pointer wins, else the newest subdir holding a rig.db by
@@ -162,7 +160,8 @@ internal static class StoreLayout
 
             var stem = id.EndsWith("-dirty", StringComparison.Ordinal) ? id[..^"-dirty".Length] : id;
             if (
-                stem.StartsWith(ws.StoreRef, StringComparison.OrdinalIgnoreCase) || ws.StoreRef.StartsWith(stem, StringComparison.OrdinalIgnoreCase)
+                stem.StartsWith(ws.StoreRef, StringComparison.OrdinalIgnoreCase)
+                || ws.StoreRef.StartsWith(stem, StringComparison.OrdinalIgnoreCase)
             )
             {
                 match = dir;

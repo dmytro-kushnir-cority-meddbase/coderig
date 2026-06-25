@@ -112,10 +112,7 @@ internal static class DeriveCommand
         WarnUnknownFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: rules, errorWriter: io.TextOutput.Error);
         // F7: use the out-param overload so the resolved store dir is available for the StoreKey computation
         // below without a second ResolveReadStoreDir call (io:read ×7). Gated: schema fail-fast at open.
-        var (context, rigDir) = await OpenReadContextGatedAsync(
-            io.WorkspaceLocation,
-            withStoreDir: true
-        );
+        var (context, rigDir) = await OpenReadContextGatedAsync(io.WorkspaceLocation, withStoreDir: true);
         await using var contextScope = context;
 
         // Deployment attribution (opt-in: only when deployments.json sits next to .rig). Empty (no-op) when
@@ -300,7 +297,14 @@ internal static class DeriveCommand
             io.TextOutput.Output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup.Take(perKindSample))
             {
-                WriteEntryPointLine(io.TextOutput.Output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
+                WriteEntryPointLine(
+                    io.TextOutput.Output,
+                    deployments,
+                    route: e.Route,
+                    filePath: e.FilePath,
+                    line: e.Line,
+                    requires: e.Requires
+                );
             }
 
             WriteSampleTruncationNote(io.TextOutput.Output, total: kindGroup.Count(), shown: perKindSample, kind: kindGroup.Key);
@@ -333,7 +337,11 @@ internal static class DeriveCommand
         // whose process loads it (shared libraries fan out to many hosts — see the chip counts).
         if (!deployments.IsEmpty)
         {
-            WriteServiceSummary(derivedEps.Concat(origins).Select(e => (e.Kind, (string?)e.FilePath, e.Requires)), deployments, io.TextOutput.Output);
+            WriteServiceSummary(
+                derivedEps.Concat(origins).Select(e => (e.Kind, (string?)e.FilePath, e.Requires)),
+                deployments,
+                io.TextOutput.Output
+            );
         }
 
         return 0;

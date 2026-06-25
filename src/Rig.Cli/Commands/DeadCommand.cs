@@ -172,7 +172,9 @@ internal static class DeadCommand
             $"Dead-code candidates: {candidates.Count}  (High {candidates.Count(c => c.Tier == DeadCodeFinder.Tier.High)}, "
                 + $"Medium {candidates.Count(c => c.Tier == DeadCodeFinder.Tier.Medium)}, Low {candidates.Count(c => c.Tier == DeadCodeFinder.Tier.Low)})"
         );
-        io.TextOutput.Output.WriteLine(opts.LibMode ? "Mode: library (public/protected = roots)" : "Mode: application (public methods are flaggable)");
+        io.TextOutput.Output.WriteLine(
+            opts.LibMode ? "Mode: library (public/protected = roots)" : "Mode: application (public methods are flaggable)"
+        );
         io.TextOutput.Output.WriteLine("REPORT ONLY — confirm each against the C# compiler (IDE0051/CS0169) before removing.");
         if (!opts.ShowAll && candidates.Any(c => c.Tier == DeadCodeFinder.Tier.Low))
         {

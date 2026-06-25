@@ -98,7 +98,14 @@ internal static class EntryPointsCommand
             io.TextOutput.Output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup.Take(max))
             {
-                WriteEntryPointLine(io.TextOutput.Output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
+                WriteEntryPointLine(
+                    io.TextOutput.Output,
+                    deployments,
+                    route: e.Route,
+                    filePath: e.FilePath,
+                    line: e.Line,
+                    requires: e.Requires
+                );
             }
 
             WriteSampleTruncationNote(io.TextOutput.Output, total: kindGroup.Count(), shown: max, kind: kindGroup.Key);

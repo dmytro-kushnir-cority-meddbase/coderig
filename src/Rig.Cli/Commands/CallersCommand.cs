@@ -36,8 +36,15 @@ internal static class CallersCommand
         };
         var includeReverseOnly = new Option<bool>("--include-reverse-only")
         {
+            // DIAGNOSTIC / hidden: the reverse closure is only a candidate generator — forward-verification is
+            // the arbiter, so the forward-confirmed set IS the answer. The reverse-only remainder is a
+            // CHA-over-approximation (no forward path) plus a small recall hedge for forward's own
+            // interface/lambda misses; it is noise for the precise question and is hidden by default (no
+            // footer). This flag is the debug escape hatch that lists it (e.g. when chasing a suspected
+            // forward false-negative). Hidden from --help so it doesn't read as a normal lens.
             Description =
-                "Also LIST the reverse-only callers/roots/entry points (a reverse-dispatch over-approximation with no forward path). Default lists only forward-confirmed hits + a count footer.",
+                "DIAGNOSTIC: list the reverse-only callers/roots/entry points (reverse-dispatch over-approximation, no forward path). Hidden by default — the forward-confirmed set is the answer.",
+            Hidden = true,
         };
         var async = CommonOptions.Async();
         var includeDelivery = CommonOptions.IncludeDelivery();
@@ -183,7 +190,9 @@ internal static class CallersCommand
             {
                 if (!tsv)
                 {
-                    io.TextOutput.Output.WriteLine($"No root callers (no-predecessor origins) reach '{opts.ToPattern}' (or no symbol matches).");
+                    io.TextOutput.Output.WriteLine(
+                        $"No root callers (no-predecessor origins) reach '{opts.ToPattern}' (or no symbol matches)."
+                    );
                 }
 
                 return 1;
@@ -223,7 +232,9 @@ internal static class CallersCommand
 
                 return 0;
             }
-            io.TextOutput.Output.WriteLine($"Root callers (heuristic — no-predecessor origins) reaching '{opts.ToPattern}': {rootsConfirmed.Count}");
+            io.TextOutput.Output.WriteLine(
+                $"Root callers (heuristic — no-predecessor origins) reaching '{opts.ToPattern}': {rootsConfirmed.Count}"
+            );
             foreach (var r in rootsConfirmed.Take(max))
             {
                 io.TextOutput.Output.WriteLine($"{Indent.L1}{r}{HeaderSuffix(epContext, r)}");
@@ -233,7 +244,8 @@ internal static class CallersCommand
                 io.TextOutput.Output.WriteLine($"{Indent.L1}… +{rootsConfirmed.Count - max} more (raise --limit)");
             }
             // Reverse-only = in the reverse closure but with NO forward path: a reverse-dispatch
-            // over-approximation. By DEFAULT we DON'T list these; --include-reverse-only reveals them.
+            // over-approximation. HIDDEN by default (it's diagnostic noise — the confirmed set is the
+            // answer); the hidden --include-reverse-only flag lists it as a recall escape hatch.
             if (opts.IncludeReverseOnly && rootsReverseOnly.Count > 0)
             {
                 io.TextOutput.Output.WriteLine($"Reverse-only (no forward path found — confirm with `rig path`): {rootsReverseOnly.Count}");
@@ -241,12 +253,6 @@ internal static class CallersCommand
                 {
                     io.TextOutput.Output.WriteLine($"{Indent.L1}{r}{HeaderSuffix(epContext, r)}");
                 }
-            }
-            else if (rootsReverseOnly.Count > 0)
-            {
-                io.TextOutput.Output.WriteLine(
-                    $"{Indent.L1}… +{rootsReverseOnly.Count} reach this only via reverse-dispatch over-approximation (no forward path) — list with --include-reverse-only"
-                );
             }
 
             return 0;
@@ -322,8 +328,8 @@ internal static class CallersCommand
             io.TextOutput.Output.WriteLine($"{Indent.L1}… +{confirmedCallers.Count - max} more (raise --limit, or --format tsv for all)");
         }
         // Reverse-only = in the reverse closure but with NO forward path: a reverse-dispatch over-approximation
-        // (a shared base/interface seam pulls in every caller of ANY override). By DEFAULT we DON'T list these;
-        // --include-reverse-only reveals them under a caveat (recall escape hatch).
+        // (a shared base/interface seam pulls in every caller of ANY override). HIDDEN by default (diagnostic
+        // noise — the confirmed set is the answer); the hidden --include-reverse-only flag lists it.
         if (opts.IncludeReverseOnly && reverseOnlyCallers.Count > 0)
         {
             io.TextOutput.Output.WriteLine($"Reverse-only (no forward path found — confirm with `rig path`): {reverseOnlyCallers.Count}");
@@ -331,12 +337,6 @@ internal static class CallersCommand
             {
                 io.TextOutput.Output.WriteLine($"{Indent.L1}d{kv.Value}  {ShortName(kv.Key)}");
             }
-        }
-        else if (reverseOnlyCallers.Count > 0)
-        {
-            io.TextOutput.Output.WriteLine(
-                $"{Indent.L1}… +{reverseOnlyCallers.Count} reach this only via reverse-dispatch over-approximation (no forward path) — list with --include-reverse-only"
-            );
         }
 
         return 0;
@@ -511,8 +511,8 @@ internal static class CallersCommand
         }
         // Reverse-only = in the reverse closure but with NO forward path: a reverse-dispatch over-approximation
         // (a shared base/interface seam — e.g. EntityBase.Delete — pulls in every caller of ANY override, which
-        // can dwarf the real answer by 100s–1000s). By DEFAULT we DON'T list these; we always print a count
-        // footer with how to reveal them. `--include-reverse-only` lists them under a caveat (recall escape hatch).
+        // can dwarf the real answer by 100s–1000s). HIDDEN by default — the headline confirmed set IS the
+        // answer; the hidden --include-reverse-only flag lists it as a diagnostic recall escape hatch.
         if (includeReverseOnly && reverseOnly.Count > 0)
         {
             output.WriteLine($"Reverse-only (no forward path found — confirm with `rig path`): {reverseOnly.Count}");
@@ -524,16 +524,6 @@ internal static class CallersCommand
                     WriteEntryPointLine(output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
                 }
             }
-        }
-        else if (reverseOnly.Count > 0)
-        {
-            output.WriteLine(
-                $"{Indent.L1}… +{reverseOnly.Count} reverse-only entry point(s) reach this via reverse-dispatch over-approximation (no forward path) — list with --include-reverse-only; confirm any with `rig path <entry-point> {toPattern}`."
-            );
-        }
-        else
-        {
-            output.WriteLine($"{Indent.L1}(all reachable entry points are forward-confirmed)");
         }
         // The service summary reflects the precise answer (confirmed EPs).
         if (!deployments.IsEmpty)

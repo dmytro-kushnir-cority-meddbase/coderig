@@ -95,7 +95,11 @@ public static class GenericMonomorphizer
                 {
                     CloneClosure(
                         caller: lambdaCaller,
-                        newCaller: MonomorphizedNodeId.For(lambdaCaller, declaringBinding: inst.DeclaringBinding, methodBinding: inst.MethodBinding)
+                        newCaller: MonomorphizedNodeId.For(
+                            lambdaCaller,
+                            declaringBinding: inst.DeclaringBinding,
+                            methodBinding: inst.MethodBinding
+                        )
                     );
                 }
             }
@@ -166,8 +170,16 @@ public static class GenericMonomorphizer
             return edge.Callee; // non-generic edge
         }
 
-        var declaring = GenericSubstitution.ResolveTokens(declTokens, enclosingDeclaringBinding: inst.DeclaringBinding, enclosingMethodBinding: inst.MethodBinding);
-        var method = GenericSubstitution.ResolveTokens(methTokens, enclosingDeclaringBinding: inst.DeclaringBinding, enclosingMethodBinding: inst.MethodBinding);
+        var declaring = GenericSubstitution.ResolveTokens(
+            declTokens,
+            enclosingDeclaringBinding: inst.DeclaringBinding,
+            enclosingMethodBinding: inst.MethodBinding
+        );
+        var method = GenericSubstitution.ResolveTokens(
+            methTokens,
+            enclosingDeclaringBinding: inst.DeclaringBinding,
+            enclosingMethodBinding: inst.MethodBinding
+        );
         if (declaring is null || method is null)
         {
             return edge.Callee; // a forwarded token didn't resolve here -> leave the callee CHA
@@ -189,8 +201,16 @@ public static class GenericMonomorphizer
             return null;
         }
 
-        var declaring = GenericSubstitution.ResolveTokens(declTokens, enclosingDeclaringBinding: Array.Empty<string>(), enclosingMethodBinding: Array.Empty<string>());
-        var method = GenericSubstitution.ResolveTokens(methTokens, enclosingDeclaringBinding: Array.Empty<string>(), enclosingMethodBinding: Array.Empty<string>());
+        var declaring = GenericSubstitution.ResolveTokens(
+            declTokens,
+            enclosingDeclaringBinding: Array.Empty<string>(),
+            enclosingMethodBinding: Array.Empty<string>()
+        );
+        var method = GenericSubstitution.ResolveTokens(
+            methTokens,
+            enclosingDeclaringBinding: Array.Empty<string>(),
+            enclosingMethodBinding: Array.Empty<string>()
+        );
         if (declaring is null || method is null)
         {
             return null; // forwarded/unresolved -> the caller's clone handles it

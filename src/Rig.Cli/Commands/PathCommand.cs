@@ -147,7 +147,14 @@ internal static class PathCommand
         // Deployment/EP chip on the from-node (path[0]): which service(s) host this entry point.
         // Opt-in via deployments.json; no-op otherwise.
         var pathDeployments = await LoadDeploymentsAsync(context, io.WorkspaceLocation.WorkingDirectory);
-        var pathEpContext = await BuildEpContextAsync(context, graph, io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules, rules, pathDeployments);
+        var pathEpContext = await BuildEpContextAsync(
+            context,
+            graph,
+            io.WorkspaceLocation.WorkingDirectory,
+            opts.ExtraRules,
+            rules,
+            pathDeployments
+        );
 
         io.TextOutput.Output.WriteLine($"Path '{opts.FromPattern}' -> '{opts.ToPattern}' ({path.Count} nodes):");
         for (var i = 0; i < path.Count; i++)

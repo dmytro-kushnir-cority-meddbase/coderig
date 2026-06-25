@@ -9,10 +9,13 @@
 > the two documented sync FPs (`Work/Edit.HandleUpdateWarningActioned`, `Work/ManageRecall.HandleRecall…`)
 > move to Reverse-only; `rig path` confirms no forward path, while confirmed EPs do have one. Test:
 > `tests/Rig.Tests/Domain/CallersForwardVerificationTests.cs`.
-> **The ROOT CAUSE (fix #1 — symmetric path-precise reverse narrowing) is STILL OPEN** — it's the
-> set-based-reverse-BFS limitation REFERENCE already discloses; left as the deeper follow-up.
+> **The ROOT CAUSE (fix #1) is RETIRED (2026-06-25)** — not by making the reverse closure independently
+> precise, but by recognizing there is nothing to make precise: forward-verification already makes the
+> emitted answer forward≡reverse, and the residual raw reverse-only set is an *eliminable asymmetry artifact*
+> (reverse less-narrowed than forward), not the irreducible CHA residual (that lives in forward's `×N`
+> fan-out, disclosed symmetrically). See **Resolution of fix #1** at the foot of this doc.
 
-**Status:** mitigated (fix #2 shipped; fix #1 root-cause open) · **Severity:** medium (false positives in `callers --entrypoints`; safe-direction over-approximation but violates the callers↔path/tree invariant and inflates "who reaches X" / blast-radius answers) · **Found:** 2026-06-23 (MedDBase healthcode MR auth-reachability audit) · **Distinct from** `bug-callers-path-overreach.md` (that is the OPPOSITE direction — `path`/`callers` over-reaching vs `reaches`/`tree` via `nameof`/event edges; this is `callers` over-reaching vs forward `path` AND `tree`).
+**Status:** resolved (fix #2 shipped; fix #1 retired — see Resolution note) · **Severity:** medium (false positives in `callers --entrypoints`; safe-direction over-approximation but violates the callers↔path/tree invariant and inflates "who reaches X" / blast-radius answers) · **Found:** 2026-06-23 (MedDBase healthcode MR auth-reachability audit) · **Distinct from** `bug-callers-path-overreach.md` (that is the OPPOSITE direction — `path`/`callers` over-reaching vs `reaches`/`tree` via `nameof`/event edges; this is `callers` over-reaching vs forward `path` AND `tree`).
 
 ## Symptom
 `rig callers <target> --entrypoints` lists entry points that forward `rig path`/`rig tree` from those same EPs cannot reach — in **either** traversal mode (it is NOT async/handoff-specific). The reverse closure contains predecessor relationships with no forward counterpart, so the documented invariant "`callers` walks the SAME shaped graph as `path`/`reaches`/`tree`" is violated.
@@ -204,3 +207,108 @@ regression: `cache_coherence` 4-high stable, EPs 9936 / effects 183707 unchanged
 reverse closure is unaffected (this is a forward-narrowing fix; `--entrypoints` is forward-verified) — the
 remaining reverse-only bloat is the reverse-gate first-reach follow-up + the `ReverseDispatchReaches`
 `AnyUnreliable` lever. Tests: `InheritedReceiverNoFanTests`.
+
+---
+
+## Resolution of fix #1 (2026-06-25): the split is the intended end-state — and reverse-only is an eliminable artifact, not irreducible residual
+
+The open question on fix #1 was framed as "make the *reverse* closure independently precise (symmetric
+path-precise reverse narrowing)." After monomorphization landed (it dropped this target's reverse-only set
+from **3309 → 50** on the re-indexed store `0f7f84f2`), the conceptual question sharpened to: *should reverse
+narrow exactly like forward, and is there any reason to present the reverse-only superset at all?* The
+resolution:
+
+### 1. On a shared graph, forward and reverse are the SAME relation
+
+Reachability over a fixed edge set is direction-agnostic: "A reaches B forward" ≡ "B reaches A on the
+reversed edges." So if both directions walk the **same shaped, identically-narrowed graph**, their answers
+are equal *by construction* — that equality IS the forward≡reverse target. A correctly-narrowed backward
+pass cannot discover a *true* node a correctly-narrowed forward pass misses. There is no legitimate
+"backward finds roots forward can't."
+
+### 2. Reverse's ONLY legitimate role is the root/EP index — efficiency, not extra truth
+
+"What does X touch" → forward from X. "Who reaches sink S / what are the EPs" → reverse from S (roots are a
+no-predecessor, i.e. reverse-graph, concept). The reverse question is *answerable* forward — run forward from
+every candidate EP and filter — which is **exactly what forward-verification (fix #2) does**. Reverse-from-
+the-sink is just the cheap index (one traversal vs forward-probing all ~9,936 EPs). Reverse must therefore
+**not** carry its own dispatch semantics; the dispatch-narrowing predicate is **direction-free** (a
+virtual/interface edge caller↔override is real iff the caller's mined `ReceiverType` *forward-resolves* to
+that override). Today's divergence — `BuildReverseMaps` / `ReverseDispatchReaches` with the `AnyUnreliable`
+CHA fallback + first-reach-wins through the shared base node — is precisely the bug, not a feature.
+
+### 3. Why generics were RESOLVED but CHA is only DISCLOSED (they differ in kind)
+
+- **Generic instantiation has recoverable static ground truth.** The type argument at `M<C>` is statically
+  determined and propagates deterministically (incl. into lambdas). Monomorphization *recovers* the exact
+  instantiation graph — not an approximation, the ground truth we'd been discarding. The effort paid because
+  a precise answer existed in the facts.
+- **Virtual/interface devirtualization has no static ground truth.** The runtime override depends on the
+  receiver's runtime type — undecidable in general (the compiler itself emits `callvirt` to one static
+  symbol). RTA receiver-narrowing sharpens it, but degrades to CHA at reflection/factory/`List<IFoo>`
+  boundaries. The residual fan is **irreducible** — there's no precise answer to recover, only a sound
+  over-approximation to disclose.
+
+### 4. The reverse pass is a CANDIDATE GENERATOR; forward is the arbiter — so the headline is `reverse ∩ forward`
+
+`callers` (all three modes: default / `--roots` / `--entrypoints`) does NOT use reverse to find the path. It
+uses reverse (`FactPathFinder.ReachedBy`) to cheaply enumerate *candidates*, then forward-verifies each
+(`FactPathFinder.SeedsReachTarget` toward the depth-0 matched target nodes). **Confirmed (forward-reaches the
+target) = the headline answer; the rest = reverse-only.** Reverse proposes; forward decides. The reverse
+pass's only job is to be a cheap, sound *superset* so forward has every real candidate to confirm — it is the
+root/EP index, not a source of truth.
+
+### 5. reverse-only is THREE things, only one of which is irreducible — and none belongs in the headline
+
+`reverse-only = (reverse candidates that forward rejected)`. That set decomposes:
+
+1. **Reverse over-approximation (the bulk; eliminable artifact).** Reverse is currently *less narrowed* than
+   forward — a shared base/interface seam (`EntityBase.Delete`) rejoins every override's callers. Forward
+   (receiver-narrowed) correctly rejects them. On store `0f7f84f2` the 50 reverse-only EPs for
+   `ContactEntity.RemovePersonContactLinks` are dominated by this (verified false positives; `rig path` = No
+   path). If reverse applied the same direction-free predicate, this component collapses to ≈∅.
+2. **Forward's own under-approximation that reverse caught (the recall hedge — genuine, NOT artifact).**
+   Forward narrowing can legitimately *miss* an interface-dispatch/lambda-only path (documented forward gap).
+   Such an EP is truly reachable, reverse caught it, forward can't confirm it → it lands in reverse-only. This
+   is exactly why the partition **caveats rather than drops** (`SeedsReachTarget` comment: "a forward reach
+   can legitimately miss an interface/lambda-only path"). This component is the legitimate reason the bucket
+   exists at all.
+3. **The irreducible CHA residual is NOT here** — it lives in *both* directions equally and forward already
+   discloses it symmetrically as the `×N` fan-out bucket ("could be any of these N — NOT a real call"). It is
+   never reverse-only, because forward keeps it too (so it forward-verifies).
+
+So "reverse-only is an eliminable artifact" was an over-simplification: it is **(1) eliminable artifact ∪ (2)
+a real forward-miss hedge**. Neither belongs in the precise headline; (1) is noise, (2) is a recall escape
+hatch for the rare forward false-negative.
+
+### The actual recall RISK is none of the above — it's reverse UNDER-approximation
+
+Because the headline is `reverse ∩ forward`, a true EP that **reverse** fails to generate (the disclosed
+interface/lambda reverse-miss) never becomes a candidate → it is absent from the headline **and** from
+reverse-only — a *silent* false negative, invisible in either bucket. This, not reverse-only noise, is the
+recall property worth guarding: the candidate generator must stay a sound superset. The CHA
+over-approximation (component 1) is the very thing that buys that safety margin, which is why narrowing
+reverse is polish, not a correctness fix.
+
+### Decision
+
+- **CHA narrowing should be the same in both directions** — one direction-free predicate, applied up in
+  reverse exactly as down in forward. That is the principled end-state; reverse-only collapses toward ∅ under
+  it.
+- **Forward-verification (fix #2) already makes the EMITTED answer forward≡reverse today** (headline =
+  forward-confirmed). Fix #1 (symmetric reverse) and fix #2 (forward-verify the reverse closure) are
+  *operationally the same computation* — "narrow reverse symmetrically" literally means "evaluate the forward
+  predicate at each reverse hop." Fix #2 is the shipped, pragmatic form; the only thing still divergent is the
+  **raw** reverse superset (`--include-reverse-only` / `--roots` / `--raw`).
+- **Reverse-only is now HIDDEN by default (2026-06-25) — diagnostic, under a hidden flag.** Since the
+  forward-confirmed set IS the answer and reverse-only is (1) noise ∪ (2) a rare recall hedge, the default
+  `callers` output prints ONLY the confirmed answer — no footer, no count. The `--include-reverse-only` flag
+  still lists it (the component-2 escape hatch for chasing a suspected forward false-negative) but is marked
+  `Hidden` in `CallersCommand` so it is off the `--help` surface and doesn't read as a normal lens. Not
+  deleted (it's a real hedge); just de-advertised. TSV is unchanged (always emits all rows + the
+  `forwardConfirmed` flag, so consumers can still partition). The raw superset remains via `--raw`.
+
+This **retires fix #1 as an open root cause**: there is nothing to make "independently precise" about reverse
+— the answer is forward-verified, and the residual raw superset is the deliberate, disclosed
+over-approximation. Remaining work is the optional polish of narrowing the *raw* reverse closure for the
+blast-radius surface, tracked in the backlog, not a correctness gap.

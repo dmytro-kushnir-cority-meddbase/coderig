@@ -55,16 +55,15 @@ public static class Writes
         await context.Database.EnsureCreatedAsync(cancellationToken);
         var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
 
-        const string pragma = 
-                     """
-                     PRAGMA journal_mode=OFF;
-                     PRAGMA synchronous=OFF;
-                     PRAGMA temp_store=MEMORY;
-                     PRAGMA mmap_size=4294967296;
-                     PRAGMA cache_size=-262144;
-                     PRAGMA locking_mode=EXCLUSIVE;
-                     """;
-        
+        const string pragma = """
+            PRAGMA journal_mode=OFF;
+            PRAGMA synchronous=OFF;
+            PRAGMA temp_store=MEMORY;
+            PRAGMA mmap_size=4294967296;
+            PRAGMA cache_size=-262144;
+            PRAGMA locking_mode=EXCLUSIVE;
+            """;
+
         await context.Database.ExecuteSqlRawAsync(pragma, cancellationToken);
 
         // Bulk insert: skip per-Add change detection (we never mutate tracked entities) and flush in

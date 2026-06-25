@@ -700,7 +700,9 @@ internal static class TreeCommand
         // instead of leaving them unsure whether the symbol was wrong or the tool failed.
         if (rendered == 0)
         {
-            io.TextOutput.Output.WriteLine($"No effects reachable from '{opts.FromPattern}'. Run with --view full for the structural call tree.");
+            io.TextOutput.Output.WriteLine(
+                $"No effects reachable from '{opts.FromPattern}'. Run with --view full for the structural call tree."
+            );
         }
 
         // --hazards: the summary section under the tree (reuses the `derive` Hazards renderer). Empty-safe —

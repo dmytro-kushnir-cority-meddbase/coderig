@@ -22,11 +22,14 @@ public sealed class StoreLayoutTests
         // A short prefix of the id resolves it.
         Path.GetFileName(StoreLayout.ResolveStoreDirByRef(new WorkspaceLocation(work.Path, "abc123"))).ShouldBe(shortId);
         // Exact id (incl. the -dirty store) resolves.
-        Path.GetFileName(StoreLayout.ResolveStoreDirByRef(new WorkspaceLocation(work.Path, "def456aaa789-dirty"))).ShouldBe("def456aaa789-dirty");
+        Path.GetFileName(StoreLayout.ResolveStoreDirByRef(new WorkspaceLocation(work.Path, "def456aaa789-dirty")))
+            .ShouldBe("def456aaa789-dirty");
         // The dirty store's sha stem resolves it.
-        Path.GetFileName(StoreLayout.ResolveStoreDirByRef(new WorkspaceLocation(work.Path, "def456aaa789"))).ShouldBe("def456aaa789-dirty");
+        Path.GetFileName(StoreLayout.ResolveStoreDirByRef(new WorkspaceLocation(work.Path, "def456aaa789")))
+            .ShouldBe("def456aaa789-dirty");
         // A timestamp store resolves by exact id.
-        Path.GetFileName(StoreLayout.ResolveStoreDirByRef(new WorkspaceLocation(work.Path, "ts-20260617120000"))).ShouldBe("ts-20260617120000");
+        Path.GetFileName(StoreLayout.ResolveStoreDirByRef(new WorkspaceLocation(work.Path, "ts-20260617120000")))
+            .ShouldBe("ts-20260617120000");
         // An unrelated sha resolves to nothing.
         StoreLayout.ResolveStoreDirByRef(new WorkspaceLocation(work.Path, "9999999999999999")).ShouldBeNull();
     }

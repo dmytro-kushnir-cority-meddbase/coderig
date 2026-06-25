@@ -43,7 +43,9 @@ internal static class FactCommands
                     {
                         var marker = string.Equals(storeId, latest, StringComparison.OrdinalIgnoreCase) ? "  ← LATEST (read default)" : "";
                         output.WriteLine($"{Indent.L1}store {storeId}{marker}");
-                        await using var context = await OpenReadContextGatedAsync(new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeId));
+                        await using var context = await OpenReadContextGatedAsync(
+                            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeId)
+                        );
                         await RenderRunsAsync(context: context, output: output, idIndent: Indent.L2, detailIndent: Indent.L3);
                     }
 
@@ -78,18 +80,17 @@ internal static class FactCommands
     internal static Command BuildDi(TextWriter output, TextWriter error, string workingDirectory)
     {
         var storeRef = CommonOptions.Store();
-        var cmd = new Command(name: "di", description: "DI registrations: service -> implementation, lifetime, source.")
-        {
-            storeRef
-        };
-        
+        var cmd = new Command(name: "di", description: "DI registrations: service -> implementation, lifetime, source.") { storeRef };
+
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
                 error,
                 async () =>
                 {
-                    await using var context = await OpenReadContextGatedAsync(new WorkspaceLocation(workingDirectory, pr.GetValue(storeRef)));
+                    await using var context = await OpenReadContextGatedAsync(
+                        new WorkspaceLocation(workingDirectory, pr.GetValue(storeRef))
+                    );
                     var registrations = await Reads.LoadDiRegistrationsAsync(context);
                     if (registrations is null)
                     {
@@ -100,7 +101,9 @@ internal static class FactCommands
                     {
                         output.WriteLine("DI Registrations");
                         output.WriteLine($"{Indent.L1}0 DI registrations found.");
-                        output.WriteLine($"{Indent.L1}(DI is mined from XML DI config files during `rig index`; an empty result is expected for projects without XML-based DI.)");
+                        output.WriteLine(
+                            $"{Indent.L1}(DI is mined from XML DI config files during `rig index`; an empty result is expected for projects without XML-based DI.)"
+                        );
                         return 0;
                     }
 
@@ -143,7 +146,9 @@ internal static class FactCommands
                 error,
                 async () =>
                 {
-                    await using var context = await OpenReadContextGatedAsync(new WorkspaceLocation(workingDirectory, pr.GetValue(storeRef)));
+                    await using var context = await OpenReadContextGatedAsync(
+                        new WorkspaceLocation(workingDirectory, pr.GetValue(storeRef))
+                    );
                     if (pr.GetValue(skipped))
                     {
                         var sourceFiles = await Reads.LoadSkippedSourceFilesAsync(context);
@@ -196,9 +201,15 @@ internal static class FactCommands
             Description = "Exclude compiler-generated lambdas (symbols containing ~λ in their DocID).",
         };
         var storeRef = CommonOptions.Store();
-        var cmd = new Command(name: "symbols", description: "Search indexed symbols by name.") { pattern, kind, limit, noLambdas, storeRef };
+        var cmd = new Command(name: "symbols", description: "Search indexed symbols by name.")
+        {
+            pattern,
+            kind,
+            limit,
+            noLambdas,
+            storeRef,
+        };
         cmd.SetAction(pr =>
-            
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
                 error,
@@ -217,7 +228,7 @@ internal static class FactCommands
                     var filtered = filterLambdas
                         ? allHits.Where(h => !h.SymbolId.Contains("~λ", StringComparison.Ordinal)).ToList()
                         : allHits.ToList();
-                    
+
                     var total = filtered.Count;
                     var shown = filtered.Take(cap).ToList();
                     output.WriteLine($"Symbols matching '{p}'{(k is null ? "" : $" kind={k}")}");
@@ -249,7 +260,7 @@ internal static class FactCommands
         var kind = CommonOptions.Kind();
         var limit = CommonOptions.Limit(200);
         var storeRef = CommonOptions.Store();
-        var cmd = new Command(name: "refs", description: "Find references to a symbol.") { pattern, firstParty, kind, limit,  storeRef };
+        var cmd = new Command(name: "refs", description: "Find references to a symbol.") { pattern, firstParty, kind, limit, storeRef };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
@@ -259,7 +270,9 @@ internal static class FactCommands
                     var p = pr.GetValue(pattern)!;
                     var fp = pr.GetValue(firstParty);
                     var refKind = pr.GetValue(kind);
-                    await using var context = await OpenReadContextGatedAsync(new WorkspaceLocation(workingDirectory, pr.GetValue(storeRef)));
+                    await using var context = await OpenReadContextGatedAsync(
+                        new WorkspaceLocation(workingDirectory, pr.GetValue(storeRef))
+                    );
                     var hits = await Reads.FindReferencesAsync(
                         context,
                         pattern: p,

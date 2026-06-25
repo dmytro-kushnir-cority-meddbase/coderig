@@ -116,8 +116,16 @@ public static class GenericInstantiationInventory
                 return; // non-generic edge
             }
 
-            var declaring = GenericSubstitution.ResolveTokens(declTokens, enclosingDeclaringBinding: enclDeclaring, enclosingMethodBinding: enclMethod);
-            var method = GenericSubstitution.ResolveTokens(methTokens, enclosingDeclaringBinding: enclDeclaring, enclosingMethodBinding: enclMethod);
+            var declaring = GenericSubstitution.ResolveTokens(
+                declTokens,
+                enclosingDeclaringBinding: enclDeclaring,
+                enclosingMethodBinding: enclMethod
+            );
+            var method = GenericSubstitution.ResolveTokens(
+                methTokens,
+                enclosingDeclaringBinding: enclDeclaring,
+                enclosingMethodBinding: enclMethod
+            );
             if (declaring is null || method is null)
             {
                 return; // a forwarded token didn't resolve in this context -> leave the callee CHA

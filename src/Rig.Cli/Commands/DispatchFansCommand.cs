@@ -168,14 +168,24 @@ internal static class DispatchFansCommand
         if (r.AbsentReceiver > 0)
         {
             parts.Add(
-                string.Format(CultureInfo.InvariantCulture, "{0}={1}", arg0: FactPathFinder.DispatchFanCauses.AbsentReceiver, arg1: r.AbsentReceiver)
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    "{0}={1}",
+                    arg0: FactPathFinder.DispatchFanCauses.AbsentReceiver,
+                    arg1: r.AbsentReceiver
+                )
             );
         }
 
         if (r.TypeParameter > 0)
         {
             parts.Add(
-                string.Format(CultureInfo.InvariantCulture, "{0}={1}", arg0: FactPathFinder.DispatchFanCauses.TypeParameter, arg1: r.TypeParameter)
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    "{0}={1}",
+                    arg0: FactPathFinder.DispatchFanCauses.TypeParameter,
+                    arg1: r.TypeParameter
+                )
             );
         }
 

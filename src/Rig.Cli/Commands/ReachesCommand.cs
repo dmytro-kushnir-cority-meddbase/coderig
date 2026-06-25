@@ -219,7 +219,9 @@ internal static class ReachesCommand
         // this listing isn't a silent false negative.
         if (direct.Count > max)
         {
-            io.TextOutput.Output.WriteLine($"{Indent.L1}… +{direct.Count - max} more direct effect(s) (raise --limit, or --format tsv for all)");
+            io.TextOutput.Output.WriteLine(
+                $"{Indent.L1}… +{direct.Count - max} more direct effect(s) (raise --limit, or --format tsv for all)"
+            );
         }
 
         if (scheduled.Count > 0)

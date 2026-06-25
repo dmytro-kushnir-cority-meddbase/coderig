@@ -23,7 +23,7 @@ internal static class StorageProbes
             await connection.OpenAsync(cancellationToken);
             await ApplyReadPragmasAsync(connection, cancellationToken);
         }
-        
+
         return connection;
     }
 

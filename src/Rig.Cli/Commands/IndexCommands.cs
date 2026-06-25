@@ -46,7 +46,7 @@ internal static class IndexCommands
                 error,
                 async () =>
                 {
-                    var dbPath = StoreLayout.DbPathForRef(new WorkspaceLocation(workingDirectory,  pr.GetValue(store)));
+                    var dbPath = StoreLayout.DbPathForRef(new WorkspaceLocation(workingDirectory, pr.GetValue(store)));
                     if (!File.Exists(dbPath))
                     {
                         return CommandGuard.NoRunError(error);
@@ -345,7 +345,7 @@ internal static class IndexCommands
         }
 
         output.WriteLine($"Progress: Saving run {(atomicPublish ? ", atomic-publish" : ", in-place")})");
-        
+
         var saveWatch = Stopwatch.StartNew();
         string runId;
         await using (var context = new RigDbContext(dbPath, pooling: !atomicPublish))
