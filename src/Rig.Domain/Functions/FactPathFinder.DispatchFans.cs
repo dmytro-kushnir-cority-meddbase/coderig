@@ -109,20 +109,20 @@ public static partial class FactPathFinder
                 continue;
             }
 
-            var blindFan = FanCount(edge.Callee, null);
+            var blindFan = FanCount(hub: edge.Callee, receiver: null);
             if (blindFan < 2)
             {
                 continue; // not a dispatch site (single concrete target or a real leaf call)
             }
 
-            var narrowedFan = FanCount(edge.Callee, edge.ReceiverType);
+            var narrowedFan = FanCount(hub: edge.Callee, receiver: edge.ReceiverType);
             if (narrowedFan != blindFan)
             {
                 continue; // the receiver reduced the fan — narrowed, not a problem
             }
 
             // Un-narrowed: classify WHY (first match wins).
-            var cause = ClassifyCause(edge.Callee, edge.ReceiverType, index);
+            var cause = ClassifyCause(hub: edge.Callee, receiver: edge.ReceiverType, index: index);
 
             if (!hubs.TryGetValue(edge.Callee, out var acc))
             {

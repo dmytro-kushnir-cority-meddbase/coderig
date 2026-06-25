@@ -26,16 +26,16 @@ internal static class TraversalGraphLoader
     // Every query command opens the store READ-ONLY (see RigDbContext.readOnly): the engine rejects any
     // write to the main DB, so a read command can never mutate the index. Writers (index/mine/graph) use
     // the default read-write constructor.
-    internal static RigDbContext OpenReadContext(string workingDirectory, string? storeRef = null) =>
-        new(StoreLayout.DbPathForRef(workingDirectory, storeRef), readOnly: true);
+    internal static RigDbContext OpenReadContext(WorkspaceLocation workspaceLocation) =>
+        new RigDbContext(StoreLayout.DbPathForRef(workspaceLocation), readOnly: true);
 
     // F7: overload that also surfaces the resolved store DIRECTORY so the caller can reuse it for a
     // cache-key computation (StoreKey), avoiding a second ResolveReadStoreDir call. The caller receives
     // the dir as an `out` parameter; the existing no-out-param overload is unchanged for all other callers.
-    internal static RigDbContext OpenReadContext(string workingDirectory, string? storeRef, out string storeDir)
+    internal static RigDbContext OpenReadContext(WorkspaceLocation workspaceLocation, out string storeDir)
     {
-        storeDir = StoreLayout.ResolveReadStoreDir(workingDirectory, storeRef);
-        return new(Path.Combine(storeDir, StoreLayout.DbFileName), readOnly: true);
+        storeDir = StoreLayout.ResolveReadStoreDir(workspaceLocation);
+        return new RigDbContext(Path.Combine(storeDir, StoreLayout.DbFileName), readOnly: true);
     }
 
     // The SINGLE schema-gate chokepoint for read/query commands. Opens the read context exactly as
@@ -44,21 +44,17 @@ internal static class TraversalGraphLoader
     // here so an uninitialized / schema-drifted store fails at open with a clear "re-index" message rather
     // than a cryptic mid-query `no such column`. Writers (index/mine/graph) use the raw constructor — they
     // CREATE the store and must not be gated. On a gate failure the context is disposed before rethrow.
-    internal static async Task<RigDbContext> OpenReadContextGatedAsync(string workingDirectory, string? storeRef = null)
+    internal static async Task<RigDbContext> OpenReadContextGatedAsync(WorkspaceLocation workspaceLocation)
     {
-        var context = OpenReadContext(workingDirectory, storeRef);
+        var context = OpenReadContext(workspaceLocation);
         await AssertReadableAsync(context);
         return context;
     }
-
+    
     // Gated counterpart of the F7 out-param overload (storeDir surfaced for StoreKey reuse).
-    internal static async Task<(RigDbContext Context, string StoreDir)> OpenReadContextGatedAsync(
-        string workingDirectory,
-        string? storeRef,
-        bool withStoreDir
-    )
+    internal static async Task<(RigDbContext Context, string StoreDir)> OpenReadContextGatedAsync(WorkspaceLocation ws, bool withStoreDir)
     {
-        var context = OpenReadContext(workingDirectory, storeRef, out var storeDir);
+        var context = OpenReadContext(ws, storeDir: out var storeDir);
         await AssertReadableAsync(context);
         return (context, storeDir);
     }

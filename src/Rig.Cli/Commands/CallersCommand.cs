@@ -89,7 +89,7 @@ internal static class CallersCommand
                             Format: pr.GetValue(format),
                             Limit: pr.GetValue(limit)
                         ),
-                        new CommandIo(Output: output, Error: error, WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
+                        new CommandIo(new TextOutput(output, error), new WorkspaceLocation(workingDirectory, pr.GetValue(store)))
                     )
             )
         );
@@ -122,10 +122,10 @@ internal static class CallersCommand
         // --raw bypasses shaping (the exact unfiltered reverse closure); else monomorphize factories + cut +
         // context, honoured symmetrically by the reverse traversal (a cut node yields no successors forward,
         // so it is never a predecessor in reverse).
-        var rules = RuleSetLoader.Load(io.WorkingDirectory, opts.ExtraRules);
+        var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules);
         var shaped = opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
 
-        await using var context = await OpenReadContextGatedAsync(io.WorkingDirectory, io.StoreRef);
+        await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation);
 
         // One shaped reverse subgraph (bounded when `rig graph` has run, else the full EF graph) drives all
         // three callers modes — the set, the no-predecessor roots, and the rule-detected entrypoints.
@@ -146,19 +146,19 @@ internal static class CallersCommand
         {
             // F9: load the DeploymentMap here and pass it into RunEntryPointsAsync, eliminating the
             // LoadDeploymentsAsync call that was inside RunEntryPointsAsync (depth-1 in the call tree).
-            var epDeployments = await LoadDeploymentsAsync(context, io.WorkingDirectory);
+            var epDeployments = await LoadDeploymentsAsync(context, io.WorkspaceLocation.WorkingDirectory);
             return await RunEntryPointsAsync(
                 context,
                 graph,
-                opts.ToPattern,
-                maxDepth,
-                mode,
-                rules,
-                io.WorkingDirectory,
-                tsv,
-                io.Output,
-                opts.IncludeReverseOnly,
-                epDeployments
+                toPattern: opts.ToPattern,
+                maxDepth: maxDepth,
+                mode: mode,
+                rules: rules,
+                workingDirectory: io.WorkspaceLocation.WorkingDirectory,
+                tsv: tsv,
+                output: io.TextOutput.Output,
+                includeReverseOnly: opts.IncludeReverseOnly,
+                deployments: epDeployments
             );
         }
 
@@ -170,10 +170,10 @@ internal static class CallersCommand
             : await BuildEpContextAsync(
                 context,
                 graph,
-                io.WorkingDirectory,
+                io.WorkspaceLocation.WorkingDirectory,
                 opts.ExtraRules,
                 rules,
-                await LoadDeploymentsAsync(context, io.WorkingDirectory)
+                await LoadDeploymentsAsync(context, io.WorkspaceLocation.WorkingDirectory)
             );
 
         if (opts.RootsOnly)
@@ -183,7 +183,7 @@ internal static class CallersCommand
             {
                 if (!tsv)
                 {
-                    io.Output.WriteLine($"No root callers (no-predecessor origins) reach '{opts.ToPattern}' (or no symbol matches).");
+                    io.TextOutput.Output.WriteLine($"No root callers (no-predecessor origins) reach '{opts.ToPattern}' (or no symbol matches).");
                 }
 
                 return 1;
@@ -218,33 +218,33 @@ internal static class CallersCommand
                 var reverseOnlySet = rootsReverseOnly.ToHashSet(StringComparer.Ordinal);
                 foreach (var r in roots.Take(max))
                 {
-                    io.Output.WriteLine($"{r}\t{(reverseOnlySet.Contains(r) ? "false" : "true")}");
+                    io.TextOutput.Output.WriteLine($"{r}\t{(reverseOnlySet.Contains(r) ? "false" : "true")}");
                 }
 
                 return 0;
             }
-            io.Output.WriteLine($"Root callers (heuristic — no-predecessor origins) reaching '{opts.ToPattern}': {rootsConfirmed.Count}");
+            io.TextOutput.Output.WriteLine($"Root callers (heuristic — no-predecessor origins) reaching '{opts.ToPattern}': {rootsConfirmed.Count}");
             foreach (var r in rootsConfirmed.Take(max))
             {
-                io.Output.WriteLine($"{Indent.L1}{r}{HeaderSuffix(epContext, r)}");
+                io.TextOutput.Output.WriteLine($"{Indent.L1}{r}{HeaderSuffix(epContext, r)}");
             }
             if (rootsConfirmed.Count > max)
             {
-                io.Output.WriteLine($"{Indent.L1}… +{rootsConfirmed.Count - max} more (raise --limit)");
+                io.TextOutput.Output.WriteLine($"{Indent.L1}… +{rootsConfirmed.Count - max} more (raise --limit)");
             }
             // Reverse-only = in the reverse closure but with NO forward path: a reverse-dispatch
             // over-approximation. By DEFAULT we DON'T list these; --include-reverse-only reveals them.
             if (opts.IncludeReverseOnly && rootsReverseOnly.Count > 0)
             {
-                io.Output.WriteLine($"Reverse-only (no forward path found — confirm with `rig path`): {rootsReverseOnly.Count}");
+                io.TextOutput.Output.WriteLine($"Reverse-only (no forward path found — confirm with `rig path`): {rootsReverseOnly.Count}");
                 foreach (var r in rootsReverseOnly.Take(max))
                 {
-                    io.Output.WriteLine($"{Indent.L1}{r}{HeaderSuffix(epContext, r)}");
+                    io.TextOutput.Output.WriteLine($"{Indent.L1}{r}{HeaderSuffix(epContext, r)}");
                 }
             }
             else if (rootsReverseOnly.Count > 0)
             {
-                io.Output.WriteLine(
+                io.TextOutput.Output.WriteLine(
                     $"{Indent.L1}… +{rootsReverseOnly.Count} reach this only via reverse-dispatch over-approximation (no forward path) — list with --include-reverse-only"
                 );
             }
@@ -257,7 +257,7 @@ internal static class CallersCommand
         {
             if (!tsv)
             {
-                io.Output.WriteLine($"No symbol matches '{opts.ToPattern}'.");
+                io.TextOutput.Output.WriteLine($"No symbol matches '{opts.ToPattern}'.");
             }
 
             return 1;
@@ -299,42 +299,42 @@ internal static class CallersCommand
         {
             foreach (var kv in reachable.OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).Take(max))
             {
-                io.Output.WriteLine($"{kv.Value}\t{kv.Key}\t{(IsReverseOnly(kv.Key) ? "false" : "true")}");
+                io.TextOutput.Output.WriteLine($"{kv.Value}\t{kv.Key}\t{(IsReverseOnly(kv.Key) ? "false" : "true")}");
             }
 
             return 0;
         }
-        io.Output.WriteLine($"Methods that reach '{opts.ToPattern}': {confirmedCallers.Count}");
+        io.TextOutput.Output.WriteLine($"Methods that reach '{opts.ToPattern}': {confirmedCallers.Count}");
         if (matched.Count > 0)
         {
-            io.Output.WriteLine($"{Indent.L1}Matched nodes ({matched.Count}):");
+            io.TextOutput.Output.WriteLine($"{Indent.L1}Matched nodes ({matched.Count}):");
             foreach (var kv in matched)
             {
-                io.Output.WriteLine($"{Indent.L2}{ShortName(kv.Key)}");
+                io.TextOutput.Output.WriteLine($"{Indent.L2}{ShortName(kv.Key)}");
             }
         }
         foreach (var kv in confirmedCallers.Take(max))
         {
-            io.Output.WriteLine($"{Indent.L1}d{kv.Value}  {ShortName(kv.Key)}");
+            io.TextOutput.Output.WriteLine($"{Indent.L1}d{kv.Value}  {ShortName(kv.Key)}");
         }
         if (confirmedCallers.Count > max)
         {
-            io.Output.WriteLine($"{Indent.L1}… +{confirmedCallers.Count - max} more (raise --limit, or --format tsv for all)");
+            io.TextOutput.Output.WriteLine($"{Indent.L1}… +{confirmedCallers.Count - max} more (raise --limit, or --format tsv for all)");
         }
         // Reverse-only = in the reverse closure but with NO forward path: a reverse-dispatch over-approximation
         // (a shared base/interface seam pulls in every caller of ANY override). By DEFAULT we DON'T list these;
         // --include-reverse-only reveals them under a caveat (recall escape hatch).
         if (opts.IncludeReverseOnly && reverseOnlyCallers.Count > 0)
         {
-            io.Output.WriteLine($"Reverse-only (no forward path found — confirm with `rig path`): {reverseOnlyCallers.Count}");
+            io.TextOutput.Output.WriteLine($"Reverse-only (no forward path found — confirm with `rig path`): {reverseOnlyCallers.Count}");
             foreach (var kv in reverseOnlyCallers.Take(max))
             {
-                io.Output.WriteLine($"{Indent.L1}d{kv.Value}  {ShortName(kv.Key)}");
+                io.TextOutput.Output.WriteLine($"{Indent.L1}d{kv.Value}  {ShortName(kv.Key)}");
             }
         }
         else if (reverseOnlyCallers.Count > 0)
         {
-            io.Output.WriteLine(
+            io.TextOutput.Output.WriteLine(
                 $"{Indent.L1}… +{reverseOnlyCallers.Count} reach this only via reverse-dispatch over-approximation (no forward path) — list with --include-reverse-only"
             );
         }

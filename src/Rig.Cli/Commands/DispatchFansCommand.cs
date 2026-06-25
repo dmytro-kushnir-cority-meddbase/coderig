@@ -56,7 +56,7 @@ internal static class DispatchFansCommand
                             Top: pr.GetValue(top),
                             Cause: pr.GetValue(cause)
                         ),
-                        new CommandIo(Output: output, Error: error, WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
+                        new CommandIo(new TextOutput(output, error), new WorkspaceLocation(workingDirectory, pr.GetValue(store)))
                     )
             )
         );
@@ -68,9 +68,9 @@ internal static class DispatchFansCommand
     private static async Task<int> RunAsync(Options opts, CommandIo io)
     {
         var tsv = CommonOptions.IsTsv(opts.Format);
-        var rules = RuleSetLoader.Load(io.WorkingDirectory, opts.ExtraRules);
+        var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules);
 
-        await using var context = await OpenReadContextGatedAsync(io.WorkingDirectory, io.StoreRef);
+        await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation);
 
         // The full shaped graph (every call edge + mined dispatch facts), same load `rig derive` uses, so
         // the measured fan matches what the rest of the pipeline sees. This is a whole-graph diagnostic, not
@@ -87,7 +87,7 @@ internal static class DispatchFansCommand
         {
             if (!tsv)
             {
-                io.Output.WriteLine(
+                io.TextOutput.Output.WriteLine(
                     opts.Cause is null ? "No un-narrowed dispatch fans found." : $"No un-narrowed dispatch fans with cause '{opts.Cause}'."
                 );
             }
@@ -101,7 +101,7 @@ internal static class DispatchFansCommand
             // The cause-breakdown is a compact comma-joined `cause=count` of the non-zero causes.
             foreach (var r in rows.Take(opts.Top))
             {
-                io.Output.WriteLine(
+                io.TextOutput.Output.WriteLine(
                     string.Format(
                         CultureInfo.InvariantCulture,
                         "{0}\t{1}\t{2}\t{3}\t{4}",
@@ -118,18 +118,18 @@ internal static class DispatchFansCommand
         }
 
         var actionable = rows.Count(r => r.Actionable);
-        io.Output.WriteLine(
+        io.TextOutput.Output.WriteLine(
             $"Un-narrowed dispatch fans: {rows.Count} hub(s) ({actionable} actionable) — ranked by residualFan × incomingEdges."
         );
-        io.Output.WriteLine(
+        io.TextOutput.Output.WriteLine(
             "(actionable = some un-narrowed edge has an absent or type-parameter receiver — likely a missing rule/EP def to capture the receiver/binding.)"
         );
-        io.Output.WriteLine(
+        io.TextOutput.Output.WriteLine(
             "(traversal-cut seams — service-locator / reflection hubs in rig.rules.json `traversalCuts` — are excluded: their fan never materialises in reaches/tree/path.)"
         );
         foreach (var r in rows.Take(opts.Top))
         {
-            io.Output.WriteLine(
+            io.TextOutput.Output.WriteLine(
                 string.Format(
                     CultureInfo.InvariantCulture,
                     "  [{0}] fan {1} × {2} edge(s) = {3}  {4}  ({5})",
@@ -145,7 +145,7 @@ internal static class DispatchFansCommand
 
         if (rows.Count > opts.Top)
         {
-            io.Output.WriteLine($"  … +{rows.Count - opts.Top} more hub(s) (raise --top, or --format tsv for all)");
+            io.TextOutput.Output.WriteLine($"  … +{rows.Count - opts.Top} more hub(s) (raise --top, or --format tsv for all)");
         }
 
         return 0;
@@ -168,14 +168,14 @@ internal static class DispatchFansCommand
         if (r.AbsentReceiver > 0)
         {
             parts.Add(
-                string.Format(CultureInfo.InvariantCulture, "{0}={1}", FactPathFinder.DispatchFanCauses.AbsentReceiver, r.AbsentReceiver)
+                string.Format(CultureInfo.InvariantCulture, "{0}={1}", arg0: FactPathFinder.DispatchFanCauses.AbsentReceiver, arg1: r.AbsentReceiver)
             );
         }
 
         if (r.TypeParameter > 0)
         {
             parts.Add(
-                string.Format(CultureInfo.InvariantCulture, "{0}={1}", FactPathFinder.DispatchFanCauses.TypeParameter, r.TypeParameter)
+                string.Format(CultureInfo.InvariantCulture, "{0}={1}", arg0: FactPathFinder.DispatchFanCauses.TypeParameter, arg1: r.TypeParameter)
             );
         }
 
@@ -185,8 +185,8 @@ internal static class DispatchFansCommand
                 string.Format(
                     CultureInfo.InvariantCulture,
                     "{0}={1}",
-                    FactPathFinder.DispatchFanCauses.BaseTypedReceiver,
-                    r.BaseTypedReceiver
+                    arg0: FactPathFinder.DispatchFanCauses.BaseTypedReceiver,
+                    arg1: r.BaseTypedReceiver
                 )
             );
         }
@@ -197,8 +197,8 @@ internal static class DispatchFansCommand
                 string.Format(
                     CultureInfo.InvariantCulture,
                     "{0}={1}",
-                    FactPathFinder.DispatchFanCauses.ExternalOrUnbound,
-                    r.ExternalOrUnbound
+                    arg0: FactPathFinder.DispatchFanCauses.ExternalOrUnbound,
+                    arg1: r.ExternalOrUnbound
                 )
             );
         }

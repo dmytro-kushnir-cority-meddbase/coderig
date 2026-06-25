@@ -42,7 +42,7 @@ internal static class EntryPointsCommand
                             Format: pr.GetValue(format),
                             Limit: pr.GetValue(limit)
                         ),
-                        new CommandIo(Output: output, Error: error, WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
+                        new CommandIo(new TextOutput(output, error), new WorkspaceLocation(workingDirectory, pr.GetValue(store)))
                     )
             )
         );
@@ -58,8 +58,8 @@ internal static class EntryPointsCommand
         var tsv = CommonOptions.IsTsv(opts.Format);
         var max = opts.Limit ?? int.MaxValue; // --limit absent => unbounded (this IS the listing)
 
-        var rules = RuleSetLoader.Load(io.WorkingDirectory, opts.ExtraRules);
-        await using var context = await OpenReadContextGatedAsync(io.WorkingDirectory, io.StoreRef);
+        var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules);
+        await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation);
 
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
         var epSet = await DeriveEntryPointsAsync(context, epData, rules);
@@ -74,7 +74,7 @@ internal static class EntryPointsCommand
             .ThenBy(e => e.Route, StringComparer.Ordinal)
             .ToList();
 
-        var deployments = await LoadDeploymentsAsync(context, io.WorkingDirectory);
+        var deployments = await LoadDeploymentsAsync(context, io.WorkspaceLocation.WorkingDirectory);
 
         // --format tsv: one row per EP — kind, route, file, line, requires, loaded services, active services
         // (the last two comma-joined; empty without deployments.json).
@@ -84,7 +84,7 @@ internal static class EntryPointsCommand
             {
                 var loaded = deployments.ServicesForFile(e.FilePath);
                 var active = deployments.ActiveServices(loadedServices: loaded, requires: e.Requires);
-                io.Output.WriteLine(
+                io.TextOutput.Output.WriteLine(
                     $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}"
                 );
             }
@@ -92,21 +92,21 @@ internal static class EntryPointsCommand
             return 0;
         }
 
-        io.Output.WriteLine($"Entry points: {eps.Count}");
+        io.TextOutput.Output.WriteLine($"Entry points: {eps.Count}");
         foreach (var kindGroup in eps.GroupBy(e => e.Kind, StringComparer.Ordinal).OrderByDescending(g => g.Count()))
         {
-            io.Output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
+            io.TextOutput.Output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup.Take(max))
             {
-                WriteEntryPointLine(io.Output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
+                WriteEntryPointLine(io.TextOutput.Output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
             }
 
-            WriteSampleTruncationNote(io.Output, total: kindGroup.Count(), shown: max, kind: kindGroup.Key);
+            WriteSampleTruncationNote(io.TextOutput.Output, total: kindGroup.Count(), shown: max, kind: kindGroup.Key);
         }
 
         if (!deployments.IsEmpty)
         {
-            WriteServiceSummary(eps.Select(e => (e.Kind, (string?)e.FilePath, e.Requires)), deployments, io.Output);
+            WriteServiceSummary(eps.Select(e => (e.Kind, (string?)e.FilePath, e.Requires)), deployments, io.TextOutput.Output);
         }
 
         return 0;

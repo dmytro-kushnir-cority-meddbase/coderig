@@ -118,7 +118,7 @@ internal static class ImpactCommand
                             Structural: pr.GetValue(structural),
                             ExpectNoEffectChange: pr.GetValue(expectNoEffectChange)
                         ),
-                        new CommandIo(Output: output, Error: error, WorkingDirectory: workingDirectory, StoreRef: null)
+                        new CommandIo(new TextOutput(output, error), new WorkspaceLocation(workingDirectory, null))
                     )
             )
         );
@@ -153,18 +153,22 @@ internal static class ImpactCommand
 
         // The HEAD store: opened for the (cheap) deployment-map read on a hit, and the full derivation on a
         // miss. Opening issues no query — the cost is in the graph load + reach a hit skips.
-        await using var context = await OpenReadContextGatedAsync(workingDirectory: io.WorkingDirectory, storeRef: opts.HeadRef);
+        var headLocation = io.WorkspaceLocation with
+        {
+            StoreRef = opts.HeadRef,
+        };
+        await using var context = await OpenReadContextGatedAsync(headLocation);
 
         // F4: load the DeploymentMap ONCE here so both the warm-path (cache hit) and cold-path share the
         // same result — eliminates the duplicate LoadDeploymentsAsync that previously appeared in each branch.
-        var deployments = await LoadDeploymentsAsync(context, io.WorkingDirectory, io.Error);
+        var deployments = await LoadDeploymentsAsync(context, io.WorkspaceLocation.WorkingDirectory, io.TextOutput.Error);
 
         // WARM PATH: a fully-materialized diff + provenance + per-EP FQN subset → render WITHOUT loading the
         // base store or shaping/walking either graph. Deployments are loaded once above for the --structural chips.
         if (cacheKey is not null && cache!.Get(cacheKey) is { } cachedBlob && ImpactCacheCodec.Decode(cachedBlob) is { } art)
         {
             RenderImpact(
-                output: io.Output,
+                output: io.TextOutput.Output,
                 impactDiff: art.Diff,
                 baseProv: art.BaseProvenance,
                 headProv: art.HeadProvenance,
@@ -175,13 +179,13 @@ internal static class ImpactCommand
                 structural: opts.Structural,
                 max: max
             );
-            return ExpectNoEffectChangeExit(opts.ExpectNoEffectChange, EffectChangedEpCount(art.Diff), io.Error);
+            return ExpectNoEffectChangeExit(opts.ExpectNoEffectChange, EffectChangedEpCount(art.Diff), io.TextOutput.Error);
         }
 
         // Provenance for the header: each store's source branch + short commit (12-char sha), read from its
         // own run row. Falls back to the store-id when a store has no commit/branch provenance.
         var headProv = await ReadProvenanceAsync(context, opts.HeadRef);
-        var baseProv = await ResolveBaseProvenanceAsync(baseDbPath, opts.BaseRef);
+        var baseProv = await ResolveBaseProvenanceAsync(baseDbPath: baseDbPath, baseRef: opts.BaseRef);
 
         // HEAD (branch) side: load and shape the full graph, derive entry points + effects. All reads are
         // done once and threaded into the per-EP computations below.
@@ -211,7 +215,7 @@ internal static class ImpactCommand
         TrySaveDiffToCache(cache, cacheKey, impactDiff, baseProv, headProv, fqnSites);
 
         RenderImpact(
-            output: io.Output,
+            output: io.TextOutput.Output,
             impactDiff: impactDiff,
             baseProv: baseProv,
             headProv: headProv,
@@ -222,7 +226,7 @@ internal static class ImpactCommand
             structural: opts.Structural,
             max: max
         );
-        return ExpectNoEffectChangeExit(opts.ExpectNoEffectChange, EffectChangedEpCount(impactDiff), io.Error);
+        return ExpectNoEffectChangeExit(opts.ExpectNoEffectChange, EffectChangedEpCount(impactDiff), io.TextOutput.Error);
     }
 
     // Resolve BOTH per-commit stores up front (sha / short-sha / store-id → store dir), load the rule set,
@@ -239,12 +243,13 @@ internal static class ImpactCommand
     )
     {
         var rules = RuleSetLoader.Load(
-            workingDirectory: io.WorkingDirectory,
+            workingDirectory: io.WorkspaceLocation.WorkingDirectory,
             extraRules: opts.ExtraRules,
             loadedPaths: out var loadedRulePaths
         );
-        var headDir = StoreLayout.ResolveReadStoreDir(workingDirectory: io.WorkingDirectory, storeRef: opts.HeadRef);
-        var baseDir = StoreLayout.ResolveReadStoreDir(workingDirectory: io.WorkingDirectory, storeRef: opts.BaseRef);
+
+        var headDir = StoreLayout.ResolveReadStoreDir(io.WorkspaceLocation with { StoreRef = opts.HeadRef });
+        var baseDir = StoreLayout.ResolveReadStoreDir(io.WorkspaceLocation with { StoreRef = opts.BaseRef });
         var baseDbPath = Path.Combine(baseDir, StoreLayout.DbFileName);
         var headStoreKey = StoreKey(Path.Combine(headDir, StoreLayout.DbFileName));
         var baseStoreKey = StoreKey(baseDbPath);

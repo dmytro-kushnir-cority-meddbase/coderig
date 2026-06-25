@@ -116,8 +116,8 @@ public static class GenericInstantiationInventory
                 return; // non-generic edge
             }
 
-            var declaring = GenericSubstitution.ResolveTokens(declTokens, enclDeclaring, enclMethod);
-            var method = GenericSubstitution.ResolveTokens(methTokens, enclDeclaring, enclMethod);
+            var declaring = GenericSubstitution.ResolveTokens(declTokens, enclosingDeclaringBinding: enclDeclaring, enclosingMethodBinding: enclMethod);
+            var method = GenericSubstitution.ResolveTokens(methTokens, enclosingDeclaringBinding: enclDeclaring, enclosingMethodBinding: enclMethod);
             if (declaring is null || method is null)
             {
                 return; // a forwarded token didn't resolve in this context -> leave the callee CHA
@@ -129,7 +129,7 @@ public static class GenericInstantiationInventory
         // SEED: every edge whose bindings are fully concrete on their own (resolve against empty enclosing).
         foreach (var edge in graph.CallEdges)
         {
-            ScanEdge(edge, Array.Empty<string>(), Array.Empty<string>());
+            ScanEdge(edge, enclDeclaring: Array.Empty<string>(), enclMethod: Array.Empty<string>());
         }
 
         // FIXPOINT: each instantiation's closure (its body + its lambdas') edges, resolving forwarded tokens
@@ -155,7 +155,7 @@ public static class GenericInstantiationInventory
 
                 foreach (var e in bodyEdges)
                 {
-                    ScanEdge(e, inst.DeclaringBinding, inst.MethodBinding);
+                    ScanEdge(e, enclDeclaring: inst.DeclaringBinding, enclMethod: inst.MethodBinding);
                 }
             }
         }

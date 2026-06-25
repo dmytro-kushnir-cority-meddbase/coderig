@@ -31,7 +31,7 @@ internal static class FactCommands
                     var storeIds = StoreLayout.AvailableStoreIds(workingDirectory);
                     if (storeIds.Count == 0)
                     {
-                        await using var context = await OpenReadContextGatedAsync(workingDirectory);
+                        await using var context = await OpenReadContextGatedAsync(new WorkspaceLocation(workingDirectory));
                         output.WriteLine("Runs");
                         await RenderRunsAsync(context: context, output: output, idIndent: Indent.L1, detailIndent: Indent.L2);
                         return 0;
@@ -43,7 +43,7 @@ internal static class FactCommands
                     {
                         var marker = string.Equals(storeId, latest, StringComparison.OrdinalIgnoreCase) ? "  ← LATEST (read default)" : "";
                         output.WriteLine($"{Indent.L1}store {storeId}{marker}");
-                        await using var context = await OpenReadContextGatedAsync(workingDirectory: workingDirectory, storeRef: storeId);
+                        await using var context = await OpenReadContextGatedAsync(new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeId));
                         await RenderRunsAsync(context: context, output: output, idIndent: Indent.L2, detailIndent: Indent.L3);
                     }
 
@@ -77,14 +77,19 @@ internal static class FactCommands
 
     internal static Command BuildDi(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var cmd = new Command(name: "di", description: "DI registrations: service -> implementation, lifetime, source.");
-        cmd.SetAction(_ =>
+        var storeRef = CommonOptions.Store();
+        var cmd = new Command(name: "di", description: "DI registrations: service -> implementation, lifetime, source.")
+        {
+            storeRef
+        };
+        
+        cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
                 error,
                 async () =>
                 {
-                    await using var context = await OpenReadContextGatedAsync(workingDirectory);
+                    await using var context = await OpenReadContextGatedAsync(new WorkspaceLocation(workingDirectory, pr.GetValue(storeRef)));
                     var registrations = await Reads.LoadDiRegistrationsAsync(context);
                     if (registrations is null)
                     {
@@ -95,9 +100,7 @@ internal static class FactCommands
                     {
                         output.WriteLine("DI Registrations");
                         output.WriteLine($"{Indent.L1}0 DI registrations found.");
-                        output.WriteLine(
-                            $"{Indent.L1}(DI is mined from XML DI config files during `rig index`; an empty result is expected for projects without XML-based DI.)"
-                        );
+                        output.WriteLine($"{Indent.L1}(DI is mined from XML DI config files during `rig index`; an empty result is expected for projects without XML-based DI.)");
                         return 0;
                     }
 
@@ -132,14 +135,15 @@ internal static class FactCommands
     internal static Command BuildFiles(TextWriter output, TextWriter error, string workingDirectory)
     {
         var skipped = new Option<bool>("--skipped") { Description = "List source files skipped during indexing." };
-        var cmd = new Command(name: "files", description: "Inspect indexed source files.") { skipped };
+        var storeRef = CommonOptions.Store();
+        var cmd = new Command(name: "files", description: "Inspect indexed source files.") { skipped, storeRef };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
                 error,
                 async () =>
                 {
-                    await using var context = await OpenReadContextGatedAsync(workingDirectory);
+                    await using var context = await OpenReadContextGatedAsync(new WorkspaceLocation(workingDirectory, pr.GetValue(storeRef)));
                     if (pr.GetValue(skipped))
                     {
                         var sourceFiles = await Reads.LoadSkippedSourceFilesAsync(context);
@@ -191,8 +195,10 @@ internal static class FactCommands
         {
             Description = "Exclude compiler-generated lambdas (symbols containing ~λ in their DocID).",
         };
-        var cmd = new Command(name: "symbols", description: "Search indexed symbols by name.") { pattern, kind, limit, noLambdas };
+        var storeRef = CommonOptions.Store();
+        var cmd = new Command(name: "symbols", description: "Search indexed symbols by name.") { pattern, kind, limit, noLambdas, storeRef };
         cmd.SetAction(pr =>
+            
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
                 error,
@@ -202,13 +208,16 @@ internal static class FactCommands
                     var k = pr.GetValue(kind);
                     var cap = pr.GetValue(limit);
                     var filterLambdas = pr.GetValue(noLambdas);
-                    await using var context = await OpenReadContextGatedAsync(workingDirectory);
+                    var sr = pr.GetValue(storeRef);
+                    var ws = new WorkspaceLocation(workingDirectory, sr);
+                    await using var context = await OpenReadContextGatedAsync(ws);
                     // Fetch beyond the display cap so we can compute the true post-filter total: the LIKE
                     // fallback hard-caps at 5000 unique rows, and the FTS path returns all matches.
                     var allHits = await Reads.SearchSymbolsAsync(context, pattern: p, kind: k, limit: int.MaxValue);
                     var filtered = filterLambdas
                         ? allHits.Where(h => !h.SymbolId.Contains("~λ", StringComparison.Ordinal)).ToList()
                         : allHits.ToList();
+                    
                     var total = filtered.Count;
                     var shown = filtered.Take(cap).ToList();
                     output.WriteLine($"Symbols matching '{p}'{(k is null ? "" : $" kind={k}")}");
@@ -239,7 +248,8 @@ internal static class FactCommands
         var firstParty = new Option<bool>("--first-party") { Description = "Only references from first-party code." };
         var kind = CommonOptions.Kind();
         var limit = CommonOptions.Limit(200);
-        var cmd = new Command(name: "refs", description: "Find references to a symbol.") { pattern, firstParty, kind, limit };
+        var storeRef = CommonOptions.Store();
+        var cmd = new Command(name: "refs", description: "Find references to a symbol.") { pattern, firstParty, kind, limit,  storeRef };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
@@ -249,7 +259,7 @@ internal static class FactCommands
                     var p = pr.GetValue(pattern)!;
                     var fp = pr.GetValue(firstParty);
                     var refKind = pr.GetValue(kind);
-                    await using var context = await OpenReadContextGatedAsync(workingDirectory);
+                    await using var context = await OpenReadContextGatedAsync(new WorkspaceLocation(workingDirectory, pr.GetValue(storeRef)));
                     var hits = await Reads.FindReferencesAsync(
                         context,
                         pattern: p,

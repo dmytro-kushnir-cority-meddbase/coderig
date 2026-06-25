@@ -54,7 +54,7 @@ internal static class PathCommand
                             Depth: pr.GetValue(depth),
                             Format: pr.GetValue(format)
                         ),
-                        new CommandIo(Output: output, Error: error, WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
+                        new CommandIo(new TextOutput(output, error), new WorkspaceLocation(workingDirectory, pr.GetValue(store)))
                     )
             )
         );
@@ -80,10 +80,10 @@ internal static class PathCommand
         var mode = CommonOptions.Mode(async: opts.Async, includeDelivery: opts.IncludeDelivery);
         // --raw bypasses all shaping (the exact unfiltered plumbing); else monomorphize factories + cut +
         // context-narrow, honoured symmetrically by the reverse/forward traversal.
-        var rules = RuleSetLoader.Load(io.WorkingDirectory, opts.ExtraRules);
+        var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules);
         var shaped = opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
 
-        await using var context = await OpenReadContextGatedAsync(io.WorkingDirectory, io.StoreRef);
+        await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation);
         // Any path from a `from` node lies entirely within that node's forward closure, so the BOUNDED
         // forward subgraph (loaded on disk via the derived edge views, sized to the result) finds the
         // same first path as the full graph. Falls back to the full EF graph when `rig graph` hasn't run.
@@ -105,15 +105,15 @@ internal static class PathCommand
 
         if (!tsv)
         {
-            io.Output.WriteLine(
+            io.TextOutput.Output.WriteLine(
                 $"Fact graph: {graph.CallEdges.Count} call edges, {graph.ImplementsEdges.Count} implements edges, {graph.Methods.Count} methods"
             );
         }
 
         var path = FactPathFinder.Find(
             graph,
-            opts.FromPattern,
-            opts.ToPattern,
+            fromPattern: opts.FromPattern,
+            toPattern: opts.ToPattern,
             maxDepth: CommonOptions.DepthOrUnbounded(opts.Depth),
             mode: mode
         );
@@ -124,7 +124,7 @@ internal static class PathCommand
         {
             if (!tsv)
             {
-                io.Output.WriteLine($"No path from '{opts.FromPattern}' to '{opts.ToPattern}'.");
+                io.TextOutput.Output.WriteLine($"No path from '{opts.FromPattern}' to '{opts.ToPattern}'.");
             }
 
             return 1;
@@ -137,7 +137,7 @@ internal static class PathCommand
             for (var i = 0; i < path.Count; i++)
             {
                 var s = path[i];
-                io.Output.WriteLine(
+                io.TextOutput.Output.WriteLine(
                     $"{i}\t{s.SymbolId}\t{s.Kind}\t{s.HandoffVia}\t{s.Fanout}\t{s.LoopKind}\t{s.LoopDetail}\t{s.DispatchBasis}\t{s.FilePath}\t{s.Line}"
                 );
             }
@@ -146,10 +146,10 @@ internal static class PathCommand
 
         // Deployment/EP chip on the from-node (path[0]): which service(s) host this entry point.
         // Opt-in via deployments.json; no-op otherwise.
-        var pathDeployments = await LoadDeploymentsAsync(context, io.WorkingDirectory);
-        var pathEpContext = await BuildEpContextAsync(context, graph, io.WorkingDirectory, opts.ExtraRules, rules, pathDeployments);
+        var pathDeployments = await LoadDeploymentsAsync(context, io.WorkspaceLocation.WorkingDirectory);
+        var pathEpContext = await BuildEpContextAsync(context, graph, io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules, rules, pathDeployments);
 
-        io.Output.WriteLine($"Path '{opts.FromPattern}' -> '{opts.ToPattern}' ({path.Count} nodes):");
+        io.TextOutput.Output.WriteLine($"Path '{opts.FromPattern}' -> '{opts.ToPattern}' ({path.Count} nodes):");
         for (var i = 0; i < path.Count; i++)
         {
             var step = path[i];
@@ -165,7 +165,7 @@ internal static class PathCommand
                 i == 0
                     ? HeaderSuffix(pathEpContext, step.SymbolId)
                     : $"  [{kind}{loop}{(step.FilePath is null ? "" : $" @ {ShortenPath(step.FilePath)}:{step.Line}")}]";
-            io.Output.WriteLine($"{Indent.Of(i + 1)}{step.SymbolId}{via}");
+            io.TextOutput.Output.WriteLine($"{Indent.Of(i + 1)}{step.SymbolId}{via}");
         }
         return 0;
     }

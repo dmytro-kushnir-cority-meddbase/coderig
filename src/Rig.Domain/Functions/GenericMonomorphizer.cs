@@ -75,13 +75,13 @@ public static class GenericMonomorphizer
         var instIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var inst in inventory.Instantiations)
         {
-            instIds.Add(MonomorphizedNodeId.For(inst.MethodId, inst.DeclaringBinding, inst.MethodBinding));
+            instIds.Add(MonomorphizedNodeId.For(inst.MethodId, declaringBinding: inst.DeclaringBinding, methodBinding: inst.MethodBinding));
         }
 
         var clonedEdges = new List<CallEdge>();
         foreach (var inst in inventory.Instantiations)
         {
-            var instId = MonomorphizedNodeId.For(inst.MethodId, inst.DeclaringBinding, inst.MethodBinding);
+            var instId = MonomorphizedNodeId.For(inst.MethodId, declaringBinding: inst.DeclaringBinding, methodBinding: inst.MethodBinding);
             var map = BuildNameMap(inst, typeParamNamesFor, containingTypeOf);
 
             // Clone the method's own body edges onto the instantiation node.
@@ -95,7 +95,7 @@ public static class GenericMonomorphizer
                 {
                     CloneClosure(
                         caller: lambdaCaller,
-                        newCaller: MonomorphizedNodeId.For(lambdaCaller, inst.DeclaringBinding, inst.MethodBinding)
+                        newCaller: MonomorphizedNodeId.For(lambdaCaller, declaringBinding: inst.DeclaringBinding, methodBinding: inst.MethodBinding)
                     );
                 }
             }
@@ -133,7 +133,7 @@ public static class GenericMonomorphizer
             outEdges.Add(redirect is null ? e : e with { Callee = redirect });
         }
 
-        clonedEdges.Sort((a, b) => string.Compare(a.Caller, b.Caller, StringComparison.Ordinal));
+        clonedEdges.Sort((a, b) => string.Compare(strA: a.Caller, strB: b.Caller, comparisonType: StringComparison.Ordinal));
         outEdges.AddRange(clonedEdges);
 
         return graph with
@@ -156,7 +156,7 @@ public static class GenericMonomorphizer
         // A call into the method's own lambda closure: re-point to the lambda's instantiation (same binding).
         if (edge.Callee.StartsWith(inst.MethodId + "~λ", StringComparison.Ordinal))
         {
-            return MonomorphizedNodeId.For(edge.Callee, inst.DeclaringBinding, inst.MethodBinding);
+            return MonomorphizedNodeId.For(edge.Callee, declaringBinding: inst.DeclaringBinding, methodBinding: inst.MethodBinding);
         }
 
         var declTokens = GenericSubstitution.ParseBindingTokens(edge.DeclaringTypeArgBinding);
@@ -166,14 +166,14 @@ public static class GenericMonomorphizer
             return edge.Callee; // non-generic edge
         }
 
-        var declaring = GenericSubstitution.ResolveTokens(declTokens, inst.DeclaringBinding, inst.MethodBinding);
-        var method = GenericSubstitution.ResolveTokens(methTokens, inst.DeclaringBinding, inst.MethodBinding);
+        var declaring = GenericSubstitution.ResolveTokens(declTokens, enclosingDeclaringBinding: inst.DeclaringBinding, enclosingMethodBinding: inst.MethodBinding);
+        var method = GenericSubstitution.ResolveTokens(methTokens, enclosingDeclaringBinding: inst.DeclaringBinding, enclosingMethodBinding: inst.MethodBinding);
         if (declaring is null || method is null)
         {
             return edge.Callee; // a forwarded token didn't resolve here -> leave the callee CHA
         }
 
-        var candidate = MonomorphizedNodeId.For(edge.Callee, declaring, method);
+        var candidate = MonomorphizedNodeId.For(edge.Callee, declaringBinding: declaring, methodBinding: method);
         return instIds.Contains(candidate) ? candidate : edge.Callee;
     }
 
@@ -189,14 +189,14 @@ public static class GenericMonomorphizer
             return null;
         }
 
-        var declaring = GenericSubstitution.ResolveTokens(declTokens, Array.Empty<string>(), Array.Empty<string>());
-        var method = GenericSubstitution.ResolveTokens(methTokens, Array.Empty<string>(), Array.Empty<string>());
+        var declaring = GenericSubstitution.ResolveTokens(declTokens, enclosingDeclaringBinding: Array.Empty<string>(), enclosingMethodBinding: Array.Empty<string>());
+        var method = GenericSubstitution.ResolveTokens(methTokens, enclosingDeclaringBinding: Array.Empty<string>(), enclosingMethodBinding: Array.Empty<string>());
         if (declaring is null || method is null)
         {
             return null; // forwarded/unresolved -> the caller's clone handles it
         }
 
-        var candidate = MonomorphizedNodeId.For(edge.Callee, declaring, method);
+        var candidate = MonomorphizedNodeId.For(edge.Callee, declaringBinding: declaring, methodBinding: method);
         return instIds.Contains(candidate) ? candidate : null;
     }
 

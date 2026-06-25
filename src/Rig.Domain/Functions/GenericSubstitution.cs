@@ -257,14 +257,14 @@ public static class GenericSubstitution
                     resolved[i] = token.Value;
                     break;
                 case 'M':
-                    if (!TryResolveIndex(token.Value, enclosingMethodBinding, out resolved[i]!))
+                    if (!TryResolveIndex(indexText: token.Value, binding: enclosingMethodBinding, value: out resolved[i]!))
                     {
                         return null;
                     }
 
                     break;
                 case 'T':
-                    if (!TryResolveIndex(token.Value, enclosingDeclaringBinding, out resolved[i]!))
+                    if (!TryResolveIndex(indexText: token.Value, binding: enclosingDeclaringBinding, value: out resolved[i]!))
                     {
                         return null;
                     }

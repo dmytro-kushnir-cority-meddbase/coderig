@@ -13,16 +13,10 @@ namespace Rig.Storage.Queries;
 // is why ColumnExists probes PRAGMA table_info rather than relying on DDL guards.
 internal static class StorageProbes
 {
-    private static DbConnection? CONNECTION; 
     // The EF-managed connection, opened if the caller hasn't opened it yet (raw-ADO query paths need an
     // open connection; FTS5 / PRAGMA / recursive-CTE SQL isn't expressible in EF LINQ).
     public static async Task<DbConnection> OpenConnectionAsync(RigDbContext context, CancellationToken cancellationToken)
     {
-        if (CONNECTION != null)
-        {
-            return CONNECTION;
-        }
-        
         var connection = context.Database.GetDbConnection();
         if (connection.State != ConnectionState.Open)
         {
@@ -30,7 +24,6 @@ internal static class StorageProbes
             await ApplyReadPragmasAsync(connection, cancellationToken);
         }
         
-        CONNECTION = connection;
         return connection;
     }
 

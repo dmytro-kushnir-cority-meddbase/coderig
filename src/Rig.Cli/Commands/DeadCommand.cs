@@ -60,7 +60,7 @@ internal static class DeadCommand
                             Limit: pr.GetValue(limit),
                             Format: pr.GetValue(format)
                         ),
-                        new CommandIo(Output: output, Error: error, WorkingDirectory: workingDirectory, StoreRef: null)
+                        new CommandIo(new TextOutput(output, error), new WorkspaceLocation(workingDirectory, null))
                     )
             )
         );
@@ -81,18 +81,18 @@ internal static class DeadCommand
     {
         var tsv = CommonOptions.IsTsv(opts.Format);
 
-        await using var context = await OpenReadContextGatedAsync(io.WorkingDirectory);
+        await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation);
 
         // TODO(perf): `dead` still loads the full ~1.4M-row call graph into memory (LoadFactGraphAsync) and
         // runs ReachableFromAll(roots) in process. This is the last read command doing a full-graph load. It
         // maps directly onto the SQL primitive (SqlReachability.ReachableSetAsync); left as-is intentionally —
         // `dead` is a cold/occasional audit path, not a hot query, so the in-memory load is acceptable for now.
-        var rules = RuleSetLoader.Load(io.WorkingDirectory, opts.ExtraRules);
+        var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules);
         var graph = await Reads.LoadFactGraphAsync(context, rules.Handoff);
         var methods = await Reads.LoadDeadCodeMethodsAsync(context);
         if (methods.Count == 0)
         {
-            io.Output.WriteLine("No method symbols in the index — run `rig index`/`rig mine` first.");
+            io.TextOutput.Output.WriteLine("No method symbols in the index — run `rig index`/`rig mine` first.");
             return 1;
         }
 
@@ -160,37 +160,37 @@ internal static class DeadCommand
         {
             foreach (var c in shown)
             {
-                io.Output.WriteLine($"{c.Tier}\t{c.Reason}\t{c.DirectCallers}\t{c.SymbolId}\t{c.FilePath}:{c.Line}");
+                io.TextOutput.Output.WriteLine($"{c.Tier}\t{c.Reason}\t{c.DirectCallers}\t{c.SymbolId}\t{c.FilePath}:{c.Line}");
             }
 
             return 0;
         }
 
-        io.Output.WriteLine($"Roots (entry points + handoffs + Main + tests): {roots.Count}");
-        io.Output.WriteLine($"First-party methods examined: {methods.Count}");
-        io.Output.WriteLine(
+        io.TextOutput.Output.WriteLine($"Roots (entry points + handoffs + Main + tests): {roots.Count}");
+        io.TextOutput.Output.WriteLine($"First-party methods examined: {methods.Count}");
+        io.TextOutput.Output.WriteLine(
             $"Dead-code candidates: {candidates.Count}  (High {candidates.Count(c => c.Tier == DeadCodeFinder.Tier.High)}, "
                 + $"Medium {candidates.Count(c => c.Tier == DeadCodeFinder.Tier.Medium)}, Low {candidates.Count(c => c.Tier == DeadCodeFinder.Tier.Low)})"
         );
-        io.Output.WriteLine(opts.LibMode ? "Mode: library (public/protected = roots)" : "Mode: application (public methods are flaggable)");
-        io.Output.WriteLine("REPORT ONLY — confirm each against the C# compiler (IDE0051/CS0169) before removing.");
+        io.TextOutput.Output.WriteLine(opts.LibMode ? "Mode: library (public/protected = roots)" : "Mode: application (public methods are flaggable)");
+        io.TextOutput.Output.WriteLine("REPORT ONLY — confirm each against the C# compiler (IDE0051/CS0169) before removing.");
         if (!opts.ShowAll && candidates.Any(c => c.Tier == DeadCodeFinder.Tier.Low))
         {
-            io.Output.WriteLine("(Low-confidence public/protected candidates hidden; pass --all to include them.)");
+            io.TextOutput.Output.WriteLine("(Low-confidence public/protected candidates hidden; pass --all to include them.)");
         }
 
-        io.Output.WriteLine();
+        io.TextOutput.Output.WriteLine();
         foreach (var tierGroup in shown.GroupBy(c => c.Tier).OrderBy(g => g.Key))
         {
-            io.Output.WriteLine($"=== {tierGroup.Key} confidence ({tierGroup.Count()}) ===");
+            io.TextOutput.Output.WriteLine($"=== {tierGroup.Key} confidence ({tierGroup.Count()}) ===");
             foreach (var c in tierGroup.Take(opts.Limit))
             {
                 var note = c.DirectCallers == 0 ? "" : $"  [reached only by {c.DirectCallers} dead caller(s)]";
-                io.Output.WriteLine($"{Indent.L1}{ShortName(c.SymbolId)}  {ShortenPath(c.FilePath)}:{c.Line}{note}");
+                io.TextOutput.Output.WriteLine($"{Indent.L1}{ShortName(c.SymbolId)}  {ShortenPath(c.FilePath)}:{c.Line}{note}");
             }
             if (tierGroup.Count() > opts.Limit)
             {
-                io.Output.WriteLine($"{Indent.L1}… and {tierGroup.Count() - opts.Limit} more (raise --limit)");
+                io.TextOutput.Output.WriteLine($"{Indent.L1}… and {tierGroup.Count() - opts.Limit} more (raise --limit)");
             }
         }
         return 0;

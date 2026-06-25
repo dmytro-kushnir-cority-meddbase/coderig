@@ -38,22 +38,22 @@ internal static class StoreLayout
     // store (the default). A given ref must match an indexed per-commit store (by store-id, or a commit
     // sha prefix either way — see ResolveStoreDirByRef); an unmatched ref throws StoreRefNotFoundException
     // so CommandGuard can list what IS indexed instead of failing into a raw "no such file" open error.
-    internal static string DbPathForRef(string workingDirectory, string? storeRef) =>
-        Path.Combine(ResolveReadStoreDir(workingDirectory, storeRef), DbFileName);
+    internal static string DbPathForRef(WorkspaceLocation ws) =>
+        Path.Combine(ResolveReadStoreDir(ws), DbFileName);
 
     // The store DIRECTORY a read command should use, honoring `--store`. Empty/null => the LATEST store dir
     // (ResolveStoreDir). A given ref must match an indexed per-commit store; an unmatched ref throws
     // StoreRefNotFoundException. Commands that key a cache to the store dir (tree) resolve through here too,
     // so `--store` steers the context AND the cache consistently.
-    internal static string ResolveReadStoreDir(string workingDirectory, string? storeRef)
+    internal static string ResolveReadStoreDir(WorkspaceLocation ws)
     {
-        if (string.IsNullOrWhiteSpace(storeRef))
+        if (string.IsNullOrWhiteSpace(ws.StoreRef))
         {
-            return ResolveStoreDir(workingDirectory);
+            return ResolveStoreDir(ws.WorkingDirectory);
         }
 
-        return ResolveStoreDirByRef(workingDirectory: workingDirectory, refOrId: storeRef)
-            ?? throw new StoreRefNotFoundException(storeRef, AvailableStoreIds(workingDirectory));
+        return ResolveStoreDirByRef(ws)
+            ?? throw new StoreRefNotFoundException(ws.StoreRef, AvailableStoreIds(ws.WorkingDirectory));
     }
 
     // The newest per-commit store dir — the LATEST pointer wins, else the newest subdir holding a rig.db by
@@ -133,14 +133,14 @@ internal static class StoreLayout
     // sub-store whose id (minus any `-dirty` suffix) shares a sha prefix with `refOrId` — so a full HEAD
     // sha resolves the short-sha store dir, and a short prefix resolves too. Exact id wins outright.
     // Returns null when nothing matches.
-    internal static string? ResolveStoreDirByRef(string workingDirectory, string refOrId)
+    internal static string? ResolveStoreDirByRef(WorkspaceLocation ws)
     {
-        if (string.IsNullOrWhiteSpace(refOrId))
+        if (string.IsNullOrWhiteSpace(ws.StoreRef))
         {
             return null;
         }
 
-        var rig = RigDir(workingDirectory);
+        var rig = RigDir(ws.WorkingDirectory);
         if (!Directory.Exists(rig))
         {
             return null;
@@ -155,14 +155,14 @@ internal static class StoreLayout
             }
 
             var id = Path.GetFileName(dir);
-            if (string.Equals(id, refOrId, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(id, ws.StoreRef, StringComparison.OrdinalIgnoreCase))
             {
                 return dir; // exact store-id wins
             }
 
             var stem = id.EndsWith("-dirty", StringComparison.Ordinal) ? id[..^"-dirty".Length] : id;
             if (
-                stem.StartsWith(refOrId, StringComparison.OrdinalIgnoreCase) || refOrId.StartsWith(stem, StringComparison.OrdinalIgnoreCase)
+                stem.StartsWith(ws.StoreRef, StringComparison.OrdinalIgnoreCase) || ws.StoreRef.StartsWith(stem, StringComparison.OrdinalIgnoreCase)
             )
             {
                 match = dir;
