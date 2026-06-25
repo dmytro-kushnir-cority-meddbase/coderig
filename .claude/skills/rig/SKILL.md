@@ -25,6 +25,7 @@ query/rule changes. Tool repo: `C:\git\coderig` (global tool `rig`).
 ```bash
 rig index Sln.slnx --parallelism 16          # whole solution, ONE call (internal parallel build + extract)
 rig index Sln.slnx --from Entry.csproj       # entry-scoped: Entry's transitive ProjectReference closure
+rig index Other.slnx --merge --rules r.json  # multi-solution: ACCUMULATE into the (commit-scoped) store; one run/solution, queries span all. Pass --rules every time. Loop w/ continue-on-failure for a many-solution repo.
 rig reaches "Type.Method" [--async]          # effects reachable from a node (sync; --async also walks handoffs)
 rig tree "Type.Method" [--view paths|full|effects|summary|hazards] [--format llm|llm-ids] [--suppress ctors,lambdas] [--exclude throw] [--raw]   # call tree (default --view paths = effectful paths)
 rig callers "Type.Method" [--roots|--entrypoints]  # reverse (roots = no-predecessor origins; entrypoints = rule-detected EPs)
@@ -118,7 +119,7 @@ bound); refine to "active-in" via rule-declared `provides`∩`requires` tokens. 
 
 ## Gotchas (full list in REFERENCE)
 - **`index` builds internally — NO external pre-build.** `--parallelism 16` is the safe standard (the internal build no longer clobbers shared `bin/`).
-- **Standalone `index` REPLACES atomically** (write-temp + rename) — no need to delete `.rig` first. Only `index --identity` (multi-solution accumulate) APPENDS.
+- **Standalone `index` REPLACES atomically** (write-temp + rename) — no need to delete `.rig` first. `index --merge` (or `--identity`) ACCUMULATES instead: one run per solution into a commit-scoped unified store (`rig runs` lists them; queries span all). A single-solution store makes other solutions' entry points invisible → false dead-code/phantom reach; index all app solutions before trusting cross-product reachability. See REFERENCE.md.
 - **Index with the global `rig`** (Debug *can* index now MEF deps are pinned, but global is reliable; don't index rig's own repo from its own `bin/` Debug dll — it self-clobbers mid-run).
 - Results are only as good as the rules + what's in scope — see the fundamental static-analysis limits in REFERENCE before trusting a count.
 

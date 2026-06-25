@@ -181,6 +181,42 @@ Recall recoveries already built in:
   the entry-scoped closure (the old `mine`). Never run two `index` commands against one clone at once.
 - **`rig index` REPLACES atomically** (temp + rename) — re-running a standalone `index` cleanly overwrites;
   no need to delete `.rig` first. Only `index --identity` (multi-solution accumulate) APPENDS in place.
+- **Multi-solution unified store — `rig index <sln> --merge`.** A repo with many solutions (MedDBase has
+  ~20) is indexed into ONE queryable store by running `index` once per solution with `--merge` (accumulate
+  into the existing store) instead of replacing. The store is **commit-scoped**: every solution from the same
+  working tree maps to the same `<shortsha>-dirty` store dir, so all merges land together; `rig runs` then
+  lists **one run per solution** under that store, and `tree`/`reaches`/`callers`/`derive` span all of them.
+  Mechanics + gotchas:
+  - **`--merge` ≈ `--identity` auto-derived from the commit** — you usually don't pass `--identity` by hand;
+    `--merge` appends a new run keyed to the current commit. (`--identity` is the lower-level "append under
+    this explicit id" knob, used by the legacy `mine`.) Re-merging the same solution updates its run.
+  - **Pass `--rules <ruleset>.json` on EVERY merge** (same INDEX-time rules asymmetry as above) — else that
+    solution's DI/XML-DI come back empty.
+  - **Cross-solution assembly divergence is tolerated, not fatal**: when two solutions compile the same
+    assembly (e.g. `MMS.Standard`) with different content, index WARNs `possible fork; keeping latest` and
+    continues — it does not abort the merge. Worth a glance in the log; "keeping latest" can mask a real fork.
+  - **Bulk-merge resiliently**: loop the solutions with continue-on-failure + per-solution logging. One
+    `index` at a time per clone (never two concurrent against one working tree).
+  - **The common failure is `DegradedBuildException` ("design-time build produced 0 source files after 3
+    attempts")** — rig REFUSES to index a project whose DTB yields no source (it would write absent types +
+    mis-bound dependents = a corrupt index) rather than silently degrade, and **aborts the WHOLE solution**
+    if any one project degrades. Causes, in order of likelihood:
+    1. **Un-restored solution.** For MedDBase the restore tool is **Paket**, not NuGet — `.paket/paket.exe
+       restore` at the repo root (a `msbuild -t:Restore` / `dotnet restore` returns rc=1 here). Then MSBuild.
+    2. **Legacy net48 ASP.NET web projects** (`<TargetFrameworkVersion>v4.8` + `UseIISExpress` +
+       `Microsoft.WebApplication.targets`, e.g. `MedDBase.Site`, `ContractManagement.Site`) yield **0 source
+       via Buildalyzer DTB even after a clean Paket-restore + successful MSBuild + `--no-build-cache`** — the
+       web build targets don't surface `Compile` items to Buildalyzer. These index ONLY through the bespoke
+       `build-if-due` + entry-`--from <csproj>` pipeline, or must be **excluded** from the merge. Their
+       `.aspx`/web layer is entry points, not data-access, so they rarely matter for effect/hazard detectors.
+    3. **`.sqlproj` DB-model solutions** (`ChambersDbModel`, `Permissions-db-model`) — not C#, never indexable.
+    (On MedDBase's ~20 solutions: ~half merge clean after Paket-restore; the net48-web + sqlproj ones don't.)
+  - **`--from <csproj>` whose closure resolves to 0 buildable C# projects CRASHES** with an unhandled
+    `IndexOutOfRangeException` (`SolutionSourceLoader.LoadAsync`) instead of a clean "nothing to index" —
+    known rig defect; don't read the crash as a store problem.
+  - **Why bother**: a single-solution store silently makes every entry point in the OTHER solutions invisible
+    and can turn real cross-solution callers into apparent dead code / phantom-only reach. Index all the
+    application solutions before trusting reachability/dead-code/`callers --entrypoints` across the product.
 - **Rules load at INDEX time vs QUERY time are asymmetric** — `rig index` resolves rules relative to the SOLUTION dir (+ builtin/global), NOT the analysis cwd. **DI registrations + the XML DI miner (`xmlDiFiles`) are captured at INDEX time**, so if your ruleset lives in the analysis cwd you MUST pass `--rules <that>.json` to `rig index` or `rig di` comes back empty (effects/entry points are derived at QUERY time from cwd rules, so they look fine — the asymmetry is silent). Symptom: `DiRegistrations: 0` despite XML service descriptors existing.
 - **Index with the published/global `rig`**; the plain Debug bin throws `System.Composition.TypedParts`
   not found from `AdhocWorkspace` (missing MEF deps). Read-only queries work from any build.
