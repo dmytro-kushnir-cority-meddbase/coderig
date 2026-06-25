@@ -848,15 +848,13 @@ on the real store before flipping it on.
 Each query currently opens its own `RigDbContext`/connection. Move to ONE shared (static) SQLite connection
 app-wide — read pragmas + mmap/cache applied once, warm across queries. (User request.)
 
-### forward ≡ reverse on the real store (the architectural prize) + reconcile the 8 parked tests
-Monomorphization gives forward≡reverse by construction for materialized seams, but only FORWARD narrowing is
-validated (665→38). Validate the REVERSE direction (`callers`/`ReachedBy`) over the materialized graph
-matches forward on the real store. **8** reverse-dispatch tests are `[Skip]`-parked (corrects the earlier
-"5" note) — they guard reverse reachability through interface / base-virtual / mined dispatch and currently
-under-narrow (all 8 FAIL un-skipped). Reconcile their assertions to the narrowed truth once forward≡reverse
-is validated — they are the regression net, do NOT drop. Files: `CallersForwardVerificationTests`,
-`CallersForwardVerifiedClosureTests` (×2), `FactPathFinderFanoutTests` (×2), `MinedDispatchTests`,
-`ReachedByAnyTests`, `ReverseInterfaceDispatchTests`.
+### forward ≡ reverse on the real store (the architectural prize)
+The 8 parked reverse-dispatch tests are **✅ RECONCILED (2026-06-25, `cc9a529b`)** — un-skipped and fixed to
+the narrowed truth: the reverse walk excludes CHA phantoms (forward≡reverse on those seams) and
+dispatch-declaration waypoints (interface/base-virtual decls aren't caller-origins), keeping the real
+caller/EP assertions. Suite has **zero** skips now. STILL OPEN: validate forward≡reverse on the REAL
+MedDBase store (the synthetic tests prove it per-seam; the materialized-graph reverse vs forward at scale is
+unmeasured) — pair with the FP-calibration sweep below.
 
 ### Monomorphization FP-calibration before trusting on-by-default
 Validated on ONE EP (DebtorOverride, sound). Broaden: sweep more generic-heavy EPs; confirm no
