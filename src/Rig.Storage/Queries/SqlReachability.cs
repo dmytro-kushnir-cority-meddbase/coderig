@@ -415,24 +415,43 @@ public static class SqlReachability
     {
         var edgeJoinCol = direction == Direction.Forward ? "FromSym" : "ToSym";
 
+        // The call-site generic type-args AND the monomorphization bindings (DeclaringTypeArgBinding /
+        // MethodTypeArgBinding) live on reference_facts, NOT on the persisted call_edges view — so the bounded
+        // graph must re-attach them keyed by (caller, callee, line). Without the bindings the ShapeGraph
+        // monomorphization seam sees nothing and the bounded path can't reproduce the full-graph (narrowed)
+        // reach. One bulk pass over reach_set; non-generic edges have no entry -> null. (The columns are
+        // guaranteed by the open-time index-schema gate, so no per-column probe.)
         var typeArgsByEdge = new Dictionary<(string, string, int), string>();
-        if (true)
-        {
-            await ReadAsync(
-                connection,
-                """
-                SELECT rf.EnclosingSymbolId, rf.TargetSymbolId, rf.Line, rf.TypeArguments
-                FROM reference_facts rf JOIN reach_set r ON rf.EnclosingSymbolId = r.sym
-                WHERE rf.TypeArguments IS NOT NULL;
-                """,
-                reader =>
+        var declBindingByEdge = new Dictionary<(string, string, int), string>();
+        var methBindingByEdge = new Dictionary<(string, string, int), string>();
+        await ReadAsync(
+            connection,
+            """
+            SELECT rf.EnclosingSymbolId, rf.TargetSymbolId, rf.Line, rf.TypeArguments, rf.DeclaringTypeArgBinding, rf.MethodTypeArgBinding
+            FROM reference_facts rf JOIN reach_set r ON rf.EnclosingSymbolId = r.sym
+            WHERE rf.TypeArguments IS NOT NULL OR rf.DeclaringTypeArgBinding IS NOT NULL OR rf.MethodTypeArgBinding IS NOT NULL;
+            """,
+            reader =>
+            {
+                // first wins; a dup (caller, callee, line) is vanishingly rare
+                var key = (reader.GetString(0), reader.GetString(1), reader.IsDBNull(2) ? 0 : reader.GetInt32(2));
+                if (!reader.IsDBNull(3))
                 {
-                    var key = (reader.GetString(0), reader.GetString(1), reader.IsDBNull(2) ? 0 : reader.GetInt32(2));
-                    typeArgsByEdge[key] = reader.GetString(3); // first wins; dup (caller,callee,line) is vanishingly rare
-                },
-                cancellationToken
-            );
-        }
+                    typeArgsByEdge.TryAdd(key, reader.GetString(3));
+                }
+
+                if (!reader.IsDBNull(4))
+                {
+                    declBindingByEdge.TryAdd(key, reader.GetString(4));
+                }
+
+                if (!reader.IsDBNull(5))
+                {
+                    methBindingByEdge.TryAdd(key, reader.GetString(5));
+                }
+            },
+            cancellationToken
+        );
 
         var callEdges = new List<CallEdge>();
         await ReadAsync(
@@ -447,6 +466,8 @@ public static class SqlReachability
                 var to = reader.GetString(1);
                 var line = reader.IsDBNull(4) ? 0 : reader.GetInt32(4);
                 typeArgsByEdge.TryGetValue((from, to, line), out var typeArgs);
+                declBindingByEdge.TryGetValue((from, to, line), out var declBinding);
+                methBindingByEdge.TryGetValue((from, to, line), out var methBinding);
                 callEdges.Add(
                     new CallEdge(
                         Caller: from,
@@ -459,6 +480,8 @@ public static class SqlReachability
                         ReceiverType: reader.IsDBNull(7) ? null : reader.GetString(7),
                         HandoffDispatcher: reader.IsDBNull(8) ? null : reader.GetString(8),
                         TypeArguments: typeArgs,
+                        DeclaringTypeArgBinding: declBinding,
+                        MethodTypeArgBinding: methBinding,
                         DeliveryPrecision: reader.IsDBNull(9) ? null : reader.GetString(9),
                         NonVirtual: !reader.IsDBNull(10) && reader.GetInt64(10) != 0
                     )

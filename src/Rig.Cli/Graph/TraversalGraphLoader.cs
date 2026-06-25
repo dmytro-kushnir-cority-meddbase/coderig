@@ -13,15 +13,16 @@ namespace Rig.Cli.Graph;
 // thus walk the identical shaped graph.
 internal static class TraversalGraphLoader
 {
-    // SQL FAST PATH HARDCODED OFF (2026-06-24, monomorphization rework): the bounded `call_edges` views
-    // drop the reference_facts type-arg bindings (DeclaringTypeArgBinding/MethodTypeArgBinding), so the
-    // monomorphization seam in ShapeGraph sees no bindings on the SQL path and materializes nothing. Route
-    // every traversal/effect-reach load through the EF path (Reads.LoadFactGraphAsync /
-    // LoadReachInputsFromRowsAsync), which projects those bindings onto CallEdge — so materialization has
-    // the data UNIFORMLY. Correctness/uniformity first; the SqlReachability code is kept intact to
-    // RE-OPTIMIZE later (make the views binding-aware), at which point flip this back to true.
-    // (static readonly, not const, so the disabled SQL branches don't trip unreachable-code warnings.)
-    private static readonly bool SqlFastPathEnabled = false;
+    // SQL FAST PATH RE-ENABLED (2026-06-25): the bounded loader (SqlReachability.LoadGraphFromReachSetAsync)
+    // now re-attaches the reference_facts type-arg bindings (DeclaringTypeArgBinding/MethodTypeArgBinding)
+    // onto the bounded CallEdges, so the ShapeGraph monomorphization seam fires on the SQL path too. The CTE
+    // only BOUNDS the loaded subgraph (sized to the result, not the 1.6GB store); the same in-memory
+    // FactPathFinder + ShapeGraph then runs over it — and because reach_set is the receiver-blind CHA
+    // SUPERSET, the bounded graph contains every edge materialization needs, so it reproduces the full-EF
+    // (narrowed) reach (the Bounded_graph_reproduces_full_graph_reach equivalence test). Falls back to the
+    // full EF graph when `rig graph` hasn't run (HasGraphAsync false).
+    // (static readonly, not const, so a future flip doesn't trip unreachable-code warnings.)
+    private static readonly bool SqlFastPathEnabled = true;
 
     // Every query command opens the store READ-ONLY (see RigDbContext.readOnly): the engine rejects any
     // write to the main DB, so a read command can never mutate the index. Writers (index/mine/graph) use
@@ -50,7 +51,7 @@ internal static class TraversalGraphLoader
         await AssertReadableAsync(context);
         return context;
     }
-    
+
     // Gated counterpart of the F7 out-param overload (storeDir surfaced for StoreKey reuse).
     internal static async Task<(RigDbContext Context, string StoreDir)> OpenReadContextGatedAsync(WorkspaceLocation ws, bool withStoreDir)
     {
