@@ -266,7 +266,27 @@ Traced the import write path against the store (the bug is OPEN, so the buggy co
 
 ## Detector: `write_set_divergence` — import/API path writes fewer tables than the UI path (NEW, corpus-surfaced)
 
-**Status:** proposed · **Family:** consistency/dual-write sibling · **Found:** 2026-06-24 (100-bug GitLab triage, `docs/meddbase-bug-corpus.md`)
+**Status:** ✅ CORE SHIPPED (2026-06-25, commit `write_set_divergence`) — pure deriver + rule schema + provider
++ `HazardKinds` + `DeriveCommand` wiring + 7 unit tests, mirrors `cache_coherence` end-to-end. Rule-declared EP
+pairs (option 1 below). **Family:** consistency/dual-write sibling · **Found:** 2026-06-24 (100-bug GitLab triage).
+
+### Calibration reality (2026-06-25) — the PAIRING granularity is everything; treat every finding as a candidate
+First real-store calibration (Document `Save` vs `SaveImportedDocument`) flagged PersonEvent + Profile — and an
+**independent adversarial source-verification REFUTED both**:
+- **PersonEvent = mis-paired EP.** `SaveImportedDocument` is a narrow building-block stub; the real import-level
+  peer is `DocumentImportEntity.Save`, which DOES write PersonEvent one frame up (`BuildPersonEvent`,
+  `DocumentImportEntity.cs:180`). Pairing the canonical full save against a sub-step manufactures a phantom gap.
+  ⇒ **EP pairs must be the same GRANULARITY** (entry-point-level save vs entry-point-level import), the "hard
+  part" flagged below. This is the dominant FP source.
+- **Profile = transitive-reach artifact.** Neither path writes Profile as part of the save; the primary's Profile
+  write is a deep (d12-13) transitive reach through session/logout machinery. ⇒ the per-EP write-set is polluted
+  by deep unrelated reach; consider a depth/scoping bound or an exclude-namespace filter on the write-set.
+- **Substring EP-resolution over-matches** overloads + `~λ` lambdas: `DocumentImportEntity.Save` matched 5 nodes
+  → the pair was silently skipped (need exactly 1). ⇒ resolve EP patterns to the METHOD node precisely (strip
+  `~λ` suffixes; disambiguate overloads / accept an exact DocID), else useful pairs can't be expressed.
+Net: the detector is mechanically sound but is a DISCLOSED CANDIDATE generator (medium) requiring per-finding
+source verification — like FR-7. Next increments: (a) precise EP resolution, (b) write-set scoping/depth bound,
+(c) calibrate on a correctly-paired corpus dyad (GI-4385 needs `DocumentImportEntity.Save`, not the stub).
 
 ### The hazard
 Two entry points that perform the "same" logical operation on the same entity — typically the **canonical UI
@@ -750,14 +770,25 @@ invalidated on the path, never `PersonCache`).
   and emit them inline in `tree <EP> --view hazards` like the effect-attached hazards. Substrate exists —
   `DeriveCommand` already maps both into `HazardFinding`; the EP-reach join is the usual
   `reachable.ContainsKey(site)`.
-- **opaqueType render-collapse HIDES effects inside a redirected-override subtree → misleads manual hazard
-  validation.** `opaqueTypes` is render-only (`TreeRenderer`), but a `redirectRules` edge routes THROUGH the
-  external virtual (`SD.LLBLGen.Pro…EntityBase.Delete`) that matches the opaque pattern — so the renderer
-  collapses that via-node to a leaf and suppresses the override body, hiding any `cache:invalidate`/effect in
-  it. (`ContactCache.Remove` on the contact-delete path was invisible in `tree` until the ORM-runtime
-  opaqueType was disabled; `derive`/reachability were never affected — render-only.) Fix: exempt a redirect
-  via-node from opaque collapse (the point of a redirect is that real first-party logic hangs off it). Reverse
-  `callers` is unaffected (no render gate) — that asymmetry is the tell.
+- **~~opaqueType render-collapse HIDES effects inside a redirected-override subtree~~ — RETRACTED (2026-06-25):
+  NOT a render bug; an index/cache-time artifact.** Initially diagnosed as a render-rule bug (the override body
+  + `ContactCache.Remove` were missing from `tree` while the ORM-runtime `opaqueType` was active). Could NOT be
+  reproduced afterward: re-layering the `M:SD.LLBLGen.Pro.` opaqueType via `--rules` on the current store +
+  `--no-cache` still renders `ContactEntity.Delete «via ORMSupportClasses.EntityBase»` → `RemovePersonContactLinks`
+  → `cache:invalidate ContactCache` in full; the opaque rule only collapses a genuinely-internal `EntityBase.Save`
+  subtree, NOT the redirected first-party override. The single-impl fold (`FoldSingleImplHops`) promotes the
+  narrowed override into the base hop's slot BEFORE render, so the rendered node is `ContactEntity.Delete` (not
+  opaque-matching) and its subtree shows. opaque is render-only and never read at index (rig-on-rig: the index
+  command has NO path to `MatchOpaque`; only `TreeCommand`→`TreeRenderer` reaches it). **Actual cause = a stale
+  MATERIALIZED GRAPH (index/graph-time), NOT the query cache first guessed:** the SQL-fast-path `tree`/`reaches`
+  walk the PERSISTED `call_edges`, into which `redirectRules` are BAKED at graph-materialization
+  (`IndexCommands.MaterializeGraphAsync` → `FactGraphProjection.FromAnalysis` → `RedirectClassifier.Redirect`;
+  `GraphMaterializer.BuildAsync` bakes them into `call_edges`). A graph materialized BEFORE the redirect rule
+  existed lacks the baked redirect edge → the forward walk dead-ends at the un-indexed external base → override
+  body absent. A re-graph (today's `rig index --merge` re-materialized MedDBase) bakes the edge → body appears.
+  **Lesson: redirect is index/graph-time (baked into `call_edges`), NOT query-time for the SQL fast path — after a
+  `redirectRules` change, `rig graph` (re-materialize) before trusting forward reachability.** No render fix
+  needed; the fold + opaque interaction is correct.
 - **`rig index --from <csproj>` whose closure resolves to 0 buildable C# projects CRASHES** with an unhandled
   `IndexOutOfRangeException` (`SolutionSourceLoader.LoadAsync`) instead of a clean "nothing to index". Cheap
   guard.
