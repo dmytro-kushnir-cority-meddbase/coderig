@@ -1,8 +1,10 @@
-## Monomorphization rework — pending (session 2026-06-24 wrap-up)
+## Monomorphization rework — ✅ SHIPPED (2026-06-25)
 
-The static-monomorphization rework shipped transitive + lambda-closure materialization (real-store
-validated: `DebtorOverride.SaveIncludedServices` 665→38 reach, Haiku-confirmed sound) on a uniform EF load
-path behind the `meta` schema-version gate. Open items:
+The static-monomorphization rework shipped transitive + lambda-closure materialization (real-store validated:
+`DebtorOverride.SaveIncludedServices` 665→38 reach, verified sound) on a uniform EF load path behind the
+`meta` schema-version gate, then went unconditional + FP-calibrated. Shipped sub-items below. The remaining
+SUBSTRATE work (graph-time materialization end-state; forward≡reverse real-store validation) is NOT here — it
+lives in [../progress/dispatch-precision-substrate.md].
 
 ### Re-enable the SQL reads fast path (binding-aware) — ✅ DONE (2026-06-25, `71f35478`)
 `SqlReachability.LoadGraphFromReachSetAsync` now re-attaches `DeclaringTypeArgBinding`/`MethodTypeArgBinding`
@@ -12,31 +14,21 @@ true`. The CTE only BOUNDS the load; the in-memory FactPathFinder+ShapeGraph run
 the CHA SUPERSET so it reproduces the full-EF narrowed reach (`Bounded_graph_reproduces_full_graph_reach` +
 `Sql_*` equivalence tests). Real-store: `DebtorOverride` → 38 via the SQL path, ~14s vs 22s full-EF.
 
-### Materialize the monomorphized subgraph at `rig graph` time (the next perf lever)
-The bounded SQL load above still pulls the receiver-blind **CHA superset** and narrows it IN MEMORY — so for
-a high-fan EP (e.g. `DebtorOverride`, narrowed answer 38 but CHA reach 665+) the bounded pull is large and the
-win over full-EF is modest (~14s vs 22s, not the old ~8s pure-bounded). The lever: **bake materialization
-into the persisted graph at `rig graph` time** — run `GenericInstantiationInventory` + `GenericMonomorphizer`
-during `GraphMaterializer.BuildAsync` and persist the `~mono` instantiation nodes + substituted/redirected
-edges into `call_edges`/`dispatch_edges` (and a base→mono collapse map for display). Then the CTE walks the
-ALREADY-NARROWED graph, so the bounded pull is sized to the narrowed reach (small) — the query-time
-inventory/materialize/collapse work disappears too. Cost: graph-build does the materialization once
-(amortized), bumps `SchemaVersion.Graph` (re-graph required), and the bounded loader's in-memory ShapeGraph
-materialize step is dropped for the SQL path (kept for the EF fallback / `--raw`). Display-collapse must run
-on the persisted `~mono` ids (already handled by `MonomorphCollapse`). Validate forward≡reverse + clone count
-on the real store before flipping it on.
+### Materialize the monomorphized subgraph at `rig graph` time — ➡️ OPEN, moved to the substrate tracker
+The next perf lever (bake `~mono` into persisted `call_edges`/`dispatch_edges` at `rig graph` time so the CTE
+walks an already-narrowed graph). This is the substrate's end-state and now lives in
+[../progress/dispatch-precision-substrate.md] (item 1) — not duplicated here.
 
-### Single static SQL connection across the app
-Each query currently opens its own `RigDbContext`/connection. Move to ONE shared (static) SQLite connection
-app-wide — read pragmas + mmap/cache applied once, warm across queries. (User request.)
+### Single static SQL connection across the app — ❌ WON'T DO (2026-06-25)
+Decided not to pursue. Each query opening its own `RigDbContext`/connection is fine; the warm shared-connection
+win doesn't justify the shared-static-state cost.
 
-### forward ≡ reverse on the real store (the architectural prize)
+### forward ≡ reverse on the real store — parked tests reconciled ✅; real-store validation OPEN (substrate tracker)
 The 8 parked reverse-dispatch tests are **✅ RECONCILED (2026-06-25, `cc9a529b`)** — un-skipped and fixed to
 the narrowed truth: the reverse walk excludes CHA phantoms (forward≡reverse on those seams) and
 dispatch-declaration waypoints (interface/base-virtual decls aren't caller-origins), keeping the real
-caller/EP assertions. Suite has **zero** skips now. STILL OPEN: validate forward≡reverse on the REAL
-MedDBase store (the synthetic tests prove it per-seam; the materialized-graph reverse vs forward at scale is
-unmeasured) — pair with the FP-calibration sweep below.
+caller/EP assertions. Suite has **zero** skips now. The real-store forward≡reverse validation at scale is OPEN
+and tracked in [../progress/dispatch-precision-substrate.md] (item 2).
 
 ### Monomorphization FP-calibration before trusting on-by-default — ✅ LIVE (2026-06-25)
 **Went live: the `Reads.MonomorphizeEnabled` toggle is REMOVED — monomorphization is unconditional.** A/B on

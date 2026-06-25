@@ -11,8 +11,7 @@ O(E) reverse"* — needs the materialization moved to `rig graph`: run `GenericI
 `GenericMonomorphizer` in `GraphMaterializer.BuildAsync`, persist the `~mono` nodes + substituted/redirected
 edges into `call_edges`/`dispatch_edges` (+ a base→mono collapse map for display). Then the CTE walks the
 already-narrowed graph (smaller bounded pull; query-time inventory/materialize disappears). Bumps
-`SchemaVersion.Graph`. *(Also tracked in [../done/monomorphization-rework.md] "next perf lever" — should
-consolidate here; see note at bottom.)*
+`SchemaVersion.Graph`.
 
 ## 2. Forward ≡ reverse — validate on the real store at scale
 Only the motivating `#4460` case is validated. Broader sweep open. `rig dispatch-fans` (re-measured
@@ -25,18 +24,10 @@ Only the motivating `#4460` case is validated. Broader sweep open. `rig dispatch
   instead of CHA-fanning. A small targeted build, independent of the materialization work.
 - The rest are `irreducible` base-typed-receiver CHA cones (correctly disclosed, not bugs).
 
-## 3. Single static SQL connection (perf)
-Each query opens its own `RigDbContext`/connection; move to ONE shared static SQLite connection app-wide
-(read pragmas + mmap/cache applied once, warm across queries). *(Also in [../done/monomorphization-rework.md];
-consolidate.)*
+_(Single static SQL connection was considered and dropped — ❌ WON'T DO, see done/monomorphization-rework.md.)_
 
 ## Hard constraints (apply to all of the above)
 - Playground → green → real-store → iterate; synthetic-`FactGraphData` unit coverage required.
 - **Unresolved generic → CHA cone, NEVER dead** (soundness; disclose, don't drop).
 - Disclose + classify every fallback; a high-fan actionable fallback is a hypothesis that a rule/EP def is
   incomplete.
-
----
-**Consolidation note:** items 1 + 3 also live in `done/monomorphization-rework.md`, which was moved to `done/`
-but still carries these OPEN items. They should move fully here so `done/` is purely shipped. (Pending the
-orchestrator's go-ahead — see session discussion.)
