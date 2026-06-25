@@ -791,7 +791,10 @@ is repo-specific, so this is never a builtin/on-by-default rule.
 - **Triaged → FALSE POSITIVE (disproven by code review on the actual path, agent 2026-06-24).** rig's
   structural signal IS present — `RemovePersonContactLinks` does 4 `UpdateMulti` bulk writes to `PersonEntity`
   (nulling Fk{Insurer,Employer,Legal,School}Contact) bypassing save-hooks, and NO `Person`-cache invalidation
-  is reachable from the EP (`Contact/Edit.Delete`) in EITHER sync OR async reach (verified 2026-06-25). But the
+  is reachable from the EP (`Contact/Edit.Delete`) in EITHER sync OR async reach (verified 2026-06-25), INCLUDING
+  the `DoWhenCommitted` post-commit callbacks — rig DOES walk those (the lambda body is a `~λ0` node reached by
+  a methodGroup edge at the registration site; proven here by the EP reaching `ContactCache.Remove` at :68
+  THROUGH the DoWhenCommitted lambda). So the no-invalidation signal is ACCURATE, not a reachability gap. But the
   staleness is UNOBSERVABLE, so it is not a bug: the nulled FKs point at the contact being deleted, whose own
   cache is removed post-commit (`DoWhenCommitted(() => ContactCache.Remove(pkContact))`, ContactEntity.cs:68);
   a cached PersonRecord holding a stale Fk*Contact still resolves via `GetContactRecord → ContactCache` to
