@@ -863,10 +863,24 @@ caller/EP assertions. Suite has **zero** skips now. STILL OPEN: validate forward
 MedDBase store (the synthetic tests prove it per-seam; the materialized-graph reverse vs forward at scale is
 unmeasured) — pair with the FP-calibration sweep below.
 
-### Monomorphization FP-calibration before trusting on-by-default
-Validated on ONE EP (DebtorOverride, sound). Broaden: sweep more generic-heavy EPs; confirm no
-over-narrowing; measure clone count + the per-method (50) / total (100k) caps at real-store scale.
-`Reads.MonomorphizeEnabled = true` is hardcoded — decide the real default after calibration.
+### Monomorphization FP-calibration before trusting on-by-default — ✅ LIVE (2026-06-25)
+**Went live: the `Reads.MonomorphizeEnabled` toggle is REMOVED — monomorphization is unconditional.** A/B on
+the fresh store (`MonomorphizeEnabled` flipped for the OFF baseline): `DebtorOverride.SaveIncludedServices`
+7861 → 175 reachable methods (type-parameter fan, narrowed); `BillingRuleHelper.SaveServices` 7843 → 7614 and
+`Master.GetCompany` 638 → 601 (mostly base-virtual, irreducible); control `ContactEntity.RemovePersonContactLinks`
+13 == 13 (non-generic, zero spurious change). An **independent adversarial verifier** (fresh-context agent,
+read-only source + `rig`) returned **SOUND, high confidence**: the DebtorOverride drop is on the change-log
+virtuals inside `CommonEntityBase.Delete → GetChangeLogger` (overridden by 32 entities); the narrowing pins the
+receiver to `BillingRuleDebtorOverrideServiceIncludedEntity`, a LEAF type that overrides none of them, so the
+dropped Person/Invoice/Company closures are genuinely No-path. All three false-negative vectors (multi-valued
+type-arg, wrongly-narrowed virtual, reflection-bound dispatch) ruled out with source evidence; the helper's 3
+distinct instantiations stay independent (validates per-instantiation materialization). Second clean check
+(the first Haiku pass wasn't persisted) → shipped.
+
+**Residual (non-blocking, no longer gating):** clone count + the per-method (50) / total (100k) caps are
+unmeasured at real-store scale (no direct command — would need light instrumentation); a broader sweep beyond
+DebtorOverride was not run (the verifier + control were judged sufficient to go live). A/B calibration now
+requires a temporary local edit (no runtime toggle).
 
 ### Misc rework debt
 - **Re-index MedDBase**: ✅ DONE (2026-06-25) — fresh single store `caa9373ffbf6-dirty` on the new schema

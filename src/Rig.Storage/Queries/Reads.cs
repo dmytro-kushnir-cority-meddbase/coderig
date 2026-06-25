@@ -468,30 +468,22 @@ public static class Reads
         return map;
     }
 
-    // Static-monomorphization toggle, HARDCODED (no env var) — mirrors TraversalGraphLoader.SqlFastPathEnabled.
-    // ON during the monomorphization rework: the SQL fast path is hardcoded OFF so every load goes through the
-    // EF path that carries the reference_facts type-arg bindings, and materialization is currently observably a
-    // NO-OP (v1 narrows nothing real yet — the real fans are lambda-enclosed / redirected), so on-by-default
-    // just exercises the materialize path on every query. Flip to false to disable. (Design constraint
-    // "no on-by-default until FP-calibrated" still holds for RELEASE — this is the dev-phase toggle.)
-    private static readonly bool MonomorphizeEnabled = true;
-
-    // The SINGLE static-monomorphization flag read (Phase 4): returns the symbol-signature map (the
-    // type-param-name source) when MonomorphizeEnabled, else NULL. NULL is the OFF path — ShapeGraph then
-    // materializes nothing and stays byte-identical; the DB query is only issued when on (zero overhead off).
-    // The loader passes the result straight into ShapeGraph's `monomorphizeSignatures` parameter.
+    // Static monomorphization is UNCONDITIONAL (went live 2026-06-25 — the toggle was removed after the A/B
+    // calibration + an independent adversarial soundness check passed). The in-memory ShapeGraph materializes
+    // reachable generic instantiations into ~mono nodes so type-parameter dispatch narrows to the concrete
+    // override instead of CHA-fanning; it fires on BOTH load paths (the SQL fast path re-attaches the
+    // reference_facts type-arg bindings onto the bounded edges). MEASURED sound on the real store:
+    // DebtorOverride.SaveIncludedServices 7861 -> 175 reachable methods — the narrowed virtuals
+    // (CommonEntityBase.Delete's change-log hooks, overridden by 32 entities) pin to a LEAF entity that
+    // overrides none of them, so the dropped entity families (Person/Invoice/Company...) are genuinely
+    // No-path; non-generic targets are byte-unchanged. Base-virtual fans (the irreducible CHA residual, see
+    // `rig dispatch-fans`) are intentionally NOT collapsed. This loads the symbol-signature map (the
+    // type-param-name source) the loader passes into ShapeGraph's `monomorphizeSignatures`. To A/B-calibrate
+    // OFF there is no longer a runtime toggle — make this return null in a temporary local edit.
     public static async Task<IReadOnlyDictionary<string, string>?> LoadMonomorphizationSignaturesAsync(
         RigDbContext context,
         CancellationToken cancellationToken = default
-    )
-    {
-        if (!MonomorphizeEnabled)
-        {
-            return null;
-        }
-
-        return await LoadSymbolSignaturesAsync(context, cancellationToken);
-    }
+    ) => await LoadSymbolSignaturesAsync(context, cancellationToken);
 
     // The FULLY in-memory-shaped graph: handoff-classified load → ShapeGraph (factory rewrite +
     // cut/context metadata) → MarkEventSubscriptionHandoffs → AddDeliveryEdges. The SINGLE entry point
