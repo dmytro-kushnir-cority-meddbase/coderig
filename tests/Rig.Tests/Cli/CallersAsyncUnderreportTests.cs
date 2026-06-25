@@ -32,7 +32,9 @@ public sealed class CallersAsyncUnderreportTests
 
         // --async --entrypoints (the precise superset)
         output.GetStringBuilder().Clear();
-        (await CliApplication.RunAsync(["callers", "WriteAuditEntry", "--entrypoints", "--async"], output, error, workingDirectory)).ShouldBe(0);
+        (
+            await CliApplication.RunAsync(["callers", "WriteAuditEntry", "--entrypoints", "--async"], output, error, workingDirectory)
+        ).ShouldBe(0);
         var asyncText = output.ToString();
 
         var syncCount = HeadlineCount(syncText);

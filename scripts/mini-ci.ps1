@@ -43,9 +43,16 @@ New-Item -ItemType Directory -Force -Path $packageOutput | Out-Null
 Push-Location $repoRoot
 try {
     dotnet tool restore
+    # Native tools report failure via EXIT CODE, not a terminating error, so $ErrorActionPreference="Stop"
+    # does NOT halt on them (same trap as the test gate below). Gate the CHEAP checks explicitly so a
+    # formatting drift or compile break fails in seconds — BEFORE the expensive build/test/pack/install —
+    # instead of sailing through to a buried failure at the end.
     dotnet csharpier check .
+    if ($LASTEXITCODE -ne 0) { throw "csharpier check failed - run 'dotnet csharpier format .' then re-run." }
     dotnet restore $solution
+    if ($LASTEXITCODE -ne 0) { throw "Restore failed (exit $LASTEXITCODE)." }
     dotnet build $solution -c $Configuration /p:UseSharedCompilation=false
+    if ($LASTEXITCODE -ne 0) { throw "Build failed (exit $LASTEXITCODE) - not testing/packing." }
 
     if (-not $SkipTests) {
         # `dotnet test` (Microsoft.Testing.Platform) reports failures via EXIT CODE, not a terminating
