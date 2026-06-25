@@ -140,6 +140,21 @@ internal sealed record CacheCoherenceRule(
     IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null
 );
 
+// write_set_divergence rule: two entry points that perform the "same" logical operation on an entity but
+// write DIFFERENT sets of tables. `pairs` declares the (entity, primaryEntryPoint, secondaryEntryPoint)
+// triples; `writeEffects` lists the provider+operation pairs that count as a "write". Projected to
+// FactWriteSetDivergenceRule. One object, not a list (last-writer-wins).
+internal sealed record WriteSetDivergenceRule(
+    IReadOnlyList<WriteSetDivergencePairDocument>? Pairs,
+    IReadOnlyList<EffectRefDocument>? WriteEffects
+);
+
+// One declared pair inside the writeSetDivergence rule.
+internal sealed record WriteSetDivergencePairDocument(string Entity, string PrimaryEntryPoint, string SecondaryEntryPoint);
+
+// A provider+operation predicate for the writeSetDivergence rule. Operation null = any operation.
+internal sealed record EffectRefDocument(string Provider, string? Operation = null);
+
 // A `rig tree` render rule: a DocID substring `Pattern` + a human `Label`/`Reason` shown in the
 // rendered marker. Used for both collapse-seams (fold a fan-out hub's children) and opaque-types
 // (draw a node as a leaf). Codebase-specific presentation data; projected to FactRenderRule.
@@ -239,6 +254,10 @@ internal sealed class AnalysisRulesDocument
     // Top-level key "cacheCoherence": a SINGLE object (not a list) declaring the cached entities + bulk-write +
     // invalidation method names for the FR-7 cache-coherence graph hazard (see CacheCoherenceRule).
     public CacheCoherenceRule? CacheCoherence { get; set; }
+
+    // Top-level key "writeSetDivergence": a SINGLE object declaring the EP pairs + write-effect predicates
+    // for the structural write-set divergence detector (see WriteSetDivergenceRule).
+    public WriteSetDivergenceRule? WriteSetDivergence { get; set; }
 
     // Top-level key "deliveryRules": list of publish→consumer delivery mechanisms (events, actors).
     public List<DeliveryRuleDocument>? DeliveryRules { get; set; }

@@ -26,6 +26,11 @@ public static class HazardKinds
     // string lives HERE — referenced by both the All set below and the DeriveCommand finding mapping.
     public const string CacheCoherence = "cache_coherence";
 
+    // write_set_divergence: two entry points performing the "same" logical operation on an entity write
+    // DIFFERENT sets of tables — the secondary path silently skips rows the primary maintains. Derived
+    // by FactWriteSetDivergenceDeriver (wired in DeriveCommand), so the type string lives here.
+    public const string WriteSetDivergence = "write_set_divergence";
+
     // The closed set of hazard finding types. Membership test for "promote this observation into the Hazards
     // view (and drop it from the generic Observations block)".
     public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
@@ -36,6 +41,7 @@ public static class HazardKinds
         FactHazardDeriver.DualWriteType,
         FactCycleDeriver.EventCycleType,
         CacheCoherence,
+        WriteSetDivergence,
         NPlusOne,
         UnserializablePayload,
     };

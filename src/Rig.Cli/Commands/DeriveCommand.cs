@@ -194,11 +194,81 @@ internal static class DeriveCommand
             )
             : [];
 
+        // --- write_set_divergence: structural set-diff over per-EP reachable write-sets. Two entry points
+        //     that perform the "same" logical operation on an entity write DIFFERENT sets of tables — the
+        //     secondary path silently skips junction/link/event/denormalized rows the primary maintains.
+        //     Opt-in: only when the `writeSetDivergence` rule section is present. Pattern resolution:
+        //     each rule pair's PrimaryEntryPoint/SecondaryEntryPoint are substring patterns matched
+        //     case-insensitively against the shaped graph's node DocIDs (the same Contains semantics
+        //     FactPathFinder.ReachesWithFanout uses for its `fromPattern`). A pair is skipped with a
+        //     log note when either side resolves to 0 or >1 nodes — requires an unambiguous match. ---
+        var writeSetDivergenceFindings = new List<HazardFinding>();
+        if (rules.WriteSetDivergence is { } wsd)
+        {
+            var resolvedPairs = new List<WriteSetDivergencePair>();
+            foreach (var pair in wsd.Pairs)
+            {
+                var primaryMatches = shapedGraph
+                    .Methods.Select(m => m.SymbolId)
+                    .Where(id => id.IndexOf(pair.PrimaryEntryPoint, StringComparison.OrdinalIgnoreCase) >= 0)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
+                var secondaryMatches = shapedGraph
+                    .Methods.Select(m => m.SymbolId)
+                    .Where(id => id.IndexOf(pair.SecondaryEntryPoint, StringComparison.OrdinalIgnoreCase) >= 0)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
+
+                if (primaryMatches.Count != 1)
+                {
+                    io.TextOutput.Error.WriteLine(
+                        $"[write_set_divergence] Skipping pair for '{pair.Entity}': primary pattern '{pair.PrimaryEntryPoint}' matched {primaryMatches.Count} node(s) (need exactly 1)."
+                    );
+                    continue;
+                }
+
+                if (secondaryMatches.Count != 1)
+                {
+                    io.TextOutput.Error.WriteLine(
+                        $"[write_set_divergence] Skipping pair for '{pair.Entity}': secondary pattern '{pair.SecondaryEntryPoint}' matched {secondaryMatches.Count} node(s) (need exactly 1)."
+                    );
+                    continue;
+                }
+
+                resolvedPairs.Add(
+                    new WriteSetDivergencePair(
+                        EntityLabel: pair.Entity,
+                        PrimaryEnclosingId: primaryMatches[0],
+                        SecondaryEnclosingId: secondaryMatches[0]
+                    )
+                );
+            }
+
+            if (resolvedPairs.Count > 0)
+            {
+                var writePredicates = wsd
+                    .WriteEffects.Select(e => new EffectPredicate(Provider: e.Provider, Operation: e.Operation))
+                    .ToList();
+                var writeNormalize = new NormalizeSpec(SimpleTypeName: true, StripSuffix: ["EntityCollection", "Collection", "DAO"]);
+                var divergenceSpec = new WriteSetDivergenceSpec(
+                    Pairs: resolvedPairs,
+                    WritePredicates: writePredicates,
+                    WriteNormalize: writeNormalize
+                );
+                writeSetDivergenceFindings.AddRange(
+                    WriteSetDivergenceFindings(
+                        FactWriteSetDivergenceDeriver.Derive(graph: shapedGraph, effects: unfilteredEffects, spec: divergenceSpec)
+                    )
+                );
+            }
+        }
+
         // Both hazard sources unioned: the over-effects pattern findings + the graph-tier event_cycle findings.
         // Fed to BOTH the tsv `hazard` emission AND the rendered Hazards section so neither view misses a source.
         var allHazards = new List<HazardFinding>(HazardFindings(effects));
         allHazards.AddRange(cycleFindings);
         allHazards.AddRange(cacheCoherenceFindings);
+        allHazards.AddRange(writeSetDivergenceFindings);
 
         // --exclude-namespace: drop hazard findings whose enclosing DocID namespace starts with any of the
         // given prefixes (case-insensitive). Applied BEFORE both tsv and human output for consistency.
@@ -452,6 +522,38 @@ internal static class DeriveCommand
                     Enclosing: f.Method,
                     FilePath: f.FilePath,
                     Line: f.Line
+                )
+            );
+        }
+
+        return mapped;
+    }
+
+    // Map each write_set_divergence finding into a HazardFinding so it flows through the SAME Hazards
+    // view + tsv split as the other sources. Like event_cycle and cache_coherence it is NOT
+    // effect-attached — it is a property of the call-graph topology (structural set-diff). The SITE is
+    // the AbsentEpId: the entry point that SHOULD also write the table but doesn't (the actionable gap).
+    // Reason encodes which EP has the write (present) vs which lacks it (absent); Context is the
+    // diverging resource key; Confidence is "medium" (the pairing is rule-declared but "same logical op"
+    // is an assumption that requires human verification). Pure + internal so the mapping is unit-testable
+    // without a store.
+    internal static IReadOnlyList<HazardFinding> WriteSetDivergenceFindings(IReadOnlyList<WriteSetDivergenceFinding> findings)
+    {
+        var mapped = new List<HazardFinding>(findings.Count);
+        foreach (var f in findings)
+        {
+            var directionLabel = f.Direction == WriteSetDirection.PrimaryOnly ? "primary" : "secondary";
+            var absentLabel = f.Direction == WriteSetDirection.PrimaryOnly ? "secondary" : "primary";
+            mapped.Add(
+                new HazardFinding(
+                    Type: HazardKinds.WriteSetDivergence,
+                    Confidence: "medium",
+                    Reason: $"table_written_by_{directionLabel}_not_{absentLabel}",
+                    Context: f.ResourceKey,
+                    Detail: $"entity:{f.EntityLabel} present:{f.PresentEpId} absent:{f.AbsentEpId}",
+                    Enclosing: f.AbsentEpId,
+                    FilePath: "",
+                    Line: 0
                 )
             );
         }
