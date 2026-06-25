@@ -887,10 +887,13 @@ requires a temporary local edit (no runtime toggle).
   (377,512 symbols / 2,123,817 references / 145 di), all prior stores dropped. Query side is unblocked.
 - **`<T,U>` label gap**: plain method-generic instantiation labels don't render concrete even on the EF path
   (`PrettyGenericName` / renderer, separate from narrowing + load-path).
-- **Phase-3 collapse of mono-lambda ids**: verify display-collapse folds `{M}~λN~mono⟨…⟩` on real
-  `tree`/`callers` output (`MonomorphizedNodeId.BaseOf` should handle it; untested on the store).
-- **CallersCommand auxiliary `ReachedBy` sites** (≈203/371/420) left un-collapsed — wrap with
-  `MonomorphCollapse` if `~mono` ids surface through those join paths.
+- **Phase-3 collapse of mono-lambda ids**: ✅ VERIFIED on the store (2026-06-25) — no `~mono`/`{M}~λN~mono⟨…⟩`
+  ids leak into `tree`/`callers`/`reaches`/`path` output in ANY format (text, `--format tsv`, `--format
+  llm-ids`), checked against materializing targets (`DebtorOverride.SaveIncludedServices`,
+  `BillingRuleHelper.SaveServices` incl. its Func lambdas). `MonomorphCollapse` folds them as intended.
+- **CallersCommand auxiliary `ReachedBy` sites** (≈203/371/420) left un-collapsed: ✅ confirmed HARMLESS — those
+  sites build set-membership/filter sets (forward-verify target ids, the async re-probe), never rendered, so
+  un-collapsed `~mono` ids there cause no leakage (verified above). No wrap needed.
 - **`SchemaVersion.Index`/`.Graph` bump discipline**: the gate is only safe if the C# consts are bumped on a
   schema-shape change (that's the whole tripwire).
 - **Cleanup**: `StorageProbes` header comment still mentions `ADD COLUMN` (stale post column-probe removal);
