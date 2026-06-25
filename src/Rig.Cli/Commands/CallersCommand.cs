@@ -402,39 +402,47 @@ internal static class CallersCommand
             .ThenBy(e => e.Route, StringComparer.Ordinal)
             .ToList();
 
+        // BUG-rig-missed-entrypoints-healthcode (Defect 2): the sync surface hides the scheduled/actor-handoff
+        // paths, so a sync EP answer can UNDER-report — "0 sync" misreads as "unreachable from any entry point"
+        // (which de-risks a change wrongly), and a non-zero sync count can still omit EPs that reach the target
+        // ONLY via a handoff. Count the rule-detected EPs reachable on the --async surface so both the 0-EP and
+        // the non-zero hints below can point the user at --async. Probed with AsyncExact (the semantics we'd
+        // suggest), never AsyncInclude, so the hint never leans on imprecise delivery fan-out that --async would
+        // itself exclude. Returns 0 when already walking handoffs (nothing hidden) — also the cheap early-out.
+        int AsyncReachableEpCount()
+        {
+            // Already walking handoffs (nothing hidden), or the graph has none at all — skip the extra reverse
+            // walk. The handoff-presence check is an O(E) scan that spares handoff-free stores the whole probe.
+            if (mode != FactPathFinder.TraversalMode.SyncCut || !graph.CallEdges.Any(e => e.Kind == EdgeKinds.Handoff))
+            {
+                return 0;
+            }
+
+            var asyncReachable = FactPathFinder
+                .ReachedBy(graph, toPattern, maxDepth, mode: FactPathFinder.TraversalMode.AsyncExact)
+                .Keys.ToHashSet(StringComparer.Ordinal);
+            var asyncSites = graph.Methods.Where(m => asyncReachable.Contains(m.SymbolId)).Select(m => (m.FilePath, m.Line)).ToHashSet();
+            return derivedEps
+                .Concat(promoted)
+                .Where(e => asyncSites.Contains((e.FilePath, e.Line)))
+                .GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line))
+                .Count();
+        }
+
         if (touching.Count == 0)
         {
             if (!tsv)
             {
-                // BUG-rig-missed-entrypoints-healthcode (Defect 2): a sync 0 reads as "not reachable from any
-                // entry point", but the scheduled / actor-message surface is sync-cut by default. Before
-                // claiming "none", probe --async — a target reachable ONLY via a handoff (a background worker,
-                // an actor message, an event) would otherwise be wrongly reported as dead/background-only, which
-                // defeats the security-reachability use case. Only paid on the 0-result path, so no per-query cost.
-                if (mode == FactPathFinder.TraversalMode.SyncCut)
+                // A target reachable ONLY via a handoff (background worker, actor message, event) would
+                // otherwise be wrongly reported as dead/background-only — defeating the security-reachability
+                // use case. Paid only on the 0-result path here.
+                var asyncCount = AsyncReachableEpCount();
+                if (asyncCount > 0)
                 {
-                    // Probe with AsyncExact — the default `--async` semantics we'd point the user at — so the
-                    // hint never suggests `--async` on the strength of a fan-out-only (imprecise) reach that
-                    // `--async` itself would then exclude.
-                    var asyncReachable = FactPathFinder
-                        .ReachedBy(graph, toPattern, maxDepth, mode: FactPathFinder.TraversalMode.AsyncExact)
-                        .Keys.ToHashSet(StringComparer.Ordinal);
-                    var asyncSites = graph
-                        .Methods.Where(m => asyncReachable.Contains(m.SymbolId))
-                        .Select(m => (m.FilePath, m.Line))
-                        .ToHashSet();
-                    var asyncCount = derivedEps
-                        .Concat(promoted)
-                        .Where(e => asyncSites.Contains((e.FilePath, e.Line)))
-                        .GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line))
-                        .Count();
-                    if (asyncCount > 0)
-                    {
-                        output.WriteLine(
-                            $"No entry points reach '{toPattern}' synchronously — but {asyncCount} reach it via async/scheduled handoff. Re-run with --async."
-                        );
-                        return 1;
-                    }
+                    output.WriteLine(
+                        $"No entry points reach '{toPattern}' synchronously — but {asyncCount} reach it via async/scheduled handoff. Re-run with --async."
+                    );
+                    return 1;
                 }
 
                 output.WriteLine($"No rule-detected entry points reach '{toPattern}'.");
@@ -509,6 +517,20 @@ internal static class CallersCommand
                 WriteEntryPointLine(output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
             }
         }
+        // Defect 2 (non-zero under-report): even with sync EPs present, the async surface can reach MORE — a
+        // target some EPs touch only via a scheduled/actor handoff. Compared against the sync REACHABLE set
+        // (touching), not the confirmed headline, so the delta isolates the async contribution rather than
+        // conflating it with the reverse-only partition. Cost is one extra reverse walk, paid only on the text
+        // path in SyncCut mode (the helper early-outs otherwise). The precise per-EP confirmation lives on the
+        // --async run, so this is a "go look" pointer, not a verified count.
+        var asyncEpCount = AsyncReachableEpCount();
+        if (asyncEpCount > touching.Count)
+        {
+            output.WriteLine(
+                $"{Indent.L1}… +{asyncEpCount - touching.Count} more entry point(s) reach this via async/scheduled handoff (not shown) — re-run with --async."
+            );
+        }
+
         // Reverse-only = in the reverse closure but with NO forward path: a reverse-dispatch over-approximation
         // (a shared base/interface seam — e.g. EntityBase.Delete — pulls in every caller of ANY override, which
         // can dwarf the real answer by 100s–1000s). HIDDEN by default — the headline confirmed set IS the

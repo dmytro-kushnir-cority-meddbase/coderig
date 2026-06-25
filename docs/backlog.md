@@ -804,15 +804,22 @@ background worker + http + soap); `GetCompany` 16 → 219. For a security/author
 is actively misleading — a reviewer could wrongly de-risk a change. (Defect 1, the `[ClientBinding]` EP miss, is
 fixed per-repo; this is the orthogonal engine half.)
 
-**Fix (pick, low-risk first):**
-1. **Footer/hint when sync under-reports:** when `--entrypoints` (or `reaches`) walks past ≥1 handoff edge that
-   was sync-cut, print `N handoff edge(s) not walked — re-run with --async`. Strongest signal: when sync EPs == 0
-   but `--roots`/`--async` would yield > 0, say so explicitly ("0 sync EPs; M reachable via async/scheduled handoff").
-2. **`--async` default for `callers`/`reaches`** with a `--no-async` opt-out (bigger semantics change; the sync
-   answer is the special case, not the default — debatable, surface as a fork).
-Recommend #1 (the footer) — it preserves sync semantics and kills the "0 = dead" misread. Touches CallersCommand
-/ ReachesCommand rendering + the traversal's handoff-skipped count (already computed at the sync-cut point in
-FactPathFinder.Successors / GraphIndex). Cheap, high-value for the reachability use case.
+**STATUS (2026-06-25): fix #1 SHIPPED for `callers --entrypoints` (both halves), validated on the fresh store.**
+The 0-EP half was already in place (probe `--async`; "0 sync — but N via async; re-run with --async"). This
+pass added the **non-zero under-report** half: a `AsyncReachableEpCount()` helper (one extra reverse `ReachedBy`
+in AsyncExact, gated to SyncCut + graphs that actually contain handoff edges) and a footer
+`… +K more entry point(s) reach this via async/scheduled handoff (not shown) — re-run with --async` whenever the
+async surface reaches strictly more EPs than the sync set. Test: `CallersAsyncUnderreportTests` (event-`+=`
+handoff playground fixture — `Task.Run(methodGroup)` is walked SYNC here, so it does NOT trigger; the
+sync-cut handoff had to be an event subscription, auto-reclassified by `MarkEventSubscriptionHandoffs`).
+Real-store: `Master.GetCompany` sync 14 → "+14 more" → `--async` 28; `Master.GetMedicalPerson` 1 → "+5" → 6.
+Note the backlog's "handoff-skipped count already computed in FactPathFinder" was WRONG — no such count is
+exposed; the async re-probe (the proven 0-case pattern) was used instead.
+
+**Residual (not done):** the DEFAULT `callers` path and `--roots` still have no under-report hint (only
+`--entrypoints` does); `reaches` already discloses the scheduled bucket under `--async`. Extending the footer to
+default/`--roots` is a small follow-up if wanted (same helper). Fix #2 (`--async` default) remains an untaken,
+debatable fork.
 
 ---
 
@@ -862,8 +869,8 @@ over-narrowing; measure clone count + the per-method (50) / total (100k) caps at
 `Reads.MonomorphizeEnabled = true` is hardcoded — decide the real default after calibration.
 
 ### Misc rework debt
-- **Re-index MedDBase**: the meta gate rejects the pre-meta store ("re-index") BY DESIGN — re-index to query
-  again and to pick up the full rework.
+- **Re-index MedDBase**: ✅ DONE (2026-06-25) — fresh single store `caa9373ffbf6-dirty` on the new schema
+  (377,512 symbols / 2,123,817 references / 145 di), all prior stores dropped. Query side is unblocked.
 - **`<T,U>` label gap**: plain method-generic instantiation labels don't render concrete even on the EF path
   (`PrettyGenericName` / renderer, separate from narrowing + load-path).
 - **Phase-3 collapse of mono-lambda ids**: verify display-collapse folds `{M}~λN~mono⟨…⟩` on real
