@@ -531,27 +531,6 @@ public sealed record FactCacheCoherenceRule(
     IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null
 );
 
-// write_set_divergence rule: two entry points performing the "same" logical operation on an entity that
-// write DIFFERENT sets of tables. The secondary path silently skips junction/link/event/denormalized
-// rows the primary maintains → stale/inconsistent data, no exception. Projected from the
-// `writeSetDivergence` section by FactWriteSetDivergenceRuleProvider. A single object (not a list).
-public sealed record FactWriteSetDivergenceRule(
-    // Each declared pair: an entity label + two entry-point METHOD patterns (substrings matched
-    // case-insensitively against node DocIDs — the `<from>` pattern convention of `rig tree`).
-    IReadOnlyList<FactWriteSetDivergencePair> Pairs,
-    // The provider+operation pairs that count as a "write" for this codebase. Null/empty operation
-    // means any operation of that provider.
-    IReadOnlyList<FactEffectRef> WriteEffects
-);
-
-// One declared entity pair inside a writeSetDivergence rule.
-public sealed record FactWriteSetDivergencePair(string Entity, string PrimaryEntryPoint, string SecondaryEntryPoint);
-
-// A provider+operation predicate for effect matching. Operation null = any operation of that provider.
-// Mirrors the EffectPredicate in the deriver layer but lives in the Domain Data namespace so the rule
-// record (Facts.cs) and the rule provider (Rig.Analysis) can reference it without a circular dep.
-public sealed record FactEffectRef(string Provider, string? Operation = null);
-
 public sealed record FactHandoffRule(
     string Id,
     string Kind,

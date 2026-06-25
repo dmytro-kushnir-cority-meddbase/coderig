@@ -26,10 +26,6 @@ public sealed record RuleSet
     // DeriveCommand). A single object; null when the `cacheCoherence` section is absent.
     public FactCacheCoherenceRule? CacheCoherence { get; init; }
 
-    // write_set_divergence rule: declared EP pairs + write-effect predicates for the structural write-set
-    // divergence detector (wired in DeriveCommand). A single object; null when the `writeSetDivergence`
-    // section is absent.
-    public FactWriteSetDivergenceRule? WriteSetDivergence { get; init; }
     public IReadOnlyList<FactGenericFactoryRule> Factory { get; init; } = [];
     public IReadOnlyList<FactTraversalCutRule> Cut { get; init; } = [];
     public IReadOnlyList<FactContextDispatchRule> Context { get; init; } = [];
