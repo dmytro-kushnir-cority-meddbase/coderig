@@ -53,18 +53,11 @@ public static class Writes
     {
         var runId = Guid.NewGuid().ToString("n");
         await context.Database.EnsureCreatedAsync(cancellationToken);
+        // EnsureCreatedAsync above already opened the connection, so OpenConnectionAsync's first-open tuning
+        // won't fire here — apply the bulk-write profile explicitly (the named home of what used to be an
+        // inline PRAGMA block). All connection tuning now routes through StorageProbes' profile registry.
         var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
-
-        const string pragma = """
-            PRAGMA journal_mode=OFF;
-            PRAGMA synchronous=OFF;
-            PRAGMA temp_store=MEMORY;
-            PRAGMA mmap_size=4294967296;
-            PRAGMA cache_size=-262144;
-            PRAGMA locking_mode=EXCLUSIVE;
-            """;
-
-        await context.Database.ExecuteSqlRawAsync(pragma, cancellationToken);
+        await StorageProbes.ApplyProfileAsync(connection, StorageProbes.Profile.BulkWrite, cancellationToken);
 
         // Bulk insert: skip per-Add change detection (we never mutate tracked entities) and flush in
         // batches, clearing the tracker each time so memory stays flat over millions of fact rows.
