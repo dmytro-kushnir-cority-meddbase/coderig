@@ -76,6 +76,13 @@ Full list + issue refs in `meddbase-analysis/docs/reviewer-pitfalls.md`. The rec
 The `@parity` preset = `--only permission --only llblgen:write --only llblgen:bulk_write --only llblgen:delete
 --only audit` (the guard+durable-write+audit subset — the actionable ~25 rows, not the 318-row everything diff).
 
+**Branch not indexed? (the common case — do NOT skip the audit).** The rig store usually holds `main`, not the
+MR branch, so the change's *new* sinks (the changed methods) aren't queryable. Query the **pre-change CONSUMER
+surface** instead: the call sites *above* the changed methods are unchanged, so rig's reachability + EP
+classification to those consumers is still valid. Then confirm the new sink wiring (which consumer now reaches
+the cert-gated access) from **branch source** — `git show <branch-sha>:<path>`. Reachability-to-consumers from
+rig + sink-wiring from branch source = the full picture without re-indexing the branch.
+
 ### Migration guard-gap — BIDIRECTIONAL (a refactor is a guard-gap factory)
 Worked exemplar: **MR !10645** (object-store → cached-entity migration + permission safeguard). A storage/access
 migration into a **cert-gated cached store** (in MedDBase, cached stores check a certificate on read/write
@@ -90,6 +97,17 @@ migration into a **cert-gated cached store** (in MedDBase, cached stores check a
 rig grounds *which* EPs reach the cert-gated access and *that* it carries a `permission:assert`; whether a given
 runner's **identity satisfies** the cert is the `[LLM]`/human call rig can't resolve. Parameterize on the actual
 `<CachedEntity.access>` and `<Permission/cert>` for the change under review.
+
+**Where the gate actually lives:** the cert assert is usually **two hops below the getter** —
+`<Cache>.New(id) → IfCanView → CertificateEntity.AssertRight(…, <Right>)` — not on the method you're reading.
+Follow the cache indirection to confirm the gate is real.
+
+**The canonical safeguard shape to verify (MedDBase idiom):** a target-cert grant —
+`using (new GrantAccess(<owner>Cache.New(id).FkCertificate, <Right>)) { …read… }`. It self-grants the *target's*
+cert, **profile-keyed and thread-scoped**, so the assert is satisfied even for a profile-less/wrong-profile
+background or migration runner — which is *exactly* how a cert-gated migration safeguards its own system/queue
+path without cert-denial. **Verify the grant and the assert resolve the same `ActiveProfile`** (both inside the
+same `using`, same thread); if so the background path is covered, regardless of the runner's real rights.
 
 ## Don't over-flag
 ~29 of 200 in one window were **by-design / wontfix**, ~8 were **typos/copy**. By-design behavior and cosmetic
