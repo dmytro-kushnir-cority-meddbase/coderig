@@ -194,11 +194,29 @@ internal static class DeriveCommand
             )
             : [];
 
+        // --- static_init_capture: a config / Settings.* / feature-flag READ frozen in a STATIC field
+        //     INITIALIZER (evaluated once at CLR type-init, never re-read — "wrong until app restart"). Like
+        //     cache_coherence it is NOT effect-attached: derived here over the (unfiltered) effects + the
+        //     static-field universe and added as a hazard source. Opt-in: only when the `staticInitCapture`
+        //     rule section is present. The static-ness join is sourced from symbol_facts.Modifiers via
+        //     LoadStaticFieldIdsAsync; the deriver stays pure (the set is handed in). The mutable-source
+        //     patterns are POLICY (rule data), so the deriver hardcodes nothing. ---
+        var staticInitCaptureFindings = rules.StaticInitCapture is { } sic
+            ? StaticInitCaptureFindings(
+                FactStaticInitCaptureDeriver.Derive(
+                    effects: unfilteredEffects,
+                    spec: new StaticInitCaptureSpec(MutableSourcePatterns: sic.MutableSources),
+                    staticFieldIds: await Reads.LoadStaticFieldIdsAsync(context)
+                )
+            )
+            : [];
+
         // Both hazard sources unioned: the over-effects pattern findings + the graph-tier event_cycle findings.
         // Fed to BOTH the tsv `hazard` emission AND the rendered Hazards section so neither view misses a source.
         var allHazards = new List<HazardFinding>(HazardFindings(effects));
         allHazards.AddRange(cycleFindings);
         allHazards.AddRange(cacheCoherenceFindings);
+        allHazards.AddRange(staticInitCaptureFindings);
 
         // --exclude-namespace: drop hazard findings whose enclosing DocID namespace starts with any of the
         // given prefixes (case-insensitive). Applied BEFORE both tsv and human output for consistency.
@@ -447,6 +465,35 @@ internal static class DeriveCommand
                     Type: HazardKinds.CacheCoherence,
                     Confidence: f.Certainty ?? "medium",
                     Reason: "bulk_write_without_cache_invalidation",
+                    Context: f.ResourceKey,
+                    Detail: "",
+                    Enclosing: f.Method,
+                    FilePath: f.FilePath,
+                    Line: f.Line
+                )
+            );
+        }
+
+        return mapped;
+    }
+
+    // Map each static_init_capture finding into a HazardFinding so it flows through the SAME Hazards view +
+    // tsv split as the other sources. Like cache_coherence it is NOT effect-attached: the SITE is the
+    // enclosing STATIC field (Method) + the read's FilePath/Line. Context is the mutable source read (the
+    // config/Settings value frozen at type-init); Detail is empty (the source is the whole signal).
+    // Confidence is "medium" — the shape is grounded (a static-field-init read of a mutable source) but
+    // whether the staleness is operationally harmful depends on whether the value changes at runtime, so it
+    // reads as "verify". Pure + internal so the mapping is unit-testable without a store.
+    internal static IReadOnlyList<HazardFinding> StaticInitCaptureFindings(IReadOnlyList<StaticInitCaptureFinding> findings)
+    {
+        var mapped = new List<HazardFinding>(findings.Count);
+        foreach (var f in findings)
+        {
+            mapped.Add(
+                new HazardFinding(
+                    Type: HazardKinds.StaticInitCapture,
+                    Confidence: "medium",
+                    Reason: "config_read_frozen_in_static_field_init",
                     Context: f.ResourceKey,
                     Detail: "",
                     Enclosing: f.Method,

@@ -78,4 +78,8 @@ public static class SymbolKinds
 {
     public const string Method = "method";
     public const string Type = "type";
+
+    // A field symbol (IFieldSymbol => "field" in FactExtractor). The `F:` DocID prefix's expanded kind; used
+    // by the static_init_capture detector to load the static-field universe.
+    public const string Field = "field";
 }

@@ -531,6 +531,14 @@ public sealed record FactCacheCoherenceRule(
     IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null
 );
 
+// static_init_capture POLICY: the project-specific mutable-source resource patterns whose READ into a
+// STATIC field initializer is the hazard (config / Settings.* / feature flag — frozen at CLR type-init,
+// "wrong until app restart"). Patterns are matched as substrings of the effect's ResourceType (like
+// cacheCoherence's cachedEntities are project-specific). Opt-in: the detector fires ONLY when this section
+// is present with a non-empty mutableSources list. Rule data, not code; projected from the
+// `staticInitCapture` section by FactStaticInitCaptureRuleProvider. A single object (not a list).
+public sealed record FactStaticInitCaptureRule(IReadOnlyList<string> MutableSources);
+
 public sealed record FactHandoffRule(
     string Id,
     string Kind,

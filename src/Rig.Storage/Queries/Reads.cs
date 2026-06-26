@@ -1287,6 +1287,27 @@ public static class Reads
         return rows.GroupBy(r => (r.FilePath, r.Line, r.Target)).Select(g => g.First()).ToList();
     }
 
+    // The set of STATIC field DocIDs (`F:Ns.Type.field`) declared first-party — the universe the
+    // static_init_capture detector joins an effect's EnclosingSymbolId against to decide whether a config
+    // read sits inside a STATIC field initializer (frozen at CLR type-init) rather than an instance field
+    // (re-runs per construction) or a method/accessor (re-evaluates live). Static-ness is sourced exactly
+    // like the static-field-access loaders: symbol_facts.Modifiers (the fact layer's only source of a slot's
+    // modifiers), gated on the "static" token. Field symbols (Kind="field"); deduped by SymbolId. A whole-store
+    // load (no enclosing-scope bound) — derive needs every static field.
+    public static async Task<IReadOnlySet<string>> LoadStaticFieldIdsAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var ids = await context
+            .SymbolFacts.AsNoTracking()
+            .Where(s => s.Kind == SymbolKinds.Field && s.Modifiers.Contains("static"))
+            .Select(s => s.SymbolId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+        return ids.ToHashSet(StringComparer.Ordinal);
+    }
+
     // The set of field/auto-property DocIDs carrying a [ThreadStatic] attribute. No dedicated attribute fact
     // is needed: an attribute application is a constructor invocation (`new ThreadStaticAttribute()`), so it
     // already lands as a `ctor` reference whose ENCLOSING is the decorated field's DocID and whose TARGET is

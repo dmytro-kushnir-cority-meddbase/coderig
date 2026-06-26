@@ -26,6 +26,11 @@ public sealed record RuleSet
     // DeriveCommand). A single object; null when the `cacheCoherence` section is absent.
     public FactCacheCoherenceRule? CacheCoherence { get; init; }
 
+    // static_init_capture POLICY (the project-specific mutable-source resource patterns) for the
+    // static-init-capture detector (wired in DeriveCommand). A single object; null when the
+    // `staticInitCapture` section is absent. Opt-in — the detector fires only when this is present.
+    public FactStaticInitCaptureRule? StaticInitCapture { get; init; }
+
     public IReadOnlyList<FactGenericFactoryRule> Factory { get; init; } = [];
     public IReadOnlyList<FactTraversalCutRule> Cut { get; init; } = [];
     public IReadOnlyList<FactContextDispatchRule> Context { get; init; } = [];

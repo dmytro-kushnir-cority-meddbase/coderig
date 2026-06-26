@@ -140,6 +140,12 @@ internal sealed record CacheCoherenceRule(
     IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null
 );
 
+// static_init_capture POLICY (JSON authoring shape of the `staticInitCapture` section): `mutableSources` is
+// the project-specific list of resource substrings (e.g. "MedDBase.Configuration.Settings.") whose READ
+// into a static field initializer is flagged as frozen-at-type-init config. Projected to
+// FactStaticInitCaptureRule. One object, not a list (last-writer-wins).
+internal sealed record StaticInitCaptureRule(IReadOnlyList<string> MutableSources);
+
 // A `rig tree` render rule: a DocID substring `Pattern` + a human `Label`/`Reason` shown in the
 // rendered marker. Used for both collapse-seams (fold a fan-out hub's children) and opaque-types
 // (draw a node as a leaf). Codebase-specific presentation data; projected to FactRenderRule.
@@ -239,6 +245,10 @@ internal sealed class AnalysisRulesDocument
     // Top-level key "cacheCoherence": a SINGLE object (not a list) declaring the cached entities + bulk-write +
     // invalidation method names for the FR-7 cache-coherence graph hazard (see CacheCoherenceRule).
     public CacheCoherenceRule? CacheCoherence { get; set; }
+
+    // Top-level key "staticInitCapture": a SINGLE object declaring the mutable-source resource patterns for
+    // the static_init_capture hazard (see StaticInitCaptureRule).
+    public StaticInitCaptureRule? StaticInitCapture { get; set; }
 
     // Top-level key "deliveryRules": list of publish→consumer delivery mechanisms (events, actors).
     public List<DeliveryRuleDocument>? DeliveryRules { get; set; }

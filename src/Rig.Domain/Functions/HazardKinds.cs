@@ -26,6 +26,12 @@ public static class HazardKinds
     // string lives HERE — referenced by both the All set below and the DeriveCommand finding mapping.
     public const string CacheCoherence = "cache_coherence";
 
+    // static_init_capture: a config / mutable source (Settings.* / feature flag) READ into a STATIC FIELD
+    // INITIALIZER, frozen at CLR type-init and never re-evaluated ("wrong until app restart"). Derived by
+    // FactStaticInitCaptureDeriver and wired in DeriveCommand (like cache_coherence, it has no effect-attached
+    // observation), so the type string lives HERE — referenced by both the All set below and the finding mapping.
+    public const string StaticInitCapture = "static_init_capture";
+
     // The closed set of hazard finding types. Membership test for "promote this observation into the Hazards
     // view (and drop it from the generic Observations block)".
     public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
@@ -36,6 +42,7 @@ public static class HazardKinds
         FactHazardDeriver.DualWriteType,
         FactCycleDeriver.EventCycleType,
         CacheCoherence,
+        StaticInitCapture,
         NPlusOne,
         UnserializablePayload,
     };
