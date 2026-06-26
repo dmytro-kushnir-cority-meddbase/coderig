@@ -206,8 +206,8 @@ Recall recoveries already built in:
     2. **Legacy net48 ASP.NET web projects** (`<TargetFrameworkVersion>v4.8` + `UseIISExpress` +
        `Microsoft.WebApplication.targets`, e.g. `MedDBase.Site`, `ContractManagement.Site`) yield **0 source
        via Buildalyzer DTB even after a clean Paket-restore + successful MSBuild + `--no-build-cache`** — the
-       web build targets don't surface `Compile` items to Buildalyzer. These index ONLY through the bespoke
-       `build-if-due` + entry-`--from <csproj>` pipeline, or must be **excluded** from the merge. Their
+       web build targets don't surface `Compile` items to Buildalyzer. These index ONLY through an
+       MSBuild-built + entry-`--from <csproj>` pipeline, or must be **excluded** from the merge. Their
        `.aspx`/web layer is entry points, not data-access, so they rarely matter for effect/hazard detectors.
     3. **`.sqlproj` DB-model solutions** (`ChambersDbModel`, `Permissions-db-model`) — not C#, never indexable.
     (On MedDBase's ~20 solutions: ~half merge clean after Paket-restore; the net48-web + sqlproj ones don't.)

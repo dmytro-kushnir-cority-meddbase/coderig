@@ -178,7 +178,15 @@ reflection boundaries.
   `rig.rules.json`, `deployments.json`). **Run every `rig` query command from that directory** — it picks
   up the rules + store + deployment map from cwd. The source it indexes is `c:/git/meddbase-main-application`.
 - Re-index after any **extraction** change (effects/EPs are query-side and need no re-index, but
-  `FactExtractor` changes do): from `c:/git/meddbase-analysis`, run `pwsh -File build-if-due.ps1 -ThenIndex`.
-  It builds the app in Debug if the tree changed (MSBuild.exe, for the legacy net48 web + .sqlproj projects
-  that `dotnet build` can't), then runs `rig index <MedDBase.slnx> --from …/MedDBase.Site/MedDBase/MedDBase.csproj --rules rig.rules.json`.
-  Full re-index is slow (whole monorepo). `-ScanOnly` reports whether a build is due; `-Force` rebuilds anyway.
+  `FactExtractor` changes do): build the app (MSBuild.exe — the legacy net48 web + `.sqlproj` projects that
+  `dotnet build` can't), then from `c:/git/meddbase-analysis` run
+  `rig index <MedDBase.slnx> --from …/MedDBase.Site/MedDBase/MedDBase.csproj --rules rig.rules.json`. A full
+  re-index is slow (whole monorepo build + extract).
+- **Index efficiently — the slow part is the monorepo BUILD, so don't repeat it:** (1) before indexing a
+  commit, check `rig runs` / `.rig/<short-sha>/` — stores are commit-scoped, so if that commit is already
+  indexed, **skip the build+index entirely**. (2) Index in the **primary checkout** (or a persistent
+  build location) so rig's design-time-build cache (`.rig/dtb-cache`, on by default) is reused across indexes
+  — a **fresh `git worktree` per index loses the cache and forces a from-scratch build of the whole monorepo**.
+  Only use a throwaway worktree when the working tree genuinely must stay on another branch, and expect the
+  full-build cost. (3) Building per branch-switch on a tree-change heuristic is NOT commit-store-aware — it
+  rebuilds even for an already-indexed commit; gate on the store's existence, not the tree state.

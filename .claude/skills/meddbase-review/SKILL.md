@@ -69,7 +69,8 @@ Full list + issue refs in `meddbase-analysis/docs/reviewer-pitfalls.md`. The rec
 | Question the diff can't answer | rig command |
 |---|---|
 | Two paths to one write — do their effect+guard sets differ? | `rig effects-diff <epA> <epB> --only @parity` — read the **labeled** divergence (`permission:assert X` = a guard one enforces and the other doesn't; `llblgen:write Y` / `audit:write` = writes one does). |
-| Does THIS entry point reach a hazard? | `rig tree <EP> --view hazards` (cache_coherence/race_window/dual_write/…) |
+| Does THIS entry point reach a hazard? | `rig tree <EP> --view hazards` (cache_coherence/race_window/dual_write/…). **Caveat:** `race_window` does NOT fire on every TOCTOU — a non-atomic `ConcurrentDictionary`/`Dictionary` check-then-create over a shared field shows only as `shared_state mutate` with **no** `race_window` tag. **"No base race_window" ≠ "no race"** — confirm the check-then-act in source. |
+| **Did a concurrency FIX add a guard without dropping effects?** | `rig impact --base <pre> --head <post> --format tsv \| grep <EP>` → expect `ep_guard_delta: lock:acquire,lock:release` (or `permission:assert`) **added** and **zero `ep_effect_removed`**. A correct race fix = a guard added around an unchanged write set. |
 | Did my "behavior-preserving" refactor change effects? | `rig impact --base <pre-commit> --expect-no-effect-change` |
 | Who reaches this write WITHOUT the guard? | `rig callers <write> --entrypoints` → for each, `rig reaches <EP> --only permission` (or effects-diff vs a known-guarded EP) |
 | **Find the UI sibling of a new EAPI/endpoint write** (for the parity diff) | `rig callers <core-write-or-engine> --entrypoints` → pick the UI-kind EP driving the same write. **The sibling is often a SHARED ENGINE** (a wizard / service like `WizardBase.Book`), not a sibling endpoint — both the EAPI and UI bottom out in it. |
@@ -87,6 +88,22 @@ the new EAPI endpoints route through the same `WizardBase.Book` engine as the UI
 check was `reaches <eapi> --only permission` vs the UI sibling (EAPI asserted the SAME guards — not under-guarded)
 plus `impact --format tsv | grep <ep>` for the in-place re-platform delta (it dropped a whole-set reconciliation
 that was silently cancelling rights-invisible services — a *fix*, surfaced by `ep_effect_removed`).
+
+### Reviewing a race / lock FIX (the axis where `race_window` is least reliable)
+Worked exemplar: **MR !10788** (`Cache.ProvideEpisode` dedup race). rig did NOT flag the buggy
+`ConcurrentDictionary` check-then-create as `race_window` — the verdict came from `impact` + source, not a
+dropped hazard. The workflow:
+1. **`rig callers <shared method> --entrypoints --async` — prove ≥2 CONCURRENT EPs reach it.** No concurrent
+   reachers ⇒ no race to fix. (Background/`echoactor`/parallel-fan-out EPs are the usual racers — `--async`
+   surfaces them; `reaches <EP>` showing `parallel:fanout` confirms the workers run in parallel.)
+2. **Confirm the lock object is SHARED across the racing callers** (one instance, not per-worker) — a source
+   fact rig won't check: read the lock field's owner lifetime (e.g. `Cache = new Cache(this)` once per import).
+   A per-key `lock(locks.GetOrAdd(key, _ => new object()))` + a re-check inside the lock is the correct shape.
+3. **`impact` must show the guard ADDED and NO durable write/audit/guard removed** (the row above).
+4. **A fixed path will gain `lock_held_across_effect`** on the now-guarded writes — that's the **fix's
+   signature, NOT a new hazard**; don't flag it as a regression.
+5. **Disclose:** rig proves the guard exists and is concurrently reached; it CANNOT prove the interleave is
+   eliminated at runtime — that's a QA/repro fact.
 
 **Index the MR branch fresh — PREFERRED for any migration / new-reader change.** The store usually holds `main`,
 not the branch, so the change's *new* sinks/readers aren't queryable. **For a migration review, index the branch

@@ -14,7 +14,7 @@ attempts`, which aborts the whole-solution merge. Confirmed **NOT** a build-stat
   issue.
 ⇒ Buildalyzer's design-time MSBuild for THIS net48 ASP.NET web project (`Microsoft.WebApplication.targets`,
 `UseIISExpress`, 4 `Echo.Process` project refs) returns an empty compilation. Why this one and not
-`MedDBase.Site` (which indexes via the bespoke `build-if-due` + `--from <csproj>` pipeline) is unknown — needs
+`MedDBase.Site` (which indexes via the MSBuild-built + `--from <csproj>` pipeline) is unknown — needs
 a Buildalyzer **binlog** to see the real DTB error, not another retry. **Irrelevant to `cache_coherence`**
 (separate bounded context; doesn't bulk-write the main app's cached entities), so parked. If ever needed:
 capture the DTB binlog, or replicate the MedDBase.Site curated pipeline for the contract-management closure.
