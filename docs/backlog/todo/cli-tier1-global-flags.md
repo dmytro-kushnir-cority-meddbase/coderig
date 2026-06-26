@@ -1,10 +1,11 @@
 ## CLI Tier-1 global flags — uniform across all query commands
 
-**Status:** 🔵 IN PROGRESS (2026-06-26) — the **`--time` slice is being built** (rich index-style instrumentation —
-per-phase `PhaseTimings` + OS/proc CPU/disk/RAM sampler + `TimingReport` breakdown — on `callers`/`reaches`/`path`/
-`dispatch-fans`/`effects-diff`, which currently print help on `--time`). Motivated by the reverse-query cost finding:
-`callers --async` has a ~8s per-call floor (median 8.1s over 35 sites = 5.2 min) that we can't attribute to
-load-vs-traversal without `--time`. Remaining flags (`--no-cache`/`--format`/`--limit` uniformity) stay todo.
+**Status:** todo — **`--time` slice ✅ SHIPPED (2026-06-26, commit `6a713836`)**: rich index-style instrumentation
+(per-phase `PhaseTimings` + OS/proc CPU/disk/RAM sampler + `TimingReport`, via a disposable `QueryTiming` helper)
+now on `callers`/`reaches`/`path`/`dispatch-fans`/`effects-diff`. It paid off immediately — attributed the
+reverse-query ~8s floor to **graph load (disk-IO, 1.5 GB read/query, CPU-idle), not traversal** (see
+[warm-graph-across-queries.md](warm-graph-across-queries.md)). Remaining flags (`--no-cache`/`--format`/`--limit`
+uniformity) are the still-open work in this card.
 **Source:** extracted from `docs/rig-review-issues.md`, 2026-06-25 (#10 / E2 Tier-1 deferred section)
 
 ### What

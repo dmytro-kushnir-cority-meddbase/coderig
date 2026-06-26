@@ -41,6 +41,11 @@ Bake it at `rig graph` time (`GenericInstantiationInventory` + `GenericMonomorph
 (smaller bounded pull; query-time inventory/materialize disappears; reverse over the baked graph ≡ forward by
 construction). Bumps `SchemaVersion.Graph`. Perf lever, not a correctness gap.
 
+**Reranked by measurement (2026-06-26):** `--time` showed a reverse query is **100% graph LOAD, disk-IO bound
+(1.5 GB read/query, cpu:self 4%)** — see [warm-graph-across-queries.md](warm-graph-across-queries.md). So this
+item is the **second** perf lever: it shrinks the per-call load (smaller baked `call_edges`) but doesn't stop
+the per-process re-read. The larger lever is holding the graph warm across queries (that card). Do both.
+
 _(Single static SQL connection was considered and dropped — ❌ WON'T DO, see done/monomorphization-rework.md.)_
 
 ## Hard constraints
