@@ -60,20 +60,35 @@ disk for ~40k nodes that are then pruned.
 `dispatch_edges`. The CTE walks `call_edges ∪ dispatch_edges`; baking `~mono` call edges leaves the dispatch fan
 that inflates the closure **untouched**. As specified it would *grow* the store and *not* cut the load. ❌
 
-**The real lever (no schema change): narrow BEFORE the heavy load — two-pass query.** Reachability needs only
-graph structure (`call_edges` + `dispatch` + mono bindings, the cheaper part); the 381k `reference_facts`
-effect-inputs are only needed for the *reached* methods. Today both load together, bounded to the un-narrowed
-41k. Split it: (1) load graph structure, run `ShapeGraph` + traversal → narrowed reachable set (~hundreds);
-(2) load effect-inputs bounded to the *narrowed* set. Cuts the dominant `reference_facts` read ~200×, purely
-query-side (reorder in `LoadEffectReachInputsAsync`/`SqlReachability`). **← prototype + measure this first.**
+**Two-pass query (defer effect-inputs to the narrowed set) — PROTOTYPED + MEASURED, ~20% only, NOT worth it.**
+Hypothesis: reachability needs only graph structure; the 381k `reference_facts` effect-inputs are only needed
+for the *reached* methods, so defer them to the narrowed set. A throwaway prototype (env-gated skips, reverted)
+attributed `reaches ContactEntity.Delete` graph-load by component (time is stable; diskR noisy from OS page cache):
 
-**Heavy alternative (only if two-pass underdelivers): bake receiver-narrowed dispatch at graph time** so the CTE
-closure itself is ~157, not 41k (cuts BOTH the call_edges and reference_facts reads). But that is
-context-sensitive dispatch persistence — hard, real `dispatch_edges` blow-up risk, schema bump. Not the
-moving-`Materialize` change originally written here.
+| variant | graph load |
+|---|---|
+| baseline (full) | 6.8s |
+| skip effect-inputs (= the two-pass ceiling) | 5.6s (−1.2s, ~18%) |
+| skip bindings | 6.0s (−0.8s) |
+| skip both (≈ pure `call_edges` CTE walk) | **4.7s / ~1.1 GB floor** |
 
-_(Single static SQL connection was considered and dropped — ❌ WON'T DO, see done/monomorphization-rework.md.
-`rig graph` is still a cheap ~15s re-graph over immutable facts — relevant if the heavy alternative is ever built.)_
+So deferring effect-inputs saves only ~18–25%. **The dominant cost (~4.7s / 1.1 GB) is the `call_edges` recursive
+CTE walk over the dispatch-inflated 41k closure** — which the two-pass MUST still load to narrow in RAM. Not
+worth the wiring for ~20%.
+
+**Conclusion — no CHEAP query-side lever cuts the cold load.** The floor is the CTE walking 41k nodes that
+narrowing later prunes to a handful. Two real options remain:
+- **Heavy: bake receiver-narrowed dispatch at graph time** so the CTE closure itself is ~157, not 41k (cuts the
+  walk AND both reference_facts reads). Context-sensitive dispatch persistence — hard, `dispatch_edges`
+  blow-up risk, schema bump. The only thing that attacks the 1.1 GB floor.
+- **Amortize instead of cut: warm-graph/MCP** ([warm-graph-across-queries.md](warm-graph-across-queries.md)).
+  Since the cold load is structurally ~5s and hard to cut cheaply, holding the graph warm across queries (pay
+  it once) regains priority over trying to shrink it. The earlier "stateless-first" ordering was predicated on
+  materialization cheaply cutting the cold load — the spike shows it can't, so the bounded/stateful tradeoff
+  is back in play for the repeated/agent workflow.
+
+_(Single static SQL connection: still ❌ WON'T DO — the cost is the CTE page walk, not the connection.
+`rig graph` is a cheap ~15s re-graph over immutable facts — relevant only if the heavy narrowed-dispatch bake is built.)_
 
 ## Hard constraints
 - **Unresolved generic → CHA cone, NEVER dead** (soundness; disclose, don't drop).

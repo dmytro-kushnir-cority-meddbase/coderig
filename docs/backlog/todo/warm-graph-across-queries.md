@@ -26,15 +26,16 @@ disk and then barely computes.
 
 ## The levers (ordered — stateless first, stateful last)
 The cost is **reading + materializing 1.5 GB per process**. Order of attack, cheapest-state first:
-1. **Narrow before the heavy load — two-pass query** ([dispatch-precision-substrate.md](dispatch-precision-substrate.md),
-   §2, updated by the 2026-06-26 spike). The 1.5 GB is the dispatch-fan-inflated closure (157 → 41,626 nodes
-   via 10k dispatch edges); monomorphization prunes it to ~hundreds but only *after* the load. Load graph
-   structure → narrow → load effect-inputs bounded to the *narrowed* set. Cuts the dominant `reference_facts`
-   read ~200×, **no schema change**, `rig` stays a stateless CLI. Build/measure this first.
-   (The earlier "bake `Materialize` into `call_edges`" idea was KILLED by the spike — it's additive and leaves
-   the dispatch fan the CTE walks untouched.)
-2. **Bake receiver-narrowed dispatch at graph time** — shrinks the CTE closure itself (biggest cut) but is
-   context-sensitive dispatch persistence: hard, blow-up risk, schema bump. Only if two-pass underdelivers.
+**Spike update (2026-06-26): no CHEAP cold-load lever exists — so THIS card (amortize) regains priority.**
+The 1.5 GB is the `call_edges` CTE walking the dispatch-inflated 41k closure (157 → 41,626 via 10k dispatch
+edges). The two-pass "defer effect-inputs" idea was prototyped and measured at only **~20%** (the pure CTE walk
+is a 4.7s / 1.1 GB floor the two-pass can't avoid — see [dispatch-precision-substrate.md](dispatch-precision-substrate.md) §2).
+Cutting the cold load cheaply is off the table. Remaining options:
+1. **Warm-graph/MCP (this card)** — amortize the structurally-~5s cold load by paying it once and answering many
+   queries warm. Now the leading lever for the repeated/agent workflow, given the cold load resists cheap cuts.
+   Still **bounded** (see banner): forever-RAM + invalidation are real costs.
+2. **Bake receiver-narrowed dispatch at graph time** — the only thing that attacks the 1.1 GB cold floor (shrinks
+   the CTE closure to ~157). Context-sensitive dispatch persistence: hard, blow-up risk, schema bump.
 3. **Warm in-memory graph across queries (this card)** — *only if* 1+2 don't get the cold load low enough for
    the genuine repeated/agent workflow (the hazard map; an agent firing many `callers`/`reaches`). Front-end
    is an **MCP server** holding a store-keyed warm graph as tools — matches "LLM composes rig"; a `batch`
