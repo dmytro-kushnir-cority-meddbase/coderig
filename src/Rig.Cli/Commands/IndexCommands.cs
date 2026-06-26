@@ -155,6 +155,16 @@ internal static class IndexCommands
         return cmd;
     }
 
+    // Resolve a solution/project path to an absolute path, anchored at workingDirectory (NOT
+    // Environment.CurrentDirectory). Absolute paths pass through unchanged. This is the bug fix: a RELATIVE
+    // target otherwise resolves against the process cwd deep inside the Roslyn workspace loader — which
+    // differs from workingDirectory when `rig` is invoked from another directory — producing a wrong-base
+    // crash. Existence is NOT checked here: a missing path flows to the loader, which already fails cleanly
+    // ("Failed to load" + non-zero exit) — adding an early throw here would bypass that handler (it sits
+    // before the try) and is redundant with it.
+    internal static string ResolveSolutionPath(string target, string workingDirectory) =>
+        Path.GetFullPath(path: target, basePath: workingDirectory);
+
     internal static async Task<int> RunIndexAsync(
         string target,
         IReadOnlyList<string> extraRules,
@@ -172,6 +182,13 @@ internal static class IndexCommands
         string workingDirectory
     )
     {
+        // Normalise `target` to an absolute path ONCE, anchored at workingDirectory, before any downstream
+        // use. A relative path passed to SolutionAnalyzer/BuildEntryClosureAsync would otherwise resolve
+        // against Environment.CurrentDirectory (the process cwd), which differs from workingDirectory when
+        // `rig` is invoked from a different directory — producing a wrong-base crash deep inside Roslyn. A
+        // missing path is NOT guarded here (it flows to the loader, which already fails cleanly with
+        // "Failed to load" + non-zero exit — see the catch below and Index_does_not_reject_known_flags).
+        target = ResolveSolutionPath(target: target, workingDirectory: workingDirectory);
         var timings = time ? new PhaseTimings() : null;
         // Sample CPU (process + whole-machine) / RAM / disk on a background timer for the whole run, so the
         // --time breakdown can show WHY a phase is slow — e.g. design-time-builds is low process-CPU but high
@@ -212,7 +229,7 @@ internal static class IndexCommands
         // Capture provenance + the destination store-id up front, so the store location and commit can be
         // announced BEFORE the (long) analysis — useful when monitoring a re-index. The commit IS the
         // store-id (docs/design-impact-behavioral-diff.md §4.4-4.5).
-        var provenance = GitProvenanceProbe.Capture(fromProject ?? Path.GetFullPath(target));
+        var provenance = GitProvenanceProbe.Capture(fromProject ?? target);
         var storeId = StoreLayout.NewStoreId(provenance);
 
         var totalWatch = Stopwatch.StartNew();
@@ -220,7 +237,7 @@ internal static class IndexCommands
         var analyzeWatch = Stopwatch.StartNew();
         try
         {
-            output.WriteLine($"Indexing: {Path.GetFullPath(target)}");
+            output.WriteLine($"Indexing: {target}");
             if (extraRules.Count > 0)
             {
                 output.WriteLine($"Rules: {string.Join(", ", extraRules)}");
