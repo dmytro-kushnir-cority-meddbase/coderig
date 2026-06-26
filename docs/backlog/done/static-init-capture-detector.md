@@ -1,6 +1,14 @@
-## Detector: `static_init_capture` — config/mutable value frozen in a static field initializer (NEW, corpus GI-862)
+## Detector: `static_init_capture` — config/mutable value frozen in a static field initializer (corpus GI-862)
 
-**Status:** proposed · **Family:** staleness/cache-coherence (sibling to FR-7) · **Found:** 2026-06-24 (MedDBase GI-862 RCA)
+> **✅ SHIPPED + CALIBRATED (2026-06-26, commit `4f555fdb`).** `FactStaticInitCaptureDeriver` + rule schema
+> `staticInitCapture {mutableSources:[…]}` (opt-in) + `Reads.LoadStaticFieldIdsAsync` (static-ness from
+> `symbol_facts.Modifiers`) + DeriveCommand wiring; flows through the derive hazards view/tsv like
+> `cache_coherence`. mini-ci green (705 tests, +6). Real-store calibration (`mutableSources=["MedDBase.Configuration.Settings."]`):
+> **27 findings**, all the target shape (feature flags frozen in static UI/cache field inits), incl. the GI-862
+> sibling `ConceptView.ClinicalFormConcept`. Disclosed-candidate (medium) — some may be benign deploy-time-constant
+> flags. Off by default; enable per-repo by adding the `staticInitCapture` rule to `rig.rules.json`. Design notes below.
+
+**Status:** ✅ SHIPPED · **Family:** staleness/cache-coherence (sibling to FR-7) · **Found:** 2026-06-24 (MedDBase GI-862 RCA)
 
 ### The hazard
 A value that can change at runtime — a feature flag, a `Settings.*`/config read, or anything derived from
