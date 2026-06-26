@@ -90,57 +90,7 @@ public static class SqlReachability
     {
         var result = new Dictionary<string, int>(StringComparer.Ordinal);
         var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
-        // `nodes` is built as part of the graph UNIT (GraphMaterializer), so it is present whenever this
-        // path runs — every caller gates on HasGraphAsync (→ SchemaGate.GraphAvailableAsync) first. No
-        // per-table probe: the gate owns graph-presence.
-        const bool hasNodes = true;
-        var (frontier, next) = direction == Direction.Forward ? ("FromSym", "ToSym") : ("ToSym", "FromSym");
-
-        // Iterative level-BFS in a temp table rather than one min-depth recursive CTE. A single CTE that
-        // carries depth must dedup on (sym, depth), so a node reachable by many routes expands at up to
-        // maxDepth distinct depths before a final GROUP BY min — a ~10× blow-up. Here each level expands
-        // ONLY the current frontier (depth = d) and INSERT OR IGNORE keeps the first (shortest) depth per
-        // sym, so total work is O(closure edges) — the same as the depth-less set walk, but with exact
-        // depth. Two inserts per level (one per edge table) so each uses its FromSym/ToSym index.
-        await ExecNonQueryAsync(connection, "DROP TABLE IF EXISTS reach_depth;", null, cancellationToken);
-        await ExecNonQueryAsync(
-            connection,
-            "CREATE TEMP TABLE reach_depth(sym TEXT PRIMARY KEY, depth INTEGER NOT NULL);",
-            null,
-            cancellationToken
-        );
-        await ExecNonQueryAsync(connection, "CREATE INDEX temp.ix_reach_depth_depth ON reach_depth(depth);", null, cancellationToken);
-
-        await ExecNonQueryAsync(
-            connection,
-            $"INSERT OR IGNORE INTO reach_depth(sym, depth) SELECT sym, 0 FROM ({SeedSql(hasNodes)});",
-            command => AddLikeParam(command, pattern),
-            cancellationToken
-        );
-
-        var handoffFilter = includeHandoff ? "" : " AND ce.Kind <> 'handoff'";
-        for (var d = 0; d < maxDepth; d++)
-        {
-            var added = 0;
-            added += await ExecNonQueryAsync(
-                connection,
-                $"INSERT OR IGNORE INTO reach_depth(sym, depth) "
-                    + $"SELECT ce.{next}, {d + 1} FROM call_edges ce JOIN reach_depth r ON ce.{frontier} = r.sym WHERE r.depth = {d}{handoffFilter};",
-                null,
-                cancellationToken
-            );
-            added += await ExecNonQueryAsync(
-                connection,
-                $"INSERT OR IGNORE INTO reach_depth(sym, depth) "
-                    + $"SELECT de.{next}, {d + 1} FROM dispatch_edges de JOIN reach_depth r ON de.{frontier} = r.sym WHERE r.depth = {d};",
-                null,
-                cancellationToken
-            );
-            if (added == 0)
-            {
-                break; // frontier exhausted before the depth cap — the whole closure is enumerated
-            }
-        }
+        await BuildReachDepthAsync(connection, pattern, direction, maxDepth, includeHandoff, cancellationToken);
 
         await ReadAsync(
             connection,
@@ -555,8 +505,81 @@ public static class SqlReachability
         return new FactGraphData(callEdges, implEdges.ToArray(), methodById.Values.ToArray(), baseEdges.ToArray(), minedDispatch);
     }
 
-    // Builds the temp `reach_set` table = the directional closure of all pattern-matching symbols, in
-    // a single recursive CTE seeded straight from the LIKE match (no C# round-trip for the seeds).
+    // Builds the temp `reach_depth` table = the bounded closure from the pattern-seeds over
+    // call_edges ∪ dispatch_edges in `direction`, with each node's SHORTEST hop depth. Iterative
+    // level-BFS: each level expands ONLY the current frontier (depth = d), and INSERT OR IGNORE keeps the
+    // first (shortest) depth per sym, so total work is O(closure edges).
+    //
+    // The per-level joins are written `reach_depth CROSS JOIN <edges>` deliberately: CROSS JOIN pins the
+    // join order so the tiny depth-d frontier DRIVES and the edge table is probed via its
+    // FromSym/ToSym index. A plain JOIN lets the planner reorder — and with NO statistics on the temp
+    // frontier it assumes the frontier is large and inverts into a full SCAN of the edge table on every
+    // level. (`nodes`, the seed source via SeedSql, is part of the graph UNIT — present whenever this
+    // path runs, since every caller gates on HasGraphAsync first.)
+    private static async Task BuildReachDepthAsync(
+        DbConnection connection,
+        string pattern,
+        Direction direction,
+        int maxDepth,
+        bool includeHandoff,
+        CancellationToken cancellationToken
+    )
+    {
+        var (frontier, next) = direction == Direction.Forward ? ("FromSym", "ToSym") : ("ToSym", "FromSym");
+
+        await ExecNonQueryAsync(connection, "DROP TABLE IF EXISTS reach_depth;", null, cancellationToken);
+        await ExecNonQueryAsync(
+            connection,
+            "CREATE TEMP TABLE reach_depth(sym TEXT PRIMARY KEY, depth INTEGER NOT NULL);",
+            null,
+            cancellationToken
+        );
+        await ExecNonQueryAsync(connection, "CREATE INDEX temp.ix_reach_depth_depth ON reach_depth(depth);", null, cancellationToken);
+
+        await ExecNonQueryAsync(
+            connection,
+            $"INSERT OR IGNORE INTO reach_depth(sym, depth) SELECT sym, 0 FROM ({SeedSql(hasNodes: true)});",
+            command => AddLikeParam(command, pattern),
+            cancellationToken
+        );
+
+        var handoffFilter = includeHandoff ? "" : " AND ce.Kind <> 'handoff'";
+        for (var d = 0; d < maxDepth; d++)
+        {
+            var added = 0;
+            added += await ExecNonQueryAsync(
+                connection,
+                $"INSERT OR IGNORE INTO reach_depth(sym, depth) "
+                    + $"SELECT ce.{next}, {d + 1} FROM reach_depth r CROSS JOIN call_edges ce "
+                    + $"WHERE ce.{frontier} = r.sym AND r.depth = {d}{handoffFilter};",
+                null,
+                cancellationToken
+            );
+            added += await ExecNonQueryAsync(
+                connection,
+                $"INSERT OR IGNORE INTO reach_depth(sym, depth) "
+                    + $"SELECT de.{next}, {d + 1} FROM reach_depth r CROSS JOIN dispatch_edges de "
+                    + $"WHERE de.{frontier} = r.sym AND r.depth = {d};",
+                null,
+                cancellationToken
+            );
+            if (added == 0)
+            {
+                break; // frontier exhausted before the depth cap — the whole closure is enumerated
+            }
+        }
+    }
+
+    // Builds the temp `reach_set` table = the directional closure of all pattern-matching symbols: the
+    // FULL bounded closure (uncapped, handoff-INCLUSIVE superset — the in-memory ShapeGraph/traversal
+    // re-applies sync-cut over it).
+    //
+    // It walks via the iterative level-BFS (BuildReachDepthAsync), NOT a recursive CTE. Why: a SQLite
+    // recursive CTE may reference its own table only once, so the two edge tables had to be merged into a
+    // single `edges(frontier,next)` UNION — which SQLite materialises into an AUTOMATIC COVERING INDEX over
+    // the WHOLE call_edges ∪ dispatch_edges set (a full table SCAN of 600k+ wide rows) on EVERY query,
+    // regardless of result size. That was the dominant per-query disk read (~1 GB, measured). The level-BFS
+    // instead probes IX_call_edges_FromSym per frontier, so it touches only the closure's edges.
     private static async Task BuildReachSetAsync(
         DbConnection connection,
         string pattern,
@@ -564,41 +587,11 @@ public static class SqlReachability
         CancellationToken cancellationToken
     )
     {
-        var (frontierCol, nextCol) = direction == Direction.Forward ? ("FromSym", "ToSym") : ("ToSym", "FromSym");
+        await BuildReachDepthAsync(connection, pattern, direction, maxDepth: int.MaxValue, includeHandoff: true, cancellationToken);
 
         await ExecNonQueryAsync(connection, "DROP TABLE IF EXISTS reach_set;", null, cancellationToken);
         await ExecNonQueryAsync(connection, "CREATE TEMP TABLE reach_set(sym TEXT PRIMARY KEY);", null, cancellationToken);
-
-        var like = "%" + EscapeLike(pattern) + "%";
-        await ExecNonQueryAsync(
-            connection,
-            $"""
-            INSERT OR IGNORE INTO reach_set(sym)
-            WITH RECURSIVE
-            seeds(sym) AS (
-                {EdgeEndpointSeedUnion}
-            ),
-            edges(frontier, next) AS (
-                SELECT {frontierCol}, {nextCol} FROM call_edges
-                UNION ALL
-                SELECT {frontierCol}, {nextCol} FROM dispatch_edges
-            ),
-            reach(sym) AS (
-                SELECT sym FROM seeds
-                UNION
-                SELECT edges.next FROM edges JOIN reach ON edges.frontier = reach.sym
-            )
-            SELECT sym FROM reach;
-            """,
-            command =>
-            {
-                var p = command.CreateParameter();
-                p.ParameterName = "$pat";
-                p.Value = like;
-                command.Parameters.Add(p);
-            },
-            cancellationToken
-        );
+        await ExecNonQueryAsync(connection, "INSERT OR IGNORE INTO reach_set(sym) SELECT sym FROM reach_depth;", null, cancellationToken);
 
         // Give the planner statistics for the freshly-filled TEMP table. Without sqlite_stat1 for
         // reach_set, SQLite assumes it is large and INVERTS every `reference_facts JOIN reach_set`: it
