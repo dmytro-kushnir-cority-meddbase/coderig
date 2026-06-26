@@ -32,3 +32,4 @@ BenchmarkDotNet.Artifacts/
 # rig index artifacts (generated)
 relevant-projects.json
 trace-*.txt
+*.pyc
