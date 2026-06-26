@@ -13,31 +13,65 @@ namespace Rig.Storage.Queries;
 // is why ColumnExists probes PRAGMA table_info rather than relying on DDL guards.
 internal static class StorageProbes
 {
+    // Named connection tuning profiles — the single registry of which PRAGMAs a freshly-opened connection
+    // gets. SQLite defaults (mmap_size=0, 2 MB page cache) make every cold scan a syscall-per-page read; the
+    // profiles below trade memory for that. Profile choice is connection-scoped (applied once, on first
+    // open), and best-effort: a PRAGMA that doesn't take just leaves the default. Measured on the MedDBase
+    // store: capping mmap/cache (BoundedRead) ~halves peak RAM (1.9 GB → ~1.0 GB) for ~7% slower load,
+    // because rig loads tables once into managed objects — the big mmap was resident RAM with little
+    // latency payoff for a one-shot query. It pays off only when ONE connection serves MANY queries.
+    internal enum Profile
+    {
+        // One-shot CLI reads (reaches/tree/path/callers/derive/impact/symbols/refs). Caps mmap+cache to
+        // bound peak RAM; the loser is ~7% on a single query, which one-shot reads don't care about.
+        BoundedRead,
+
+        // Retained-page reads + fact-save writes: big mmap + cache. Worth the RAM only where pages are
+        // re-read across the connection's life (a future warm/shared read; bulk fact INSERTs in `index`).
+        Speed,
+
+        // The `index` / `rig graph` build set: Speed + synchronous=OFF. Index RAM is dominated by Roslyn
+        // extraction anyway, so it is NOT bounded — it keeps the throughput profile. (Owned here so the
+        // pragma set is named in one place; GraphMaterializer selects it instead of inlining the string.)
+        Index,
+    }
+
+    internal static string PragmaSqlFor(Profile profile) =>
+        profile switch
+        {
+            Profile.BoundedRead => "PRAGMA mmap_size=268435456; PRAGMA cache_size=-131072; PRAGMA temp_store=MEMORY;",
+            Profile.Speed => "PRAGMA mmap_size=1073741824; PRAGMA cache_size=-262144; PRAGMA temp_store=MEMORY;",
+            Profile.Index => "PRAGMA mmap_size=1073741824; PRAGMA cache_size=-262144; PRAGMA temp_store=MEMORY; PRAGMA synchronous=OFF;",
+            _ => throw new ArgumentOutOfRangeException(nameof(profile), profile, message: null),
+        };
+
     // The EF-managed connection, opened if the caller hasn't opened it yet (raw-ADO query paths need an
-    // open connection; FTS5 / PRAGMA / recursive-CTE SQL isn't expressible in EF LINQ).
-    public static async Task<DbConnection> OpenConnectionAsync(RigDbContext context, CancellationToken cancellationToken)
+    // open connection; FTS5 / PRAGMA / recursive-CTE SQL isn't expressible in EF LINQ). The default profile
+    // is BoundedRead — the common caller is a one-shot read; the few writers (Writes.cs fact-save) pass
+    // Speed explicitly. The profile is applied ONLY on the open this call performs (first-open-wins), so
+    // the first opener of a connection chooses its tuning for the connection's life.
+    public static async Task<DbConnection> OpenConnectionAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken,
+        Profile profile = Profile.BoundedRead
+    )
     {
         var connection = context.Database.GetDbConnection();
         if (connection.State != ConnectionState.Open)
         {
             await connection.OpenAsync(cancellationToken);
-            await ApplyReadPragmasAsync(connection, cancellationToken);
+            await ApplyPragmasAsync(connection, profile, cancellationToken);
         }
 
         return connection;
     }
 
-    // Tune the freshly-opened connection for the whole-store / bounded scans the query paths run against a
-    // multi-GB store. Defaults (mmap_size=0, 2 MB page cache) make every cold scan a syscall-per-page read.
-    // memory-mapped IO turns page faults into mapped reads, a bigger cache holds the hot b-tree pages, and
-    // an in-memory temp store keeps reach_set/reach_depth (and their ANALYZE stats) in RAM. All are
-    // connection-local, read-only-safe, and best-effort: a PRAGMA that doesn't take just leaves the default.
-    private static async Task ApplyReadPragmasAsync(DbConnection connection, CancellationToken cancellationToken)
+    private static async Task ApplyPragmasAsync(DbConnection connection, Profile profile, CancellationToken cancellationToken)
     {
         try
         {
             await using var command = connection.CreateCommand();
-            command.CommandText = "PRAGMA mmap_size=1073741824; PRAGMA cache_size=-262144; PRAGMA temp_store=MEMORY;";
+            command.CommandText = PragmaSqlFor(profile);
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
         catch (DbException)

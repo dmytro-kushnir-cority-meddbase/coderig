@@ -172,8 +172,10 @@ public static class GraphMaterializer
         try
         {
             await using var command = connection.CreateCommand();
-            command.CommandText =
-                "PRAGMA mmap_size=1073741824; PRAGMA cache_size=-262144; PRAGMA temp_store=MEMORY; PRAGMA synchronous=OFF;";
+            // The `index` / `rig graph` build profile — kept at full throughput (index RAM is dominated by
+            // Roslyn, not SQLite, so it is deliberately not bounded). Named in StorageProbes so the pragma
+            // set lives in one place.
+            command.CommandText = StorageProbes.PragmaSqlFor(StorageProbes.Profile.Index);
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
         catch (DbException)
