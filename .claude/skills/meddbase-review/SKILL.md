@@ -101,6 +101,13 @@ migration into a **cert-gated cached store** (in MedDBase, cached stores check a
   the migration "ran" but read/wrote nothing — a *silent functional break* with no error a diff-local reviewer
   sees. The migration adds permission on the *user* side; check the migration's *own runner* has it on the *new*
   side.
+  - **Pure SQL / DB-layer migration (no C# entry point):** there is no application cert/profile on the migration
+    side — it writes columns *beneath* the cert layer — so the runner-cert half is **N/A**. The question shifts
+    to **deploy ordering**: the backfill must complete *before any reader serves traffic*, and there must be **no
+    dual-read window** (a reader hitting the new store before backfill reads empty). Confirm the script's deploy
+    gate (pre-traffic / planned-downtime) and that no reader keeps a fallback to the old store. (rig confirms the
+    *readers* hit only the new store — `reaches <reader>` shows zero `object_store`/old-blob effects — but
+    backfill-before-read is a deploy fact, not a graph fact.)
 rig grounds *which* EPs reach the cert-gated access and *that* it carries a `permission:assert`; whether a given
 runner's **identity satisfies** the cert is the `[LLM]`/human call rig can't resolve. Parameterize on the actual
 `<CachedEntity.access>` and `<Permission/cert>` for the change under review.
