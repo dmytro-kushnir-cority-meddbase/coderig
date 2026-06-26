@@ -26,13 +26,15 @@ disk and then barely computes.
 
 ## The levers (ordered — stateless first, stateful last)
 The cost is **reading + materializing 1.5 GB per process**. Order of attack, cheapest-state first:
-1. **Graph-time materialization** ([dispatch-precision-substrate.md](dispatch-precision-substrate.md)) —
-   bakes the narrowed graph so each cold load reads *less* (smaller `call_edges`, no query-time
-   monomorphization). Cuts the 1.5 GB while `rig` stays a **stateless CLI**. Build this first; it also shrinks
-   whatever a daemon would later hold.
-2. **Lazy / partial load** — a reverse query from one symbol needs only its reverse-reachable cone, not the
-   whole 1.5 GB. If the on-disk layout supported pulling just the touched partition, cold load drops with
-   **zero resident state**. More storage-layer work; still stateless.
+1. **Narrow before the heavy load — two-pass query** ([dispatch-precision-substrate.md](dispatch-precision-substrate.md),
+   §2, updated by the 2026-06-26 spike). The 1.5 GB is the dispatch-fan-inflated closure (157 → 41,626 nodes
+   via 10k dispatch edges); monomorphization prunes it to ~hundreds but only *after* the load. Load graph
+   structure → narrow → load effect-inputs bounded to the *narrowed* set. Cuts the dominant `reference_facts`
+   read ~200×, **no schema change**, `rig` stays a stateless CLI. Build/measure this first.
+   (The earlier "bake `Materialize` into `call_edges`" idea was KILLED by the spike — it's additive and leaves
+   the dispatch fan the CTE walks untouched.)
+2. **Bake receiver-narrowed dispatch at graph time** — shrinks the CTE closure itself (biggest cut) but is
+   context-sensitive dispatch persistence: hard, blow-up risk, schema bump. Only if two-pass underdelivers.
 3. **Warm in-memory graph across queries (this card)** — *only if* 1+2 don't get the cold load low enough for
    the genuine repeated/agent workflow (the hazard map; an agent firing many `callers`/`reaches`). Front-end
    is an **MCP server** holding a store-keyed warm graph as tools — matches "LLM composes rig"; a `batch`

@@ -34,30 +34,46 @@ end-state, item 2). The `rig dispatch-fans` "676 hubs / 61 actionable" looked li
 ⇒ **No precision-rule worklist.** The substrate's precision is done: shipped monomorphization + sound
 disclosure (cuts) cover it. The single open substrate item is graph-time materialization (item 2, perf).
 
-## 2. Graph-time materialization (perf / the end-state — the only open item)
-Monomorphization currently runs IN-MEMORY at query time (`ShapeGraph`), not baked into persisted `call_edges`.
-Bake it at `rig graph` time (`GenericInstantiationInventory` + `GenericMonomorphizer` in
-`GraphMaterializer.BuildAsync`, persist `~mono` nodes/edges) so the CTE walks an already-narrowed graph
-(smaller bounded pull; query-time inventory/materialize disappears; reverse over the baked graph ≡ forward by
-construction). Bumps `SchemaVersion.Graph`. Perf lever, not a correctness gap.
+## 2. The per-query load — what it ACTUALLY is (calibration spike, 2026-06-26)
 
-**Cheap to adopt — the migration is `rig graph` (~15s), NOT a re-index.** `rig graph` is a standalone command
-(`IndexCommands.cs`) that rebuilds the derived `call_edges`/`dispatch_edges` views from the **immutable indexed
-facts** — no Roslyn, no rescan, idempotent — and already bakes factory/redirect/delivery rules. Monomorphization
-becomes one more graph-time resolver alongside those. So the source of truth (the facts from `rig index`) never
-changes, the slow Roslyn pass is untouched, and "re-do the policy" if monomorphization changes = re-run `rig
-graph` (~15s), not re-index. The only real cost is the schema bump + the persisted `~mono` ids round-tripping
-through `MonomorphCollapse` byte-identically to today's in-memory `ShapeGraph` result — a correctness bar the
-existing `GenericMonomorphizer*Tests`/`MonomorphizeShapeGraphTests` already pin, not a migration-time cost.
+**The original plan in this slot — "bake `GenericMonomorphizer.Materialize` into `call_edges` at `rig graph`
+time" — is KILLED by the spike. It does not fix the load.** Measured on the MedDBase store
+(`ContactEntity.Delete`, a typical symbol with a 3-effect answer):
 
-**Reranked by measurement (2026-06-26):** `--time` showed a reverse query is **100% graph LOAD, disk-IO bound
-(1.5 GB read/query, cpu:self 4%)** — see [warm-graph-across-queries.md](warm-graph-across-queries.md). This is
-the **FIRST** perf lever to build: it cuts the cold-load cost while keeping `rig` a **stateless CLI**, and
-shrinks whatever a warm-graph daemon would later have to hold resident. The warm-graph/MCP path (stateful,
-~1.7 GB-per-store-forever, owns invalidation) is the second lever — pull it only if materialization + lazy
-load don't get cold load low enough for the agent-batch workflow.
+| measure | count |
+|---|---|
+| forward closure, `call_edges` only | 157 |
+| forward closure, `call ∪ dispatch` | **41,626** (265× explosion) |
+| `dispatch_edges` rows (whole store) | 10,261 |
+| `call_edges` rows (whole store) | 613,924 |
+| `call_edges` pulled in the 41k closure | 102,725 |
+| `reference_facts` (effect-inputs) pulled in the 41k closure | **381,318** |
 
-_(Single static SQL connection was considered and dropped — ❌ WON'T DO, see done/monomorphization-rework.md.)_
+**Finding:** the constant ~1.5 GB / ~6 s per query is the **dispatch-fan-inflated bounded closure**. Just 10k
+`dispatch_edges` blow the closure up 265× (157 → 41,626); the bounded CTE then pulls ~102k call edges + ~381k
+`reference_facts` rows for that inflated set. Monomorphization narrows the 41k back toward low hundreds (code's
+own example: `DebtorOverride.SaveIncludedServices` 7861 → 175) — but **in memory, AFTER the heavy load**. We pay
+disk for ~40k nodes that are then pruned.
+
+**Why the bake fails:** `GenericMonomorphizer.Materialize` *clones* generic instantiations into `~mono`
+`call_edges` (additive — base methods kept for soundness) and narrows via in-memory `NarrowByReceiver` over
+`dispatch_edges`. The CTE walks `call_edges ∪ dispatch_edges`; baking `~mono` call edges leaves the dispatch fan
+that inflates the closure **untouched**. As specified it would *grow* the store and *not* cut the load. ❌
+
+**The real lever (no schema change): narrow BEFORE the heavy load — two-pass query.** Reachability needs only
+graph structure (`call_edges` + `dispatch` + mono bindings, the cheaper part); the 381k `reference_facts`
+effect-inputs are only needed for the *reached* methods. Today both load together, bounded to the un-narrowed
+41k. Split it: (1) load graph structure, run `ShapeGraph` + traversal → narrowed reachable set (~hundreds);
+(2) load effect-inputs bounded to the *narrowed* set. Cuts the dominant `reference_facts` read ~200×, purely
+query-side (reorder in `LoadEffectReachInputsAsync`/`SqlReachability`). **← prototype + measure this first.**
+
+**Heavy alternative (only if two-pass underdelivers): bake receiver-narrowed dispatch at graph time** so the CTE
+closure itself is ~157, not 41k (cuts BOTH the call_edges and reference_facts reads). But that is
+context-sensitive dispatch persistence — hard, real `dispatch_edges` blow-up risk, schema bump. Not the
+moving-`Materialize` change originally written here.
+
+_(Single static SQL connection was considered and dropped — ❌ WON'T DO, see done/monomorphization-rework.md.
+`rig graph` is still a cheap ~15s re-graph over immutable facts — relevant if the heavy alternative is ever built.)_
 
 ## Hard constraints
 - **Unresolved generic → CHA cone, NEVER dead** (soundness; disclose, don't drop).
