@@ -72,9 +72,21 @@ Full list + issue refs in `meddbase-analysis/docs/reviewer-pitfalls.md`. The rec
 | Does THIS entry point reach a hazard? | `rig tree <EP> --view hazards` (cache_coherence/race_window/dual_write/…) |
 | Did my "behavior-preserving" refactor change effects? | `rig impact --base <pre-commit> --expect-no-effect-change` |
 | Who reaches this write WITHOUT the guard? | `rig callers <write> --entrypoints` → for each, `rig reaches <EP> --only permission` (or effects-diff vs a known-guarded EP) |
+| **Find the UI sibling of a new EAPI/endpoint write** (for the parity diff) | `rig callers <core-write-or-engine> --entrypoints` → pick the UI-kind EP driving the same write. **The sibling is often a SHARED ENGINE** (a wizard / service like `WizardBase.Book`), not a sibling endpoint — both the EAPI and UI bottom out in it. |
+| **Did THIS endpoint's own guard/write set change across an in-place refactor?** (parity for a re-platformed endpoint) | `rig impact --base <pre> --head <post> --format tsv \| grep <EP>` → read `ep_effect_added`/`ep_effect_removed`: a removed `permission:assert` = a dropped guard, a removed `llblgen:*` = a dropped write. (This is the parity check when ONE endpoint is refactored in place — `effects-diff` is for two DISTINCT endpoints.) |
 
 The `@parity` preset = `--only permission --only llblgen:write --only llblgen:bulk_write --only llblgen:delete
 --only audit` (the guard+durable-write+audit subset — the actionable ~25 rows, not the 318-row everything diff).
+**Reading a parity diff when both EPs share a deep engine** (EAPI + UI both route through `wizard.Book`): read
+the **`permission:assert` rows FIRST** — they're the real parity signal. The `llblgen:*` `A-only`/`B-only` rows
+are mostly each caller's *surrounding* surface (the UI's consultation writes, the EAPI's object-holder writes),
+not a gap. **A missing GUARD is the finding; a missing WRITE usually isn't.**
+
+Worked exemplar (parity / re-platformed endpoint): **MR !10314** (EAPI appointment amendment/item endpoints) —
+the new EAPI endpoints route through the same `WizardBase.Book` engine as the UI booking wizard, so the parity
+check was `reaches <eapi> --only permission` vs the UI sibling (EAPI asserted the SAME guards — not under-guarded)
+plus `impact --format tsv | grep <ep>` for the in-place re-platform delta (it dropped a whole-set reconciliation
+that was silently cancelling rights-invisible services — a *fix*, surfaced by `ep_effect_removed`).
 
 **Index the MR branch fresh — PREFERRED for any migration / new-reader change.** The store usually holds `main`,
 not the branch, so the change's *new* sinks/readers aren't queryable. **For a migration review, index the branch
@@ -89,6 +101,13 @@ reachability + EP classification of the *consumers* (the call sites *above* the 
 unchanged), and confirm the new sink wiring from **branch source** (`git show <branch-sha>:<path>`). **Disclose
 the blind spot:** this cannot see EPs/readers the branch newly introduces — so "all readers guarded" is only
 verified for readers that already existed on `main`. Re-index to be sure.
+
+**Mismatched base/head stores poison the GLOBAL impact diff — trust the per-EP rows.** If base and head were
+indexed with different project closures (or one is `+dirty`), `rig impact`'s top-line entry-point `+N/-M` list is
+**scope noise** (e.g. `-579 actors` that are just projects outside one store's closure, not the MR). Trust only
+the `ep_effect_added`/`ep_effect_removed` rows for the EPs the diff actually touches (those EPs are identically
+scoped in both stores), or re-index the base into a clean matching-closure store. Index head with a detached
+`git worktree` so the primary checkout is never disturbed.
 
 ### Migration guard-gap — BIDIRECTIONAL (a refactor is a guard-gap factory)
 Worked exemplar: **MR !10645** (object-store → cached-entity migration + permission safeguard). A storage/access
