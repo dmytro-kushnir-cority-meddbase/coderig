@@ -102,6 +102,11 @@ internal static class SolutionSourceLoader
 
         ReportProgress(progress, $"Loaded {csharpProjects.Length} C# project(s) to index");
 
+        // Empty closure guard: a `--from <csproj>` whose entry-closure resolves to 0 buildable C# projects
+        // (or whose only projects are excluded) would otherwise crash at `csharpProjects[0]` below with an
+        // unhandled IndexOutOfRangeException. Fail cleanly instead.
+        EnsureIndexableProjects(csharpProjects.Length);
+
         // ONE per-project pass: compile, collect error diagnostics, and read the project's sources
         // against that SAME compilation — held alive (GC.KeepAlive) for the whole task so Roslyn's
         // bounded compilation cache can't evict it between the diagnostics bind and the per-document
@@ -656,6 +661,22 @@ internal static class SolutionSourceLoader
                 + $"Σ getCompilation {compile:0.0}s / Σ diagnostics {diag:0.0}s / Σ read {read:0.0}s"
         );
         progress($"  slowest getCompilation: {slowest}");
+    }
+
+    // Empty-closure guard (extracted from LoadAsync so it is unit-testable without a real workspace): a
+    // `--from <csproj>` whose entry-closure resolves to 0 buildable C# projects — or whose only projects are
+    // excluded (tests / IsExcludedProject) — must fail cleanly rather than crash at `csharpProjects[0]` with an
+    // unhandled IndexOutOfRangeException. IndexCommands catches this InvalidOperationException and renders a
+    // "Failed to load" diagnostic with a non-zero exit.
+    internal static void EnsureIndexableProjects(int csharpProjectCount)
+    {
+        if (csharpProjectCount == 0)
+        {
+            throw new InvalidOperationException(
+                "Nothing to index: the entry closure resolved to 0 buildable C# projects (after project excludes). "
+                    + "Check the target/--from path and that its reference closure includes at least one C# project."
+            );
+        }
     }
 
     // A project is a test project by name convention (matches the CLI's --from closure heuristic):
