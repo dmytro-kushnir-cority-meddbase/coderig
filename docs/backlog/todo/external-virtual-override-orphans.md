@@ -86,6 +86,27 @@ fan-out); existing dispatch carries it the rest of the way.
    engine must already understand). Playbook skill first (`SKILL.md` + the mining query); promote to a
    `rig suggest-rules` native command only if it earns repeated use. Generalizes later to mine other families
    (candidate effects, `handoffDispatchers`). This is "detectors are data, mined from the codebase."
+
+   **✅ VALIDATED on the MedDBase store (2026-06-26 probe) — mechanically discoverable, ZERO new extraction.**
+   The mining query is [docs/queries/external-virtual-override-seam-mining.sql](../../queries/external-virtual-override-seam-mining.sql).
+   - **Critical heuristic correction (build to THIS, not the prose above):** the scan MUST be
+     **receiver-type-scoped**, not target-level same-NAME matching. Naive name-match both floods with FPs
+     (unrelated types sharing a name: `PredicateExpression.Add`⨝`HL7Component.Add` 6316, `List.Add`,
+     `Option.Match`…) AND **wrongly excludes the real Save/Delete seams**. The seam fires iff the call site's
+     receiver type (or an ancestor up its base chain) overrides the called simple name with a DIFFERENT
+     signature and NO override on that chain has the SAME signature. That **overload-mismatch (`same_sig=0`)
+     test is the true/benign separator** and dissolves the `ToString`/`GetHashCode`/`OnSave` false hits without
+     a separate effect filter (they're all same-signature). Needs `reference_facts(TargetInSource, ReceiverType)`
+     ⨝ `dispatch_facts(Kind='override')` ⨝ `type_relation_facts(RelationKind='base')` ⨝ `symbol_facts` — all present.
+   - **Results:** reproduces the 2 shipped rules as the top candidates (`EntityBase.Save` 322 recv-types,
+     `.Delete` 162) AND surfaces uncovered ones: `EntityBase.Save(bool)` (8), `ModelInfoProviderBase.GetEntityFieldCoreArray` (7),
+     and a genuine **non-LLBLGen** candidate — `DataContext.SubmitChanges(IMeasureProvider)` →
+     `DbDataContext.SubmitChanges(ConflictMode,IMeasureProvider)` (LINQ-to-SQL; `Db.cs:124`, carries an
+     `OnChangesSubmitted()` post-commit effect — verified in source).
+   - **Already half-surfaced:** `rig dispatch-fans --cause external-or-unbound` ranks the same hubs (Save #1,
+     Delete #2 as "actionable") — the skill consumes that + the overload-mismatch SQL to propose the `redirectTo`.
+   - **Residual FN (~4%):** external invocations with NULL `ReceiverType` (fluent/chained receivers) are invisible
+     to receiver-scoping; recover via the dispatch graph, not `reference_facts` alone.
 2. **Analyze which external assemblies to decompile for white-box rule extraction.** Investigate the decompile
    route as an *offline rule-GENERATION aid* (not a runtime subsystem): IL-read the external trampolines
    (LLBLGen `ORMSupportClasses`, LanguageExt, Echo, `System.Web`/SignalR lifecycle) to auto-discover
