@@ -69,6 +69,19 @@ internal static class QueryCacheKeys
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 
+    // The cache key for the WHOLE-STORE GRAPH-TIER hazard findings (cache_coherence + event_cycle +
+    // static_init_capture). Like the effect set above these are EP-INDEPENDENT, whole-store facts — a property
+    // of the SHAPED call graph (forward-closure correlation + cycle detection) + the static-field universe, not
+    // a function of which entry point reaches them. So `derive` and `tree --hazards` share ONE entry: derive
+    // once over the shaped graph (the cost we must NOT pay per-EP), reuse everywhere. A reindex shifts storeKey
+    // (miss); a changed rule shifts rulesHash (miss). DISTINCT namespace (`graphhaz`) from HazardEffectsCacheKey
+    // so the effect-attached set and the graph-tier set never collide. `v1` is the payload-schema version.
+    internal static string GraphHazardFindingsCacheKey(string storeKey, string rulesHash)
+    {
+        var material = $"graphhaz|v1|{storeKey}|{rulesHash}";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+    }
+
     // The cache key for a `rig impact` two-store diff artifact: the artifact is a pure function of the TWO
     // immutable per-commit stores (each addressed by its own StoreKey = rig.db size+mtime), the effective
     // rule fingerprint, and the traversal mode (sync-cut vs async-handoff — it changes the reach footprint).

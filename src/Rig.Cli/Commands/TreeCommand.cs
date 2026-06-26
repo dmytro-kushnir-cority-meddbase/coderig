@@ -389,7 +389,23 @@ internal static class TreeCommand
                 useCache: !opts.NoCache
             );
             effects = hazardEffects.Where(e => e.EnclosingSymbolId is not null && treeMethods.Contains(e.EnclosingSymbolId)).ToList();
-            hazardFindings = DeriveCommand.HazardFindings(effects).Where(f => treeMethods.Contains(f.Enclosing)).ToList();
+            // The effect-attached pattern hazards (race_window/lazy_init_race/dual_write/n_plus_1/…), one
+            // finding per qualifying effect, filtered to the tree's methods.
+            var effectAttachedFindings = DeriveCommand.HazardFindings(effects).Where(f => treeMethods.Contains(f.Enclosing));
+            // The GRAPH-TIER hazards (cache_coherence/event_cycle/static_init_capture) — whole-store findings
+            // that are NOT effect-attached, so HazardFindings(effects) above never carries them. Loaded from the
+            // SAME store+rules-keyed cache `derive` populates (a warm tree is a cache hit — NO graph load), then
+            // filtered to the tree's reachable methods exactly as the effect-attached set is. Appended so they
+            // get BOTH the inline ⚠ mark (via hazardsByMethod below) AND the tsv `hazard` rows.
+            var graphHazardFindings = await LoadOrDeriveGraphHazardFindingsAsync(
+                context: context,
+                rigDirectory: rigDir,
+                storeKey: storeKey,
+                rulesHash: rulesHash,
+                rules: rules,
+                useCache: !opts.NoCache
+            );
+            hazardFindings = effectAttachedFindings.Concat(graphHazardFindings.Where(f => treeMethods.Contains(f.Enclosing))).ToList();
             // --exclude-namespace: drop hazard findings whose enclosing DocID namespace starts with any of the
             // given prefixes. Applied to both the summary section (WriteHazards) and the tsv `hazard` rows.
             if (opts.ExcludeNamespaces.Count > 0)

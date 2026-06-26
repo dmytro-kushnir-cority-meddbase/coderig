@@ -161,62 +161,32 @@ internal static class DeriveCommand
         var unfilteredEffects = effects;
         effects = ApplyEffectFilters(effects: effects, only: opts.Only, exclude: opts.Exclude); // --only / --exclude (e.g. --exclude throw)
 
-        // --- event_cycle (the GRAPH-tier hazard): a feedback cycle that closes through ≥1 publish→consumer
-        //     DELIVERY edge (event raise / actor tell). Unlike every other hazard it is NOT an effect-attached
-        //     observation, so it is derived here over the delivery-edge-bearing graph and added as a SECOND
-        //     hazard source — NOT folded into HazardFindings(effects), which is pure-over-effects and shared
-        //     with impact. The graph is built IN-MEMORY via LoadShapedGraphAsync (handoff-classified load →
-        //     ShapeGraph → MarkEventSubscriptionHandoffs → AddDeliveryEdges) so the cycles it finds are
-        //     exactly the cycles the materialized call_edges carry. ---
-        var cycleFindings = EventCycleFindings(FactCycleDeriver.DeriveEventCycles(shapedGraph));
+        // --- The GRAPH-TIER hazard sources (event_cycle + cache_coherence + static_init_capture): the three
+        //     hazards that are NOT effect-attached observations — each is a property of the SHAPED call graph
+        //     (event_cycle's delivery-edge cycle detection, cache_coherence's forward-closure correlation) or
+        //     the static-field universe, so they are derived OVER the graph, not folded into
+        //     HazardFindings(effects). Extracted into LoadOrDeriveGraphHazardFindingsAsync so `tree --hazards`
+        //     shares the SAME derivation (and the same store+rules-keyed cache) — derive once, reuse per EP.
+        //     The shapedGraph + unfilteredEffects this command already holds are threaded through so the
+        //     cache-miss path neither reloads the graph nor recomputes the effects. The union ORDER (event_cycle,
+        //     cache_coherence, static_init_capture) and the opt-in gates are preserved inside the helper, so
+        //     derive's output is byte-identical. cache_coherence sees the PRE-`--only/--exclude` effects. ---
+        var graphHazardFindings = await LoadOrDeriveGraphHazardFindingsAsync(
+            context: context,
+            rigDirectory: rigDir,
+            storeKey: storeKey,
+            rulesHash: rulesHash,
+            rules: rules,
+            useCache: true,
+            shapedGraph: shapedGraph,
+            unfilteredEffects: unfilteredEffects
+        );
 
-        // --- cache_coherence (FR-7): the cache-specific INSTANCE of the GENERIC effect-correlation deriver. An
-        //     ANCHOR effect (llblgen:bulk_write to a collection of a cached entity) whose forward closure lacks a
-        //     same-key COMPANION (cache:invalidate of that entity) is flagged. Like event_cycle it is a property of
-        //     the call graph (NOT effect-attached), derived here and added as a hazard source. Opt-in: only when the
-        //     `cacheCoherence` rule section is present. The provider:op names + normalize suffixes below are the
-        //     LLBLGen-shaped instance definition — hardcoded here with the intent that they move to rule data once
-        //     a correlation DSL lands; only the POLICY (cached entities + the noise filter) is rule data today. ---
-        var cacheCoherenceFindings = rules.CacheCoherence is { } cc
-            ? CacheCoherenceFindings(
-                FactCorrelationDeriver.Derive(
-                    graph: shapedGraph,
-                    effects: unfilteredEffects,
-                    spec: new CorrelationSpec(
-                        Anchor: new EffectPredicate(Provider: "llblgen", Operation: "bulk_write"),
-                        Companion: new EffectPredicate(Provider: "cache", Operation: "invalidate"),
-                        AnchorNormalize: new NormalizeSpec(SimpleTypeName: true, StripSuffix: ["EntityCollection", "Collection", "DAO"]),
-                        CompanionNormalize: new NormalizeSpec(SimpleTypeName: true, StripSuffix: ["Cache"]),
-                        ExcludeEnclosingNamespaceSuffix: cc.ExcludeEnclosingNamespaceSuffix ?? ["CollectionClasses", "DaoClasses"],
-                        InScopeKeys: BuildCacheInScopeKeys(cachedEntities: cc.CachedEntities, effects: unfilteredEffects)
-                    )
-                )
-            )
-            : [];
-
-        // --- static_init_capture: a config / Settings.* / feature-flag READ frozen in a STATIC field
-        //     INITIALIZER (evaluated once at CLR type-init, never re-read — "wrong until app restart"). Like
-        //     cache_coherence it is NOT effect-attached: derived here over the (unfiltered) effects + the
-        //     static-field universe and added as a hazard source. Opt-in: only when the `staticInitCapture`
-        //     rule section is present. The static-ness join is sourced from symbol_facts.Modifiers via
-        //     LoadStaticFieldIdsAsync; the deriver stays pure (the set is handed in). The mutable-source
-        //     patterns are POLICY (rule data), so the deriver hardcodes nothing. ---
-        var staticInitCaptureFindings = rules.StaticInitCapture is { } sic
-            ? StaticInitCaptureFindings(
-                FactStaticInitCaptureDeriver.Derive(
-                    effects: unfilteredEffects,
-                    spec: new StaticInitCaptureSpec(MutableSourcePatterns: sic.MutableSources),
-                    staticFieldIds: await Reads.LoadStaticFieldIdsAsync(context)
-                )
-            )
-            : [];
-
-        // Both hazard sources unioned: the over-effects pattern findings + the graph-tier event_cycle findings.
-        // Fed to BOTH the tsv `hazard` emission AND the rendered Hazards section so neither view misses a source.
+        // Both hazard sources unioned: the over-effects pattern findings + the graph-tier findings (event_cycle,
+        // cache_coherence, static_init_capture, in that order). Fed to BOTH the tsv `hazard` emission AND the
+        // rendered Hazards section so neither view misses a source.
         var allHazards = new List<HazardFinding>(HazardFindings(effects));
-        allHazards.AddRange(cycleFindings);
-        allHazards.AddRange(cacheCoherenceFindings);
-        allHazards.AddRange(staticInitCaptureFindings);
+        allHazards.AddRange(graphHazardFindings);
 
         // --exclude-namespace: drop hazard findings whose enclosing DocID namespace starts with any of the
         // given prefixes (case-insensitive). Applied BEFORE both tsv and human output for consistency.

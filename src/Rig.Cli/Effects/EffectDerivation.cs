@@ -1,3 +1,5 @@
+using Rig.Cli.Caching;
+using Rig.Cli.Commands;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
@@ -127,6 +129,118 @@ internal static class EffectDerivation
         if (key is not null)
         {
             TryCache(() => cache!.Put(key, HazardEffectsCodec.Encode(derived)));
+        }
+
+        return derived;
+    }
+
+    // The WHOLE-STORE GRAPH-TIER hazard findings: cache_coherence + event_cycle + static_init_capture — the
+    // three hazard sources that are NOT effect-attached (they have no owning DerivedEffect) and so are NOT in
+    // HazardFindings(effects). Each is a property of the SHAPED call graph (cache_coherence's forward-closure
+    // correlation, event_cycle's delivery-edge cycle detection) or the static-field universe — EP-independent,
+    // whole-store facts. Mirrors DeriveCommand's inline derivation (the union order is event_cycle,
+    // cache_coherence, static_init_capture) so derive's output is unchanged. Opt-in arms (cache_coherence /
+    // static_init_capture) fire only when their rule section is present, exactly as `derive` gates them.
+    // Uncached; the cached wrapper is LoadOrDeriveGraphHazardFindingsAsync.
+    internal static async Task<IReadOnlyList<DeriveCommand.HazardFinding>> DeriveGraphHazardFindingsAsync(
+        RigDbContext context,
+        RuleSet rules,
+        // The shaped graph (cache_coherence + event_cycle derive over it). The caller (DeriveCommand) already
+        // built it; thread it through to skip the redundant LoadShapedGraphAsync here. Null = load it ourselves.
+        FactGraphData? shapedGraph = null,
+        // The UNFILTERED whole-store effect set — cache_coherence MUST see PRE-`--only/--exclude` effects (the
+        // companion cache:invalidate effects would otherwise be hidden and manufacture false missing-invalidation
+        // findings). Null = load it ourselves (uncached). Callers that already hold it thread it through.
+        IReadOnlyList<DerivedEffect>? unfilteredEffects = null
+    )
+    {
+        shapedGraph ??= await Reads.LoadShapedGraphAsync(context: context, rules: rules);
+        // The effect set is loaded UNCACHED here when not supplied — this method is the cache-miss derive path,
+        // and the caller-supplied set (DeriveCommand / the cached effect wrapper) is the warm reuse.
+        unfilteredEffects ??= await DeriveHazardEffectsAsync(context, rules);
+
+        var findings = new List<DeriveCommand.HazardFinding>();
+
+        // event_cycle: a feedback cycle that closes through ≥1 publish→consumer delivery edge. Always derived
+        // (no rule gate) — exactly as DeriveCommand does.
+        findings.AddRange(DeriveCommand.EventCycleFindings(FactCycleDeriver.DeriveEventCycles(shapedGraph)));
+
+        // cache_coherence (FR-7): an anchor bulk_write whose forward closure lacks a same-key cache:invalidate.
+        // Opt-in: only when the `cacheCoherence` rule section is present. Spec replicated from DeriveCommand.
+        if (rules.CacheCoherence is { } cc)
+        {
+            findings.AddRange(
+                DeriveCommand.CacheCoherenceFindings(
+                    FactCorrelationDeriver.Derive(
+                        graph: shapedGraph,
+                        effects: unfilteredEffects,
+                        spec: new CorrelationSpec(
+                            Anchor: new EffectPredicate(Provider: "llblgen", Operation: "bulk_write"),
+                            Companion: new EffectPredicate(Provider: "cache", Operation: "invalidate"),
+                            AnchorNormalize: new NormalizeSpec(
+                                SimpleTypeName: true,
+                                StripSuffix: ["EntityCollection", "Collection", "DAO"]
+                            ),
+                            CompanionNormalize: new NormalizeSpec(SimpleTypeName: true, StripSuffix: ["Cache"]),
+                            ExcludeEnclosingNamespaceSuffix: cc.ExcludeEnclosingNamespaceSuffix ?? ["CollectionClasses", "DaoClasses"],
+                            InScopeKeys: DeriveCommand.BuildCacheInScopeKeys(cachedEntities: cc.CachedEntities, effects: unfilteredEffects)
+                        )
+                    )
+                )
+            );
+        }
+
+        // static_init_capture: a config/Settings read frozen in a static field initializer. Opt-in: only when
+        // the `staticInitCapture` rule section is present. Spec replicated from DeriveCommand.
+        if (rules.StaticInitCapture is { } sic)
+        {
+            findings.AddRange(
+                DeriveCommand.StaticInitCaptureFindings(
+                    FactStaticInitCaptureDeriver.Derive(
+                        effects: unfilteredEffects,
+                        spec: new StaticInitCaptureSpec(MutableSourcePatterns: sic.MutableSources),
+                        staticFieldIds: await Reads.LoadStaticFieldIdsAsync(context)
+                    )
+                )
+            );
+        }
+
+        return findings;
+    }
+
+    // Cached over the .rig/cache.db query cache, keyed by (store + rules) — see GraphHazardFindingsCacheKey,
+    // a DISTINCT namespace from the effect-attached HazardEffectsCacheKey. Computed once then memoized; `derive`
+    // and `tree --hazards` share the entry, and a reindex (storeKey) or rule edit (rulesHash) misses → recompute,
+    // keeping hazards query-side. Same shape as LoadOrDeriveHazardEffectsAsync (the effect-attached twin).
+    internal static async Task<IReadOnlyList<DeriveCommand.HazardFinding>> LoadOrDeriveGraphHazardFindingsAsync(
+        RigDbContext context,
+        string rigDirectory,
+        string storeKey,
+        string rulesHash,
+        RuleSet rules,
+        bool useCache,
+        // The already-shaped graph + the unfiltered effect set, threaded into the cache-MISS derive path so it
+        // need not reload/recompute them. Unused on a cache HIT (derivation is skipped). Null = derive loads its own.
+        FactGraphData? shapedGraph = null,
+        IReadOnlyList<DerivedEffect>? unfilteredEffects = null
+    )
+    {
+        if (!useCache)
+        {
+            return await DeriveGraphHazardFindingsAsync(context, rules, shapedGraph, unfilteredEffects);
+        }
+
+        using var cache = QueryCache.Open(rigDirectory: rigDirectory, storeKey: storeKey);
+        var key = cache is null ? null : GraphHazardFindingsCacheKey(storeKey: storeKey, rulesHash: rulesHash);
+        if (key is not null && cache!.Get(key) is { } blob && GraphHazardFindingsCodec.Decode(blob) is { } hit)
+        {
+            return hit;
+        }
+
+        var derived = await DeriveGraphHazardFindingsAsync(context, rules, shapedGraph, unfilteredEffects);
+        if (key is not null)
+        {
+            TryCache(() => cache!.Put(key, GraphHazardFindingsCodec.Encode(derived)));
         }
 
         return derived;
