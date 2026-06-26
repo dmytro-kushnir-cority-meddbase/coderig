@@ -76,12 +76,19 @@ Full list + issue refs in `meddbase-analysis/docs/reviewer-pitfalls.md`. The rec
 The `@parity` preset = `--only permission --only llblgen:write --only llblgen:bulk_write --only llblgen:delete
 --only audit` (the guard+durable-write+audit subset — the actionable ~25 rows, not the 318-row everything diff).
 
-**Branch not indexed? (the common case — do NOT skip the audit).** The rig store usually holds `main`, not the
-MR branch, so the change's *new* sinks (the changed methods) aren't queryable. Query the **pre-change CONSUMER
-surface** instead: the call sites *above* the changed methods are unchanged, so rig's reachability + EP
-classification to those consumers is still valid. Then confirm the new sink wiring (which consumer now reaches
-the cert-gated access) from **branch source** — `git show <branch-sha>:<path>`. Reachability-to-consumers from
-rig + sink-wiring from branch source = the full picture without re-indexing the branch.
+**Index the MR branch fresh — PREFERRED for any migration / new-reader change.** The store usually holds `main`,
+not the branch, so the change's *new* sinks/readers aren't queryable. **For a migration review, index the branch
+first:** check it out, build, `rig index … ` into its **commit-scoped store** (`.rig/<branch-sha>/`, which sits
+*beside* `main`'s `LATEST` — non-destructive), then query *that* store. Only the fresh index sees **reach paths
+the branch ADDS** — and a migration that introduces a new reader of the cert-gated access is exactly the gap a
+`main`-only audit is blind to. (Cost: a full MedDBase index is heavy — whole monorepo + MSBuild for net48/.sqlproj
+— so it's a setup step, not free.)
+
+**Fallback (only when you can't build the branch): the pre-change CONSUMER surface.** Query `main` for
+reachability + EP classification of the *consumers* (the call sites *above* the changed methods, which are
+unchanged), and confirm the new sink wiring from **branch source** (`git show <branch-sha>:<path>`). **Disclose
+the blind spot:** this cannot see EPs/readers the branch newly introduces — so "all readers guarded" is only
+verified for readers that already existed on `main`. Re-index to be sure.
 
 ### Migration guard-gap — BIDIRECTIONAL (a refactor is a guard-gap factory)
 Worked exemplar: **MR !10645** (object-store → cached-entity migration + permission safeguard). A storage/access
@@ -108,6 +115,15 @@ cert, **profile-keyed and thread-scoped**, so the assert is satisfied even for a
 background or migration runner — which is *exactly* how a cert-gated migration safeguards its own system/queue
 path without cert-denial. **Verify the grant and the assert resolve the same `ActiveProfile`** (both inside the
 same `using`, same thread); if so the background path is covered, regardless of the runner's real rights.
+
+**But that same property is the catch — a grant is not a check.** `GrantAccess(target.cert, Right)` *satisfies*
+the assert; it does **not verify the caller holds the right**. So on USER paths the migration's "permission
+safeguard" enforces nothing on its own — its correctness rests **entirely on upstream authorization** being
+established before the read (the user is acting on that target because an earlier check let them). When a
+safeguard is grant-based, the real review question shifts up: *is every path that reaches the grant already
+caller-authorized for that target?* If yes, the grant is a scoped elevation (fine); if any path reaches it
+without prior authz, the grant silently hands out the right. rig can enumerate the reaching paths; whether each
+is pre-authorized is the `[LLM]` call.
 
 ## Don't over-flag
 ~29 of 200 in one window were **by-design / wontfix**, ~8 were **typos/copy**. By-design behavior and cosmetic
