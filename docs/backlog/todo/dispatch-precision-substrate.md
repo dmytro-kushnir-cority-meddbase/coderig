@@ -41,6 +41,15 @@ Bake it at `rig graph` time (`GenericInstantiationInventory` + `GenericMonomorph
 (smaller bounded pull; query-time inventory/materialize disappears; reverse over the baked graph ≡ forward by
 construction). Bumps `SchemaVersion.Graph`. Perf lever, not a correctness gap.
 
+**Cheap to adopt — the migration is `rig graph` (~15s), NOT a re-index.** `rig graph` is a standalone command
+(`IndexCommands.cs`) that rebuilds the derived `call_edges`/`dispatch_edges` views from the **immutable indexed
+facts** — no Roslyn, no rescan, idempotent — and already bakes factory/redirect/delivery rules. Monomorphization
+becomes one more graph-time resolver alongside those. So the source of truth (the facts from `rig index`) never
+changes, the slow Roslyn pass is untouched, and "re-do the policy" if monomorphization changes = re-run `rig
+graph` (~15s), not re-index. The only real cost is the schema bump + the persisted `~mono` ids round-tripping
+through `MonomorphCollapse` byte-identically to today's in-memory `ShapeGraph` result — a correctness bar the
+existing `GenericMonomorphizer*Tests`/`MonomorphizeShapeGraphTests` already pin, not a migration-time cost.
+
 **Reranked by measurement (2026-06-26):** `--time` showed a reverse query is **100% graph LOAD, disk-IO bound
 (1.5 GB read/query, cpu:self 4%)** — see [warm-graph-across-queries.md](warm-graph-across-queries.md). This is
 the **FIRST** perf lever to build: it cuts the cold-load cost while keeping `rig` a **stateless CLI**, and
