@@ -2,7 +2,7 @@
 
 **Shipped record + spec:** [../done/dispatch-precision-substrate-shipped.md]. The core landed (dispatch-fan
 disclosure + static monomorphization; forward ≡ reverse on the synthetic seams; the `#4460` phantom gone).
-What's left to reach the end-state and trust it at scale:
+The precision worklist is retired (below); one open item remains (graph-time materialization, perf).
 
 ## Precision worklist — RETIRED (2026-06-25, calibrated by demonstration, not assertion)
 The framing first: **forward** (`Successors`, context-carrying) is the PRECISE path; **reverse**
@@ -18,7 +18,7 @@ end-state, item 2). The `rig dispatch-fans` "676 hubs / 61 actionable" looked li
   never-executed OPEN template; no real EP reaches it un-narrowed (verified: the one real EP that hits a
   type-param hub, `PatientPortalHttpHandler` → `PostDataObject.Validate`, renders narrowed).
 - **service-locator** (`IGenericServiceProvider.ProvideService``1`, #1 by blast radius) → **❌ WON'T DO
-  (disclose-don't-resolve).** The body explodes (×113 → a 49,155-line raw tree vs 14 cut) over the BASE
+  (disclose-don't-resolve).** The body explodes (×122 IService impls → a 49,155-line raw tree vs 14 cut) over the BASE
   `IService` via reflection; the type parameter `T` only casts the RETURN — it never enters the body's
   dispatch — so monomorphization can't help and resolution would need runtime-scoped, per-provider-instance
   DI facts (the `xml_di_miner` is already rig absorbing one project's bespoke registration). This generalizes:
