@@ -42,9 +42,11 @@ Bake it at `rig graph` time (`GenericInstantiationInventory` + `GenericMonomorph
 construction). Bumps `SchemaVersion.Graph`. Perf lever, not a correctness gap.
 
 **Reranked by measurement (2026-06-26):** `--time` showed a reverse query is **100% graph LOAD, disk-IO bound
-(1.5 GB read/query, cpu:self 4%)** — see [warm-graph-across-queries.md](warm-graph-across-queries.md). So this
-item is the **second** perf lever: it shrinks the per-call load (smaller baked `call_edges`) but doesn't stop
-the per-process re-read. The larger lever is holding the graph warm across queries (that card). Do both.
+(1.5 GB read/query, cpu:self 4%)** — see [warm-graph-across-queries.md](warm-graph-across-queries.md). This is
+the **FIRST** perf lever to build: it cuts the cold-load cost while keeping `rig` a **stateless CLI**, and
+shrinks whatever a warm-graph daemon would later have to hold resident. The warm-graph/MCP path (stateful,
+~1.7 GB-per-store-forever, owns invalidation) is the second lever — pull it only if materialization + lazy
+load don't get cold load low enough for the agent-batch workflow.
 
 _(Single static SQL connection was considered and dropped — ❌ WON'T DO, see done/monomorphization-rework.md.)_
 
