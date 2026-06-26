@@ -1,7 +1,9 @@
 using System.CommandLine;
+using System.Diagnostics;
 using System.Globalization;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
+using Rig.Cli.Telemetry;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
 using static Rig.Cli.Graph.TraversalGraphLoader;
@@ -20,6 +22,7 @@ internal static class DispatchFansCommand
     {
         var rules = CommonOptions.Rules();
         var format = CommonOptions.Format();
+        var time = CommonOptions.Time();
         var store = CommonOptions.Store();
         var top = new Option<int>("--top") { Description = "Max hub rows to show (default 30).", DefaultValueFactory = _ => 30 };
         var cause = new Option<string?>("--cause")
@@ -40,6 +43,7 @@ internal static class DispatchFansCommand
         {
             rules,
             format,
+            time,
             store,
             top,
             cause,
@@ -54,7 +58,8 @@ internal static class DispatchFansCommand
                             ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                             Format: pr.GetValue(format),
                             Top: pr.GetValue(top),
-                            Cause: pr.GetValue(cause)
+                            Cause: pr.GetValue(cause),
+                            Time: pr.GetValue(time)
                         ),
                         new CommandIo(new TextOutput(output, error), new WorkspaceLocation(workingDirectory, pr.GetValue(store)))
                     )
@@ -63,25 +68,34 @@ internal static class DispatchFansCommand
         return cmd;
     }
 
-    private sealed record Options(IReadOnlyList<string> ExtraRules, string? Format, int Top, string? Cause);
+    private sealed record Options(IReadOnlyList<string> ExtraRules, string? Format, int Top, string? Cause, bool Time);
 
     private static async Task<int> RunAsync(Options opts, CommandIo io)
     {
         var tsv = CommonOptions.IsTsv(opts.Format);
         var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules);
 
+        using var timing = QueryTiming.Start(opts.Time, io.TextOutput.Error);
+
         await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation);
 
+        var graphWatch = Stopwatch.StartNew();
         // The full shaped graph (every call edge + mined dispatch facts), same load `rig derive` uses, so
         // the measured fan matches what the rest of the pipeline sees. This is a whole-graph diagnostic, not
         // a pattern-bounded traversal, so it does NOT go through LoadShapedTraversalGraphAsync.
         var graph = await Reads.LoadShapedGraphAsync(context: context, rules: rules);
+        graphWatch.Stop();
+        timing.Record("graph load", graphWatch.Elapsed);
 
+        var traversalWatch = Stopwatch.StartNew();
         var rows = FactPathFinder.DispatchFanReport(graph);
         if (opts.Cause is not null)
         {
             rows = rows.Where(r => HasCause(r, opts.Cause)).ToList();
         }
+
+        traversalWatch.Stop();
+        timing.Record("traversal", traversalWatch.Elapsed);
 
         if (rows.Count == 0)
         {
@@ -95,6 +109,7 @@ internal static class DispatchFansCommand
             return 0;
         }
 
+        var renderWatch = Stopwatch.StartNew();
         if (tsv)
         {
             // One row per hub: residualFan, incomingEdges, actionable|irreducible, cause-breakdown, hub.
@@ -113,6 +128,9 @@ internal static class DispatchFansCommand
                     )
                 );
             }
+
+            renderWatch.Stop();
+            timing.Record("render", renderWatch.Elapsed);
 
             return 0;
         }
@@ -147,6 +165,9 @@ internal static class DispatchFansCommand
         {
             io.TextOutput.Output.WriteLine($"  … +{rows.Count - opts.Top} more hub(s) (raise --top, or --format tsv for all)");
         }
+
+        renderWatch.Stop();
+        timing.Record("render", renderWatch.Elapsed);
 
         return 0;
     }

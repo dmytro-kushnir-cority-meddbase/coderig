@@ -1,7 +1,9 @@
 using System.CommandLine;
+using System.Diagnostics;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
+using Rig.Cli.Telemetry;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
 using static Rig.Cli.Effects.EffectDerivation;
@@ -29,6 +31,7 @@ internal static class ReachesCommand
         var only = CommonOptions.Only();
         var exclude = CommonOptions.Exclude();
         var limit = CommonOptions.Limit();
+        var time = CommonOptions.Time();
         var store = CommonOptions.Store();
         var cmd = new Command(name: "reaches", description: "Effects reachable from an entry point, by depth.")
         {
@@ -42,6 +45,7 @@ internal static class ReachesCommand
             only,
             exclude,
             limit,
+            time,
             store,
         };
         cmd.SetAction(pr =>
@@ -60,7 +64,8 @@ internal static class ReachesCommand
                             Format: pr.GetValue(format),
                             Only: CommonOptions.FilterSet(pr.GetValue(only)),
                             Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
-                            Limit: pr.GetValue(limit)
+                            Limit: pr.GetValue(limit),
+                            Time: pr.GetValue(time)
                         ),
                         new CommandIo(new TextOutput(output, error), new WorkspaceLocation(workingDirectory, pr.GetValue(store)))
                     )
@@ -81,7 +86,8 @@ internal static class ReachesCommand
         string? Format,
         HashSet<string> Only,
         HashSet<string> Exclude,
-        int? Limit
+        int? Limit,
+        bool Time
     );
 
     private static async Task<int> RunAsync(Options opts, CommandIo io)
@@ -91,6 +97,8 @@ internal static class ReachesCommand
         var tsv = CommonOptions.IsTsv(opts.Format);
         var mode = CommonOptions.Mode(async: opts.Async, includeDelivery: opts.IncludeDelivery);
 
+        using var timing = QueryTiming.Start(opts.Time, io.TextOutput.Error);
+
         var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules);
         WarnUnknownFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: rules, errorWriter: io.TextOutput.Error);
         // --raw zeroes cut/context; reaches keeps Factory (it monomorphizes generic factories even under
@@ -99,6 +107,7 @@ internal static class ReachesCommand
 
         await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation);
 
+        var graphWatch = Stopwatch.StartNew();
         var inputs = await LoadEffectReachInputsAsync(context, opts.FromPattern, SqlReachability.Direction.Forward, shaped);
         var graph = inputs.Graph;
         if (!opts.Raw)
@@ -106,6 +115,10 @@ internal static class ReachesCommand
             graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
         }
 
+        graphWatch.Stop();
+        timing.Record("graph load", graphWatch.Elapsed);
+
+        var traversalWatch = Stopwatch.StartNew();
         var reachable = MonomorphCollapse.CollapseReachInfo(
             FactPathFinder.ReachesWithFanout(graph, opts.FromPattern, maxDepth, mode: mode)
         );
@@ -119,6 +132,8 @@ internal static class ReachesCommand
             throwRefs: inputs.ThrowRefs
         );
         effects = ApplyEffectFilters(effects, only: opts.Only, exclude: opts.Exclude); // --only / --exclude (e.g. --exclude throw)
+        traversalWatch.Stop();
+        timing.Record("traversal", traversalWatch.Elapsed);
 
         // Effects whose enclosing method is reachable from the entry point. Fanout = looped call
         // edges on the path to the enclosing method (ReachInfo.LoopNesting) + 1 if the effect's OWN
@@ -147,6 +162,7 @@ internal static class ReachesCommand
             .OrderBy(h => h.Depth)
             .ToList();
 
+        var renderWatch = Stopwatch.StartNew();
         if (tsv)
         {
             // dispatchVia/dispatchDegree flag effects whose ONLY reach is a base-virtual/interface
@@ -160,6 +176,9 @@ internal static class ReachesCommand
                     $"{h.Depth}\t{h.Effect.Provider}\t{h.Effect.Operation}\t{h.Effect.ResourceType}\t{h.Effect.EnclosingSymbolId}\t{ShortenPath(h.Effect.FilePath)}:{h.Effect.Line}\t{h.Fanout}\t{ShortLoop(h.Loop)}\t{h.Via}\t{(h.Via is null ? 0 : h.ViaDegree)}\t{h.HandoffVia}\t{h.Basis}"
                 );
             }
+
+            renderWatch.Stop();
+            timing.Record("render", renderWatch.Elapsed);
 
             return 0;
         }
@@ -253,6 +272,10 @@ internal static class ReachesCommand
                 );
             }
         }
+
+        renderWatch.Stop();
+        timing.Record("render", renderWatch.Elapsed);
+
         return 0;
     }
 }

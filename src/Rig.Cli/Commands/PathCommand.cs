@@ -1,7 +1,9 @@
 using System.CommandLine;
+using System.Diagnostics;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
+using Rig.Cli.Telemetry;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
 using static Rig.Cli.EntryPoints.EntryPointContext;
@@ -25,6 +27,7 @@ internal static class PathCommand
         var rules = CommonOptions.Rules();
         var depth = CommonOptions.Depth();
         var format = CommonOptions.Format();
+        var time = CommonOptions.Time();
         var store = CommonOptions.Store();
         var cmd = new Command(name: "path", description: "Print the first call path from one method to another.")
         {
@@ -36,6 +39,7 @@ internal static class PathCommand
             rules,
             depth,
             format,
+            time,
             store,
         };
         cmd.SetAction(pr =>
@@ -52,7 +56,8 @@ internal static class PathCommand
                             Raw: pr.GetValue(raw),
                             ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                             Depth: pr.GetValue(depth),
-                            Format: pr.GetValue(format)
+                            Format: pr.GetValue(format),
+                            Time: pr.GetValue(time)
                         ),
                         new CommandIo(new TextOutput(output, error), new WorkspaceLocation(workingDirectory, pr.GetValue(store)))
                     )
@@ -71,19 +76,25 @@ internal static class PathCommand
         bool Raw,
         IReadOnlyList<string> ExtraRules,
         int? Depth,
-        string? Format
+        string? Format,
+        bool Time
     );
 
     private static async Task<int> RunAsync(Options opts, CommandIo io)
     {
         var tsv = CommonOptions.IsTsv(opts.Format);
         var mode = CommonOptions.Mode(async: opts.Async, includeDelivery: opts.IncludeDelivery);
+
+        using var timing = QueryTiming.Start(opts.Time, io.TextOutput.Error);
+
         // --raw bypasses all shaping (the exact unfiltered plumbing); else monomorphize factories + cut +
         // context-narrow, honoured symmetrically by the reverse/forward traversal.
         var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules);
         var shaped = opts.Raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
 
         await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation);
+
+        var graphWatch = Stopwatch.StartNew();
         // Any path from a `from` node lies entirely within that node's forward closure, so the BOUNDED
         // forward subgraph (loaded on disk via the derived edge views, sized to the result) finds the
         // same first path as the full graph. Falls back to the full EF graph when `rig graph` hasn't run.
@@ -103,6 +114,9 @@ internal static class PathCommand
             graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
         }
 
+        graphWatch.Stop();
+        timing.Record("graph load", graphWatch.Elapsed);
+
         if (!tsv)
         {
             io.TextOutput.Output.WriteLine(
@@ -110,6 +124,7 @@ internal static class PathCommand
             );
         }
 
+        var traversalWatch = Stopwatch.StartNew();
         var path = FactPathFinder.Find(
             graph,
             fromPattern: opts.FromPattern,
@@ -120,6 +135,9 @@ internal static class PathCommand
         // Phase 3 display-collapse: fold any monomorphized (`~mono`) step ids back to their base method id
         // before render (no-op until Phase 2's Materialize is wired into the load path).
         path = path is null ? null : MonomorphCollapse.CollapsePath(path);
+        traversalWatch.Stop();
+        timing.Record("traversal", traversalWatch.Elapsed);
+
         if (path is null)
         {
             if (!tsv)
@@ -130,6 +148,7 @@ internal static class PathCommand
             return 1;
         }
 
+        var renderWatch = Stopwatch.StartNew();
         // --format tsv: one row per step (full DocIDs + paths for tooling), no deployment chrome. Columns:
         // depth, symbolId, edgeKind, handoffVia, fanout, loopKind, loopDetail, dispatchBasis, file, line.
         if (tsv)
@@ -141,6 +160,10 @@ internal static class PathCommand
                     $"{i}\t{s.SymbolId}\t{s.Kind}\t{s.HandoffVia}\t{s.Fanout}\t{s.LoopKind}\t{s.LoopDetail}\t{s.DispatchBasis}\t{s.FilePath}\t{s.Line}"
                 );
             }
+
+            renderWatch.Stop();
+            timing.Record("render", renderWatch.Elapsed);
+
             return 0;
         }
 
@@ -174,6 +197,10 @@ internal static class PathCommand
                     : $"  [{kind}{loop}{(step.FilePath is null ? "" : $" @ {ShortenPath(step.FilePath)}:{step.Line}")}]";
             io.TextOutput.Output.WriteLine($"{Indent.Of(i + 1)}{step.SymbolId}{via}");
         }
+
+        renderWatch.Stop();
+        timing.Record("render", renderWatch.Elapsed);
+
         return 0;
     }
 }

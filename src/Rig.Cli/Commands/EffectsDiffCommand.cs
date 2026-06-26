@@ -1,7 +1,9 @@
 using System.CommandLine;
+using System.Diagnostics;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
+using Rig.Cli.Telemetry;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
@@ -36,6 +38,7 @@ internal static class EffectsDiffCommand
         };
         var label = new Option<string?>("--label") { Description = "Optional label for the pair in output." };
         var format = CommonOptions.Format();
+        var time = CommonOptions.Time();
         var store = CommonOptions.Store();
         var cmd = new Command(
             name: "effects-diff",
@@ -47,6 +50,7 @@ internal static class EffectsDiffCommand
             only,
             label,
             format,
+            time,
             store,
         };
         cmd.SetAction(pr =>
@@ -60,7 +64,8 @@ internal static class EffectsDiffCommand
                             BPattern: pr.GetValue(b)!,
                             Only: pr.GetValue(only),
                             Label: pr.GetValue(label),
-                            Format: pr.GetValue(format)
+                            Format: pr.GetValue(format),
+                            Time: pr.GetValue(time)
                         ),
                         new CommandIo(new TextOutput(output, error), new WorkspaceLocation(workingDirectory, pr.GetValue(store)))
                     )
@@ -69,17 +74,23 @@ internal static class EffectsDiffCommand
         return cmd;
     }
 
-    private sealed record Options(string APattern, string BPattern, string[]? Only, string? Label, string? Format);
+    private sealed record Options(string APattern, string BPattern, string[]? Only, string? Label, string? Format, bool Time);
 
     private static async Task<int> RunAsync(Options opts, CommandIo io)
     {
         var tsv = CommonOptions.IsTsv(opts.Format);
         var label = opts.Label ?? "";
 
+        using var timing = QueryTiming.Start(opts.Time, io.TextOutput.Error);
+
         var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory);
 
         await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation);
+
+        var graphWatch = Stopwatch.StartNew();
         var graph = await Reads.LoadShapedGraphAsync(context: context, rules: rules);
+        graphWatch.Stop();
+        timing.Record("graph load", graphWatch.Elapsed);
 
         // Resolve each pattern to exactly one node id (substring, OrdinalIgnoreCase). 0 = no symbol; >1 =
         // ambiguous (list candidates + error — never silently pick).
@@ -95,6 +106,7 @@ internal static class EffectsDiffCommand
             return 1;
         }
 
+        var traversalWatch = Stopwatch.StartNew();
         // --only filter. EMPTY = match every effect (the generic default). Resource normalization collapses
         // ORM type variants (Entity/Collection/DAO) to one logical key; the suffix list is a sensible
         // LLBLGen-friendly default (harmless elsewhere) — a future `--strip-suffix` knob can override it.
@@ -111,7 +123,10 @@ internal static class EffectsDiffCommand
         var effects = await DeriveHazardEffectsAsync(context: context, rules: rules);
 
         var findings = FactEffectSetDiffDeriver.Derive(graph: graph, effects: effects, spec: spec);
+        traversalWatch.Stop();
+        timing.Record("traversal", traversalWatch.Elapsed);
 
+        var renderWatch = Stopwatch.StartNew();
         if (tsv)
         {
             // columns: label, resource_key, side, present_ep, absent_ep
@@ -120,12 +135,19 @@ internal static class EffectsDiffCommand
                 io.TextOutput.Output.WriteLine($"{f.Label}\t{f.ResourceKey}\t{f.Direction}\t{f.PresentEpId}\t{f.AbsentEpId}");
             }
 
+            renderWatch.Stop();
+            timing.Record("render", renderWatch.Elapsed);
+
             return 0;
         }
 
         if (findings.Count == 0)
         {
             io.TextOutput.Output.WriteLine($"No effect-set difference between '{opts.APattern}' and '{opts.BPattern}'.");
+
+            renderWatch.Stop();
+            timing.Record("render", renderWatch.Elapsed);
+
             return 0;
         }
 
@@ -139,6 +161,9 @@ internal static class EffectsDiffCommand
                 $"{Indent.L1}{f.ResourceKey}  [{side}]  reached by: {ShortName(f.PresentEpId)}  not by: {ShortName(f.AbsentEpId)}"
             );
         }
+
+        renderWatch.Stop();
+        timing.Record("render", renderWatch.Elapsed);
 
         return 0;
     }

@@ -1,8 +1,10 @@
 using System.CommandLine;
+using System.Diagnostics;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Deployments;
 using Rig.Cli.Rendering;
+using Rig.Cli.Telemetry;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
@@ -53,6 +55,7 @@ internal static class CallersCommand
         var depth = CommonOptions.Depth();
         var format = CommonOptions.Format();
         var limit = CommonOptions.Limit();
+        var time = CommonOptions.Time();
         var store = CommonOptions.Store();
         var cmd = new Command(name: "callers", description: "Reverse reachability: which methods reach the target.")
         {
@@ -67,6 +70,7 @@ internal static class CallersCommand
             depth,
             format,
             limit,
+            time,
             store,
         };
         // --orphans (the candidate heuristic) and --entrypoints (the precise rule set) are distinct lenses.
@@ -94,7 +98,8 @@ internal static class CallersCommand
                             ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                             Depth: pr.GetValue(depth),
                             Format: pr.GetValue(format),
-                            Limit: pr.GetValue(limit)
+                            Limit: pr.GetValue(limit),
+                            Time: pr.GetValue(time)
                         ),
                         new CommandIo(new TextOutput(output, error), new WorkspaceLocation(workingDirectory, pr.GetValue(store)))
                     )
@@ -116,7 +121,8 @@ internal static class CallersCommand
         IReadOnlyList<string> ExtraRules,
         int? Depth,
         string? Format,
-        int? Limit
+        int? Limit,
+        bool Time
     );
 
     private static async Task<int> RunAsync(Options opts, CommandIo io)
@@ -125,6 +131,8 @@ internal static class CallersCommand
         var max = opts.Limit ?? int.MaxValue; // --limit absent => unbounded
         var maxDepth = CommonOptions.DepthOrUnbounded(opts.Depth);
         var mode = CommonOptions.Mode(async: opts.Async, includeDelivery: opts.IncludeDelivery);
+
+        using var timing = QueryTiming.Start(opts.Time, io.TextOutput.Error);
 
         // --raw bypasses shaping (the exact unfiltered reverse closure); else monomorphize factories + cut +
         // context, honoured symmetrically by the reverse traversal (a cut node yields no successors forward,
@@ -136,6 +144,7 @@ internal static class CallersCommand
 
         // One shaped reverse subgraph (bounded when `rig graph` has run, else the full EF graph) drives all
         // three callers modes — the set, the no-predecessor roots, and the rule-detected entrypoints.
+        var graphWatch = Stopwatch.StartNew();
         var graph = await LoadShapedTraversalGraphAsync(context, opts.ToPattern, SqlReachability.Direction.Reverse, shaped);
 
         // Reclassify event-subscription (`+=`) method-group edges to `handoff` — mirroring reaches/tree
@@ -149,12 +158,15 @@ internal static class CallersCommand
             graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
         }
 
+        graphWatch.Stop();
+        timing.Record("graph load", graphWatch.Elapsed);
+
         if (opts.EntrypointsOnly)
         {
             // F9: load the DeploymentMap here and pass it into RunEntryPointsAsync, eliminating the
             // LoadDeploymentsAsync call that was inside RunEntryPointsAsync (depth-1 in the call tree).
             var epDeployments = await LoadDeploymentsAsync(context, io.WorkspaceLocation.WorkingDirectory);
-            return await RunEntryPointsAsync(
+            var epResult = await RunEntryPointsAsync(
                 context,
                 graph,
                 toPattern: opts.ToPattern,
@@ -167,6 +179,7 @@ internal static class CallersCommand
                 includeReverseOnly: opts.IncludeReverseOnly,
                 deployments: epDeployments
             );
+            return epResult;
         }
 
         // Deployment/EP context for the from-symbol annotations (opt-in via deployments.json). Only the
@@ -185,9 +198,12 @@ internal static class CallersCommand
 
         if (opts.RootsOnly)
         {
+            var traversalWatch = Stopwatch.StartNew();
             var roots = FactPathFinder.EntryRootsReaching(graph, opts.ToPattern, maxDepth, mode: mode);
             if (roots.Count == 0)
             {
+                traversalWatch.Stop();
+                timing.Record("traversal", traversalWatch.Elapsed);
                 if (!tsv)
                 {
                     io.TextOutput.Output.WriteLine(
@@ -219,6 +235,10 @@ internal static class CallersCommand
                 rootsReverseOnly = roots.Where((_, i) => !confirmedFlags[i]).ToList();
             }
 
+            traversalWatch.Stop();
+            timing.Record("traversal", traversalWatch.Elapsed);
+
+            var rootsRenderWatch = Stopwatch.StartNew();
             // --format tsv: one full-DocID root per line plus a trailing forwardConfirmed flag (ADDITIVE
             // column — the existing single-DocID-per-line shape is unchanged). ALL roots are emitted (confirmed
             // + reverse-only) so TSV consumers can filter on the flag. --raw emits the raw superset (all true).
@@ -230,8 +250,12 @@ internal static class CallersCommand
                     io.TextOutput.Output.WriteLine($"{r}\t{(reverseOnlySet.Contains(r) ? "false" : "true")}");
                 }
 
+                rootsRenderWatch.Stop();
+                timing.Record("render", rootsRenderWatch.Elapsed);
+
                 return 0;
             }
+
             io.TextOutput.Output.WriteLine(
                 $"Root callers (heuristic — no-predecessor origins) reaching '{opts.ToPattern}': {rootsConfirmed.Count}"
             );
@@ -255,12 +279,18 @@ internal static class CallersCommand
                 }
             }
 
+            rootsRenderWatch.Stop();
+            timing.Record("render", rootsRenderWatch.Elapsed);
+
             return 0;
         }
 
+        var defaultTraversalWatch = Stopwatch.StartNew();
         var reachable = MonomorphCollapse.CollapseDepthMap(FactPathFinder.ReachedBy(graph, opts.ToPattern, maxDepth, mode: mode));
         if (reachable.Count == 0)
         {
+            defaultTraversalWatch.Stop();
+            timing.Record("traversal", defaultTraversalWatch.Elapsed);
             if (!tsv)
             {
                 io.TextOutput.Output.WriteLine($"No symbol matches '{opts.ToPattern}'.");
@@ -268,6 +298,7 @@ internal static class CallersCommand
 
             return 1;
         }
+
         // Separate the BFS start nodes (depth=0, the matched target(s) and their lambdas) from actual
         // upstream callers (depth≥1). The headline count and --limit budget reflect upstream callers only
         // — the matched nodes are the SUBJECT of the query, not its answer.
@@ -296,6 +327,10 @@ internal static class CallersCommand
         var confirmedCallers = callers.Where(kv => !IsReverseOnly(kv.Key)).ToList();
         var reverseOnlyCallers = callers.Where(kv => IsReverseOnly(kv.Key)).ToList();
 
+        defaultTraversalWatch.Stop();
+        timing.Record("traversal", defaultTraversalWatch.Elapsed);
+
+        var renderWatch = Stopwatch.StartNew();
         // --format tsv: depth + full DocID per reaching method, plus a trailing forwardConfirmed flag
         // (ADDITIVE column — the existing depth\tdocid columns are unchanged). Depth-0 rows are the BFS start
         // nodes (the matched target(s) and their lambdas, always forwardConfirmed=true), distinctly identified
@@ -308,8 +343,12 @@ internal static class CallersCommand
                 io.TextOutput.Output.WriteLine($"{kv.Value}\t{kv.Key}\t{(IsReverseOnly(kv.Key) ? "false" : "true")}");
             }
 
+            renderWatch.Stop();
+            timing.Record("render", renderWatch.Elapsed);
+
             return 0;
         }
+
         io.TextOutput.Output.WriteLine($"Methods that reach '{opts.ToPattern}': {confirmedCallers.Count}");
         if (matched.Count > 0)
         {
@@ -338,6 +377,9 @@ internal static class CallersCommand
                 io.TextOutput.Output.WriteLine($"{Indent.L1}d{kv.Value}  {ShortName(kv.Key)}");
             }
         }
+
+        renderWatch.Stop();
+        timing.Record("render", renderWatch.Elapsed);
 
         return 0;
     }
