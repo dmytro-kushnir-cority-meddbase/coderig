@@ -76,6 +76,8 @@ public sealed class FactEffectSetDiffDeriverTests
         findings[0].Direction.ShouldBe(EffectDiffSide.AOnly);
         findings[0].PresentEpId.ShouldBe("M:N.UiSave.Save");
         findings[0].AbsentEpId.ShouldBe("M:N.ApiImport.Import");
+        // The row is labeled by the present EP's provider:op for this resource (a durable write here).
+        findings[0].Categories.ShouldBe(["llblgen:bulk_write"]);
     }
 
     [Test]

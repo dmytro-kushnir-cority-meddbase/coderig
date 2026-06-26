@@ -129,10 +129,14 @@ internal static class EffectsDiffCommand
         var renderWatch = Stopwatch.StartNew();
         if (tsv)
         {
-            // columns: label, resource_key, side, present_ep, absent_ep
+            // columns: label, category, resource_key, side, present_ep, absent_ep
+            // category = the present EP's provider:op(s) for this resource (comma-joined) — labels the row's
+            // KIND (e.g. permission:assert = a guard; llblgen:write = a durable write).
             foreach (var f in findings)
             {
-                io.TextOutput.Output.WriteLine($"{f.Label}\t{f.ResourceKey}\t{f.Direction}\t{f.PresentEpId}\t{f.AbsentEpId}");
+                io.TextOutput.Output.WriteLine(
+                    $"{f.Label}\t{string.Join(",", f.Categories)}\t{f.ResourceKey}\t{f.Direction}\t{f.PresentEpId}\t{f.AbsentEpId}"
+                );
             }
 
             renderWatch.Stop();
@@ -157,8 +161,9 @@ internal static class EffectsDiffCommand
         foreach (var f in findings)
         {
             var side = f.Direction == EffectDiffSide.AOnly ? "A-only" : "B-only";
+            var category = f.Categories.Count > 0 ? string.Join(",", f.Categories) : "?";
             io.TextOutput.Output.WriteLine(
-                $"{Indent.L1}{f.ResourceKey}  [{side}]  reached by: {ShortName(f.PresentEpId)}  not by: {ShortName(f.AbsentEpId)}"
+                $"{Indent.L1}{category}  {f.ResourceKey}  [{side}]  reached by: {ShortName(f.PresentEpId)}  not by: {ShortName(f.AbsentEpId)}"
             );
         }
 

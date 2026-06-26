@@ -37,12 +37,17 @@ public enum EffectDiffSide
 }
 
 // One diverging resource. PresentEpId = the EP whose effect-set CONTAINS it; AbsentEpId = the one that lacks it.
+// Categories = the sorted distinct `provider:operation`(s) of the PRESENT EP's effects that produced this
+// resource (post-Filter) — so a consumer can label the row by KIND (e.g. `permission:assert` = a guard the
+// present EP enforces that the absent one doesn't; `llblgen:write` = a durable write). Empty only if a caller
+// constructs a finding directly without categories.
 public sealed record EffectSetDiffFinding(
     string Label,
     string ResourceKey,
     EffectDiffSide Direction,
     string PresentEpId,
-    string AbsentEpId
+    string AbsentEpId,
+    IReadOnlyList<string> Categories
 );
 
 public static class FactEffectSetDiffDeriver
@@ -91,9 +96,10 @@ public static class FactEffectSetDiffDeriver
             reachOf[distinctEpIds[i]] = reachSets[i];
         }
 
-        // 3. Build a lookup: enclosing-id -> set of normalized write-resource keys for that method.
-        //    This is the per-method write-key set; an EP's write-set is the UNION over its reach set.
-        var writeKeysByEnclosing = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        // 3. Build a lookup: enclosing-id -> (normalized resource key -> set of `provider:operation`).
+        //    This is the per-method effect-key set with its category(ies); an EP's effect-set is the UNION
+        //    over its reach set. Carrying the provider:op lets the diff label each row by KIND (guard vs write).
+        var keysByEnclosing = new Dictionary<string, Dictionary<string, HashSet<string>>>(StringComparer.Ordinal);
         foreach (var e in effects)
         {
             if (e.EnclosingSymbolId is null)
@@ -112,13 +118,19 @@ public static class FactEffectSetDiffDeriver
                 continue;
             }
 
-            if (!writeKeysByEnclosing.TryGetValue(e.EnclosingSymbolId, out var keys))
+            if (!keysByEnclosing.TryGetValue(e.EnclosingSymbolId, out var keys))
             {
-                keys = new HashSet<string>(StringComparer.Ordinal);
-                writeKeysByEnclosing[e.EnclosingSymbolId] = keys;
+                keys = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+                keysByEnclosing[e.EnclosingSymbolId] = keys;
             }
 
-            keys.Add(key);
+            if (!keys.TryGetValue(key, out var cats))
+            {
+                cats = new HashSet<string>(StringComparer.Ordinal);
+                keys[key] = cats;
+            }
+
+            cats.Add($"{e.Provider}:{e.Operation}");
         }
 
         // 4. For each pair compute write-sets and emit symmetric-difference findings.
@@ -129,17 +141,17 @@ public static class FactEffectSetDiffDeriver
         {
             var primaryWrites = CollectWriteSet(
                 reachSet: reachOf.TryGetValue(pair.AId, out var pr) ? pr : [],
-                writeKeysByEnclosing: writeKeysByEnclosing
+                keysByEnclosing: keysByEnclosing
             );
             var secondaryWrites = CollectWriteSet(
                 reachSet: reachOf.TryGetValue(pair.BId, out var sr) ? sr : [],
-                writeKeysByEnclosing: writeKeysByEnclosing
+                keysByEnclosing: keysByEnclosing
             );
 
             // primary \ secondary (tables the primary writes that secondary doesn't).
-            foreach (var key in primaryWrites)
+            foreach (var (key, cats) in primaryWrites)
             {
-                if (!secondaryWrites.Contains(key))
+                if (!secondaryWrites.ContainsKey(key))
                 {
                     AddFinding(
                         findings: findings,
@@ -148,15 +160,16 @@ public static class FactEffectSetDiffDeriver
                         resourceKey: key,
                         direction: EffectDiffSide.AOnly,
                         presentEpId: pair.AId,
-                        absentEpId: pair.BId
+                        absentEpId: pair.BId,
+                        categories: cats
                     );
                 }
             }
 
             // secondary \ primary (tables the secondary writes that primary doesn't).
-            foreach (var key in secondaryWrites)
+            foreach (var (key, cats) in secondaryWrites)
             {
-                if (!primaryWrites.Contains(key))
+                if (!primaryWrites.ContainsKey(key))
                 {
                     AddFinding(
                         findings: findings,
@@ -165,7 +178,8 @@ public static class FactEffectSetDiffDeriver
                         resourceKey: key,
                         direction: EffectDiffSide.BOnly,
                         presentEpId: pair.BId,
-                        absentEpId: pair.AId
+                        absentEpId: pair.AId,
+                        categories: cats
                     );
                 }
             }
@@ -194,19 +208,31 @@ public static class FactEffectSetDiffDeriver
         return findings;
     }
 
-    // Compute the write-key set for an EP: the UNION of all normalized write keys for every method node
-    // in the EP's reach set (which includes the seed itself).
-    private static HashSet<string> CollectWriteSet(
+    // Compute the effect-key set for an EP: the UNION of all normalized resource keys for every method node
+    // in the EP's reach set (which includes the seed itself), each mapped to the set of `provider:operation`
+    // categories that produced it across the reach.
+    private static Dictionary<string, HashSet<string>> CollectWriteSet(
         IReadOnlyCollection<string> reachSet,
-        Dictionary<string, HashSet<string>> writeKeysByEnclosing
+        Dictionary<string, Dictionary<string, HashSet<string>>> keysByEnclosing
     )
     {
-        var result = new HashSet<string>(StringComparer.Ordinal);
+        var result = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         foreach (var node in reachSet)
         {
-            if (writeKeysByEnclosing.TryGetValue(node, out var keys))
+            if (!keysByEnclosing.TryGetValue(node, out var keys))
             {
-                result.UnionWith(keys);
+                continue;
+            }
+
+            foreach (var (key, cats) in keys)
+            {
+                if (!result.TryGetValue(key, out var acc))
+                {
+                    acc = new HashSet<string>(StringComparer.Ordinal);
+                    result[key] = acc;
+                }
+
+                acc.UnionWith(cats);
             }
         }
 
@@ -241,7 +267,8 @@ public static class FactEffectSetDiffDeriver
         string resourceKey,
         EffectDiffSide direction,
         string presentEpId,
-        string absentEpId
+        string absentEpId,
+        IReadOnlyCollection<string> categories
     )
     {
         // De-dup key: entity + resource key + direction + absent EP (the primary signal is the gap on the absent side).
@@ -254,7 +281,8 @@ public static class FactEffectSetDiffDeriver
                     ResourceKey: resourceKey,
                     Direction: direction,
                     PresentEpId: presentEpId,
-                    AbsentEpId: absentEpId
+                    AbsentEpId: absentEpId,
+                    Categories: categories.OrderBy(c => c, StringComparer.Ordinal).ToArray()
                 )
             );
         }

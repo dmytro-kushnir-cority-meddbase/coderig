@@ -22,6 +22,18 @@ effect/guard divergence across paths** — which 1–4 below let an LLM reviewer
    two EPs is done — see done/effects-diff.md); parity = effects-diff **+ the guard/assert set on the path**.
    So build = add guard/assert capture to the existing diff, not a new command from scratch. (`impact` diffs
    one EP across commits; this diffs two EPs at one commit — a new axis.)
+
+   **✅ EFFECTIVELY SHIPPED (2026-06-26).** Validated on the store: guards are ALREADY captured as effects
+   (`permission:assert`) and `effects-diff` already diffs them — `--only permission` surfaced the guard
+   divergence, `--only llblgen:bulk_write/audit` the write divergence (SmartLetter SaveLetter-vs-PrintLetter:
+   SaveLetter asserts `CanModifyDocuments` + writes `AuditLog`; PrintLetter checks `CanViewDocuments` SaveLetter
+   skips). The one code gap — rows weren't labeled by KIND — is **fixed**: each diff row now carries its
+   `provider:op` category (`permission:assert`=guard, `llblgen:bulk_write`=write, `audit:write`=audit) in both
+   the human view and a new tsv column. **Decisions: NO `parity` rename, NO baked-in preset** — the opinionated
+   "parity preset" (`--only permission --only llblgen:write/bulk_write/delete --only audit`) lives in the
+   **rig skill**, not the command (rig stays a composable primitive). **Remaining for this item:** encode that
+   preset + the read framing in the skill so the reviewer invokes one step. `peers` (#2) adds sibling
+   auto-discovery on top.
 2. **`rig peers <ep>` — sibling discovery.** The reviewer's hard part is *knowing which* parallel path to
    compare. Given an EP, surface peers: other EPs writing the same table/entity, the import/bulk counterpart
    of a UI action, add/edit pairs. Turns the corpus's #1 meta-heuristic ("find the second path the change
