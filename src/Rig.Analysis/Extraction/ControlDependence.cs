@@ -50,24 +50,165 @@ internal static class ControlDependence
         return -1;
     }
 
-    // Blocks executed on EVERY Entry->Exit path (each dominates the Exit) — the sound must-run spine.
-    // No special-casing of Entry/Exit: deleting Entry strands Exit (so Entry is must-run), and Exit can
-    // never be "reached without itself" (so Exit is must-run) — both fall out of the delete-test.
+    // Blocks executed on EVERY Entry->Exit path — the must-run spine. A block is must-run iff it
+    // DOMINATES the Exit (every Entry->Exit path passes through it), i.e. it lies on the Exit's chain of
+    // immediate dominators. We compute the dominator tree ONCE (Cooper-Harvey-Kennedy, "A Simple, Fast
+    // Dominance Algorithm", 2001) into int[] buffers, then walk idom from Exit up to Entry.
+    //
+    // PERF: this replaced an O(V^2 * E) reachability "delete-test" whose per-query HashSet+Stack churn was
+    // catastrophic — a 258-block method allocated ~509 MB / ~128 ms (see the benchmark). The dominator tree
+    // is ~O(V * E) worst case, near-linear in practice, with O(V) allocation per CFG and ZERO per query.
+    // The delete-test survives as the differential test oracle (obviously-correct, validates this).
+    // BACKTRACK: if a CHK edge case is ever suspected, the oracle in ControlDependenceTests is ground truth.
     internal static HashSet<int> MustRunBlocks(ControlFlowGraph cfg)
     {
-        var entry = cfg.Blocks[0].Ordinal; // Roslyn invariant: Blocks[0] == Entry, Blocks[^1] == Exit
-        var exit = cfg.Blocks[^1].Ordinal;
-        var mustRun = new HashSet<int>();
+        var n = cfg.Blocks.Length;
+        const int entry = 0; // Roslyn invariant: Blocks[0] == Entry, Blocks[^1] == Exit
+        var exit = n - 1;
 
-        foreach (var block in cfg.Blocks)
+        // 1) Reverse-postorder from Entry via ITERATIVE DFS (no recursion — safe on deep block chains).
+        var postorder = new List<int>(n);
+        var state = new byte[n]; // 0 = unvisited, 1 = on-stack/expanded, 2 = emitted
+        var dfs = new Stack<int>();
+        dfs.Push(entry);
+        while (dfs.Count > 0)
         {
-            if (!Reachable(cfg, start: entry, target: exit, excluded: block.Ordinal))
+            var b = dfs.Peek();
+            if (state[b] == 0)
             {
-                mustRun.Add(block.Ordinal);
+                state[b] = 1;
+                PushSuccessor(cfg.Blocks[b].ConditionalSuccessor?.Destination?.Ordinal);
+                PushSuccessor(cfg.Blocks[b].FallThroughSuccessor?.Destination?.Ordinal);
+            }
+            else
+            {
+                dfs.Pop();
+                if (state[b] == 1)
+                {
+                    state[b] = 2;
+                    postorder.Add(b);
+                }
+            }
+
+            void PushSuccessor(int? s)
+            {
+                if (s is int next && state[next] == 0)
+                {
+                    dfs.Push(next);
+                }
             }
         }
 
+        // rpoIndex[ordinal] = position in reverse-postorder; -1 if unreachable from Entry.
+        var rpoIndex = new int[n];
+        Array.Fill(rpoIndex, -1);
+        var rpo = new int[postorder.Count];
+        for (var i = 0; i < postorder.Count; i++)
+        {
+            var ordinal = postorder[postorder.Count - 1 - i]; // reverse
+            rpo[i] = ordinal;
+            rpoIndex[ordinal] = i;
+        }
+
+        // If Exit is unreachable from Entry (e.g. an infinite loop with no normal completion), there is no
+        // must-run spine — nothing runs "on every Entry->Exit path" because there are none.
+        if (rpoIndex[exit] < 0)
+        {
+            return [];
+        }
+
+        // 2) Predecessor lists (only reachable blocks matter).
+        var preds = new List<int>[n];
+        for (var i = 0; i < n; i++)
+        {
+            preds[i] = [];
+        }
+
+        foreach (var block in cfg.Blocks)
+        {
+            if (rpoIndex[block.Ordinal] < 0)
+            {
+                continue;
+            }
+
+            AddPred(block.ConditionalSuccessor?.Destination?.Ordinal, block.Ordinal);
+            AddPred(block.FallThroughSuccessor?.Destination?.Ordinal, block.Ordinal);
+        }
+
+        void AddPred(int? target, int from)
+        {
+            if (target is int t)
+            {
+                preds[t].Add(from);
+            }
+        }
+
+        // 3) CHK fixpoint over reverse-postorder.
+        var idom = new int[n];
+        Array.Fill(idom, -1);
+        idom[entry] = entry;
+
+        bool changed;
+        do
+        {
+            changed = false;
+            for (var i = 1; i < rpo.Length; i++) // skip Entry (rpo[0])
+            {
+                var b = rpo[i];
+                var newIdom = -1;
+                foreach (var p in preds[b])
+                {
+                    if (idom[p] < 0)
+                    {
+                        continue; // predecessor not yet processed
+                    }
+
+                    newIdom = newIdom < 0 ? p : Intersect(p, newIdom, idom, rpoIndex);
+                }
+
+                if (newIdom >= 0 && idom[b] != newIdom)
+                {
+                    idom[b] = newIdom;
+                    changed = true;
+                }
+            }
+        } while (changed);
+
+        // 4) must-run = the Exit's chain of dominators (every block that dominates Exit), Entry..Exit.
+        var mustRun = new HashSet<int>();
+        var cur = exit;
+        while (cur >= 0)
+        {
+            mustRun.Add(cur);
+            if (cur == entry)
+            {
+                break;
+            }
+
+            cur = idom[cur];
+        }
+
         return mustRun;
+    }
+
+    // CHK "intersect": the nearest common dominator of two blocks, walking the two fingers up the
+    // partially-built idom tree by reverse-postorder number (higher rpoIndex = further from Entry).
+    private static int Intersect(int a, int b, int[] idom, int[] rpoIndex)
+    {
+        while (a != b)
+        {
+            while (rpoIndex[a] > rpoIndex[b])
+            {
+                a = idom[a];
+            }
+
+            while (rpoIndex[b] > rpoIndex[a])
+            {
+                b = idom[b];
+            }
+        }
+
+        return a;
     }
 
     // The control-dependence (guard) set of `block`: the branch predicates that decide whether it runs.
