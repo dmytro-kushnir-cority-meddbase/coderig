@@ -280,6 +280,12 @@ public static partial class FactPathFinder
     private static GraphIndex BuildIndex(FactGraphData graph, bool narrowDispatch = true)
     {
         var index = new GraphIndex { NarrowDispatch = narrowDispatch };
+        // Pre-size the two collections that fill to the full graph size, so they don't resize/rehash ~log2(N)
+        // times from empty as edges/nodes are added (each resize reallocates the backing arrays — pure churn,
+        // and BuildIndex runs on EVERY traversal). Capacities are safe upper bounds (distinct callers <=
+        // edges; distinct nodes <= methods + edge endpoints).
+        index.Adjacency.EnsureCapacity(graph.CallEdges.Count);
+        index.Nodes.EnsureCapacity(graph.Methods.Count + graph.CallEdges.Count);
         foreach (var edge in graph.CallEdges)
         {
             if (!index.Adjacency.TryGetValue(edge.Caller, out var list))

@@ -11,10 +11,25 @@
 - **M2 DONE** (`a7290acd`): `MustRunBlocks` rewritten onto a CHK dominator tree after the benchmark proved the
   reachability delete-test untenable (½ GB / 128 ms for one 258-block method). Delete-test retained as the differential
   test ORACLE. `ControlDependenceBenchmarks` (BenchmarkDotNet) + the CPM fix to make BDN run (see findings).
-- **M3 TODO** (the schema-touching wiring, not started): `StructuralContext` (`Facts.cs`) gains a must-run bit →
-  `ReferenceFactEntity` + SQLite schema + `Writes.cs`/`Reads.cs` → `FactExtractor` builds a CFG per effect-bearing body
-  and tags each call-site → `reaches`/`tree` render the spine/guarded split (behind a flag) → re-index MedDBase for the
-  observed rendering diff. High-risk zone (use opus/xhigh + adversarial verify on the extraction wiring).
+- **M3 inc 1–2 DONE** (`29177c1c`/`53372a6a`/`94db1b75`): extraction freezes the guard SET onto
+  `ReferenceFact.EnclosingGuards` (incl. nested lambda/local-fn CFGs); persisted through `reference_facts`
+  (`ReferenceFactEntity` + `Writes.cs`/`Reads.cs` + `FactStructuralContext.Encode/DecodeGuards`).
+- **M3 inc 3 DONE** (render): `tree --guards` marks a control-dependence-guarded edge with `⎇[predicate]` (the
+  analog of `🔁[loop]`) — bare predicate for the if-arm, `!pred` / `!(compound)` for the else-arm, `&&`-joined,
+  must-run = no glyph. Threaded `EnclosingGuards` through `Successors`/`MutableNode`/`ToTraceNode`/`TraceNode`/
+  `TreeRenderer` (+ the dedup-collapse key, so two sites with different guards don't merge). Gated behind the
+  new `--guards` flag (default off → golden trees unchanged). Tests: `TreeGuardsRenderTests` (5).
+  **GAP FOUND + FIXED (the handoff under-specified this):** `tree`/`reaches` load the DERIVED **`call_edges`
+  materialized view** (`GraphMaterializer` write → `SqlReachability.LoadBoundedGraphAsync` read), NOT
+  `reference_facts` directly — inc 2 wired guards through `reference_facts` but never added the column to that
+  view, so every guard was silently dropped at query time. Fixed all 4 round-trip sites (`AllCallEdges` tuple +
+  `call_edges` CREATE/INSERT + the bounded-load SELECT) and made the view DROP+CREATE so the schema evolves on
+  re-index. Regression test: `CallEdgeGuardRoundTripTests` (the materialize→bounded-load seam that let it ship).
+  Verified end-to-end on rig's OWN src (10s re-index): `MustRunBlocks` renders `⎇[state[b] == 0]`,
+  `⎇[!(rpoIndex[block.Ordinal] < 0)]` etc., cached + uncached.
+- **M3 inc 4 TODO** (only remaining): the MedDBase cost-validation pass — index a MedDBase module, run
+  `rig tree --guards`, capture real per-method CFG-build cost (closes the rig-src-proxy caveat from the cost spike)
+  + see a real-world spine/guarded split.
 - **M2.5 DONE**: `GuardsOf`/`ComputeGuards` rewritten onto a **post-dominator tree + Ferrante-Ottenstein-Warren**
   dominance-frontier walk (CHK on the *reversed* CFG — the dual of must-run). Allocation 3.9 GB → **143 KB** at 514
   blocks (~27,000×); ~O(V), microseconds. Delete-test retained as the differential ORACLE (`NaiveGuards`);
@@ -22,7 +37,9 @@
   subtlety: FOW marks a loop-condition block control-dependent on ITSELF (textbook PDG self-dependence via the
   back-edge), which is useless for effect-guarding and breaks the must-run⇔no-guards invariant (loop-condition blocks
   are must-run) — excluded with a `node != branchBlock` guard. **Both must-run AND guard-sets are now production-fast.**
-- **M3 is now the only remaining work**: the schema-touching extraction→storage→render wiring + MedDBase re-index.
+- **Only remaining work: M3 inc 4** — the MedDBase cost-validation pass (extraction→storage→render is DONE and
+  verified on rig's own src). The derive-side cross-method "always-runs-from-EP" guard composition stays a later
+  enrichment (current guards are intra-method only).
 
 ## The gap
 `reaches`/`tree` report a **path-insensitive UNION** of reachable effects: every effect that *could* be hit on *any*

@@ -58,6 +58,35 @@ internal static class TreeRenderer
         return ShortName(lastDot >= 0 ? head.Substring(startIndex: 0, length: lastDot) : head);
     }
 
+    // --guards: render a frozen control-dependence guard set (FactStructuralContext-encoded on the reaching
+    // edge) as a compact AND-chain of branch predicates — every guard must hold for the call to run, so they
+    // join with " && ". Polarity: `pred` for the if-arm (WhenTrue), `!pred` for the else-arm. A compound
+    // predicate is parenthesised when negated (`!(a == null)`) so the `!` binds unambiguously; a single token
+    // (`!flag`, `!invoice.IsHealthcode`) stays bare. Each predicate's whitespace is collapsed (a condition can
+    // span lines) and the joined string is length-capped for single-line trace output. "?" only if the set
+    // decodes empty (the caller already gates on non-null, so the spine never reaches here).
+    internal static string ShortGuards(string? encoded)
+    {
+        var guards = FactStructuralContext.DecodeGuards(encoded);
+        if (guards.Count == 0)
+        {
+            return "?";
+        }
+
+        var parts = guards.Select(g =>
+        {
+            var pred = string.Join(' ', g.Predicate.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
+            if (g.WhenTrue)
+            {
+                return pred;
+            }
+
+            return pred.Contains(' ', StringComparison.Ordinal) ? $"!({pred})" : $"!{pred}";
+        });
+        var s = string.Join(" && ", parts);
+        return s.Length <= 60 ? s : s.Substring(startIndex: 0, length: 57) + "...";
+    }
+
     // Collects effect-bearing methods in DFS (source) order, deduped — the backing of `tree --effects`.
     internal static void CollectEffectful(
         TraceNode node,
@@ -151,7 +180,11 @@ internal static class TreeRenderer
         // `--hazards`: a precomputed compact hazard marker per enclosing method (SymbolId -> e.g.
         // "  ⚠ dual_write(medium), race_window(high)"), appended to the node label so the pattern findings
         // sit inline on the EP's reachable tree. Null/absent leaves nodes unmarked (the default tree).
-        IReadOnlyDictionary<string, string>? hazardsByMethod = null
+        IReadOnlyDictionary<string, string>? hazardsByMethod = null,
+        // `--guards`: mark a control-dependence-GUARDED call edge with ⎇[predicate] (the analog of 🔁[loop]),
+        // decoded from the reaching edge's frozen guard set (TraceNode.EnclosingGuards). Off by default so
+        // golden tree tests don't churn; a must-run edge (empty guard set) carries no glyph.
+        bool guards = false
     )
     {
         // Compute visible children first — the fan-out label must reflect how many branches are
@@ -181,6 +214,10 @@ internal static class TreeRenderer
         // An async handoff hop (only present under --async): mark the cross-thread boundary.
         var handoff = node.EdgeKind == EdgeKinds.Handoff ? $" ⤳handoff via {ShortName(node.HandoffVia)} [cross_thread]" : "";
         var loop = node.LoopKind is null ? "" : $" 🔁[{ShortLoop(node.LoopDetail)}]";
+        // --guards: the control-dependence guard set of the edge that reached this node — the branch
+        // predicates gating whether the call runs in its parent. Empty (must-run) → no glyph; the ⎇
+        // analog of 🔁. Off unless --guards (keeps default golden trees stable).
+        var guardTag = guards && node.EnclosingGuards is not null ? $" ⎇[{ShortGuards(node.EnclosingGuards)}]" : "";
         // Identical sibling edges collapsed under one parent (e.g. a generic method called once per
         // type-arg): show the call-site count rather than N repeated "⋯elided" lines.
         var calls = node.CallSites > 1 ? $" ×{node.CallSites} calls" : "";
@@ -282,7 +319,8 @@ internal static class TreeRenderer
         // `--hazards`: the inline pattern-finding marker for this method (empty when unmarked). Placed before
         // the source-loc suffixes so SourceLocDedupWriter's trailing-loc regex still matches the line.
         var hazard = hazardsByMethod is not null && hazardsByMethod.TryGetValue(node.SymbolId, out var hz) ? hz : "";
-        var label = $"{epPrefix}{name}{dispatch}{handoff}{loop}{calls}{elided}{opaqueTag}{cutTag}{fx}{hazard}{loc}{epSuffix}{callLoc}";
+        var label =
+            $"{epPrefix}{name}{dispatch}{handoff}{loop}{guardTag}{calls}{elided}{opaqueTag}{cutTag}{fx}{hazard}{loc}{epSuffix}{callLoc}";
         output.WriteLine(isRoot ? label : $"{prefix}{Connector(isLast)}{label}");
 
         // Collapse-seam render rule: this node is a fan-out hub (e.g. a reflection service-locator or
@@ -355,7 +393,8 @@ internal static class TreeRenderer
                 effectLeavesByMethod: effectLeavesByMethod,
                 parentDeclaringConcrete: declaringConcrete,
                 parentMethodConcrete: methodConcrete,
-                hazardsByMethod: hazardsByMethod
+                hazardsByMethod: hazardsByMethod,
+                guards: guards
             );
         }
     }

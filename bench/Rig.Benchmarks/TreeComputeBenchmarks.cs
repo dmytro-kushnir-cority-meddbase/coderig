@@ -18,8 +18,6 @@ namespace Rig.Benchmarks;
 [MemoryDiagnoser]
 public class TreeComputeBenchmarks
 {
-    private const int MaxDepth = 20;
-
     private FactGraphData _rawGraph = null!; // unshaped bounded graph (input to ShapeGraph)
     private FactGraphData _shapedGraph = null!; // shaped (input to MarkEventSubscriptionHandoffs)
     private FactGraphData _markedGraph = null!; // shaped + event-marked (input to BuildTree)
@@ -138,6 +136,15 @@ public class TreeComputeBenchmarks
 
     [Benchmark]
     public IReadOnlyList<TraceNode> BuildTree() => FactPathFinder.BuildTree(_markedGraph, _pattern);
+
+    // For the no-BDN gcdump harness (Program.cs `gcloop`): set up the inputs ONCE, then hand back a thunk
+    // that runs one BuildTree — so a tight loop + a heap/alloc capture can profile it outside BDN's
+    // per-process noise.
+    internal async Task<Func<IReadOnlyList<TraceNode>>> PrepareBuildTreeAsync()
+    {
+        await SetupAsync();
+        return () => FactPathFinder.BuildTree(_markedGraph, _pattern);
+    }
 
     [Benchmark]
     public IReadOnlyList<DerivedEffect> DeriveEffects() =>

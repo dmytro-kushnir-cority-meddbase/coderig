@@ -56,7 +56,12 @@ public static partial class FactPathFinder
         // override — so the reached node must NOT be re-dispatched (its override fan-out is suppressed,
         // exactly like a node reached via a dispatch edge / `fromDispatch`). The caller ORs this into the
         // `fromDispatch` it passes when it later expands this node. False for every other edge.
-        bool OutNonVirtual
+        bool OutNonVirtual,
+        // CFG-derived control-dependence guards of THIS call edge's site within the caller (the
+        // ReferenceFact.EnclosingGuards the edge carries): the branch predicates gating whether the call
+        // runs. Null on must-run sites, synthesized dispatch hops (no call-site), and pre-flag stores.
+        // RENDERING only (tree --guards) — threaded onto the reached node like LoopKind/LoopDetail.
+        string? EnclosingGuards
     )> Successors(
         string current,
         GraphIndex index,
@@ -125,7 +130,8 @@ public static partial class FactPathFinder
                         outBinding,
                         edge.DeclaringTypeArgBinding,
                         edge.MethodTypeArgBinding,
-                        false
+                        false,
+                        edge.EnclosingGuards
                     );
                     continue;
                 }
@@ -146,7 +152,8 @@ public static partial class FactPathFinder
                     edge.MethodTypeArgBinding,
                     // A `base.M()` edge resolves to exactly the base body; mark it so the reached node is not
                     // re-dispatched into sibling overrides (forward fan suppression — one-hop, like dispatch).
-                    edge.NonVirtual
+                    edge.NonVirtual,
+                    edge.EnclosingGuards
                 );
             }
         }
@@ -198,7 +205,9 @@ public static partial class FactPathFinder
                 incomingBinding,
                 null,
                 null,
-                false
+                false,
+                // A synthesized dispatch hop has no call-site, so no control-dependence guard.
+                null
             );
         }
     }

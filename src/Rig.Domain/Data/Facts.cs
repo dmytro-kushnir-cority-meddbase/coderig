@@ -493,7 +493,14 @@ public sealed record TraceNode(
     // line for a ctor, the inline-lambda decl line, the call line for a method. Surfaced by `tree --full`
     // (deduped in print order) — gives ctors/lambdas and every node a source line. Null/0 at a root.
     string? CallFile = null,
-    int CallLine = 0
+    int CallLine = 0,
+    // CFG-derived control-dependence guards of the call edge that reached this node from its parent
+    // (carried from CallEdge.EnclosingGuards, encoded by FactStructuralContext.EncodeGuards): the branch
+    // predicates gating whether the call runs within the PARENT method. Null == must-run (unconditional in
+    // the parent) — the spine. The tree renderer marks a guarded edge with ⎇[predicate] under `--guards`
+    // (the control-dependence analog of 🔁), decoded via FactStructuralContext.DecodeGuards. Intra-method
+    // only; null on synthesized dispatch hops, roots, and pre-flag stores.
+    string? EnclosingGuards = null
 );
 
 // A method handed off as a delegate (method-group) — a deferred/background entry point the

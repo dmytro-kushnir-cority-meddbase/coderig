@@ -35,59 +35,56 @@ public sealed class CfgSpike
         var source =
             // lang=cs
             """
-            public sealed class Account { }
+                public sealed class Account { }
 
-            public sealed class C
-            {
-                public void M1(Account a)
+                public sealed class C
                 {
-                    if (a == null) return;
-                    Save(a);
-                    
-                    switch (Counter(a))
+                    public void M1(Account a)
                     {
-                        case -1: return;
-                        case 2: 
+                        if (a == null) return;
+                        Save(a);
+                        
+                        switch (Counter(a))
                         {
-                            Console.WriteLine("CATCH");
-                            break;
+                            case -1: return;
+                            case 2: 
+                            {
+                                Console.WriteLine("CATCH");
+                                break;
+                            }
+                            case 3: 
+                            {
+                                throw new NotImplementedException();
+                            }
+                            case 5:
+                                Console.WriteLine("CATCH");
+                            default: break;
                         }
-                        case 3: 
-                        {
-                            throw new NotImplementedException();
-                        }
-                        case 5:
-                            Console.WriteLine("CATCH");
-                        default: break;
+                        
+                        Save(a);
                     }
                     
-                    Save(a);
-                }
-                
-                public void M2(bool cond)
-                {
-                    if (cond) A(); else B();
-                    C();
-                }
-                private void A() {}
-                private void B() {}
-                private void C() {}
+                    public void M2(bool cond)
+                    {
+                        if (cond) A(); else B();
+                        C();
+                    }
+                    private void A() {}
+                    private void B() {}
+                    private void C() {}
 
-                private void Save(Account a) { }
-                
-                private int Counter(Account a){ return 10 }
-            }
-            """;
+                    private void Save(Account a) { }
+                    
+                    private int Counter(Account a){ return 10 }
+                }
+                """;
 
         var (tree, model) = Compile(source);
 
         // 1) syntax: grab the method M
-        var methods = tree.GetRoot()
-            .DescendantNodes()
-            .OfType<MethodDeclarationSyntax>();
+        var methods = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>();
 
-        var method = methods
-            .Single(m => m.Identifier.Text == "M1");
+        var method = methods.Single(m => m.Identifier.Text == "M1");
 
         // 2) syntax → IOperation (layer 3a). GetOperation on a method-with-body yields an
         //    IMethodBodyOperation; on a bare block it yields an IBlockOperation. Both can seed a CFG.
@@ -259,8 +256,10 @@ public sealed class CfgSpike
             var block = cfg.Blocks[b];
             var fall = block.FallThroughSuccessor?.Destination?.Ordinal ?? -1;
             var cond = block.ConditionalSuccessor?.Destination?.Ordinal ?? -1;
-            if (fall >= 0 && !visited[fall]) Dfs(fall);
-            if (cond >= 0 && !visited[cond]) Dfs(cond);
+            if (fall >= 0 && !visited[fall])
+                Dfs(fall);
+            if (cond >= 0 && !visited[cond])
+                Dfs(cond);
             rpo.Add(b);
         }
 
@@ -268,17 +267,21 @@ public sealed class CfgSpike
         rpo.Reverse();
 
         var rpoNum = new int[n];
-        for (int i = 0; i < rpo.Count; i++) rpoNum[rpo[i]] = i;
+        for (int i = 0; i < rpo.Count; i++)
+            rpoNum[rpo[i]] = i;
 
         // Step 2: predecessor lists
         var preds = new List<int>[n];
-        for (int i = 0; i < n; i++) preds[i] = new List<int>();
+        for (int i = 0; i < n; i++)
+            preds[i] = new List<int>();
         foreach (var block in cfg.Blocks)
         {
             var fall = block.FallThroughSuccessor?.Destination?.Ordinal ?? -1;
             var cond = block.ConditionalSuccessor?.Destination?.Ordinal ?? -1;
-            if (fall >= 0) preds[fall].Add(block.Ordinal);
-            if (cond >= 0) preds[cond].Add(block.Ordinal);
+            if (fall >= 0)
+                preds[fall].Add(block.Ordinal);
+            if (cond >= 0)
+                preds[cond].Add(block.Ordinal);
         }
 
         // Step 3: Cooper/Harvey/Kennedy 2001
@@ -290,8 +293,10 @@ public sealed class CfgSpike
         {
             while (b1 != b2)
             {
-                while (rpoNum[b1] > rpoNum[b2]) b1 = idom[b1];
-                while (rpoNum[b2] > rpoNum[b1]) b2 = idom[b2];
+                while (rpoNum[b1] > rpoNum[b2])
+                    b1 = idom[b1];
+                while (rpoNum[b2] > rpoNum[b1])
+                    b2 = idom[b2];
             }
 
             return b1;
@@ -307,7 +312,8 @@ public sealed class CfgSpike
                 int newIdom = -1;
                 foreach (int p in preds[b])
                 {
-                    if (idom[p] == -1) continue;
+                    if (idom[p] == -1)
+                        continue;
                     newIdom = newIdom == -1 ? p : Intersect(newIdom, p);
                 }
 
@@ -352,8 +358,7 @@ public sealed class CfgSpike
     private static ControlFlowGraph BuildCfg(string source, string methodName)
     {
         var (tree, model) = Compile(source);
-        var method = tree.GetRoot().DescendantNodes()
-            .OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.Text == methodName);
+        var method = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.Text == methodName);
         var op = model.GetOperation(method);
         return op switch
         {
@@ -363,25 +368,28 @@ public sealed class CfgSpike
         };
     }
 
-// ── the red target: turn these green ──
+    // ── the red target: turn these green ──
     [Test]
     public void MustRun_excludes_both_arms_keeps_the_merge()
     {
         // if (cond) A(); else B();  C();   →  C is must-run, A and B are not.
-        var cfg = BuildCfg("""
-                           public sealed class C
-                           {
-                               public void M(bool cond)
-                               {
-                                   if (cond) A(); else B();
-                                   C();
-                                   
-                                   for (int i = 0; i < 100; i++)
-                                    C();
-                               }
-                               private void A() {} private void B() {} private void C() {}
-                           }
-                           """, "M");
+        var cfg = BuildCfg(
+            """
+            public sealed class C
+            {
+                public void M(bool cond)
+                {
+                    if (cond) A(); else B();
+                    C();
+                    
+                    for (int i = 0; i < 100; i++)
+                     C();
+                }
+                private void A() {} private void B() {} private void C() {}
+            }
+            """,
+            "M"
+        );
 
         // #0 Entry, #1 branch, #2 A, #3 B, #4 C(merge), #5 Exit
         MustRun_CHK(cfg).ShouldBe([0, 1, 4, 5, 6, 8], ignoreOrder: true);
@@ -390,120 +398,126 @@ public sealed class CfgSpike
     [Test]
     public void MustRun_only_the_first_guard_in_the_double_return()
     {
-        var cfg = BuildCfg("""
-                           public sealed class Account { }
-                           public sealed class C
-                           {
-                               public void M(Account a)
-                               {
-                                   if (a == null) return;
-                                   if (a != null) return;
-                                   Save(a);
-                               }
-                               private void Save(Account a) {}
-                           }
-                           """, "M");
+        var cfg = BuildCfg(
+            """
+            public sealed class Account { }
+            public sealed class C
+            {
+                public void M(Account a)
+                {
+                    if (a == null) return;
+                    if (a != null) return;
+                    Save(a);
+                }
+                private void Save(Account a) {}
+            }
+            """,
+            "M"
+        );
 
         // #0 Entry, #1 first guard, #2 second guard, #3 Save, #4 Exit
         MustRun_CHK(cfg).ShouldBe([0, 1, 4], ignoreOrder: true);
     }
-    
+
     [Test]
     public void BIG()
     {
-        var cfg = BuildCfg("""
-                           
-                           public sealed class C
+        var cfg = BuildCfg(
+            """
+
+            public sealed class C
+            {
+               public static HashSet<int> M(ControlFlowGraph cfg)
+               {
+                   int n = cfg.Blocks.Length;
+
+                   // Step 1: reverse postorder via DFS
+                   var rpo = new List<int>(n);
+                   var visited = new bool[n];
+
+                   void Dfs(int b)
+                   {
+                       visited[b] = true;
+                       var block = cfg.Blocks[b];
+                       var fall = block.FallThroughSuccessor?.Destination?.Ordinal ?? -1;
+                       var cond = block.ConditionalSuccessor?.Destination?.Ordinal ?? -1;
+                       if (fall >= 0 && !visited[fall]) Dfs(fall);
+                       if (cond >= 0 && !visited[cond]) Dfs(cond);
+                       rpo.Add(b);
+                   }
+
+                   Dfs(0);
+                   rpo.Reverse();
+
+                   var rpoNum = new int[n];
+                   for (int i = 0; i < rpo.Count; i++) rpoNum[rpo[i]] = i;
+
+                   // Step 2: predecessor lists
+                   var preds = new List<int>[n];
+                   for (int i = 0; i < n; i++) preds[i] = new List<int>();
+                   foreach (var block in cfg.Blocks)
+                   {
+                       var fall = block.FallThroughSuccessor?.Destination?.Ordinal ?? -1;
+                       var cond = block.ConditionalSuccessor?.Destination?.Ordinal ?? -1;
+                       if (fall >= 0) preds[fall].Add(block.Ordinal);
+                       if (cond >= 0) preds[cond].Add(block.Ordinal);
+                   }
+
+                   // Step 3: Cooper/Harvey/Kennedy 2001
+                   var idom = new int[n];
+                   Array.Fill(idom, -1);
+                   idom[0] = 0;
+
+                   int Intersect(int b1, int b2)
+                   {
+                       while (b1 != b2)
+                       {
+                           while (rpoNum[b1] > rpoNum[b2]) b1 = idom[b1];
+                           while (rpoNum[b2] > rpoNum[b1]) b2 = idom[b2];
+                       }
+
+                       return b1;
+                   }
+
+                   bool changed = true;
+                   while (changed)
+                   {
+                       changed = false;
+                       for (int i = 1; i < rpo.Count; i++)
+                       {
+                           int b = rpo[i];
+                           int newIdom = -1;
+                           foreach (int p in preds[b])
                            {
-                              public static HashSet<int> M(ControlFlowGraph cfg)
-                              {
-                                  int n = cfg.Blocks.Length;
-                           
-                                  // Step 1: reverse postorder via DFS
-                                  var rpo = new List<int>(n);
-                                  var visited = new bool[n];
-                           
-                                  void Dfs(int b)
-                                  {
-                                      visited[b] = true;
-                                      var block = cfg.Blocks[b];
-                                      var fall = block.FallThroughSuccessor?.Destination?.Ordinal ?? -1;
-                                      var cond = block.ConditionalSuccessor?.Destination?.Ordinal ?? -1;
-                                      if (fall >= 0 && !visited[fall]) Dfs(fall);
-                                      if (cond >= 0 && !visited[cond]) Dfs(cond);
-                                      rpo.Add(b);
-                                  }
-                           
-                                  Dfs(0);
-                                  rpo.Reverse();
-                           
-                                  var rpoNum = new int[n];
-                                  for (int i = 0; i < rpo.Count; i++) rpoNum[rpo[i]] = i;
-                           
-                                  // Step 2: predecessor lists
-                                  var preds = new List<int>[n];
-                                  for (int i = 0; i < n; i++) preds[i] = new List<int>();
-                                  foreach (var block in cfg.Blocks)
-                                  {
-                                      var fall = block.FallThroughSuccessor?.Destination?.Ordinal ?? -1;
-                                      var cond = block.ConditionalSuccessor?.Destination?.Ordinal ?? -1;
-                                      if (fall >= 0) preds[fall].Add(block.Ordinal);
-                                      if (cond >= 0) preds[cond].Add(block.Ordinal);
-                                  }
-                           
-                                  // Step 3: Cooper/Harvey/Kennedy 2001
-                                  var idom = new int[n];
-                                  Array.Fill(idom, -1);
-                                  idom[0] = 0;
-                           
-                                  int Intersect(int b1, int b2)
-                                  {
-                                      while (b1 != b2)
-                                      {
-                                          while (rpoNum[b1] > rpoNum[b2]) b1 = idom[b1];
-                                          while (rpoNum[b2] > rpoNum[b1]) b2 = idom[b2];
-                                      }
-                           
-                                      return b1;
-                                  }
-                           
-                                  bool changed = true;
-                                  while (changed)
-                                  {
-                                      changed = false;
-                                      for (int i = 1; i < rpo.Count; i++)
-                                      {
-                                          int b = rpo[i];
-                                          int newIdom = -1;
-                                          foreach (int p in preds[b])
-                                          {
-                                              if (idom[p] == -1) continue;
-                                              newIdom = newIdom == -1 ? p : Intersect(newIdom, p);
-                                          }
-                           
-                                          if (newIdom != -1 && idom[b] != newIdom)
-                                          {
-                                              idom[b] = newIdom;
-                                              changed = true;
-                                          }
-                                      }
-                                  }
-                           
-                                  // Step 4: Dom(exit) = walk idom chain from exit to entry
-                                  var result = new HashSet<int>();
-                                  int cur = n - 1;
-                                  while (cur != 0)
-                                  {
-                                      result.Add(cur);
-                                      cur = idom[cur];
-                                  }
-                           
-                                  result.Add(0);
-                                  return result;
-                              }
-                           
+                               if (idom[p] == -1) continue;
+                               newIdom = newIdom == -1 ? p : Intersect(newIdom, p);
                            }
-                           """, "M");
+
+                           if (newIdom != -1 && idom[b] != newIdom)
+                           {
+                               idom[b] = newIdom;
+                               changed = true;
+                           }
+                       }
+                   }
+
+                   // Step 4: Dom(exit) = walk idom chain from exit to entry
+                   var result = new HashSet<int>();
+                   int cur = n - 1;
+                   while (cur != 0)
+                   {
+                       result.Add(cur);
+                       cur = idom[cur];
+                   }
+
+                   result.Add(0);
+                   return result;
+               }
+
+            }
+            """,
+            "M"
+        );
 
         // BIG = run on a real, complex 55-block method (CHK's own source). Robust capstone: the fast
         // dominator algorithm must agree with the naive delete-test. (Orchestrator completed this — the
@@ -556,10 +570,7 @@ public sealed class CfgSpike
 
     // Milestone 2: partition the method's effect-bearing call-sites (here: every invocation) into the
     // must-run spine vs the guarded shell, using BlockOf + the dominator must-run set.
-    private static (List<string> MustRunSites, List<string> GuardedSites) Partition(
-        ControlFlowGraph cfg,
-        MethodDeclarationSyntax method
-    )
+    private static (List<string> MustRunSites, List<string> GuardedSites) Partition(ControlFlowGraph cfg, MethodDeclarationSyntax method)
     {
         var mustRunBlocks = MustRun_CHK(cfg);
         var mustRun = new List<string>();
