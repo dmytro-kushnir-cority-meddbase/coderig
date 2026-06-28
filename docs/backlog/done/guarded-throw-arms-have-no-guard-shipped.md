@@ -1,6 +1,10 @@
 # Guarded `throw` arms carry no guard — the normal-completion model excludes dead-end blocks
 
-**Status:** todo · **Priority: LOW-MED** (a guarded throw is a conditional effect we can't disclose; bounded model extension) · **Found:** 2026-06-28 (dogfooding `tree`, `ClassFactory.AssemblyResolver` L41-43) · **Family:** effect-precision / control-dependence-model
+**Status:** SHIPPED 2026-06-28 (`e0fac644`) — ComputeGuards' two-model merge (normal + virtual-exit, merged by IsAbnormalExit) gives a reachable guarded throw its gating predicate without disturbing the must-run spine; `OnThrow` wires the guard onto the Throw ref. Proven by the differential oracle + guarded-throw fixtures + a capture test; the vacuous-post-dominance regression still passes. · **Priority: LOW-MED** · **Found:** 2026-06-28 (dogfooding `tree`, `ClassFactory.AssemblyResolver` L41-43) · **Family:** effect-precision / control-dependence-model
+
+## Residual (NOT done)
+- **MedDBase re-index pending:** the throw-guard wiring is an *extraction* change, so the `↯ throw:raise` effect leaf won't show its `⎇` on the existing store until a re-index. End-to-end is guaranteed by the three independent tests (capture stores it → deriver copies it → leaf-render shows it); the re-index is confirmatory.
+- Nested-guard throws carry only their innermost direct guard (the documented direct-CD limit — see [[guard-set-direct-vs-transitive-control-dependence]]).
 **Related:** [[branch-aware-effects-shipped]] (the feature) · [[guards-not-shown-on-view-full-promoted-leaves]] (a guarded throw ALSO hits that rendering gap — two reasons it shows bare)
 
 ## Symptom

@@ -1,6 +1,10 @@
 # `--guards` not rendered on `--view full` promoted leaves (external library calls + effect leaves)
 
-**Status:** todo · **Priority: MEDIUM** (undercuts `--guards` in the primary inspection view: a guarded effect reads as must-run) · **Found:** 2026-06-28 (dogfooding `tree MMS.ClassFactory.GetAssembly --view full --guards`) · **Family:** rendering / disclosure-completeness
+**Status:** SHIPPED 2026-06-28 (`fac662ca`) — guards thread through SymbolRef/FactInvocation/DerivedEffect to both leaf formatters; validated on the MedDBase store (switch-arm externals + guarded `Dictionary.Add`/`String.Substring`; must-run io/lock leaves stay bare). · **Priority: MEDIUM** · **Found:** 2026-06-28 (dogfooding `tree MMS.ClassFactory.GetAssembly --view full --guards`) · **Family:** rendering / disclosure-completeness
+
+## Residual follow-ups (NOT shipped)
+- **Render-quality nit:** a switch-derived guard's predicate text is the bare case constant (`"entry"`, `!"executing"`), not `name == "entry"` / `name != "executing"`. The switch lowers to per-case equality and `FactExtractor.FullConditionText` returns the constant unchanged. Reconstruct `<governing> == <constant>` for switch guards so the render reads as a predicate.
+- **Ctor + field-access effect leaves stay guardless:** the invocation and throw arms carry guards now, but ctor effects (`OnCreation` is structurally blind — see the alloc-detector card) and static-field-access effects don't. Wiring those needs the ctor/field-access refs to carry `EnclosingGuards` (extraction change → re-index).
 **Related:** [[branch-aware-effects-shipped]] (the feature) · [[guard-set-direct-vs-transitive-control-dependence]] (sibling guard-disclosure gap)
 
 ## Symptom
