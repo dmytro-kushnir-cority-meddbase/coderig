@@ -54,6 +54,7 @@ internal static class ImpactCommand
         var format = CommonOptions.Format();
         var limit = CommonOptions.Limit();
         var noCache = CommonOptions.NoCache();
+        var noGate = CommonOptions.NoGate();
         var structural = new Option<bool>("--structural")
         {
             Description =
@@ -84,6 +85,7 @@ internal static class ImpactCommand
             format,
             limit,
             noCache,
+            noGate,
             structural,
             expectNoEffectChange,
         };
@@ -115,6 +117,7 @@ internal static class ImpactCommand
                             Format: pr.GetValue(format),
                             Limit: pr.GetValue(limit),
                             NoCache: pr.GetValue(noCache),
+                            Gate: !pr.GetValue(noGate),
                             Structural: pr.GetValue(structural),
                             ExpectNoEffectChange: pr.GetValue(expectNoEffectChange)
                         ),
@@ -136,6 +139,7 @@ internal static class ImpactCommand
         string? Format,
         int? Limit,
         bool NoCache,
+        bool Gate,
         bool Structural,
         bool ExpectNoEffectChange
     );
@@ -189,20 +193,22 @@ internal static class ImpactCommand
 
         // HEAD (branch) side: load and shape the full graph, derive entry points + effects. All reads are
         // done once and threaded into the per-EP computations below.
-        var headData = await LoadHeadSideDataAsync(context, rules);
+        var headData = await LoadHeadSideDataAsync(context, rules, gate: opts.Gate);
 
         // Branch-side per-EP outputs: the EP-set diff vs base, the reach sets, the epByKey site map, the
         // effect footprints, and the hazard sets — all over the HEAD graph loaded above.
         var branchSide = await ComputeBranchSideAsync(baseDbPath: baseDbPath, rules: rules, mode: mode, headData: headData);
 
         // Assemble the proven store-vs-store ImpactDiff: load the base store ONCE, diff reach sets +
-        // footprints/hazards against the branch, and wrap the three signals into ImpactDiff.
+        // footprints/hazards against the branch, and wrap the three signals into ImpactDiff. The gate must
+        // match the HEAD side so both stores' static-field-read effects are filtered identically.
         var impactDiff = await AssembleImpactDiffAsync(
             baseDbPath: baseDbPath,
             rules: rules,
             mode: mode,
             headData: headData,
-            branchSide: branchSide
+            branchSide: branchSide,
+            gate: opts.Gate
         );
 
         // (FilePath, Line) -> method DocID, in-RAM (no store I/O) — lets the affected-EP card render each EP's
@@ -254,14 +260,15 @@ internal static class ImpactCommand
         var headStoreKey = StoreKey(Path.Combine(headDir, StoreLayout.DbFileName));
         var baseStoreKey = StoreKey(baseDbPath);
         var cache = opts.NoCache ? null : QueryCache.Open(rigDirectory: headDir, storeKey: headStoreKey);
+        // Fold the shared_state:read write-pairing gate state into the rule-fingerprint slot so the gated and
+        // ungated (--no-gate) diffs never share a cache entry. BOTH carry an explicit token (not the bare
+        // rulesHash) so a diff cached by a PRE-gate binary can never be served as a gated result (a one-time
+        // recompute on upgrade; correctness over a warm-cache hit).
+        var rulesHash = RulesFingerprint.ComputeFromPaths(loadedRulePaths); // F6: reuse paths Load resolved.
+        var keyRulesHash = opts.Gate ? $"{rulesHash}|gate" : $"{rulesHash}|nogate";
         var cacheKey = cache is null
             ? null
-            : ImpactCacheKey(
-                baseStoreKey: baseStoreKey,
-                headStoreKey: headStoreKey,
-                rulesHash: RulesFingerprint.ComputeFromPaths(loadedRulePaths), // F6: reuse paths Load resolved.
-                mode: mode
-            );
+            : ImpactCacheKey(baseStoreKey: baseStoreKey, headStoreKey: headStoreKey, rulesHash: keyRulesHash, mode: mode);
         return (rules, baseDbPath, cache, cacheKey);
     }
 
@@ -279,7 +286,7 @@ internal static class ImpactCommand
         IReadOnlyDictionary<string, IReadOnlyList<string>> RefTargets
     );
 
-    private static async Task<HeadSideData> LoadHeadSideDataAsync(RigDbContext context, RuleSet rules)
+    private static async Task<HeadSideData> LoadHeadSideDataAsync(RigDbContext context, RuleSet rules, bool gate = true)
     {
         var methods = await Reads.LoadDeadCodeMethodsAsync(context);
         // The branch's per-symbol declaration body hashes (guarded — empty on a pre-fact store). Diffed against
@@ -310,7 +317,8 @@ internal static class ImpactCommand
             staticFieldWriteRefs: staticFieldWriteRefs,
             staticFieldReadRefs: staticFieldReadRefs,
             deriveHazards: true,
-            threadStaticCells: threadStaticCells
+            threadStaticCells: threadStaticCells,
+            gate: gate
         );
         // The branch's enclosing→field/property-access-targets lookup, built ONCE so ComputeReachSets can union
         // each reachable method's read/write targets as degenerate `R:` nodes at O(reach) cost.
@@ -395,10 +403,11 @@ internal static class ImpactCommand
         RuleSet rules,
         FactPathFinder.TraversalMode mode,
         HeadSideData headData,
-        BranchSideData branchSide
+        BranchSideData branchSide,
+        bool gate = true
     )
     {
-        var baseSide = await ComputeBaseSideAsync(baseDbPath: baseDbPath, rules: rules, mode: mode);
+        var baseSide = await ComputeBaseSideAsync(baseDbPath: baseDbPath, rules: rules, mode: mode, gate: gate);
 
         // The symbols whose declaration BODY changed base↔branch (differing/one-sided hash). An EP whose reach
         // intersects this set is affected IN-PLACE even when its structural reach-set diff is empty. Both maps
@@ -1194,7 +1203,7 @@ internal static class ImpactCommand
         Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>> Footprints,
         Dictionary<(string Kind, string Route), HashSet<HazardFinding>> Hazards,
         IReadOnlyDictionary<string, string> BodyHashes
-    )> ComputeBaseSideAsync(string baseDbPath, RuleSet rules, FactPathFinder.TraversalMode mode)
+    )> ComputeBaseSideAsync(string baseDbPath, RuleSet rules, FactPathFinder.TraversalMode mode, bool gate = true)
     {
         await using var context = new RigDbContext(baseDbPath, readOnly: true);
         var graph = await Reads.LoadShapedGraphAsync(context: context, rules: rules);
@@ -1221,7 +1230,8 @@ internal static class ImpactCommand
             staticFieldWriteRefs: staticFieldWriteRefs,
             staticFieldReadRefs: staticFieldReadRefs,
             deriveHazards: true,
-            threadStaticCells: threadStaticCells
+            threadStaticCells: threadStaticCells,
+            gate: gate
         );
 
         // Phase 3: union the base's field/property-access targets into its reach sets too, so the per-EP

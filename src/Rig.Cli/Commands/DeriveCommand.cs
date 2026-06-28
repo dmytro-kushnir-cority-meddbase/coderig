@@ -29,6 +29,7 @@ internal static class DeriveCommand
         var excludeNamespace = CommonOptions.ExcludeNamespace();
         var format = CommonOptions.Format();
         var store = CommonOptions.Store();
+        var noGate = CommonOptions.NoGate();
         var listProviders = new Option<bool>("--list-providers")
         {
             Description = "Print the known effect providers and provider:operation pairs from the effective rule set, then exit.",
@@ -42,6 +43,7 @@ internal static class DeriveCommand
             excludeNamespace,
             format,
             store,
+            noGate,
             listProviders,
         };
         cmd.SetAction(pr =>
@@ -57,6 +59,7 @@ internal static class DeriveCommand
                             Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
                             ExcludeNamespaces: CommonOptions.NamespacePrefixes(pr.GetValue(excludeNamespace)),
                             Format: pr.GetValue(format),
+                            Gate: !pr.GetValue(noGate),
                             ListProviders: pr.GetValue(listProviders)
                         ),
                         new CommandIo(new TextOutput(output, error), new WorkspaceLocation(workingDirectory, pr.GetValue(store)))
@@ -73,6 +76,7 @@ internal static class DeriveCommand
         HashSet<string> Exclude,
         IReadOnlyList<string> ExcludeNamespaces,
         string? Format,
+        bool Gate = true,
         bool ListProviders = false
     );
 
@@ -153,7 +157,8 @@ internal static class DeriveCommand
             rulesHash: rulesHash,
             rules: rules,
             useCache: true,
-            epData: epData // #1b: reuse the EP data loaded above; skip the redundant load on a cache miss.
+            epData: epData, // #1b: reuse the EP data loaded above; skip the redundant load on a cache miss.
+            gate: opts.Gate // shared_state:read write-pairing gate (on by default; --no-gate flips off).
         );
         // cache_coherence (below) MUST see the PRE-filter effects: --exclude cache would otherwise hide the
         // cache:invalidate companions and manufacture false missing-invalidation findings. Capture the

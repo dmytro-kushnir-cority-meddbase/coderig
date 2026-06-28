@@ -33,9 +33,24 @@ internal static class EffectDerivation
         // [ThreadStatic] cell DocIDs (Reads.LoadThreadStaticFieldIdsAsync). A read→write on one is rerouted
         // from race_window to thread_local_context (thread-confined ⇒ not a race, but the FR-2 surface).
         // Null/empty leaves the legacy race_window classification unchanged.
-        IReadOnlySet<string>? threadStaticCells = null
+        IReadOnlySet<string>? threadStaticCells = null,
+        // FR-1 read-arm WRITE-PAIRING GATE (on by default). When true, a shared_state:read effect is emitted
+        // only for a static-field read whose cell ALSO appears as a static-field write target somewhere in the
+        // same input set — so a read of a never-written cell (const/enum/other immutable static) is dropped as
+        // pure inventory noise (it can never pair with a write for the race_window TOCTOU hazard). Pure
+        // presentation/inventory filtering: race_window is unaffected (its matcher already only pairs same-cell
+        // read+write, so an unpaired read contributes nothing). `--no-gate` flips this off (emit every read).
+        bool gate = true
     )
     {
+        // Pre-filter the static-field READ refs to cells that are also WRITTEN somewhere (the gate). An unpaired
+        // read can never form a race_window pair, so it is inventory-only — drop it unless --no-gate opts in.
+        if (gate && staticFieldReadRefs is { Count: > 0 })
+        {
+            var writtenCells = (staticFieldWriteRefs ?? []).Select(w => w.Target).ToHashSet(StringComparer.Ordinal);
+            staticFieldReadRefs = staticFieldReadRefs.Where(r => writtenCells.Contains(r.Target)).ToList();
+        }
+
         var effects = FactEffectDeriver.Derive(
             invocations,
             effectRules,
@@ -74,7 +89,9 @@ internal static class EffectDerivation
         // Perf (#1b): the caller (DeriveCommand) has already loaded the EP data for its own base-type gates;
         // thread it through to skip the redundant LoadFactEntryPointDataAsync here. Null = load it ourselves
         // (back-compat for callers that don't have it — e.g. the uncached cache-miss path triggered elsewhere).
-        FactEntryPointDeriver.FactEntryPointData? epData = null
+        FactEntryPointDeriver.FactEntryPointData? epData = null,
+        // FR-1 read-arm write-pairing gate (on by default) — threaded into DeriveEffects. `--no-gate` flips off.
+        bool gate = true
     )
     {
         epData ??= await Reads.LoadFactEntryPointDataAsync(context);
@@ -93,7 +110,8 @@ internal static class EffectDerivation
             staticFieldWriteRefs: staticFieldWriteRefs,
             staticFieldReadRefs: staticFieldReadRefs,
             deriveHazards: true,
-            threadStaticCells: threadStaticCells
+            threadStaticCells: threadStaticCells,
+            gate: gate
         );
     }
 
@@ -110,22 +128,32 @@ internal static class EffectDerivation
         bool useCache,
         // Perf (#1b): the already-loaded EP data, threaded into DeriveHazardEffectsAsync on a cache MISS so it
         // need not reload it. Unused on a cache HIT (derivation is skipped). Null = derivation loads its own.
-        FactEntryPointDeriver.FactEntryPointData? epData = null
+        FactEntryPointDeriver.FactEntryPointData? epData = null,
+        // FR-1 read-arm write-pairing gate (on by default). CRITICAL: it is folded into the cache key below —
+        // a gated and an ungated (--no-gate) run produce DIFFERENT effect sets, so they must not share an entry
+        // (else --no-gate would return cached gated results, or vice-versa).
+        bool gate = true
     )
     {
         if (!useCache)
         {
-            return await DeriveHazardEffectsAsync(context, rules, epData);
+            return await DeriveHazardEffectsAsync(context, rules, epData, gate: gate);
         }
 
         using var cache = QueryCache.Open(rigDirectory: rigDirectory, storeKey: storeKey);
-        var key = cache is null ? null : HazardEffectsCacheKey(storeKey: storeKey, rulesHash: rulesHash);
+        // Fold the gate state into the rule-fingerprint slot of the key so the gated and ungated (--no-gate)
+        // effect sets never share a cache entry. BOTH carry an explicit token (not the bare rulesHash) so a
+        // blob written by a PRE-gate binary under the bare fingerprint can never be served as a gated result —
+        // the gate is a derivation-logic change the rulesHash alone doesn't capture (a one-time recompute on
+        // upgrade; correctness over a warm-cache hit — a fact tool must not silently return stale ungated counts).
+        var keyRulesHash = gate ? $"{rulesHash}|gate" : $"{rulesHash}|nogate";
+        var key = cache is null ? null : HazardEffectsCacheKey(storeKey: storeKey, rulesHash: keyRulesHash);
         if (key is not null && cache!.Get(key) is { } blob && HazardEffectsCodec.Decode(blob) is { } hit)
         {
             return hit;
         }
 
-        var derived = await DeriveHazardEffectsAsync(context, rules, epData);
+        var derived = await DeriveHazardEffectsAsync(context, rules, epData, gate: gate);
         if (key is not null)
         {
             TryCache(() => cache!.Put(key, HazardEffectsCodec.Encode(derived)));

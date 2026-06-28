@@ -68,6 +68,7 @@ internal static class TreeCommand
         var exclude = CommonOptions.Exclude();
         var excludeNamespace = CommonOptions.ExcludeNamespace();
         var noCache = CommonOptions.NoCache();
+        var noGate = CommonOptions.NoGate();
         var time = CommonOptions.Time();
         var format = CommonOptions.Format(
             description: "Output format: tsv — machine-readable DFS rows; llm — compact LLM TSV (6-col for --view paths/full; 7-col for --view effects, which adds a parent column); llm-ids — LLM TSV with explicit id/parent_id linkage (8-col, all views). In --view effects, parent_id is the nearest EFFECTFUL ancestor (not the direct caller) and depth is the original-tree depth. llm and llm-ids compose with --view paths/full/effects only. --guards appends a trailing `guards` column (the control-dependence condition gating each call) to all three formats.",
@@ -96,6 +97,7 @@ internal static class TreeCommand
             exclude,
             excludeNamespace,
             noCache,
+            noGate,
             time,
             format,
             store,
@@ -178,6 +180,7 @@ internal static class TreeCommand
                             Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
                             ExcludeNamespaces: CommonOptions.NamespacePrefixes(pr.GetValue(excludeNamespace)),
                             NoCache: pr.GetValue(noCache),
+                            Gate: !pr.GetValue(noGate),
                             Time: pr.GetValue(time),
                             Format: pr.GetValue(format),
                             Suppress: pr.GetValue(suppress)
@@ -208,6 +211,7 @@ internal static class TreeCommand
         HashSet<string> Exclude,
         IReadOnlyList<string> ExcludeNamespaces,
         bool NoCache,
+        bool Gate,
         bool Time,
         string? Format,
         string? Suppress
@@ -394,7 +398,8 @@ internal static class TreeCommand
                 storeKey: storeKey,
                 rulesHash: rulesHash,
                 rules: rules,
-                useCache: !opts.NoCache
+                useCache: !opts.NoCache,
+                gate: opts.Gate // shared_state:read write-pairing gate (on by default; --no-gate flips off).
             );
             effects = hazardEffects.Where(e => e.EnclosingSymbolId is not null && treeMethods.Contains(e.EnclosingSymbolId)).ToList();
             // The effect-attached pattern hazards (race_window/lazy_init_race/dual_write/n_plus_1/…), one

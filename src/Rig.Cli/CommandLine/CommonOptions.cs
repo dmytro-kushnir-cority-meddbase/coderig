@@ -100,6 +100,16 @@ internal static class CommonOptions
 
     internal static Option<bool> NoCache() => new("--no-cache") { Description = "Bypass the query cache." };
 
+    // --no-gate: disable the shared_state:read write-pairing gate. By default a static-field read effect is
+    // emitted only when its cell is ALSO written somewhere (so it can pair with a write for the race_window
+    // TOCTOU hazard); --no-gate emits every static-field read, including never-written const/enum cells.
+    internal static Option<bool> NoGate() =>
+        new("--no-gate")
+        {
+            Description =
+                "Disable the shared_state:read write-pairing gate — emit every static-field read, including never-written const/enum cells (default: gate on).",
+        };
+
     internal static Option<bool> Time() => new("--time") { Description = "Print per-phase timings to stderr." };
 
     internal static Option<bool> Files() => new("--files") { Description = "Append each node's source location." };
