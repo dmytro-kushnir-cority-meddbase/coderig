@@ -122,7 +122,13 @@ public sealed record ReferenceFact(
     // stage-2 traversal therefore resolves it to its static callee only and excludes it from the
     // override-dispatch fan (forward AND reverse). False for ordinary virtual/interface/direct calls and
     // on stores indexed before this flag existed (so old stores read as all-virtual = prior behavior).
-    bool NonVirtual = false
+    bool NonVirtual = false,
+    // The control-dependence GUARD SET of this call-site WITHIN its own method (CFG-derived, frozen at
+    // index): the branch predicates that gate whether this effect runs, each encoded as predicate-text/
+    // polarity and joined. Null/empty == MUST-RUN — unconditional within the method (the spine). INTRA-
+    // method only; the cumulative cross-method guard chain is a DERIVE-side composition. Decode with
+    // FactStructuralContext.DecodeGuards. Null on stores indexed before this existed (read as no guards).
+    string? EnclosingGuards = null
 );
 
 /// <summary>A base-type or implemented-interface edge between two types.</summary>

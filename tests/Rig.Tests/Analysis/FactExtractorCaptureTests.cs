@@ -68,6 +68,43 @@ public sealed class FactExtractorCaptureTests
     }
 
     [Test]
+    public void Captures_control_dependence_guard_set_on_call_sites()
+    {
+        // branch-aware-effects M3: the extractor builds a CFG per method and freezes each call-site's
+        // intra-method guard set onto the ReferenceFact. Unconditional call -> null (must-run); guarded
+        // call -> the predicate + polarity.
+        var source = """
+            namespace App
+            {
+                public sealed class Svc
+                {
+                    public void Handle(bool flag)
+                    {
+                        Always();
+                        if (flag) Guarded();
+                    }
+
+                    private void Always() {}
+                    private void Guarded() {}
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        var always = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Always"));
+        var guarded = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Guarded"));
+
+        always.EnclosingGuards.ShouldBeNull(); // unconditional -> must-run -> no guards
+
+        guarded.EnclosingGuards.ShouldNotBeNull();
+        var decoded = FactStructuralContext.DecodeGuards(guarded.EnclosingGuards);
+        decoded.Count.ShouldBe(1);
+        decoded[0].Predicate.ShouldContain("flag");
+        decoded[0].WhenTrue.ShouldBeTrue(); // Guarded() runs when `flag` is true
+    }
+
+    [Test]
     public void Bare_instance_call_records_the_enclosing_type_as_the_implicit_this_receiver()
     {
         // Per C# spec a bare `Foo()` instance call runs on the implicit `this`, so its receiver type is the

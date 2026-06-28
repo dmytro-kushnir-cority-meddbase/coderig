@@ -5,6 +5,8 @@ using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.FlowAnalysis;
+using Microsoft.CodeAnalysis.Operations;
 using Rig.Domain.Data;
 
 namespace Rig.Analysis.Extraction;
@@ -34,6 +36,11 @@ internal static class FactExtractor
         // Per-file memo for EnclosingSymbolId: enclosing node -> its owning DocID. Shared across the lambda
         // pass and every reference so a member's DocID is built once, not once per contained reference.
         var enclosingCache = new Dictionary<SyntaxNode, string?>();
+        // Per-method CFG + control-dependence cache (branch-aware-effects). Built lazily the first time an
+        // effect-bearing ref in a method asks for its guard set, then reused for every other ref in that
+        // method — so each method's CFG is constructed ONCE (the cost-spike basis). null value = the body
+        // had no buildable CFG (cached so we don't retry). Keyed by the method/accessor/ctor decl node.
+        var cfgGuardCache = new Dictionary<SyntaxNode, (ControlFlowGraph Cfg, IReadOnlyList<ControlDependence.ControlGuard>[] Guards)?>();
 
         // --- Lambda identity (18b): a synthetic symbol + handoff edge for each argument-passed lambda,
         //     so EnclosingSymbolId can re-root the lambda body's facts onto the lambda. The map is built
@@ -171,6 +178,9 @@ internal static class FactExtractor
                 : refKind is RefKinds.Write or RefKinds.Read ? name
                 : null;
             var structural = StructuralContextOf(structuralRoot, model, symbolCache);
+            // Control-dependence guard set of this effect-bearing call-site within its method (CFG-derived,
+            // frozen here — see branch-aware-effects). Same nodes that carry structural context.
+            var enclosingGuards = structuralRoot is null ? null : EncodedGuardsFor(structuralRoot, model, cfgGuardCache);
             var delegateConsumer = refKind == RefKinds.MethodGroup ? DelegateConsumerOf(name, model) : null;
             // A `base.M(...)` call is NON-VIRTUAL (C# spec: CIL `call`, not `callvirt`): the instance
             // receiver is the `base` keyword, so it binds to exactly the base implementation and can never
@@ -196,7 +206,8 @@ internal static class FactExtractor
                 argumentTemplates: argumentTemplates,
                 argumentNames: argumentNames,
                 symbolCache: symbolCache,
-                nonVirtual: nonVirtual
+                nonVirtual: nonVirtual,
+                enclosingGuards: enclosingGuards
             );
 
             // 18c: a method-group ASSIGNED to a delegate field/property/event (not passed as an
@@ -650,7 +661,8 @@ internal static class FactExtractor
         string? argumentTemplates = null,
         string? argumentNames = null,
         SymbolStringCache? symbolCache = null,
-        bool nonVirtual = false
+        bool nonVirtual = false,
+        string? enclosingGuards = null
     )
     {
         // Generic type arguments at the CALL SITE — read from the constructed `target` BEFORE
@@ -736,7 +748,9 @@ internal static class FactExtractor
                 // True for a `base.M(...)` call — non-virtual (CIL `call`), binds to exactly the base
                 // implementation. The traversal resolves it to its static callee only and keeps it out of
                 // the override-dispatch fan. False for every ordinary call. (Detected by the caller.)
-                NonVirtual: nonVirtual
+                NonVirtual: nonVirtual,
+                // CFG-derived control-dependence guard set of this call-site within its method (null = must-run).
+                EnclosingGuards: enclosingGuards
             )
         );
     }
@@ -1119,6 +1133,60 @@ internal static class FactExtractor
         string? CatchTypes,
         string? EnclosingScopes = null
     );
+
+    // The encoded control-dependence guard set of an effect-bearing call-site `node`, within its enclosing
+    // method (branch-aware-effects; frozen at index). Returns null when the effect is unconditional
+    // (must-run — empty guard set), when `node` isn't in the method's top-level CFG (e.g. it sits inside a
+    // lambda body — a deliberate M3 follow-up; that ref carries no guards rather than wrong ones), or when
+    // no CFG could be built. The per-extraction `cache` ensures each method's CFG is constructed ONCE.
+    private static string? EncodedGuardsFor(
+        SyntaxNode node,
+        SemanticModel model,
+        Dictionary<SyntaxNode, (ControlFlowGraph Cfg, IReadOnlyList<ControlDependence.ControlGuard>[] Guards)?> cache
+    )
+    {
+        var owner = node.AncestorsAndSelf().FirstOrDefault(a => a is BaseMethodDeclarationSyntax or AccessorDeclarationSyntax);
+        if (owner is null)
+        {
+            return null;
+        }
+
+        if (!cache.TryGetValue(owner, out var data))
+        {
+            data = BuildGuardData(owner, model);
+            cache[owner] = data;
+        }
+
+        if (data is null)
+        {
+            return null;
+        }
+
+        var block = ControlDependence.BlockOf(data.Value.Cfg, node);
+        if (block < 0 || block >= data.Value.Guards.Length)
+        {
+            return null; // not a node in this method's top-level CFG (lambda body, etc.)
+        }
+
+        var guards = data.Value.Guards[block];
+        return guards.Count == 0 ? null : FactStructuralContext.EncodeGuards(guards.Select(g => (g.Predicate, g.WhenTrue)).ToList());
+    }
+
+    private static (ControlFlowGraph Cfg, IReadOnlyList<ControlDependence.ControlGuard>[] Guards)? BuildGuardData(
+        SyntaxNode owner,
+        SemanticModel model
+    )
+    {
+        ControlFlowGraph? cfg = model.GetOperation(owner) switch
+        {
+            IMethodBodyOperation methodBody => ControlFlowGraph.Create(methodBody),
+            IConstructorBodyOperation ctorBody => ControlFlowGraph.Create(ctorBody),
+            IBlockOperation block => ControlFlowGraph.Create(block),
+            _ => null,
+        };
+
+        return cfg is null ? null : (cfg, ControlDependence.ComputeGuards(cfg));
+    }
 
     // The InvocationExpressionSyntax this name is the invoked method of: `Foo(..)`, `a.Foo(..)`, or
     // `a?.Foo(..)`. Null otherwise (mirrors IsInvoked's shapes, plus the conditional-access form).
