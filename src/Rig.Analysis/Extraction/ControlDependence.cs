@@ -281,6 +281,9 @@ internal static class ControlDependence
                     // effect-guarding AND wrong for our model — a loop-condition block is MUST-RUN (every
                     // path checks it to exit), so its guard set must be empty (the must-run<=>no-guards
                     // invariant). A block does not meaningfully guard itself.
+                    // TODO: this is a deliberate departure from canonical PDG semantics, correct for the
+                    // effect-guarding use case. If a future consumer needs true control dependence (e.g. a
+                    // loop-carried-dependence analysis), make this self-exclusion opt-in rather than always-on.
                     if (node != aOrdinal)
                     {
                         guards[node].Add(new ControlGuard(aOrdinal, predicateText, whenTrue));
