@@ -33,13 +33,22 @@ internal static class ControlDependence
     // conditional effect — `throw … WHEN cond`). MustRunBlocks deliberately does NOT add this edge, so a
     // throw never becomes must-run. Shared with the test oracle so both model the same semantics.
     internal static bool IsAbnormalExit(BasicBlock b) =>
-        // REACHABLE only: a switch-expression's synthetic no-match throw arm (and other defensively-emitted
-        // dead arms) is unreachable; wiring it to Exit would forge phantom paths that strip legitimate
-        // post-dominance and re-pin the vacuous-post-dominance guards on the must-run spine. A real guarded
-        // `throw` (e.g. `if (x) throw …`) is reachable and IS a conditional effect.
+        // A method-ESCAPING throw: no in-method Destination. This block GETS the virtual edge to Exit (in
+        // PostDominatorTree's abnormal-exit pass). REACHABLE only: a switch-expression's synthetic no-match
+        // throw arm (and other defensively-emitted dead arms) is unreachable; wiring it to Exit would forge
+        // phantom paths that strip legitimate post-dominance and re-pin the vacuous-post-dominance guards on
+        // the must-run spine. A real guarded `throw` (e.g. `if (x) throw …`) is reachable.
         b.IsReachable
         && b.FallThroughSuccessor
             is { Destination: null, Semantics: ControlFlowBranchSemantics.Throw or ControlFlowBranchSemantics.Rethrow };
+
+    // ANY reachable throw/rethrow block (escaping OR caught — a caught throw routes to its catch and so has a
+    // non-null Destination). These are the blocks whose guard we READ from the virtual-exit pass: a caught
+    // throw reaches Exit through its catch→rethrow chain (whose escaping rethrow carries the virtual edge), so
+    // the virtual pass computes its gating predicate too. The narrower IsAbnormalExit governs only which
+    // blocks get the virtual EDGE; this governs which blocks are guard-disclosed from that pass.
+    internal static bool EndsInThrow(BasicBlock b) =>
+        b.IsReachable && b.FallThroughSuccessor is { Semantics: ControlFlowBranchSemantics.Throw or ControlFlowBranchSemantics.Rethrow };
 
     // The CFG block whose operation subtree contains `target` (exact syntax-node match), or -1. The
     // BranchValue (the condition operation) is scanned separately because it is NOT in block.Operations.
@@ -257,18 +266,18 @@ internal static class ControlDependence
     {
         var normal = MarkGuards(cfg, includeAbnormalExit: false);
 
-        // Skip the second pass unless there's actually a reachable guarded throw to disclose.
-        var hasAbnormalExit = false;
+        // Skip the second pass unless there's actually a reachable throw to disclose.
+        var hasThrow = false;
         foreach (var b in cfg.Blocks)
         {
-            if (IsAbnormalExit(b))
+            if (EndsInThrow(b))
             {
-                hasAbnormalExit = true;
+                hasThrow = true;
                 break;
             }
         }
 
-        if (!hasAbnormalExit)
+        if (!hasThrow)
         {
             return normal;
         }
@@ -277,7 +286,10 @@ internal static class ControlDependence
         var merged = new IReadOnlyList<ControlGuard>[cfg.Blocks.Length];
         for (var i = 0; i < merged.Length; i++)
         {
-            merged[i] = IsAbnormalExit(cfg.Blocks[i]) ? virtualPass[i] : normal[i];
+            // Read the virtual pass for EVERY throw block (escaping or caught) so a guarded `throw` inside a
+            // try/catch — which routes to its catch, not Exit — still gets its predicate; every other block
+            // keeps the strict normal-completion guards (must-run<=>no-guards duality intact).
+            merged[i] = EndsInThrow(cfg.Blocks[i]) ? virtualPass[i] : normal[i];
         }
 
         return merged;

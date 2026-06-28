@@ -97,9 +97,10 @@ public sealed class ControlDependenceTests
         var exit = cfg.Blocks.Length - 1;
         var guards = new List<ControlDependence.ControlGuard>();
 
-        // Mirror ComputeGuards' two-model merge: the virtual throw->Exit edge is active ONLY when computing
-        // guards for an abnormal-exit (throw) block; normally-completing blocks use the strict graph.
-        var includeAbnormalExit = ControlDependence.IsAbnormalExit(cfg.Blocks[block]);
+        // Mirror ComputeGuards' two-model merge: the virtual throw->Exit edges are modelled ONLY when computing
+        // guards for a throw block (escaping or caught); normally-completing blocks use the strict graph. The
+        // edges themselves are added only for ESCAPING throws (IsAbnormalExit), inside ReachAvoiding below.
+        var includeAbnormalExit = ControlDependence.EndsInThrow(cfg.Blocks[block]);
 
         foreach (var a in cfg.Blocks)
         {
@@ -190,9 +191,14 @@ public sealed class ControlDependenceTests
             """
                 public sealed class C { void M(object a, bool x, bool y) { if (a == null) throw new System.Exception(); if (x) { if (y) throw new System.Exception(); } Use(a); } void Use(object a) {} }
                 """,
+            // guarded throw INSIDE try/catch — the caught throw routes to the catch (non-null Destination),
+            // reaching Exit only through the catch's escaping rethrow. Exercises EndsInThrow vs IsAbnormalExit.
+            """
+                public sealed class C { void M(object a) { try { if (a == null) throw new System.Exception(); Use(a); } catch (System.Exception e) { throw new System.Exception("x", e); } } void Use(object a) {} }
+                """,
             SugarSource,
         ];
-        string[] methods = ["M", "M", "M", "Demo"];
+        string[] methods = ["M", "M", "M", "M", "Demo"];
 
         for (var i = 0; i < sources.Length; i++)
         {
@@ -264,9 +270,14 @@ public sealed class ControlDependenceTests
             """
                 public sealed class C { void M(object a, bool x, bool y) { if (a == null) throw new System.Exception(); if (x) { if (y) throw new System.Exception(); } Use(a); } void Use(object a) {} }
                 """,
+            // guarded throw INSIDE try/catch — the caught throw routes to the catch (non-null Destination),
+            // reaching Exit only through the catch's escaping rethrow. Exercises EndsInThrow vs IsAbnormalExit.
+            """
+                public sealed class C { void M(object a) { try { if (a == null) throw new System.Exception(); Use(a); } catch (System.Exception e) { throw new System.Exception("x", e); } } void Use(object a) {} }
+                """,
             SugarSource,
         ];
-        string[] methods = ["M", "M", "M", "Demo"];
+        string[] methods = ["M", "M", "M", "M", "Demo"];
 
         for (var i = 0; i < sources.Length; i++)
         {
@@ -390,6 +401,32 @@ public sealed class ControlDependenceTests
         var mustRun = ControlDependence.MustRunBlocks(cfg);
         mustRun.ShouldContain(BlockOfCall(cfg, tree, "Use(a)"));
         mustRun.ShouldNotContain(throwBlock);
+    }
+
+    // A guarded throw INSIDE a try/catch still carries its predicate: the caught throw routes to the catch
+    // (non-null Destination, so NOT IsAbnormalExit), but EndsInThrow reads the virtual pass where it reaches
+    // Exit via the catch's escaping rethrow. This is the AssemblyResolver shape that motivated the fix.
+    [Test]
+    public void A_guarded_throw_inside_try_catch_carries_its_predicate()
+    {
+        var (cfg, tree) = Build(
+            """
+            public sealed class C { void M(object a) { try { if (a == null) throw new System.Exception(); Use(a); } catch (System.Exception e) { throw new System.Exception("x", e); } } void Use(object a) {} }
+            """,
+            "M"
+        );
+
+        // The guarded (inner) throw is the one whose creation is gated by `if (a == null)`.
+        var guardedThrow = tree.GetRoot()
+            .DescendantNodes()
+            .OfType<ObjectCreationExpressionSyntax>()
+            .First(o => o.ToString().Contains("\"x\"") == false); // the inner `new Exception()` (no message arg)
+        var block = ControlDependence.BlockOf(cfg, guardedThrow);
+        var guards = ControlDependence.GuardsOf(cfg, block);
+
+        guards.Count.ShouldBe(1);
+        guards[0].Predicate.ShouldContain("== null");
+        guards[0].WhenTrue.ShouldBeTrue();
     }
 
     // Regression for the vacuous-post-dominance bug: a switch-expression's synthetic no-match throw arm is
