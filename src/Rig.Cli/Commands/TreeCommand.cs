@@ -60,7 +60,7 @@ internal static class TreeCommand
         var guards = new Option<bool>("--guards")
         {
             Description =
-                "Mark control-dependence-GUARDED call edges with ⎇[predicate] (the analog of 🔁[loop]): the branch predicates gating whether the call runs in its parent. Unconditional (must-run) edges carry no glyph. Intra-method guards only.",
+                "Surface control-dependence guards: in the tree, mark a GUARDED call edge with ⎇ [condition] (the analog of 🔁[loop]) — the branch condition gating whether the call runs in its parent; unconditional (must-run) edges carry none. In --format tsv/llm/llm-ids, append a trailing `guards` column with that condition. Intra-method guards only.",
         };
         var rules = CommonOptions.Rules();
         var depth = CommonOptions.Depth();
@@ -70,7 +70,7 @@ internal static class TreeCommand
         var noCache = CommonOptions.NoCache();
         var time = CommonOptions.Time();
         var format = CommonOptions.Format(
-            description: "Output format: tsv — machine-readable DFS rows; llm — compact LLM TSV (6-col for --view paths/full; 7-col for --view effects, which adds a parent column); llm-ids — LLM TSV with explicit id/parent_id linkage (8-col, all views). In --view effects, parent_id is the nearest EFFECTFUL ancestor (not the direct caller) and depth is the original-tree depth. llm and llm-ids compose with --view paths/full/effects only.",
+            description: "Output format: tsv — machine-readable DFS rows; llm — compact LLM TSV (6-col for --view paths/full; 7-col for --view effects, which adds a parent column); llm-ids — LLM TSV with explicit id/parent_id linkage (8-col, all views). In --view effects, parent_id is the nearest EFFECTFUL ancestor (not the direct caller) and depth is the original-tree depth. llm and llm-ids compose with --view paths/full/effects only. --guards appends a trailing `guards` column (the control-dependence condition gating each call) to all three formats.",
             allowedValues: ["tsv", "llm", "llm-ids"]
         );
         var store = CommonOptions.Store();
@@ -443,7 +443,8 @@ internal static class TreeCommand
         // --format tsv: the full reachable tree, one row per node in DFS pre-order (depth lets a consumer
         // rebuild the hierarchy). No deployment chrome / single-impl folding — raw structure for tooling.
         // Columns: depth, symbolId, edgeKind, handoffVia, fanout, effects (comma-joined provider:operation),
-        // file, line. Emitted here so it pays for neither the deployment map nor the seam computation.
+        // file, line — plus a trailing `guards` column under --guards. Emitted here so it pays for neither
+        // the deployment map nor the seam computation.
         if (tsv)
         {
             var tsvEffects = ApplyEffectFilters(effects, only: opts.Only, exclude: opts.Exclude)
@@ -456,7 +457,7 @@ internal static class TreeCommand
                 );
             foreach (var root in roots)
             {
-                EmitTsvNode(root, 0, tsvEffects, locations, io.TextOutput.Output);
+                EmitTsvNode(root, 0, tsvEffects, locations, io.TextOutput.Output, opts.Guards);
             }
 
             // --hazards: the per-hazard `hazard` rows (same column contract as `derive --format tsv`) after the
@@ -520,7 +521,8 @@ internal static class TreeCommand
                     rawEffectsByMethod: rawEffectsForLlm,
                     projection: projection,
                     output: io.TextOutput.Output,
-                    suppress: suppressSet
+                    suppress: suppressSet,
+                    guards: opts.Guards
                 );
             }
             else
@@ -530,7 +532,8 @@ internal static class TreeCommand
                     rawEffectsByMethod: rawEffectsForLlm,
                     projection: projection,
                     output: io.TextOutput.Output,
-                    suppress: suppressSet
+                    suppress: suppressSet,
+                    guards: opts.Guards
                 );
             }
 
@@ -781,15 +784,22 @@ internal static class TreeCommand
         int depth,
         IReadOnlyDictionary<string, string> effectsByMethod,
         IReadOnlyDictionary<string, (string? File, int Line)> locations,
-        TextWriter output
+        TextWriter output,
+        bool guards = false
     )
     {
         var (file, line) = locations.TryGetValue(node.SymbolId, out var loc) ? loc : (null, 0);
         var effects = effectsByMethod.GetValueOrDefault(key: node.SymbolId, defaultValue: "");
-        output.WriteLine($"{depth}\t{node.SymbolId}\t{node.EdgeKind}\t{node.HandoffVia}\t{node.Fanout}\t{effects}\t{file}\t{line}");
+        // --guards: a trailing column with the reconstructed control-dependence condition gating this call
+        // (empty for must-run). Same text as the human tree's ⎇ glyph (TreeRenderer.ShortGuards): the foreach
+        // MoveNext guard is filtered and a short-circuit ||/&& renders as the whole source condition.
+        var guardCol = guards ? "\t" + ShortGuards(node.EnclosingGuards, node.LoopDetail) : "";
+        output.WriteLine(
+            $"{depth}\t{node.SymbolId}\t{node.EdgeKind}\t{node.HandoffVia}\t{node.Fanout}\t{effects}\t{file}\t{line}{guardCol}"
+        );
         foreach (var child in node.Children)
         {
-            EmitTsvNode(child, depth + 1, effectsByMethod, locations, output);
+            EmitTsvNode(child, depth + 1, effectsByMethod, locations, output, guards);
         }
     }
 }

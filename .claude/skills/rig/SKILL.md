@@ -27,7 +27,7 @@ rig index Sln.slnx --parallelism 16          # whole solution, ONE call (interna
 rig index Sln.slnx --from Entry.csproj       # entry-scoped: Entry's transitive ProjectReference closure
 rig index Other.slnx --merge --rules r.json  # multi-solution: ACCUMULATE into the (commit-scoped) store; one run/solution, queries span all. Pass --rules every time. Loop w/ continue-on-failure for a many-solution repo.
 rig reaches "Type.Method" [--async]          # effects reachable from a node (sync; --async also walks handoffs)
-rig tree "Type.Method" [--view paths|full|effects|summary|hazards] [--format llm|llm-ids] [--suppress ctors,lambdas] [--exclude throw] [--raw]   # call tree (default --view paths = effectful paths)
+rig tree "Type.Method" [--view paths|full|effects|summary|hazards] [--format llm|llm-ids] [--guards] [--suppress ctors,lambdas] [--exclude throw] [--raw]   # call tree (default --view paths = effectful paths; --guards marks branch-gated edges)
 rig callers "Type.Method" [--roots|--entrypoints]  # reverse (roots = no-predecessor origins; entrypoints = rule-detected EPs)
 rig path "From" "To" [--async]               # one concrete path
 rig derive [--list-providers] [--exclude-namespace <ns>]   # ALL effects + EPs; --list-providers = the valid --only/--exclude token set
@@ -52,6 +52,7 @@ Per-repo glyphs via `rig.effect-emoji.json`.
 - `tree` children are source-ordered (≈ execution order). Generic labels show the REAL instantiation (monomorphized down the chain), not `<T,U>`.
 - **Filter**: `--only`/`--exclude <list>` (comma/space-sep, repeatable; `provider` or `provider:op`; exclude wins). Headline: `--exclude throw`. An UNKNOWN token now WARNS (stderr) instead of silently matching nothing — `rig derive --list-providers` prints the valid set for the current rules.
 - **Hazards** (`tree --view hazards`, `derive` rollup): per-method deduped (one row `×N` sites; the per-type header reads "N site(s) across M method(s)"). `race_window`/`lazy_init_race` are TRIAGE CANDIDATES, not proofs — sort/read by method, not raw count; `#cctor` static-init is exempt (CLR type-init lock). `--exclude-namespace <prefix>` (repeatable) drops framework/vendored hazard noise (e.g. `--exclude-namespace Echo.Process`); hazards-only, effects unaffected.
+- **Control-dependence guards** (`tree --guards`): a call edge that runs only under a branch is marked `⎇ [condition]` (the analog of `🔁[loop]`); an unconditional (must-run) edge carries none — so the glyph-free frames are the SPINE that fires on every invocation, and `⎇` frames are the guarded shell. The condition is the full source predicate — a short-circuit `a || b` shows whole (not split into operands), an else-arm is negated `!(…)`; the `foreach` MoveNext guard is filtered as redundant with `🔁`. **INTRA-METHOD only**: it says the call is gated WITHIN its direct caller, NOT whether that caller always runs from the EP (the cross-method "always-runs-from-EP" composition is a derive-side follow-up). `--guards` also appends a trailing `guards` column to `--format tsv|llm|llm-ids` (a dedicated column, since a condition can contain `||`).
 
 ## Async handoffs — SYNC-CUT by default
 A delegate handed to a dispatcher to run later/elsewhere is a `handoff` edge, NOT a call. Default CUT: a

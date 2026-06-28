@@ -216,7 +216,7 @@ internal static class TreeRenderer
         // "  ⚠ dual_write(medium), race_window(high)"), appended to the node label so the pattern findings
         // sit inline on the EP's reachable tree. Null/absent leaves nodes unmarked (the default tree).
         IReadOnlyDictionary<string, string>? hazardsByMethod = null,
-        // `--guards`: mark a control-dependence-GUARDED call edge with ⎇[predicate] (the analog of 🔁[loop]),
+        // `--guards`: mark a control-dependence-GUARDED call edge with ⎇ [predicate] (the analog of 🔁[loop]),
         // decoded from the reaching edge's frozen guard set (TraceNode.EnclosingGuards). Off by default so
         // golden tree tests don't churn; a must-run edge (empty guard set) carries no glyph.
         bool guards = false

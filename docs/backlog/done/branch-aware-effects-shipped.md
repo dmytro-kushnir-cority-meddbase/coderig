@@ -1,6 +1,6 @@
 # `branch-aware-effects`: control-dependence over effects (must-run spine vs guarded shell)
 
-**Status:** todo · **Found:** 2026-06-26 (appointment-lifecycle dive — the "`RemoveConfirm` reaches 54 effects but ~90% are under a branch" over-count) · **Family:** effect-precision / new-substrate
+**Status:** SHIPPED 2026-06-28 (merged to `main` `23a24cb3`; M1–M3 complete incl. inc-4 MedDBase cost validation, ~29s extract; `tree --guards` render live) · **Found:** 2026-06-26 (appointment-lifecycle dive — the "`RemoveConfirm` reaches 54 effects but ~90% are under a branch" over-count) · **Family:** effect-precision / new-substrate
 **Design settled:** 2026-06-27 (CFG-only; Path-A syntactic proxy rejected — see below)
 
 ## Status (branch `feat/cfg-control-dependence`)
@@ -14,7 +14,7 @@
 - **M3 inc 1–2 DONE** (`29177c1c`/`53372a6a`/`94db1b75`): extraction freezes the guard SET onto
   `ReferenceFact.EnclosingGuards` (incl. nested lambda/local-fn CFGs); persisted through `reference_facts`
   (`ReferenceFactEntity` + `Writes.cs`/`Reads.cs` + `FactStructuralContext.Encode/DecodeGuards`).
-- **M3 inc 3 DONE** (render): `tree --guards` marks a control-dependence-guarded edge with `⎇[predicate]` (the
+- **M3 inc 3 DONE** (render): `tree --guards` marks a control-dependence-guarded edge with `⎇ [predicate]` (the
   analog of `🔁[loop]`) — bare predicate for the if-arm, `!pred` / `!(compound)` for the else-arm, `&&`-joined,
   must-run = no glyph. Threaded `EnclosingGuards` through `Successors`/`MutableNode`/`ToTraceNode`/`TraceNode`/
   `TreeRenderer` (+ the dedup-collapse key, so two sites with different guards don't merge). Gated behind the
@@ -25,8 +25,8 @@
   view, so every guard was silently dropped at query time. Fixed all 4 round-trip sites (`AllCallEdges` tuple +
   `call_edges` CREATE/INSERT + the bounded-load SELECT) and made the view DROP+CREATE so the schema evolves on
   re-index. Regression test: `CallEdgeGuardRoundTripTests` (the materialize→bounded-load seam that let it ship).
-  Verified end-to-end on rig's OWN src (10s re-index): `MustRunBlocks` renders `⎇[state[b] == 0]`,
-  `⎇[!(rpoIndex[block.Ordinal] < 0)]` etc., cached + uncached.
+  Verified end-to-end on rig's OWN src (10s re-index): `MustRunBlocks` renders `⎇ [state[b] == 0]`,
+  `⎇ [!(rpoIndex[block.Ordinal] < 0)]` etc., cached + uncached.
 - **M3 inc 4 DONE** (MedDBase cost validation, 2026-06-28): re-indexed the full 142-project MedDBase closure
   (377,776 symbols / 2,125,822 refs) 4× with `--time`, build fully cached so `extract` is isolated. The
   **`extract` phase (which now includes the always-on CFG/guard build) is ~29s, rock-stable (28.5–29.5s)** —

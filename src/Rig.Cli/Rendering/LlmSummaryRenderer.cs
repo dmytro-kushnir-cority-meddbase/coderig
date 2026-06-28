@@ -81,12 +81,19 @@ internal static class LlmSummaryRenderer
 
     // Reconstructable projections (EffectfulPaths, Full) omit the parent column — depth+order suffice.
     // EffectsFlat keeps it because the parent row may be absent (gappy flat view).
-    internal static string Header(LlmProjection projection) =>
-        projection == LlmProjection.EffectsFlat
-            ? "depth\tparent\tname\tarity\tcalls\teffects\tflags"
-            : "depth\tname\tarity\tcalls\teffects\tflags";
+    // `guards` appends a trailing `guards` column (--guards): the reconstructed control-dependence condition
+    // gating each call (e.g. `result == Yes || result == No`), empty for must-run. A dedicated column, not a
+    // `flags` token, because a guard condition can contain `||` which would collide with the `|`-joined flags.
+    internal static string Header(LlmProjection projection, bool guards = false)
+    {
+        var baseHeader =
+            projection == LlmProjection.EffectsFlat
+                ? "depth\tparent\tname\tarity\tcalls\teffects\tflags"
+                : "depth\tname\tarity\tcalls\teffects\tflags";
+        return guards ? baseHeader + "\tguards" : baseHeader;
+    }
 
-    // 8-column header for llm-ids: explicit surrogate-id linkage.
+    // 8-column header for llm-ids: explicit surrogate-id linkage (+ a trailing `guards` column under --guards).
     internal const string LlmIdsHeader = "id\tparent_id\tdepth\tname\tarity\tcalls\teffects\tflags";
 
     // effectsByMethod: SymbolId -> list of effect strings in the same form as the tree renderer produces
@@ -104,10 +111,12 @@ internal static class LlmSummaryRenderer
         IReadOnlyDictionary<string, List<string>> rawEffectsByMethod,
         LlmProjection projection,
         TextWriter output,
-        SuppressSet suppress = SuppressSet.Default
+        SuppressSet suppress = SuppressSet.Default,
+        // --guards: append the per-node control-dependence guard condition as a trailing `guards` column.
+        bool guards = false
     )
     {
-        output.WriteLine(Header(projection));
+        output.WriteLine(Header(projection, guards));
         foreach (var root in roots)
         {
             // EffectfulPaths: prune roots with no downstream effect (same as the terminal default).
@@ -123,7 +132,8 @@ internal static class LlmSummaryRenderer
                 rawEffectsByMethod: rawEffectsByMethod,
                 projection: projection,
                 output: output,
-                suppress: suppress
+                suppress: suppress,
+                guards: guards
             );
         }
     }
@@ -143,10 +153,12 @@ internal static class LlmSummaryRenderer
         IReadOnlyDictionary<string, List<string>> rawEffectsByMethod,
         LlmProjection projection,
         TextWriter output,
-        SuppressSet suppress = SuppressSet.Default
+        SuppressSet suppress = SuppressSet.Default,
+        // --guards: append the per-node control-dependence guard condition as a trailing `guards` column.
+        bool guards = false
     )
     {
-        output.WriteLine(LlmIdsHeader);
+        output.WriteLine(guards ? LlmIdsHeader + "\tguards" : LlmIdsHeader);
 
         // Counter for the next id to emit (1-based, monotonic).
         var nextId = 1;
@@ -173,7 +185,8 @@ internal static class LlmSummaryRenderer
                 suppress: suppress,
                 nextId: ref nextId,
                 firstEmissionId: firstEmissionId,
-                parentIdAtDepth: parentIdAtDepth
+                parentIdAtDepth: parentIdAtDepth,
+                guards: guards
             );
         }
     }
@@ -468,7 +481,8 @@ internal static class LlmSummaryRenderer
         IReadOnlyDictionary<string, List<string>> rawEffectsByMethod,
         LlmProjection projection,
         TextWriter output,
-        SuppressSet suppress
+        SuppressSet suppress,
+        bool guards = false
     )
     {
         // Determine whether this node is suppressed.
@@ -564,17 +578,17 @@ internal static class LlmSummaryRenderer
             // Emit the row: fixed column count, no trailing tab.
             // Each projection has a fixed column count (paths/full = 6, effects = 7); empty fields
             // are empty strings. The row ends at the last column — no trailing tab, even when the
-            // last column (flags) is empty.
-            if (projection == LlmProjection.EffectsFlat)
+            // last column (flags) is empty. --guards appends one trailing `guards` column.
+            var row =
+                projection == LlmProjection.EffectsFlat
+                    ? new List<string> { depth.ToString(CultureInfo.InvariantCulture), parentName, name, arity, calls, effectsStr, flags }
+                    : new List<string> { depth.ToString(CultureInfo.InvariantCulture), name, arity, calls, effectsStr, flags };
+            if (guards)
             {
-                // 7-column row: depth parent name arity calls effects flags
-                EmitRow(output, depth.ToString(CultureInfo.InvariantCulture), parentName, name, arity, calls, effectsStr, flags);
+                row.Add(TreeRenderer.ShortGuards(node.EnclosingGuards, node.LoopDetail));
             }
-            else
-            {
-                // 6-column row: depth name arity calls effects flags
-                EmitRow(output, depth.ToString(CultureInfo.InvariantCulture), name, arity, calls, effectsStr, flags);
-            }
+
+            EmitRow(output, row.ToArray());
         }
 
         // Truncated nodes do NOT expand their children (the tree already chose not to).
@@ -599,7 +613,8 @@ internal static class LlmSummaryRenderer
                 rawEffectsByMethod: rawEffectsByMethod,
                 projection: projection,
                 output: output,
-                suppress: suppress
+                suppress: suppress,
+                guards: guards
             );
         }
     }
@@ -649,7 +664,8 @@ internal static class LlmSummaryRenderer
         SuppressSet suppress,
         ref int nextId,
         Dictionary<string, int> firstEmissionId,
-        List<int> parentIdAtDepth
+        List<int> parentIdAtDepth,
+        bool guards = false
     )
     {
         if (IsSuppressed(node.SymbolId, suppress))
@@ -676,7 +692,8 @@ internal static class LlmSummaryRenderer
                     suppress: suppress,
                     nextId: ref nextId,
                     firstEmissionId: firstEmissionId,
-                    parentIdAtDepth: parentIdAtDepth
+                    parentIdAtDepth: parentIdAtDepth,
+                    guards: guards
                 );
             }
 
@@ -788,8 +805,8 @@ internal static class LlmSummaryRenderer
                 flags = node.EdgeKind == "cycle" ? "cycle" : "";
             }
 
-            EmitRow(
-                output,
+            var row = new List<string>
+            {
                 thisId.ToString(CultureInfo.InvariantCulture),
                 parentIdStr,
                 depth.ToString(CultureInfo.InvariantCulture),
@@ -797,8 +814,14 @@ internal static class LlmSummaryRenderer
                 arity,
                 calls,
                 effectsStr,
-                flags
-            );
+                flags,
+            };
+            if (guards)
+            {
+                row.Add(TreeRenderer.ShortGuards(node.EnclosingGuards, node.LoopDetail));
+            }
+
+            EmitRow(output, row.ToArray());
         }
 
         if (node.Truncated)
@@ -824,7 +847,8 @@ internal static class LlmSummaryRenderer
                 suppress: suppress,
                 nextId: ref nextId,
                 firstEmissionId: firstEmissionId,
-                parentIdAtDepth: parentIdAtDepth
+                parentIdAtDepth: parentIdAtDepth,
+                guards: guards
             );
         }
     }

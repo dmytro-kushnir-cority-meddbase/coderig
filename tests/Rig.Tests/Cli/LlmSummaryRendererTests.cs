@@ -71,6 +71,118 @@ public sealed class LlmSummaryRendererTests
         Lines(output)[0].ShouldBe("depth\tparent\tname\tarity\tcalls\teffects\tflags");
     }
 
+    // ── --guards trailing column ─────────────────────────────────────────────────────────────────
+
+    [Test]
+    public void Guards_flag_appends_a_trailing_guards_column_to_llm_output()
+    {
+        // A guarded child carries its reconstructed condition in the trailing column; the must-run root is
+        // empty there. A dedicated column (not a flags token) so the `||` in a condition never collides.
+        var root = new TraceNode(
+            "M:App.Svc.Do()",
+            "invocation",
+            null,
+            null,
+            [
+                new TraceNode(
+                    "M:App.Repo.Save()",
+                    "invocation",
+                    null,
+                    null,
+                    [],
+                    EnclosingGuards: FactStructuralContext.EncodeGuards([("invoice.IsHealthcode || force", true)])
+                ),
+            ]
+        );
+
+        var sw = new StringWriter();
+        LlmSummaryRenderer.Render(
+            roots: [root],
+            rawEffectsByMethod: new Dictionary<string, List<string>>(StringComparer.Ordinal),
+            projection: LlmSummaryRenderer.LlmProjection.Full,
+            output: sw,
+            suppress: LlmSummaryRenderer.SuppressSet.None,
+            guards: true
+        );
+        var lines = Lines(sw.ToString());
+
+        var header = lines[0].Split('\t');
+        header.Length.ShouldBe(7); // 6 base + guards
+        header[^1].ShouldBe("guards");
+
+        var rootRow = lines[1].Split('\t');
+        rootRow.Length.ShouldBe(7);
+        rootRow[^1].ShouldBe(""); // Do() is must-run -> empty guards cell
+
+        var saveRow = lines.Single(l => l.Split('\t')[1] == "Repo.Save").Split('\t');
+        saveRow[^1].ShouldBe("invoice.IsHealthcode || force"); // the WHOLE condition, the || intact in one cell
+    }
+
+    [Test]
+    public void Guards_flag_appends_a_trailing_guards_column_to_llm_ids_output()
+    {
+        var root = new TraceNode(
+            "M:App.Svc.Do()",
+            "invocation",
+            null,
+            null,
+            [
+                new TraceNode(
+                    "M:App.Repo.Save()",
+                    "invocation",
+                    null,
+                    null,
+                    [],
+                    EnclosingGuards: FactStructuralContext.EncodeGuards([("a == null", false)])
+                ),
+            ]
+        );
+
+        var sw = new StringWriter();
+        LlmSummaryRenderer.RenderWithIds(
+            roots: [root],
+            rawEffectsByMethod: new Dictionary<string, List<string>>(StringComparer.Ordinal),
+            projection: LlmSummaryRenderer.LlmProjection.Full,
+            output: sw,
+            suppress: LlmSummaryRenderer.SuppressSet.None,
+            guards: true
+        );
+        var lines = Lines(sw.ToString());
+
+        var header = lines[0].Split('\t');
+        header.Length.ShouldBe(9); // 8 base + guards
+        header[^1].ShouldBe("guards");
+
+        var saveRow = lines.Single(l => l.Split('\t')[3] == "Repo.Save").Split('\t');
+        saveRow[^1].ShouldBe("!(a == null)"); // else-arm -> negated, parenthesised
+    }
+
+    [Test]
+    public void Without_guards_flag_no_trailing_column_is_added()
+    {
+        // Default (guards off): the schema is unchanged — no guards column, even on a guarded node.
+        var root = new TraceNode(
+            "M:App.Svc.Do()",
+            "invocation",
+            null,
+            null,
+            [
+                new TraceNode(
+                    "M:App.Repo.Save()",
+                    "invocation",
+                    null,
+                    null,
+                    [],
+                    EnclosingGuards: FactStructuralContext.EncodeGuards([("flag", true)])
+                ),
+            ]
+        );
+
+        var output = Render([root]); // helper does not pass guards -> default false
+        Lines(output)[0].ShouldBe("depth\tname\tarity\tcalls\teffects\tflags");
+        Lines(output).ShouldAllBe(l => l.Split('\t').Length <= 6);
+    }
+
     // ── name shortening: no namespaces, no parameter types ───────────────────────────────────────
 
     [Test]

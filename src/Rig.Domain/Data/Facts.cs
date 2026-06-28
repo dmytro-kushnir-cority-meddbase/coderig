@@ -497,7 +497,7 @@ public sealed record TraceNode(
     // CFG-derived control-dependence guards of the call edge that reached this node from its parent
     // (carried from CallEdge.EnclosingGuards, encoded by FactStructuralContext.EncodeGuards): the branch
     // predicates gating whether the call runs within the PARENT method. Null == must-run (unconditional in
-    // the parent) — the spine. The tree renderer marks a guarded edge with ⎇[predicate] under `--guards`
+    // the parent) — the spine. The tree renderer marks a guarded edge with ⎇ [predicate] under `--guards`
     // (the control-dependence analog of 🔁), decoded via FactStructuralContext.DecodeGuards. Intra-method
     // only; null on synthesized dispatch hops, roots, and pre-flag stores.
     string? EnclosingGuards = null
