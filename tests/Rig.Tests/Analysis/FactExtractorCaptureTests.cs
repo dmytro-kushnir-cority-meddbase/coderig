@@ -105,6 +105,42 @@ public sealed class FactExtractorCaptureTests
     }
 
     [Test]
+    public void Captures_guards_for_calls_inside_lambda_bodies()
+    {
+        // The transaction-body case: effects inside `Run(() => { … })` must be guarded relative to their
+        // OWN lambda's CFG (nested-CFG resolution), not treated as unguarded.
+        var source = """
+            namespace App
+            {
+                public sealed class Svc
+                {
+                    public void Handle(bool flag)
+                    {
+                        Run(() =>
+                        {
+                            Always();
+                            if (flag) Guarded();
+                        });
+                    }
+
+                    private void Run(System.Action a) => a();
+                    private void Always() {}
+                    private void Guarded() {}
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        var always = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Always"));
+        var guarded = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Guarded"));
+
+        always.EnclosingGuards.ShouldBeNull(); // unconditional within the lambda
+        guarded.EnclosingGuards.ShouldNotBeNull(); // behind if(flag) within the lambda
+        FactStructuralContext.DecodeGuards(guarded.EnclosingGuards)[0].Predicate.ShouldContain("flag");
+    }
+
+    [Test]
     public void Bare_instance_call_records_the_enclosing_type_as_the_implicit_this_receiver()
     {
         // Per C# spec a bare `Foo()` instance call runs on the implicit `this`, so its receiver type is the

@@ -38,9 +38,12 @@ internal static class FactExtractor
         var enclosingCache = new Dictionary<SyntaxNode, string?>();
         // Per-method CFG + control-dependence cache (branch-aware-effects). Built lazily the first time an
         // effect-bearing ref in a method asks for its guard set, then reused for every other ref in that
-        // method — so each method's CFG is constructed ONCE (the cost-spike basis). null value = the body
-        // had no buildable CFG (cached so we don't retry). Keyed by the method/accessor/ctor decl node.
-        var cfgGuardCache = new Dictionary<SyntaxNode, (ControlFlowGraph Cfg, IReadOnlyList<ControlDependence.ControlGuard>[] Guards)?>();
+        // method — so each method's CFGs are constructed ONCE (the cost-spike basis). The value is the
+        // method's top-level CFG PLUS every nested CFG (lambdas + local functions), each with its guards,
+        // because a ref inside a lambda/local function lives in that sub-CFG, not the top-level one. Empty
+        // list = no buildable CFG (cached so we don't retry). Keyed by the method/accessor/ctor decl node.
+        var cfgGuardCache =
+            new Dictionary<SyntaxNode, IReadOnlyList<(ControlFlowGraph Cfg, IReadOnlyList<ControlDependence.ControlGuard>[] Guards)>>();
 
         // --- Lambda identity (18b): a synthetic symbol + handoff edge for each argument-passed lambda,
         //     so EnclosingSymbolId can re-root the lambda body's facts onto the lambda. The map is built
@@ -1135,14 +1138,15 @@ internal static class FactExtractor
     );
 
     // The encoded control-dependence guard set of an effect-bearing call-site `node`, within its enclosing
-    // method (branch-aware-effects; frozen at index). Returns null when the effect is unconditional
-    // (must-run — empty guard set), when `node` isn't in the method's top-level CFG (e.g. it sits inside a
-    // lambda body — a deliberate M3 follow-up; that ref carries no guards rather than wrong ones), or when
-    // no CFG could be built. The per-extraction `cache` ensures each method's CFG is constructed ONCE.
+    // executable (branch-aware-effects; frozen at index). Returns null when the effect is unconditional
+    // (must-run — empty guard set) or when no CFG could be built. Resolves across the method's top-level CFG
+    // AND its nested lambda / local-function CFGs, so a ref inside a `RequireTransaction.Call(t => …)`
+    // transaction body is guarded relative to its OWN lambda. The per-extraction `cache` builds each
+    // method's CFGs ONCE.
     private static string? EncodedGuardsFor(
         SyntaxNode node,
         SemanticModel model,
-        Dictionary<SyntaxNode, (ControlFlowGraph Cfg, IReadOnlyList<ControlDependence.ControlGuard>[] Guards)?> cache
+        Dictionary<SyntaxNode, IReadOnlyList<(ControlFlowGraph Cfg, IReadOnlyList<ControlDependence.ControlGuard>[] Guards)>> cache
     )
     {
         var owner = node.AncestorsAndSelf().FirstOrDefault(a => a is BaseMethodDeclarationSyntax or AccessorDeclarationSyntax);
@@ -1151,33 +1155,39 @@ internal static class FactExtractor
             return null;
         }
 
-        if (!cache.TryGetValue(owner, out var data))
+        if (!cache.TryGetValue(owner, out var graphs))
         {
-            data = BuildGuardData(owner, model);
-            cache[owner] = data;
+            graphs = BuildGuardGraphs(owner, model);
+            cache[owner] = graphs;
         }
 
-        if (data is null)
+        // The node lives in exactly ONE of the owner's CFGs (its top-level body, or a nested lambda / local
+        // function). Find the CFG whose blocks contain it; the others return -1 from BlockOf.
+        foreach (var (cfg, guards) in graphs)
         {
-            return null;
+            var block = ControlDependence.BlockOf(cfg, node);
+            if (block < 0 || block >= guards.Length)
+            {
+                continue;
+            }
+
+            var g = guards[block];
+            return g.Count == 0 ? null : FactStructuralContext.EncodeGuards(g.Select(x => (x.Predicate, x.WhenTrue)).ToList());
         }
 
-        var block = ControlDependence.BlockOf(data.Value.Cfg, node);
-        if (block < 0 || block >= data.Value.Guards.Length)
-        {
-            return null; // not a node in this method's top-level CFG (lambda body, etc.)
-        }
-
-        var guards = data.Value.Guards[block];
-        return guards.Count == 0 ? null : FactStructuralContext.EncodeGuards(guards.Select(g => (g.Predicate, g.WhenTrue)).ToList());
+        return null;
     }
 
-    private static (ControlFlowGraph Cfg, IReadOnlyList<ControlDependence.ControlGuard>[] Guards)? BuildGuardData(
+    // The owner's top-level CFG plus every NESTED CFG — lambdas (anonymous functions) and local functions,
+    // recursively. Roslyn keeps each in its own sub-graph, so a ref inside a lambda body (e.g. a
+    // `RequireTransaction.Call(t => { … })` transaction body) is in that sub-CFG, not the top-level one.
+    // Each CFG carries its own intra-CFG guards. Empty when no CFG could be built.
+    private static IReadOnlyList<(ControlFlowGraph Cfg, IReadOnlyList<ControlDependence.ControlGuard>[] Guards)> BuildGuardGraphs(
         SyntaxNode owner,
         SemanticModel model
     )
     {
-        ControlFlowGraph? cfg = model.GetOperation(owner) switch
+        ControlFlowGraph? top = model.GetOperation(owner) switch
         {
             IMethodBodyOperation methodBody => ControlFlowGraph.Create(methodBody),
             IConstructorBodyOperation ctorBody => ControlFlowGraph.Create(ctorBody),
@@ -1185,7 +1195,64 @@ internal static class FactExtractor
             _ => null,
         };
 
-        return cfg is null ? null : (cfg, ControlDependence.ComputeGuards(cfg));
+        if (top is null)
+        {
+            return [];
+        }
+
+        var result = new List<(ControlFlowGraph, IReadOnlyList<ControlDependence.ControlGuard>[])>();
+        Collect(top);
+        return result;
+
+        void Collect(ControlFlowGraph cfg)
+        {
+            result.Add((cfg, ControlDependence.ComputeGuards(cfg)));
+
+            foreach (var localFn in cfg.LocalFunctions)
+            {
+                Collect(cfg.GetLocalFunctionControlFlowGraph(localFn));
+            }
+
+            foreach (var block in cfg.Blocks)
+            {
+                foreach (var anon in AnonymousFunctionsIn(block.Operations))
+                {
+                    Collect(cfg.GetAnonymousFunctionControlFlowGraph(anon));
+                }
+
+                if (block.BranchValue is { } branchValue)
+                {
+                    foreach (var anon in AnonymousFunctionsIn([branchValue]))
+                    {
+                        Collect(cfg.GetAnonymousFunctionControlFlowGraph(anon));
+                    }
+                }
+            }
+        }
+    }
+
+    // Every IFlowAnonymousFunctionOperation (a lambda, as the CFG models it) in the given operation roots.
+    private static IEnumerable<IFlowAnonymousFunctionOperation> AnonymousFunctionsIn(IEnumerable<IOperation> roots)
+    {
+        var stack = new Stack<IOperation>();
+        foreach (var root in roots)
+        {
+            stack.Push(root);
+        }
+
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            if (current is IFlowAnonymousFunctionOperation anon)
+            {
+                yield return anon;
+            }
+
+            foreach (var child in current.ChildOperations)
+            {
+                stack.Push(child);
+            }
+        }
     }
 
     // The InvocationExpressionSyntax this name is the invoked method of: `Foo(..)`, `a.Foo(..)`, or
