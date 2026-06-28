@@ -306,7 +306,11 @@ internal static class FactExtractor
                 node: thrown,
                 structural: StructuralContextOf(thrown, model, symbolCache),
                 allowRuntime: true,
-                symbolCache: symbolCache
+                symbolCache: symbolCache,
+                // A guarded `throw` is a conditional effect (`throw … WHEN cond`); ComputeGuards' abnormal-exit
+                // pass gives the throw block its gating predicate. The thrown expression IS the throw block's
+                // BranchValue, so BlockOf resolves to it. null when the throw is on the must-run spine.
+                enclosingGuards: EncodedGuardsFor(thrown, model, cfgGuardCache)
             );
         }
 

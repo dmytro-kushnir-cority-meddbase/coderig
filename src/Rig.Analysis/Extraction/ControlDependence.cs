@@ -25,6 +25,22 @@ internal static class ControlDependence
     // WhenTrue = the guarded effect runs when this predicate evaluates true.
     internal readonly record struct ControlGuard(int BranchBlock, string Predicate, bool WhenTrue);
 
+    // An "abnormal exit": a block that ends by THROWING (or rethrowing) out of the method — its
+    // FallThroughSuccessor carries Throw/Rethrow semantics with no in-method Destination (a caught throw
+    // routes to a catch block and has a real Destination, so it is NOT a dead-end and is excluded here).
+    // ComputeGuards models a VIRTUAL edge from such a block to the Exit so the throw arm participates in
+    // post-dominance and is correctly seen as control-dependent on its gating branch (a guarded throw is a
+    // conditional effect — `throw … WHEN cond`). MustRunBlocks deliberately does NOT add this edge, so a
+    // throw never becomes must-run. Shared with the test oracle so both model the same semantics.
+    internal static bool IsAbnormalExit(BasicBlock b) =>
+        // REACHABLE only: a switch-expression's synthetic no-match throw arm (and other defensively-emitted
+        // dead arms) is unreachable; wiring it to Exit would forge phantom paths that strip legitimate
+        // post-dominance and re-pin the vacuous-post-dominance guards on the must-run spine. A real guarded
+        // `throw` (e.g. `if (x) throw …`) is reachable and IS a conditional effect.
+        b.IsReachable
+        && b.FallThroughSuccessor
+            is { Destination: null, Semantics: ControlFlowBranchSemantics.Throw or ControlFlowBranchSemantics.Rethrow };
+
     // The CFG block whose operation subtree contains `target` (exact syntax-node match), or -1. The
     // BranchValue (the condition operation) is scanned separately because it is NOT in block.Operations.
     // Matching the INVOCATION node (not its enclosing statement) means `a?.Save()` resolves to the block
@@ -228,7 +244,48 @@ internal static class ControlDependence
     // ORACLE (NaiveGuards in ControlDependenceTests) — it is ground truth if a CHK edge case is suspected.
     // Blocks that cannot reach the Exit (throw arms, infinite loops) are absent from the reversed traversal,
     // so they're excluded — matching the normal-completion model MustRunBlocks uses.
+    //
+    // ABNORMAL EXIT (guarded throw): a method-escaping `throw` is a dead-end in the normal-completion model
+    // (can't reach Exit) so it would carry no guard — yet `if (x) throw …` is a CONDITIONAL effect we want to
+    // disclose. We therefore compute TWO passes and merge: the NORMAL pass (no throw->Exit edges) gives the
+    // correct guards for every normally-completing block (so post-throw code like `Use(a)` stays must-run with
+    // NO guard, preserving the must-run<=>no-guards duality), and a VIRTUAL pass (throw->Exit edges, see
+    // IsAbnormalExit) is read ONLY for the throw blocks themselves, giving each its gating predicate. Reading
+    // the virtual pass for non-throw blocks would re-pin the vacuous-post-dominance guards on the must-run
+    // spine (a synthetic switch-expr no-match throw arm would forge a phantom Exit path) — hence the merge.
     internal static IReadOnlyList<ControlGuard>[] ComputeGuards(ControlFlowGraph cfg)
+    {
+        var normal = MarkGuards(cfg, includeAbnormalExit: false);
+
+        // Skip the second pass unless there's actually a reachable guarded throw to disclose.
+        var hasAbnormalExit = false;
+        foreach (var b in cfg.Blocks)
+        {
+            if (IsAbnormalExit(b))
+            {
+                hasAbnormalExit = true;
+                break;
+            }
+        }
+
+        if (!hasAbnormalExit)
+        {
+            return normal;
+        }
+
+        var virtualPass = MarkGuards(cfg, includeAbnormalExit: true);
+        var merged = new IReadOnlyList<ControlGuard>[cfg.Blocks.Length];
+        for (var i = 0; i < merged.Length; i++)
+        {
+            merged[i] = IsAbnormalExit(cfg.Blocks[i]) ? virtualPass[i] : normal[i];
+        }
+
+        return merged;
+    }
+
+    // One FOW pass. includeAbnormalExit routes method-escaping throws to the Exit (see ComputeGuards) so the
+    // throw arms participate in post-dominance; false keeps the strict normal-completion graph.
+    private static List<ControlGuard>[] MarkGuards(ControlFlowGraph cfg, bool includeAbnormalExit)
     {
         var n = cfg.Blocks.Length;
         var exit = n - 1; // Roslyn invariant: Blocks[^1] == Exit
@@ -239,7 +296,7 @@ internal static class ControlDependence
             guards[i] = [];
         }
 
-        var ipdom = PostDominatorTree(cfg, out var rpoIndexR);
+        var ipdom = PostDominatorTree(cfg, includeAbnormalExit, out var rpoIndexR);
         if (rpoIndexR[exit] < 0)
         {
             return guards; // Exit unreachable -> no normal completion -> no guards
@@ -307,7 +364,7 @@ internal static class ControlDependence
     // idom[x] is the immediate POST-dominator of x; rpoIndexR[x] < 0 means x cannot reach the Exit. In the
     // reversed graph a node's successors are its ORIGINAL predecessors (used for the DFS/RPO) and its
     // predecessors are its ORIGINAL successors (used in the CHK fixpoint).
-    private static int[] PostDominatorTree(ControlFlowGraph cfg, out int[] rpoIndexR)
+    private static int[] PostDominatorTree(ControlFlowGraph cfg, bool includeAbnormalExit, out int[] rpoIndexR)
     {
         var n = cfg.Blocks.Length;
         var exit = n - 1;
@@ -324,6 +381,15 @@ internal static class ControlDependence
         {
             AddEdge(b.Ordinal, b.ConditionalSuccessor?.Destination?.Ordinal);
             AddEdge(b.Ordinal, b.FallThroughSuccessor?.Destination?.Ordinal);
+
+            // Virtual throw->Exit edge (only in the abnormal-exit pass; see ComputeGuards): a method-escaping
+            // throw is otherwise a sink unreachable from Exit in the reversed graph, so it would be dropped
+            // (rpoIndexR < 0) and carry no guard. Routing it to Exit lets this pass mark it control-dependent
+            // on its gating branch. The result is read ONLY for the throw blocks themselves.
+            if (includeAbnormalExit && b.Ordinal != exit && IsAbnormalExit(b))
+            {
+                AddEdge(b.Ordinal, exit);
+            }
         }
 
         void AddEdge(int from, int? to)

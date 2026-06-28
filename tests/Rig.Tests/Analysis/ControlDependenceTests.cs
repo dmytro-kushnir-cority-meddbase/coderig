@@ -97,6 +97,10 @@ public sealed class ControlDependenceTests
         var exit = cfg.Blocks.Length - 1;
         var guards = new List<ControlDependence.ControlGuard>();
 
+        // Mirror ComputeGuards' two-model merge: the virtual throw->Exit edge is active ONLY when computing
+        // guards for an abnormal-exit (throw) block; normally-completing blocks use the strict graph.
+        var includeAbnormalExit = ControlDependence.IsAbnormalExit(cfg.Blocks[block]);
+
         foreach (var a in cfg.Blocks)
         {
             var cond = a.ConditionalSuccessor?.Destination?.Ordinal;
@@ -140,7 +144,17 @@ public sealed class ControlDependenceTests
             while (stack.Count > 0)
             {
                 var b = cfg.Blocks[stack.Pop()];
-                foreach (var d in new[] { b.ConditionalSuccessor?.Destination?.Ordinal, b.FallThroughSuccessor?.Destination?.Ordinal })
+                // Model the SAME virtual throw->Exit edge ComputeGuards uses, so this independent oracle
+                // validates the new abnormal-termination semantics rather than contradicting them.
+                var abnormalExit = includeAbnormalExit && ControlDependence.IsAbnormalExit(b) ? (int?)exit : null;
+                foreach (
+                    var d in new[]
+                    {
+                        b.ConditionalSuccessor?.Destination?.Ordinal,
+                        b.FallThroughSuccessor?.Destination?.Ordinal,
+                        abnormalExit,
+                    }
+                )
                 {
                     if (d is not int next || next == excluded)
                     {
@@ -172,9 +186,13 @@ public sealed class ControlDependenceTests
             """
                 public sealed class C { void M(bool c) { if (c) A(); else B(); D(); for (int i = 0; i < 9; i++) E(); } void A(){} void B(){} void D(){} void E(){} }
                 """,
+            // guarded throw (single + nested + post-throw must-run) — the abnormal-exit virtual-edge path.
+            """
+                public sealed class C { void M(object a, bool x, bool y) { if (a == null) throw new System.Exception(); if (x) { if (y) throw new System.Exception(); } Use(a); } void Use(object a) {} }
+                """,
             SugarSource,
         ];
-        string[] methods = ["M", "M", "Demo"];
+        string[] methods = ["M", "M", "M", "Demo"];
 
         for (var i = 0; i < sources.Length; i++)
         {
@@ -242,9 +260,13 @@ public sealed class ControlDependenceTests
             """
                 public sealed class C { void M(bool c) { if (c) A(); else B(); D(); for (int i = 0; i < 9; i++) E(); } void A(){} void B(){} void D(){} void E(){} }
                 """,
+            // guarded throw (single + nested + post-throw must-run) — the abnormal-exit virtual-edge path.
+            """
+                public sealed class C { void M(object a, bool x, bool y) { if (a == null) throw new System.Exception(); if (x) { if (y) throw new System.Exception(); } Use(a); } void Use(object a) {} }
+                """,
             SugarSource,
         ];
-        string[] methods = ["M", "M", "Demo"];
+        string[] methods = ["M", "M", "M", "Demo"];
 
         for (var i = 0; i < sources.Length; i++)
         {
@@ -340,6 +362,34 @@ public sealed class ControlDependenceTests
         Guarded("Audit").ShouldBeTrue(); // plain if
         Guarded("Open").ShouldBeFalse(); // must-run spine
         Guarded("Commit").ShouldBeFalse();
+    }
+
+    // A guarded throw is a CONDITIONAL effect: `throw … WHEN cond`. The abnormal-exit virtual-edge gives the
+    // throw block its gating predicate (it used to be dropped by the normal-completion model). The code AFTER
+    // the throw must stay must-run, and the throw itself must NOT be must-run.
+    [Test]
+    public void Guarded_throw_arm_carries_its_gating_predicate()
+    {
+        var (cfg, tree) = Build(
+            """
+            public sealed class C { void M(object a) { if (a == null) throw new System.Exception("boom"); Use(a); } void Use(object a) {} }
+            """,
+            "M"
+        );
+
+        // The throw block: BlockOf the `new System.Exception("boom")` creation (the block's BranchValue).
+        var throwExpr = tree.GetRoot().DescendantNodes().OfType<ObjectCreationExpressionSyntax>().Single();
+        var throwBlock = ControlDependence.BlockOf(cfg, throwExpr);
+        var guards = ControlDependence.GuardsOf(cfg, throwBlock);
+
+        guards.Count.ShouldBe(1);
+        guards[0].Predicate.ShouldContain("== null");
+        guards[0].WhenTrue.ShouldBeTrue(); // throw runs when (a == null) is TRUE
+
+        // post-throw Use(a) is must-run; the throw block is not.
+        var mustRun = ControlDependence.MustRunBlocks(cfg);
+        mustRun.ShouldContain(BlockOfCall(cfg, tree, "Use(a)"));
+        mustRun.ShouldNotContain(throwBlock);
     }
 
     // Regression for the vacuous-post-dominance bug: a switch-expression's synthetic no-match throw arm is

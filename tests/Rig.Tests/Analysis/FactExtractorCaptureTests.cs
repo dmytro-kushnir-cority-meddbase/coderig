@@ -169,6 +169,31 @@ public sealed class FactExtractorCaptureTests
     }
 
     [Test]
+    public void A_guarded_throw_carries_its_gating_predicate_an_unconditional_one_does_not()
+    {
+        // branch-aware-effects (abnormal-exit pass): a guarded `throw` is a conditional effect
+        // (`throw … WHEN cond`). ComputeGuards routes a method-escaping throw to a virtual Exit so the throw
+        // block picks up its gating branch; an unconditional throw stays on the must-run spine (null guards).
+        var src = """
+            namespace App { class Svc {
+                void Guarded(object a) { if (a == null) throw new System.InvalidOperationException(); Use(a); }
+                void Unconditional() { throw new System.NotSupportedException(); }
+                void Use(object a) {}
+            } }
+            """;
+        var r = Extract(src);
+        var guardedThrow = r.References.Single(x => x.RefKind == "throw" && x.TargetSymbolId.Contains("InvalidOperation"));
+        var unconditionalThrow = r.References.Single(x => x.RefKind == "throw" && x.TargetSymbolId.Contains("NotSupported"));
+
+        guardedThrow.EnclosingGuards.ShouldNotBeNull();
+        var g = FactStructuralContext.DecodeGuards(guardedThrow.EnclosingGuards)[0];
+        g.Predicate.ShouldContain("== null");
+        g.WhenTrue.ShouldBeTrue(); // the throw fires when (a == null) is TRUE
+
+        unconditionalThrow.EnclosingGuards.ShouldBeNull(); // must-run throw
+    }
+
+    [Test]
     public void Bare_instance_call_records_the_enclosing_type_as_the_implicit_this_receiver()
     {
         // Per C# spec a bare `Foo()` instance call runs on the implicit `this`, so its receiver type is the
