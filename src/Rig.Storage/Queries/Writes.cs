@@ -362,9 +362,10 @@ public static class Writes
                 "INSERT INTO reference_facts (RunId, ReferenceFactIndex, TargetSymbolId, RefKind, EnclosingSymbolId, TargetAssembly, "
                     + "TargetInSource, FilePath, Line, ReceiverType, FirstArgumentTemplate, FirstArgumentType, EnclosingLoopKind, "
                     + "EnclosingLoopDetail, EnclosingInvocations, EnclosingCatchTypes, TypeArguments, FirstArgumentName, DelegateConsumer, "
-                    + "EnclosingScopes, ArgumentTemplates, ArgumentNames, DeclaringTypeArgBinding, MethodTypeArgBinding, NonVirtual) "
+                    + "EnclosingScopes, ArgumentTemplates, ArgumentNames, DeclaringTypeArgBinding, MethodTypeArgBinding, NonVirtual, "
+                    + "EnclosingGuards) "
                     + "VALUES ($run,$idx,$target,$kind,$enc,$tasm,$insrc,$file,$line,$recv,$fat,$fatype,$elk,$eld,$einv,$ect,$ta,$fan,$dc,"
-                    + "$es,$at,$an,$dtab,$mtab,$nonvirtual);",
+                    + "$es,$at,$an,$dtab,$mtab,$nonvirtual,$eg);",
                 [
                     "$run",
                     "$idx",
@@ -391,6 +392,7 @@ public static class Writes
                     "$dtab",
                     "$mtab",
                     "$nonvirtual",
+                    "$eg",
                 ],
                 references,
                 (p, r, i) =>
@@ -420,6 +422,7 @@ public static class Writes
                     p[22].Value = (object?)r.DeclaringTypeArgBinding ?? DBNull.Value;
                     p[23].Value = (object?)r.MethodTypeArgBinding ?? DBNull.Value;
                     p[24].Value = r.NonVirtual ? 1 : 0;
+                    p[25].Value = (object?)r.EnclosingGuards ?? DBNull.Value;
                 },
                 alreadySaved: saved,
                 total: total,

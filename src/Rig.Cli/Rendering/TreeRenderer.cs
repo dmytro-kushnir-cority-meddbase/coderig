@@ -58,6 +58,70 @@ internal static class TreeRenderer
         return ShortName(lastDot >= 0 ? head.Substring(startIndex: 0, length: lastDot) : head);
     }
 
+    // --guards: render a frozen control-dependence guard set (FactStructuralContext-encoded on the reaching
+    // edge) as a compact AND-chain of branch predicates — every guard must hold for the call to run, so they
+    // join with " && ". Polarity: `pred` for the if-arm (WhenTrue), `!pred` for the else-arm. A compound
+    // predicate is parenthesised when negated (`!(a == null)`) so the `!` binds unambiguously; a single token
+    // (`!flag`, `!invoice.IsHealthcode`) stays bare. Each predicate's whitespace is collapsed (a condition can
+    // span lines) and the joined string is length-capped for single-line trace output.
+    //
+    // Redundant-with-loop filter: a call DIRECTLY in `foreach (x in COLL)` is control-dependent on the
+    // enumerator MoveNext, whose predicate Roslyn surfaces as COLL — but 🔁[x in COLL] already conveys exactly
+    // that, so a guard whose predicate IS the loop's iterated collection is dropped as noise (`loopDetail` is
+    // the reaching edge's LoopDetail). A genuine inner condition (`File.Exists(x)`, an `if`) has a different
+    // predicate and is kept. while/for carry no " in " collection marker, so they are never filtered (and
+    // empirically don't emit the redundant condition-guard). Returns "" when nothing remains (all guards were
+    // loop-redundant, or the set decoded empty) — the caller then omits the ⎇ glyph entirely.
+    internal static string ShortGuards(string? encoded, string? loopDetail = null)
+    {
+        var guards = FactStructuralContext.DecodeGuards(encoded);
+        if (guards.Count == 0)
+        {
+            return "";
+        }
+
+        var loopCollection = ForeachCollection(loopDetail);
+        var parts = new List<string>();
+        foreach (var g in guards)
+        {
+            var pred = CollapseWhitespace(g.Predicate);
+            if (loopCollection is not null && string.Equals(pred, loopCollection, StringComparison.Ordinal))
+            {
+                continue; // the foreach MoveNext guard — redundant with the 🔁[x in COLL] marker
+            }
+
+            parts.Add(
+                g.WhenTrue ? pred
+                : pred.Contains(' ', StringComparison.Ordinal) ? $"!({pred})"
+                : $"!{pred}"
+            );
+        }
+
+        if (parts.Count == 0)
+        {
+            return "";
+        }
+
+        var s = string.Join(" && ", parts);
+        return s.Length <= 60 ? s : s.Substring(startIndex: 0, length: 57) + "...";
+    }
+
+    // The COLL of a `foreach (ident in COLL)` loop detail (StructuralContext's "{ident} in {expr}" form),
+    // whitespace-collapsed for comparison; null when the detail is a while/for/null (no " in " marker).
+    private static string? ForeachCollection(string? loopDetail)
+    {
+        if (string.IsNullOrEmpty(loopDetail))
+        {
+            return null;
+        }
+
+        var inAt = loopDetail!.IndexOf(" in ", StringComparison.Ordinal);
+        return inAt < 0 ? null : CollapseWhitespace(loopDetail.Substring(inAt + 4));
+    }
+
+    private static string CollapseWhitespace(string s) =>
+        string.Join(' ', s.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
+
     // Collects effect-bearing methods in DFS (source) order, deduped — the backing of `tree --effects`.
     internal static void CollectEffectful(
         TraceNode node,
@@ -151,7 +215,11 @@ internal static class TreeRenderer
         // `--hazards`: a precomputed compact hazard marker per enclosing method (SymbolId -> e.g.
         // "  ⚠ dual_write(medium), race_window(high)"), appended to the node label so the pattern findings
         // sit inline on the EP's reachable tree. Null/absent leaves nodes unmarked (the default tree).
-        IReadOnlyDictionary<string, string>? hazardsByMethod = null
+        IReadOnlyDictionary<string, string>? hazardsByMethod = null,
+        // `--guards`: mark a control-dependence-GUARDED call edge with ⎇[predicate] (the analog of 🔁[loop]),
+        // decoded from the reaching edge's frozen guard set (TraceNode.EnclosingGuards). Off by default so
+        // golden tree tests don't churn; a must-run edge (empty guard set) carries no glyph.
+        bool guards = false
     )
     {
         // Compute visible children first — the fan-out label must reflect how many branches are
@@ -181,6 +249,14 @@ internal static class TreeRenderer
         // An async handoff hop (only present under --async): mark the cross-thread boundary.
         var handoff = node.EdgeKind == EdgeKinds.Handoff ? $" ⤳handoff via {ShortName(node.HandoffVia)} [cross_thread]" : "";
         var loop = node.LoopKind is null ? "" : $" 🔁[{ShortLoop(node.LoopDetail)}]";
+        // --guards: the control-dependence guard set of the edge that reached this node — the branch
+        // predicates gating whether the call runs in its parent. Empty (must-run) → no glyph; the ⎇
+        // analog of 🔁. The reaching edge's LoopDetail lets ShortGuards drop a foreach's own MoveNext guard
+        // (redundant with 🔁). Off unless --guards (keeps default golden trees stable).
+        var guardText = guards && node.EnclosingGuards is not null ? ShortGuards(node.EnclosingGuards, node.LoopDetail) : "";
+        // Space between ⎇ and [ : the ⎇ glyph (U+2387) renders narrow in some terminals and overlaps the
+        // following bracket without it. (🔁 is a full-width emoji and doesn't need the gap.)
+        var guardTag = guardText.Length == 0 ? "" : $" ⎇ [{guardText}]";
         // Identical sibling edges collapsed under one parent (e.g. a generic method called once per
         // type-arg): show the call-site count rather than N repeated "⋯elided" lines.
         var calls = node.CallSites > 1 ? $" ×{node.CallSites} calls" : "";
@@ -282,7 +358,8 @@ internal static class TreeRenderer
         // `--hazards`: the inline pattern-finding marker for this method (empty when unmarked). Placed before
         // the source-loc suffixes so SourceLocDedupWriter's trailing-loc regex still matches the line.
         var hazard = hazardsByMethod is not null && hazardsByMethod.TryGetValue(node.SymbolId, out var hz) ? hz : "";
-        var label = $"{epPrefix}{name}{dispatch}{handoff}{loop}{calls}{elided}{opaqueTag}{cutTag}{fx}{hazard}{loc}{epSuffix}{callLoc}";
+        var label =
+            $"{epPrefix}{name}{dispatch}{handoff}{loop}{guardTag}{calls}{elided}{opaqueTag}{cutTag}{fx}{hazard}{loc}{epSuffix}{callLoc}";
         output.WriteLine(isRoot ? label : $"{prefix}{Connector(isLast)}{label}");
 
         // Collapse-seam render rule: this node is a fan-out hub (e.g. a reflection service-locator or
@@ -355,7 +432,8 @@ internal static class TreeRenderer
                 effectLeavesByMethod: effectLeavesByMethod,
                 parentDeclaringConcrete: declaringConcrete,
                 parentMethodConcrete: methodConcrete,
-                hazardsByMethod: hazardsByMethod
+                hazardsByMethod: hazardsByMethod,
+                guards: guards
             );
         }
     }

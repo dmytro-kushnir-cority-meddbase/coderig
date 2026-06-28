@@ -407,7 +407,7 @@ public static class SqlReachability
         await ReadAsync(
             connection,
             $"""
-            SELECT c.FromSym, c.ToSym, c.Kind, c.FilePath, c.Line, c.LoopKind, c.LoopDetail, c.ReceiverType, c.HandoffDispatcher, c.DeliveryPrecision, c.NonVirtual
+            SELECT c.FromSym, c.ToSym, c.Kind, c.FilePath, c.Line, c.LoopKind, c.LoopDetail, c.ReceiverType, c.HandoffDispatcher, c.DeliveryPrecision, c.NonVirtual, c.EnclosingGuards
             FROM call_edges c JOIN reach_set r ON c.{edgeJoinCol} = r.sym;
             """,
             reader =>
@@ -433,7 +433,8 @@ public static class SqlReachability
                         DeclaringTypeArgBinding: declBinding,
                         MethodTypeArgBinding: methBinding,
                         DeliveryPrecision: reader.IsDBNull(9) ? null : reader.GetString(9),
-                        NonVirtual: !reader.IsDBNull(10) && reader.GetInt64(10) != 0
+                        NonVirtual: !reader.IsDBNull(10) && reader.GetInt64(10) != 0,
+                        EnclosingGuards: reader.IsDBNull(11) ? null : reader.GetString(11)
                     )
                 );
             },

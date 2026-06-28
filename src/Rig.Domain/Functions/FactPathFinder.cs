@@ -538,8 +538,8 @@ public static partial class FactPathFinder
     public static IReadOnlyList<TraceNode> BuildTree(
         FactGraphData graph,
         string fromPattern,
-        int maxDepth = 20,
-        int maxNodes = 20000,
+        int maxDepth = 50,
+        int maxNodes = 50000,
         TraversalMode mode = TraversalMode.SyncCut
     )
     {
@@ -568,6 +568,7 @@ public static partial class FactPathFinder
                 edgeKind: "entry",
                 loopKind: null,
                 loopDetail: null,
+                enclosingGuards: null,
                 depth: 0,
                 handoffVia: null,
                 dispatchBasis: null,
@@ -653,6 +654,9 @@ public static partial class FactPathFinder
                         && k.HandoffVia == s.HandoffVia
                         && k.Fanout == s.Fanout
                         && k.DispatchBasis == s.Basis
+                        // Two sites calling the same callee under DIFFERENT guards (e.g. `Save(x); if(d) Save(x);`)
+                        // are distinct conditionalities — keep them separate so each renders its own ⎇.
+                        && k.EnclosingGuards == s.EnclosingGuards
                     )
                     {
                         dup = k;
@@ -670,6 +674,7 @@ public static partial class FactPathFinder
                     edgeKind: s.Kind,
                     loopKind: s.LoopKind,
                     loopDetail: s.LoopDetail,
+                    enclosingGuards: s.EnclosingGuards,
                     depth: n.Depth + 1,
                     handoffVia: s.HandoffVia,
                     dispatchBasis: s.Basis,
@@ -703,6 +708,11 @@ public static partial class FactPathFinder
         public readonly string EdgeKind;
         public readonly string? LoopKind;
         public readonly string? LoopDetail;
+
+        // CFG control-dependence guards of the edge that reached this node (CallEdge.EnclosingGuards):
+        // the branch predicates gating the call within the parent. Null == must-run. RENDERING only
+        // (-> TraceNode.EnclosingGuards), surfaced by `tree --guards` as the ⎇ analog of 🔁.
+        public readonly string? EnclosingGuards;
         public readonly int Depth;
         public readonly string? HandoffVia;
         public readonly string? DispatchBasis;
@@ -736,6 +746,7 @@ public static partial class FactPathFinder
             string edgeKind,
             string? loopKind,
             string? loopDetail,
+            string? enclosingGuards,
             int depth,
             string? handoffVia,
             string? dispatchBasis,
@@ -754,6 +765,7 @@ public static partial class FactPathFinder
             ViaNonVirtual = viaNonVirtual;
             LoopKind = loopKind;
             LoopDetail = loopDetail;
+            EnclosingGuards = enclosingGuards;
             Depth = depth;
             HandoffVia = handoffVia;
             DispatchBasis = dispatchBasis;
@@ -786,7 +798,8 @@ public static partial class FactPathFinder
                 DeclaringTypeArgBinding: n.DeclaringTypeArgBinding,
                 MethodTypeArgBinding: n.MethodTypeArgBinding,
                 CallFile: n.CallFile,
-                CallLine: n.CallLine
+                CallLine: n.CallLine,
+                EnclosingGuards: n.EnclosingGuards
             );
         }
 
@@ -805,7 +818,8 @@ public static partial class FactPathFinder
             DeclaringTypeArgBinding: n.DeclaringTypeArgBinding,
             MethodTypeArgBinding: n.MethodTypeArgBinding,
             CallFile: n.CallFile,
-            CallLine: n.CallLine
+            CallLine: n.CallLine,
+            EnclosingGuards: n.EnclosingGuards
         );
     }
 
@@ -1049,7 +1063,10 @@ public static partial class FactPathFinder
         string? ReceiverType,
         string? HandoffDispatcher,
         string? DeliveryPrecision,
-        bool NonVirtual
+        bool NonVirtual,
+        // CFG control-dependence guard set of the call SITE (CallEdge.EnclosingGuards) — materialized into
+        // the derived call_edges view so the SQL-bounded graph load round-trips it (the tree --guards glyph).
+        string? EnclosingGuards
     )> AllCallEdges(FactGraphData graph)
     {
         foreach (var edge in graph.CallEdges)
@@ -1065,7 +1082,8 @@ public static partial class FactPathFinder
                 edge.ReceiverType,
                 edge.HandoffDispatcher,
                 edge.DeliveryPrecision,
-                edge.NonVirtual
+                edge.NonVirtual,
+                edge.EnclosingGuards
             );
         }
     }

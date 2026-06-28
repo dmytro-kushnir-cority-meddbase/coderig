@@ -57,6 +57,11 @@ internal static class TreeCommand
         {
             Description = "Drop box-drawing connectors (├─ └─ │) for pure indentation — diff-friendly.",
         };
+        var guards = new Option<bool>("--guards")
+        {
+            Description =
+                "Mark control-dependence-GUARDED call edges with ⎇[predicate] (the analog of 🔁[loop]): the branch predicates gating whether the call runs in its parent. Unconditional (must-run) edges carry no glyph. Intra-method guards only.",
+        };
         var rules = CommonOptions.Rules();
         var depth = CommonOptions.Depth();
         var only = CommonOptions.Only();
@@ -84,6 +89,7 @@ internal static class TreeCommand
             files,
             signatures,
             plain,
+            guards,
             rules,
             depth,
             only,
@@ -165,6 +171,7 @@ internal static class TreeCommand
                             Files: pr.GetValue(files),
                             Signatures: pr.GetValue(signatures),
                             Plain: pr.GetValue(plain),
+                            Guards: pr.GetValue(guards),
                             ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                             Depth: pr.GetValue(depth),
                             Only: CommonOptions.FilterSet(pr.GetValue(only)),
@@ -194,6 +201,7 @@ internal static class TreeCommand
         bool Files,
         bool Signatures,
         bool Plain,
+        bool Guards,
         IReadOnlyList<string> ExtraRules,
         int? Depth,
         HashSet<string> Only,
@@ -706,7 +714,8 @@ internal static class TreeCommand
                 epContext: epContext,
                 full: full,
                 effectLeavesByMethod: effectLeavesByMethod,
-                hazardsByMethod: hazardsByMethod
+                hazardsByMethod: hazardsByMethod,
+                guards: opts.Guards
             );
         }
 

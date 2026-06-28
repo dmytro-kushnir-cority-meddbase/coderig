@@ -122,7 +122,13 @@ public sealed record ReferenceFact(
     // stage-2 traversal therefore resolves it to its static callee only and excludes it from the
     // override-dispatch fan (forward AND reverse). False for ordinary virtual/interface/direct calls and
     // on stores indexed before this flag existed (so old stores read as all-virtual = prior behavior).
-    bool NonVirtual = false
+    bool NonVirtual = false,
+    // The control-dependence GUARD SET of this call-site WITHIN its own method (CFG-derived, frozen at
+    // index): the branch predicates that gate whether this effect runs, each encoded as predicate-text/
+    // polarity and joined. Null/empty == MUST-RUN — unconditional within the method (the spine). INTRA-
+    // method only; the cumulative cross-method guard chain is a DERIVE-side composition. Decode with
+    // FactStructuralContext.DecodeGuards. Null on stores indexed before this existed (read as no guards).
+    string? EnclosingGuards = null
 );
 
 /// <summary>A base-type or implemented-interface edge between two types.</summary>
@@ -222,7 +228,12 @@ public sealed record CallEdge(
     // the override-dispatch fan — FORWARD (no sibling-override successors) and REVERSE (the call's
     // source is a direct caller of the base BODY, but not a reverse-reacher of sibling overrides). False
     // on ordinary edges, synthesized dispatch hops, and pre-flag stores (read as all-virtual).
-    bool NonVirtual = false
+    bool NonVirtual = false,
+    // CFG-derived control-dependence guard set of this call SITE within the caller (from
+    // ReferenceFact.EnclosingGuards): the branch predicates gating whether this call runs. Null == must-run
+    // (unconditional in the caller). Carried onto the reached node so the renderer can mark a guarded
+    // subtree (the ⎇ analog of 🔁). Intra-method only; null on synthesized dispatch hops and pre-flag stores.
+    string? EnclosingGuards = null
 );
 
 // An "implType implements ifaceType" edge (from a type-relation fact).
@@ -482,7 +493,14 @@ public sealed record TraceNode(
     // line for a ctor, the inline-lambda decl line, the call line for a method. Surfaced by `tree --full`
     // (deduped in print order) — gives ctors/lambdas and every node a source line. Null/0 at a root.
     string? CallFile = null,
-    int CallLine = 0
+    int CallLine = 0,
+    // CFG-derived control-dependence guards of the call edge that reached this node from its parent
+    // (carried from CallEdge.EnclosingGuards, encoded by FactStructuralContext.EncodeGuards): the branch
+    // predicates gating whether the call runs within the PARENT method. Null == must-run (unconditional in
+    // the parent) — the spine. The tree renderer marks a guarded edge with ⎇[predicate] under `--guards`
+    // (the control-dependence analog of 🔁), decoded via FactStructuralContext.DecodeGuards. Intra-method
+    // only; null on synthesized dispatch hops, roots, and pre-flag stores.
+    string? EnclosingGuards = null
 );
 
 // A method handed off as a delegate (method-group) — a deferred/background entry point the
