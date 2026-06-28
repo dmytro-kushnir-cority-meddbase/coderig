@@ -27,9 +27,15 @@
   re-index. Regression test: `CallEdgeGuardRoundTripTests` (the materialize→bounded-load seam that let it ship).
   Verified end-to-end on rig's OWN src (10s re-index): `MustRunBlocks` renders `⎇[state[b] == 0]`,
   `⎇[!(rpoIndex[block.Ordinal] < 0)]` etc., cached + uncached.
-- **M3 inc 4 TODO** (only remaining): the MedDBase cost-validation pass — index a MedDBase module, run
-  `rig tree --guards`, capture real per-method CFG-build cost (closes the rig-src-proxy caveat from the cost spike)
-  + see a real-world spine/guarded split.
+- **M3 inc 4 DONE** (MedDBase cost validation, 2026-06-28): re-indexed the full 142-project MedDBase closure
+  (377,776 symbols / 2,125,822 refs) 4× with `--time`, build fully cached so `extract` is isolated. The
+  **`extract` phase (which now includes the always-on CFG/guard build) is ~29s, rock-stable (28.5–29.5s)** —
+  *under* the ~60s recollection, so the CFG build did NOT blow up extraction (`compile+read` ~43s, save ~30s,
+  graph ~24s, total ~2m). Caveat: this can't isolate the PURE CFG marginal cost — there's no CFG-off path to
+  diff against (hard-wired always-on); the cost-spike's "~8% of binding" is consistent (29s extract beside
+  ~43s bind) but a flag-gated CFG-off A/B on the same store is the only way to nail the delta. The one thing
+  to watch is ALLOCATION, not wall-clock: `extract` peaks at ~9GB / ~2.1GB/s / ~10% GC (the CFG build is a
+  real allocator). Verified `tree --guards` renders the spine/guarded split on the MedDBase render path too.
 - **M2.5 DONE**: `GuardsOf`/`ComputeGuards` rewritten onto a **post-dominator tree + Ferrante-Ottenstein-Warren**
   dominance-frontier walk (CHK on the *reversed* CFG — the dual of must-run). Allocation 3.9 GB → **143 KB** at 514
   blocks (~27,000×); ~O(V), microseconds. Delete-test retained as the differential ORACLE (`NaiveGuards`);
@@ -37,9 +43,10 @@
   subtlety: FOW marks a loop-condition block control-dependent on ITSELF (textbook PDG self-dependence via the
   back-edge), which is useless for effect-guarding and breaks the must-run⇔no-guards invariant (loop-condition blocks
   are must-run) — excluded with a `node != branchBlock` guard. **Both must-run AND guard-sets are now production-fast.**
-- **Only remaining work: M3 inc 4** — the MedDBase cost-validation pass (extraction→storage→render is DONE and
-  verified on rig's own src). The derive-side cross-method "always-runs-from-EP" guard composition stays a later
-  enrichment (current guards are intra-method only).
+- **M3 COMPLETE** — extraction→storage→render shipped + verified on rig's own src AND the full MedDBase store;
+  cost validated (inc 4). The ONLY remaining branch-aware work is the optional follow-up: the derive-side
+  cross-method "always-runs-from-EP" guard composition (current guards are intra-method only) — a later
+  enrichment, not part of M3.
 
 ## The gap
 `reaches`/`tree` report a **path-insensitive UNION** of reachable effects: every effect that *could* be hit on *any*
@@ -150,8 +157,11 @@ re-index (dominated by the MSBuild monorepo build + workspace load), so total re
 count further). // BACKTRACK: flag-gate only if a MedDBase re-index shows a regression.
 - Caveats: (1) proxy is rig's src, not MedDBase — MedDBase methods skew larger (the lifecycle dive's 200-effect
   handlers), but the cost is expressed as a *ratio to binding*, which scales with method size too, so the ~8%
-  should roughly hold; validate on a MedDBase sample at M3. (2) `GetOperation` caches per model, so measuring it
-  after a bind walk mirrors real extraction (rig binds via its own walk first).
+  should roughly hold; validate on a MedDBase sample at M3. **VALIDATED at M3 inc 4 (2026-06-28):** full-store
+  `extract` ~29s vs `compile+read` ~43s — no blow-up, consistent with the ratio (but this is extract-incl-CFG
+  vs bind, NOT an isolated CFG delta; a CFG-off A/B is still the only way to measure the pure marginal). (2)
+  `GetOperation` caches per model, so measuring it after a bind walk mirrors real extraction (rig binds via its
+  own walk first).
 
 ## Cost gate — MEASURE before committing the substrate
 Per-body `GetOperation` + `ControlFlowGraph.Create` across the 436k-symbol monorepo is a real extraction-time adder
