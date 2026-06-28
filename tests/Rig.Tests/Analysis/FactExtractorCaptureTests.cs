@@ -141,6 +141,34 @@ public sealed class FactExtractorCaptureTests
     }
 
     [Test]
+    public void Guard_predicate_is_the_full_source_condition_not_the_lowered_branch_operands()
+    {
+        // Faithful capture (branch-aware-effects): Roslyn lowers a short-circuit `a || b` / `a && b` into
+        // SEPARATE CFG branch blocks whose BranchValue is only the sub-expression `a` / `b`. So the raw FOW
+        // control-dependence of a call directly under `if (a || b)` is the flat set {a=T, b=T} — which a renderer
+        // would AND-join into the contradiction `a && b`. EncodedGuardsFor reconstructs each guard's FULL
+        // enclosing source condition (walking the branch syntax up the &&/||/!/parens chain) and dedups, so ONE
+        // source condition becomes ONE guard carrying the whole condition — `||` and `&&` now distinguished, and
+        // the De Morgan else-arm collapses to a single negated guard instead of a flat contradictory set.
+        string Guards(string body)
+        {
+            var src = "namespace App { class Svc { void H(bool a, bool b, bool c) { " + body + " } void Foo(){} } }";
+            var r = Extract(src);
+            var foo = r.References.Single(x => x.RefKind == "invocation" && x.TargetSymbolId.Contains("Foo"));
+            return string.Join(
+                ",",
+                FactStructuralContext.DecodeGuards(foo.EnclosingGuards).Select(x => $"{x.Predicate}={(x.WhenTrue ? "T" : "F")}")
+            );
+        }
+
+        Guards("if (a || b) Foo();").ShouldBe("a || b=T"); // the RemoveConfirm shape: one disjunctive guard
+        Guards("if (a && b) Foo();").ShouldBe("a && b=T"); // distinct from || (was indistinguishable raw)
+        Guards("if ((a || b) && c) Foo();").ShouldBe("(a || b) && c=T"); // whole compound condition, one guard
+        Guards("if (a || b) {} else Foo();").ShouldBe("a || b=F"); // De Morgan else-arm -> one negated guard
+        Guards("if (a) { if (b) Foo(); }").ShouldBe("b=T"); // nesting: innermost condition only (unchanged)
+    }
+
+    [Test]
     public void Bare_instance_call_records_the_enclosing_type_as_the_implicit_this_receiver()
     {
         // Per C# spec a bare `Foo()` instance call runs on the implicit `this`, so its receiver type is the

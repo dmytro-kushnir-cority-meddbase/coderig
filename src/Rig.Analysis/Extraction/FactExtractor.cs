@@ -1172,10 +1172,65 @@ internal static class FactExtractor
             }
 
             var g = guards[block];
-            return g.Count == 0 ? null : FactStructuralContext.EncodeGuards(g.Select(x => (x.Predicate, x.WhenTrue)).ToList());
+            if (g.Count == 0)
+            {
+                return null;
+            }
+
+            // Faithful guard text. A raw guard's Predicate is the per-CFG-branch BranchValue — a SUB-expression
+            // of the source condition, because Roslyn lowers a short-circuit `a || b` / `a && b` into separate
+            // branch blocks. So a single `if (a || b)` yields TWO raw guards ("a","b") that a flat renderer would
+            // wrongly AND-join into a contradiction. Reconstruct each guard's FULL enclosing condition (walk the
+            // branch's syntax up through the &&/||/!/parens chain) and dedup: the sub-branches of one condition
+            // all map to the same (text, polarity), collapsing to ONE guard ("a || b"). This also fixes the
+            // De Morgan else-arm — {a=F,b=F} collapses to one ("a || b", false) rendering as !(a || b). Distinct
+            // DECISIONS (a loop condition + an inner if, nested ifs across regions) keep separate entries and
+            // AND-join correctly. Intra-method only (the cross-method composition stays a derive-side follow-up).
+            var pairs = new List<(string Predicate, bool WhenTrue)>();
+            var seen = new HashSet<(string, bool)>();
+            foreach (var x in g)
+            {
+                var condition = FullConditionText(cfg.Blocks[x.BranchBlock].BranchValue?.Syntax) ?? x.Predicate;
+                if (seen.Add((condition, x.WhenTrue)))
+                {
+                    pairs.Add((condition, x.WhenTrue));
+                }
+            }
+
+            return FactStructuralContext.EncodeGuards(pairs);
         }
 
         return null;
+    }
+
+    // The full source CONDITION enclosing a CFG branch's BranchValue syntax: walk up through the short-circuit
+    // boolean combinators (&&, ||, !, parentheses) to the whole condition expression. Roslyn lowers `a || b`
+    // into per-operand branch blocks whose BranchValue is the sub-expression `a` / `b`; this recovers the
+    // original `a || b` so one source condition renders as ONE guard, not a flat (AND-mis-joined) set of its
+    // operands. Stops at the first non-combinator parent (the enclosing `if`/`while`/`?:`/switch), so a
+    // non-boolean condition (a `?.` null-check, a switch governing expression) is returned unchanged. Null in
+    // -> null out (the caller then falls back to the raw per-branch Predicate).
+    private static string? FullConditionText(SyntaxNode? branchValueSyntax)
+    {
+        if (branchValueSyntax is null)
+        {
+            return null;
+        }
+
+        var node = branchValueSyntax;
+        while (
+            (
+                node.Parent is BinaryExpressionSyntax be
+                && (be.IsKind(SyntaxKind.LogicalOrExpression) || be.IsKind(SyntaxKind.LogicalAndExpression))
+            )
+            || node.Parent is ParenthesizedExpressionSyntax
+            || (node.Parent is PrefixUnaryExpressionSyntax pue && pue.IsKind(SyntaxKind.LogicalNotExpression))
+        )
+        {
+            node = node.Parent;
+        }
+
+        return node.ToString();
     }
 
     // The owner's top-level CFG plus every NESTED CFG — lambdas (anonymous functions) and local functions,
