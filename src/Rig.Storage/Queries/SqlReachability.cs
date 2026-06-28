@@ -275,7 +275,7 @@ public static class SqlReachability
             SELECT r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.ReceiverType,
                    r.FirstArgumentTemplate, r.FirstArgumentType, r.EnclosingLoopKind, r.EnclosingLoopDetail,
                    r.EnclosingInvocations, r.EnclosingCatchTypes, r.TypeArguments, r.FirstArgumentName,
-                   r.ArgumentTemplates, r.ArgumentNames
+                   r.ArgumentTemplates, r.ArgumentNames, r.EnclosingGuards
             FROM reference_facts r JOIN reach_set s ON r.EnclosingSymbolId = s.sym
             WHERE r.RefKind = 'invocation';
             """,
@@ -298,7 +298,8 @@ public static class SqlReachability
                         TypeArguments: reader.IsDBNull(11) ? null : reader.GetString(11),
                         FirstArgName: reader.IsDBNull(12) ? null : reader.GetString(12),
                         ArgumentTemplates: reader.IsDBNull(13) ? null : reader.GetString(13),
-                        ArgumentNames: reader.IsDBNull(14) ? null : reader.GetString(14)
+                        ArgumentNames: reader.IsDBNull(14) ? null : reader.GetString(14),
+                        EnclosingGuards: reader.IsDBNull(15) ? null : reader.GetString(15)
                     )
                 ),
             cancellationToken
@@ -335,7 +336,7 @@ public static class SqlReachability
         await ReadAsync(
             connection,
             """
-            SELECT r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line
+            SELECT r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.EnclosingGuards
             FROM reference_facts r JOIN reach_set s ON r.EnclosingSymbolId = s.sym
             WHERE r.RefKind = 'throw';
             """,
@@ -346,7 +347,13 @@ public static class SqlReachability
                 var line = reader.IsDBNull(3) ? 0 : reader.GetInt32(3);
                 throwByKey.TryAdd(
                     (file, line, target),
-                    new SymbolRef(Target: target, Enclosing: reader.IsDBNull(1) ? null : reader.GetString(1), FilePath: file, Line: line)
+                    new SymbolRef(
+                        Target: target,
+                        Enclosing: reader.IsDBNull(1) ? null : reader.GetString(1),
+                        FilePath: file,
+                        Line: line,
+                        EnclosingGuards: reader.IsDBNull(4) ? null : reader.GetString(4)
+                    )
                 );
             },
             cancellationToken
