@@ -115,6 +115,27 @@ guards: [ (predicateId, displayText, polarity), … ]
   enclosing constructs that often live in opaque external frames; CFG buys little there and breaks at the assembly
   boundary. Once the CFG substrate exists they *could* migrate, but it's out of scope and low-value — noted, not planned.
 
+## Cost spike RESULT (2026-06-28) — gate cleared: CFG-build can be ALWAYS-ON
+Measured over a real codebase (rig's own `src/`, 830 bodied methods, 139 files; block dist p50=8 / p95=37 /
+max=196), separating the binding cost rig's extractor ALREADY pays (it `GetSymbolInfo`-walks every node) from
+the MARGINAL cost of adding the CFG:
+
+| phase | total (830 methods) | per method |
+|---|---|---|
+| baseline bind (rig pays today) | 5034 ms / 81 MB | — |
+| **marginal CFG build** (`GetOperation`+`Create` on the already-bound model) | 402 ms / 33.5 MB | **484 µs / 42 KB** |
+| our control-dependence analysis | 31 ms / 4.8 MB | 38 µs / 6 KB |
+
+**CFG construction adds ~8% to the binding sub-phase rig already runs** (~0.5 ms/method incl. our analysis; the
+cold 4.7 ms/method first-measured was binding double-counted). Binding is itself only a fraction of a full
+re-index (dominated by the MSBuild monorepo build + workspace load), so total re-index impact is well under 8%.
+**Decision: build the CFG always-on, scoped to effect-bearing bodies** (skipping DTOs/pure getters cuts the
+count further). // BACKTRACK: flag-gate only if a MedDBase re-index shows a regression.
+- Caveats: (1) proxy is rig's src, not MedDBase — MedDBase methods skew larger (the lifecycle dive's 200-effect
+  handlers), but the cost is expressed as a *ratio to binding*, which scales with method size too, so the ~8%
+  should roughly hold; validate on a MedDBase sample at M3. (2) `GetOperation` caches per model, so measuring it
+  after a bind walk mirrors real extraction (rig binds via its own walk first).
+
 ## Cost gate — MEASURE before committing the substrate
 Per-body `GetOperation` + `ControlFlowGraph.Create` across the 436k-symbol monorepo is a real extraction-time adder
 (today's extractor pulls neither `IOperation` nor a CFG). Gate it:
