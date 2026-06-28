@@ -2,9 +2,21 @@
 
 **Status:** SHIPPED 2026-06-28 (`e0fac644`) — ComputeGuards' two-model merge (normal + virtual-exit, merged by IsAbnormalExit) gives a reachable guarded throw its gating predicate without disturbing the must-run spine; `OnThrow` wires the guard onto the Throw ref. Proven by the differential oracle + guarded-throw fixtures + a capture test; the vacuous-post-dominance regression still passes. · **Priority: LOW-MED** · **Found:** 2026-06-28 (dogfooding `tree`, `ClassFactory.AssemblyResolver` L41-43) · **Family:** effect-precision / control-dependence-model
 
+## Validated end-to-end (2026-06-28)
+Re-indexed the MedDBase primary checkout and confirmed live: `ClassFactory.AssemblyResolver`'s
+`if (asm == null) throw …` now renders `↯ throw:raise System.Exception ⎇ [asm == null] :43`, while the
+catch's unconditional rethrow at `:49` correctly stays bare. Two extra fixes surfaced during validation:
+- **Try/catch throw fix (`74106eda`):** split IsAbnormalExit (escaping → virtual edge) from EndsInThrow (any
+  reachable throw → read the virtual pass), so a caught throw reached via its catch→rethrow chain still gets
+  its predicate. (Roslyn happened to route THIS throw straight to method-exit, but the fix is correct for
+  genuinely-caught throws.)
+- **SQL fast-path fix (`eb4cd90d`):** the real reason the leaf stayed bare after re-index — the graph-backed
+  `SqlReachability` input queries (used by tree/reaches when graph views exist) didn't `SELECT EnclosingGuards`
+  for invocation/throw refs. Card A had wired only the EF-fallback loaders.
+
 ## Residual (NOT done)
-- **MedDBase re-index pending:** the throw-guard wiring is an *extraction* change, so the `↯ throw:raise` effect leaf won't show its `⎇` on the existing store until a re-index. End-to-end is guaranteed by the three independent tests (capture stores it → deriver copies it → leaf-render shows it); the re-index is confirmatory.
 - Nested-guard throws carry only their innermost direct guard (the documented direct-CD limit — see [[guard-set-direct-vs-transitive-control-dependence]]).
+- No unit test pins the SQL-fast-path guard selection (validated live; would need an indexed-store fixture).
 **Related:** [[branch-aware-effects-shipped]] (the feature) · [[guards-not-shown-on-view-full-promoted-leaves]] (a guarded throw ALSO hits that rendering gap — two reasons it shows bare)
 
 ## Symptom
