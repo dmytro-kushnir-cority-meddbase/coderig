@@ -261,7 +261,7 @@ internal static class TreeCommand
         var storeKey = StoreKey(Path.Combine(rigDir, StoreLayout.DbFileName));
         var rulesHash = RulesFingerprint.ComputeFromPaths(loadedRulePaths); // F6: reuse paths Load resolved.
         using var cache = opts.NoCache ? null : QueryCache.Open(rigDirectory: rigDir, storeKey: storeKey);
-        var cacheKey = cache is null
+        ForestCacheKey? cacheKey = cache is null
             ? null
             : TreeCacheKey(
                 storeKey: storeKey,
@@ -272,15 +272,17 @@ internal static class TreeCommand
                 raw: opts.Raw
             );
 
-        var cached = cacheKey is not null && cache!.Get(cacheKey) is { } blob ? TreeCacheCodec.Decode(blob) : null;
+        var cached = cacheKey is { } ck && cache!.Get(ck.Value) is { } blob ? TreeCacheCodec.Decode(blob) : null;
         // Render data the graph would otherwise be reloaded to produce, split by filter-dependence so the
         // filter-independent half isn't duplicated across --only/--exclude combos:
         //   - locations (method DocID -> file:line) are filter- AND hazard-independent → keyed by the forest
         //     key alone (`:loc`);
         //   - seam summaries are derived from the FILTERED effects → keyed by the forest key + the filter
         //     signature (`:seam:<sig>`), since filters are absent from the forest key.
-        var locKey = cacheKey is null ? null : cacheKey + ":loc";
-        var seamKey = cacheKey is null ? null : cacheKey + ":seam:" + EffectFilterSignature(only: opts.Only, exclude: opts.Exclude);
+        var filterSig = EffectFilterSignature(only: opts.Only, exclude: opts.Exclude);
+        RenderSidecarKey? sidecar = cacheKey is { } sk ? new RenderSidecarKey(sk, filterSig, Hazards: hazards, Gate: opts.Gate) : null;
+        var locKey = sidecar?.Locations();
+        var seamKey = sidecar?.Seam();
         var cachedLocations =
             cached is not null && locKey is not null && cache!.Get(locKey) is { } locBlob ? LocationsCodec.Decode(locBlob) : null;
         var cachedSeam =
@@ -357,9 +359,9 @@ internal static class TreeCommand
                     ctorRefs: inputs.CtorRefs,
                     throwRefs: inputs.ThrowRefs
                 );
-                if (cacheKey is not null)
+                if (cacheKey is { } pk)
                 {
-                    TryCache(() => cache!.Put(cacheKey, TreeCacheCodec.Encode(new TreeCachePayload(roots, effects))));
+                    TryCache(() => cache!.Put(pk.Value, TreeCacheCodec.Encode(new TreeCachePayload(roots, effects))));
                 }
 
                 timer.Lap("derive effects + cache store");
@@ -578,7 +580,7 @@ internal static class TreeCommand
             // (`:libcalls`), recomputed only when the forest changes, not on every --full run. The `g2` suffix
             // versions the payload: SymbolRef gained EnclosingGuards, so pre-guard blobs must miss (else a
             // stale cache hit would decode null guards and silently drop the ⎇ markers).
-            var libCallsKey = cacheKey is null ? null : cacheKey + ":libcalls-g2";
+            var libCallsKey = cacheKey is { } lk ? lk.Value + ":libcalls-g2" : null;
             var libCalls = libCallsKey is not null && cache!.Get(libCallsKey) is { } lcBlob ? LibCallsCodec.Decode(lcBlob) : null;
             if (libCalls is null)
             {
@@ -655,10 +657,11 @@ internal static class TreeCommand
         }
 
         // Seam effects: from the cache when present, else computed from the (filtered) effects + graph.
-        // Under --hazards we still REUSE a cached seam: the seam is a collapsed-fan-out provider:op rollup,
-        // and whether it includes the few field-fed shared_state effects is cosmetic — not worth a graph load
-        // to recompute. (The WRITE below stays gated on !hazards so a cold --hazards run, which computes seam
-        // from the augmented effects, never caches that augmented seam.)
+        // The hazards seam now has its OWN namespaced key (haz:<g|ng>:<filter>, see RenderSidecarKey.Seam),
+        // distinct from the plain-tree seam's slot — so a cold --hazards run caches its augmented seam and a
+        // repeat identical --hazards run is a FULL hit with NO graph load. Because the namespace differs, the
+        // hazards seam can never taint a plain `tree`'s seam (they never share a slot), and the WRITE below is
+        // unconditional.
         IReadOnlyDictionary<string, List<string>> seamEffects;
         if (cachedSeam is not null)
         {
@@ -684,15 +687,16 @@ internal static class TreeCommand
         // `--files`: per-node definition location (relpath:line) for source links. Populate the render data
         // (best-effort) so the next warm query renders with NO graph load — only when a graph was actually
         // loaded (cold or render-miss) and caching is on. Locations are filter- AND hazard-independent, so
-        // they cache under the forest key always; the seam is filter-dependent and NOT cached under --hazards
-        // (the augmented effects would taint the rollup that a plain `tree` would later read).
+        // they cache under the forest key always; the seam is now cached under a hazards+gate-namespaced key
+        // (see RenderSidecarKey.Seam), so the augmented --hazards seam can never taint the plain-tree seam —
+        // tainting is impossible across distinct slots — and the seam write is therefore UNCONDITIONAL.
         var locById = opts.Files ? locations : null;
         if (graph is not null && locKey is not null)
         {
             TryCache(() => cache!.Put(locKey, LocationsCodec.Encode(locations)));
         }
 
-        if (graph is not null && seamKey is not null && !hazards)
+        if (graph is not null && seamKey is not null)
         {
             TryCache(() => cache!.Put(seamKey, SeamCodec.Encode(seamEffects)));
         }

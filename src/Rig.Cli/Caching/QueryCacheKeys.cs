@@ -35,6 +35,14 @@ internal static class QueryCacheKeys
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 
+    // A forest cache key — a newtype over the hashed key string, produced ONLY by TreeCacheKey. The render
+    // sidecar (RenderSidecarKey) takes this type, not a bare string, so it can NEVER be derived from a
+    // non-forest key; and because the sidecar suffixes `.Value`, it inherits TreeCacheKey's full dependency +
+    // version set automatically — a forest-key bump (new param / v-bump) flows through for free, so the
+    // sidecar can never drift out of lockstep with the forest it hangs off. Free at runtime: a one-field
+    // readonly struct over a string reference (pass-by-value = copy one pointer, no allocation, no boxing).
+    internal readonly record struct ForestCacheKey(string Value);
+
     // The cache key for a `rig tree` forest+effects artifact: everything the artifact is a function of —
     // the store identity, the effective rule fingerprint, and the traversal parameters. `v2` is the
     // payload-schema version (bump to ignore older blobs) — bumped from v1 when TraceNode gained
@@ -42,7 +50,7 @@ internal static class QueryCacheKeys
     // Render-only flags (--files/--summary/--effects and --only/--exclude) are deliberately absent: they
     // don't change the forest or the unfiltered effects, only how they're presented, so they must not
     // fragment the cache.
-    internal static string TreeCacheKey(
+    internal static ForestCacheKey TreeCacheKey(
         string storeKey,
         string rulesHash,
         string fromPattern,
@@ -52,7 +60,7 @@ internal static class QueryCacheKeys
     )
     {
         var material = $"tree|v2|{storeKey}|{rulesHash}|{fromPattern}|{maxDepth}|{mode}|{raw}";
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+        return new ForestCacheKey(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material))));
     }
 
     // The cache key for the WHOLE-STORE hazard-augmented effect set (derive's effect computation: every
@@ -108,6 +116,24 @@ internal static class QueryCacheKeys
         var o = string.Join(',', only.Select(x => x.ToLowerInvariant()).OrderBy(x => x, StringComparer.Ordinal));
         var e = string.Join(',', exclude.Select(x => x.ToLowerInvariant()).OrderBy(x => x, StringComparer.Ordinal));
         return $"only={o};exclude={e}";
+    }
+
+    // The render-sidecar cache keys (locations + seam) derived off a forest TreeCacheKey. Encapsulated as a
+    // typed record so the seam key's full dependency set is explicit and impossible to omit (a missing
+    // component here previously pinned `tree --view hazards` to a permanent render-miss). The seam summary is
+    // a function of the FILTERED effects AND, under --view hazards, the whole-store hazard-augmented effect set
+    // (which depends on the write-pairing gate) — so Hazards+Gate MUST namespace the key, else a hazards run
+    // would either never cache (old behaviour) or taint a plain tree's seam (same forest+filter key).
+    internal readonly record struct RenderSidecarKey(ForestCacheKey Forest, string FilterSignature, bool Hazards, bool Gate)
+    {
+        // Locations (DocID -> file:line) are filter- AND hazard-independent -> keyed off the forest key alone.
+        public string Locations() => Forest.Value + ":loc";
+
+        // Seam: namespaced by hazards (+gate, which only affects the hazard-augmented effects) so the hazards
+        // seam and the plain-tree seam never share a slot. NON-hazards key is byte-identical to the legacy
+        // `Forest.Value + ":seam:" + FilterSignature` (back-compat: existing plain-tree warm caches still hit,
+        // and gate must NOT fragment the non-hazards key — a plain tree has no gate-dependent effects).
+        public string Seam() => Forest.Value + ":seam:" + (Hazards ? $"haz:{(Gate ? "g" : "ng")}:" : "") + FilterSignature;
     }
 
     // Best-effort cache write: encoding a pathologically deep forest (or any IO hiccup) must never fail
