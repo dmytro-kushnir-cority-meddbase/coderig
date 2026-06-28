@@ -610,13 +610,17 @@ internal static class TreeRenderer
     {
         var loc = string.IsNullOrEmpty(e.FilePath) ? "" : $"  {ShortenPath(e.FilePath)}:{e.Line}";
         var glyph = EmojiLookup.For(emoji, provider: e.Provider, operation: e.Operation);
-        return $"{glyph} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}{loc}";
+        // A guarded effect (e.g. a db:write under `if`, a guarded `throw`) carries its control-dependence
+        // condition; mark it with ⎇ like a resolved call edge. Empty (must-run) → no glyph.
+        var guardText = ShortGuards(e.EnclosingGuards);
+        var guardTag = guardText.Length == 0 ? "" : $" ⎇ [{guardText}]";
+        return $"{glyph} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}{guardTag}{loc}";
     }
 
     // `tree --full`: a library call that produced NO effect (resolved to a referenced-assembly target, but
     // no rule matched it). Rendered as a dim leaf (· marker) so the call is visible without implying an
     // effect — distinct from the glyph-prefixed effect leaves above.
-    internal static string FormatUnresolvedLeaf(string target, string? filePath, int line)
+    internal static string FormatUnresolvedLeaf(string target, string? filePath, int line, string? encodedGuards = null)
     {
         var loc = string.IsNullOrEmpty(filePath) ? "" : $"  {ShortenPath(filePath)}:{line}";
         var name = ShortName(target);
@@ -626,9 +630,14 @@ internal static class TreeRenderer
             name = name[2..];
         }
 
+        // A guarded library call (e.g. a switch-arm or if-gated BCL call) carries its control-dependence
+        // condition; mark it with the ⎇ glyph, same as a resolved call edge. Empty (must-run) → no glyph.
+        var guardText = ShortGuards(encodedGuards);
+        var guardTag = guardText.Length == 0 ? "" : $" ⎇ [{guardText}]";
+
         // Render generic arity the same way resolved tree nodes do (`Seq`1.Iter` -> `Seq<T>.Iter`) so the
         // library leaves don't show raw backtick arity next to the `<T,U>` of resolved siblings.
-        return $"· {PrettyGenericName(name)}{loc}";
+        return $"· {PrettyGenericName(name)}{guardTag}{loc}";
     }
 }
 

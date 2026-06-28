@@ -570,8 +570,10 @@ internal static class TreeCommand
 
             var effectSites = effects.Where(e => e.EnclosingSymbolId is not null).Select(e => (e.EnclosingSymbolId!, e.Line)).ToHashSet();
             // Library-call sites are a pure function of the forest's method set → cache under the forest key
-            // (`:libcalls`), recomputed only when the forest changes, not on every --full run.
-            var libCallsKey = cacheKey is null ? null : cacheKey + ":libcalls";
+            // (`:libcalls`), recomputed only when the forest changes, not on every --full run. The `g2` suffix
+            // versions the payload: SymbolRef gained EnclosingGuards, so pre-guard blobs must miss (else a
+            // stale cache hit would decode null guards and silently drop the ⎇ markers).
+            var libCallsKey = cacheKey is null ? null : cacheKey + ":libcalls-g2";
             var libCalls = libCallsKey is not null && cache!.Get(libCallsKey) is { } lcBlob ? LibCallsCodec.Decode(lcBlob) : null;
             if (libCalls is null)
             {
@@ -588,7 +590,13 @@ internal static class TreeCommand
                     .DistinctBy(c => (c.Enclosing, c.Target, c.Line))
             )
             {
-                leafRows.Add((c.Enclosing!, c.Line, FormatUnresolvedLeaf(target: c.Target, filePath: c.FilePath, line: c.Line)));
+                leafRows.Add(
+                    (
+                        c.Enclosing!,
+                        c.Line,
+                        FormatUnresolvedLeaf(target: c.Target, filePath: c.FilePath, line: c.Line, encodedGuards: c.EnclosingGuards)
+                    )
+                );
             }
 
             effectLeavesByMethod = leafRows

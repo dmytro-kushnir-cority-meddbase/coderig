@@ -1068,7 +1068,8 @@ public static class Reads
                 FirstArgName: r.FirstArgumentName,
                 EnclosingScopes: r.EnclosingScopes,
                 ArgumentTemplates: r.ArgumentTemplates,
-                ArgumentNames: r.ArgumentNames
+                ArgumentNames: r.ArgumentNames,
+                EnclosingGuards: r.EnclosingGuards
             ))
             .ToListAsync(cancellationToken);
 
@@ -1096,7 +1097,13 @@ public static class Reads
                     && r.EnclosingSymbolId != null
                     && chunk.Contains(r.EnclosingSymbolId)
                 )
-                .Select(r => new SymbolRef(Target: r.TargetSymbolId, Enclosing: r.EnclosingSymbolId, FilePath: r.FilePath, Line: r.Line))
+                .Select(r => new SymbolRef(
+                    Target: r.TargetSymbolId,
+                    Enclosing: r.EnclosingSymbolId,
+                    FilePath: r.FilePath,
+                    Line: r.Line,
+                    EnclosingGuards: r.EnclosingGuards
+                ))
                 .ToListAsync(cancellationToken);
             result.AddRange(rows);
         }
@@ -1112,7 +1119,13 @@ public static class Reads
     {
         var rows = await context
             .ReferenceFacts.Where(r => r.RefKind == RefKinds.Throw && r.EnclosingSymbolId != null)
-            .Select(r => new SymbolRef(Target: r.TargetSymbolId, Enclosing: r.EnclosingSymbolId, FilePath: r.FilePath, Line: r.Line))
+            .Select(r => new SymbolRef(
+                Target: r.TargetSymbolId,
+                Enclosing: r.EnclosingSymbolId,
+                FilePath: r.FilePath,
+                Line: r.Line,
+                EnclosingGuards: r.EnclosingGuards
+            ))
             .ToListAsync(cancellationToken);
 
         return rows.GroupBy(r => (r.FilePath, r.Line, r.Target)).Select(g => g.First()).ToList();

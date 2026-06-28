@@ -62,10 +62,12 @@ internal static class QueryCacheKeys
     // of which entry point reaches it or whether the walk is sync/async. So `derive`, `tree --hazards` (any
     // EP, any mode), and any future hazard surface all share ONE entry: compute once, reuse everywhere.
     // Reindex shifts storeKey (miss); a changed rule shifts rulesHash (miss) — so hazards stay query-side
-    // data (a rule edit needs no re-index, just recomputes the cache). `v1` is the payload-schema version.
+    // data (a rule edit needs no re-index, just recomputes the cache). The payload-schema version bumped
+    // v1->v2 when DerivedEffect gained EnclosingGuards (branch-aware-effects); a pre-guard cached set must
+    // miss, else a stale hit would decode null guards and drop the ⎇ markers on effect leaves.
     internal static string HazardEffectsCacheKey(string storeKey, string rulesHash)
     {
-        var material = $"hazardfx|v1|{storeKey}|{rulesHash}";
+        var material = $"hazardfx|v2|{storeKey}|{rulesHash}";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 

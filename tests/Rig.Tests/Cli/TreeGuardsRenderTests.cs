@@ -138,6 +138,50 @@ public sealed class TreeGuardsRenderTests
         Render(root, guards: true).ShouldContain("⎇ [File.Exists(projPath)]");
     }
 
+    // `--view full` promotes effects + unresolved library calls to LEAF nodes via FormatEffectLeaf /
+    // FormatUnresolvedLeaf — a path distinct from the call-edge renderer above. These leaves used to drop
+    // the guard entirely (card A): the guard rides the ReferenceFact/DerivedEffect but the leaf formatter
+    // ignored it, so a guarded `io:read` or switch-arm library call read as must-run. Now they carry ⎇.
+    [Test]
+    public void A_guarded_library_call_leaf_carries_the_guard_glyph()
+    {
+        var guarded = TreeRenderer.FormatUnresolvedLeaf(
+            target: "M:System.Reflection.Assembly.GetEntryAssembly()",
+            filePath: "mms/ClassFactory.cs",
+            line: 72,
+            encodedGuards: FactStructuralContext.EncodeGuards([("\"entry\"", true)])
+        );
+        guarded.ShouldContain("· ");
+        guarded.ShouldContain("⎇ [\"entry\"]");
+
+        // A must-run library call (null guards) stays a bare · leaf.
+        TreeRenderer
+            .FormatUnresolvedLeaf(target: "M:System.IO.File.Exists(System.String)", filePath: "x.cs", line: 1)
+            .ShouldNotContain("⎇");
+    }
+
+    [Test]
+    public void A_guarded_effect_leaf_carries_the_guard_glyph()
+    {
+        var emoji = new Dictionary<string, string>(StringComparer.Ordinal);
+        DerivedEffect Effect(string? guards) =>
+            new(
+                Provider: "db",
+                Operation: "write",
+                ResourceType: "T:App.Orders",
+                EnclosingSymbolId: "M:App.Svc.Save()",
+                FilePath: "Svc.cs",
+                Line: 10,
+                EnclosingGuards: guards
+            );
+
+        TreeRenderer
+            .FormatEffectLeaf(Effect(FactStructuralContext.EncodeGuards([("order.IsDirty", true)])), emoji)
+            .ShouldContain("⎇ [order.IsDirty]");
+        // A must-run effect (null guards) renders without the ⎇ glyph.
+        TreeRenderer.FormatEffectLeaf(Effect(null), emoji).ShouldNotContain("⎇");
+    }
+
     [Test]
     public void Only_the_collection_guard_is_filtered_when_a_real_guard_also_applies()
     {

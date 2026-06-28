@@ -215,7 +215,8 @@ public static class FactEffectDeriver
                         FilePath: inv.FilePath,
                         Line: inv.Line,
                         Observations: observations,
-                        Atomic: rule.Atomic
+                        Atomic: rule.Atomic,
+                        EnclosingGuards: inv.EnclosingGuards
                     )
                 );
                 break; // first matching rule wins
@@ -290,7 +291,8 @@ public static class FactEffectDeriver
                             EnclosingSymbolId: inv.Enclosing,
                             FilePath: inv.FilePath,
                             Line: inv.Line,
-                            Atomic: rule.Atomic
+                            Atomic: rule.Atomic,
+                            EnclosingGuards: inv.EnclosingGuards
                         )
                     );
                     break;
@@ -380,7 +382,8 @@ public static class FactEffectDeriver
                             EnclosingSymbolId: thrown.Enclosing,
                             FilePath: thrown.FilePath,
                             Line: thrown.Line,
-                            Atomic: rule.Atomic
+                            Atomic: rule.Atomic,
+                            EnclosingGuards: thrown.EnclosingGuards
                         )
                     );
                     break;

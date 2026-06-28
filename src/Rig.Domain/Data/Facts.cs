@@ -261,7 +261,9 @@ public sealed record MethodRef(
 // both feed the effect/entry-point derivers keyed by this identical (Target, Enclosing, FilePath, Line)
 // shape, and were previously two structurally-identical 4-tuples. Enclosing is null when the ref has no
 // resolved enclosing method (most callers filter those out at the query).
-public sealed record SymbolRef(string Target, string? Enclosing, string FilePath, int Line);
+// EnclosingGuards: the CFG control-dependence guard set of this reference's call-site (branch-aware-effects),
+// carried through for `tree --view full --guards` to mark a guarded library-call / throw leaf. Null = must-run.
+public sealed record SymbolRef(string Target, string? Enclosing, string FilePath, int Line, string? EnclosingGuards = null);
 
 // A static-field/auto-property ACCESS ref — a WRITE (FR-1(b)) or a READ (FR-1 read arm) — carrying the
 // structural context the SymbolRef shape drops, so the field-access effect arms can derive the SAME
@@ -687,7 +689,10 @@ public sealed record FactInvocation(
     // ALL arguments' string templates / member-identifier names as JSON string?[] (see
     // ReferenceFact.ArgumentTemplates/ArgumentNames). Feed nth-argument resource resolution.
     string? ArgumentTemplates = null,
-    string? ArgumentNames = null
+    string? ArgumentNames = null,
+    // CFG control-dependence guard set of this invocation's call-site (branch-aware-effects); carried onto
+    // the DerivedEffect so `tree --view full --guards` can mark a guarded effect leaf. Null = must-run.
+    string? EnclosingGuards = null
 );
 
 // An effect re-derived from the reference index by matching an invocation target against the
@@ -706,7 +711,11 @@ public sealed record DerivedEffect(
     // Concurrent* per-call mutators, ImmutableInterlocked). Used by the FR-1d guard-subtraction triage to
     // drop already-safe shared_state mutations from the unguarded-candidate set (a single atomic call is
     // not the race — a non-atomic read-then-write PAIR is, which rig cannot yet couple). Default false.
-    bool Atomic = false
+    bool Atomic = false,
+    // CFG control-dependence guard set of the producing call-site (branch-aware-effects), copied from the
+    // originating reference fact. Lets `tree --view full --guards` mark a guarded effect leaf with ⎇. Null
+    // = must-run. Query-side only; carried through the hazard-effects cache (see HazardEffectsCacheKey).
+    string? EnclosingGuards = null
 );
 
 // Fact-side projections of the observation rules (the same AnalysisRuleSet.*Observations data the
