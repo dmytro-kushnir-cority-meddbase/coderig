@@ -228,7 +228,12 @@ public sealed record CallEdge(
     // the override-dispatch fan — FORWARD (no sibling-override successors) and REVERSE (the call's
     // source is a direct caller of the base BODY, but not a reverse-reacher of sibling overrides). False
     // on ordinary edges, synthesized dispatch hops, and pre-flag stores (read as all-virtual).
-    bool NonVirtual = false
+    bool NonVirtual = false,
+    // CFG-derived control-dependence guard set of this call SITE within the caller (from
+    // ReferenceFact.EnclosingGuards): the branch predicates gating whether this call runs. Null == must-run
+    // (unconditional in the caller). Carried onto the reached node so the renderer can mark a guarded
+    // subtree (the ⎇ analog of 🔁). Intra-method only; null on synthesized dispatch hops and pre-flag stores.
+    string? EnclosingGuards = null
 );
 
 // An "implType implements ifaceType" edge (from a type-relation fact).

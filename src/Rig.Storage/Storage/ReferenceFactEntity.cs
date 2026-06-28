@@ -30,4 +30,9 @@ public sealed class ReferenceFactEntity
     // True when this reference is a non-virtual `base.M(...)` call (ReferenceFact.NonVirtual). Default
     // false; old stores read it as false so behavior is unchanged until re-indexed.
     public bool NonVirtual { get; set; }
+
+    // CFG-derived control-dependence guard set of this call-site within its method (branch-aware-effects):
+    // encoded predicate-text/polarity (FactStructuralContext.DecodeGuards), null == must-run. EnsureCreated
+    // adds this column on a fresh index; old stores lack it and read as null (no guards).
+    public string? EnclosingGuards { get; set; }
 }

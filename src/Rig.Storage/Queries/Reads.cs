@@ -347,7 +347,8 @@ public static class Reads
                 DeclaringTypeArgBinding: r.DeclaringTypeArgBinding,
                 MethodTypeArgBinding: r.MethodTypeArgBinding,
                 DeliveryPrecision: null,
-                NonVirtual: r.NonVirtual
+                NonVirtual: r.NonVirtual,
+                EnclosingGuards: r.EnclosingGuards
             ))
             .ToListAsync(cancellationToken);
 
@@ -386,7 +387,8 @@ public static class Reads
                     DeclaringTypeArgBinding: r.DeclaringTypeArgBinding,
                     MethodTypeArgBinding: r.MethodTypeArgBinding,
                     DeliveryPrecision: null,
-                    NonVirtual: r.NonVirtual
+                    NonVirtual: r.NonVirtual,
+                    EnclosingGuards: r.EnclosingGuards
                 ))
                 .ToListAsync(cancellationToken);
             callEdges.AddRange(redirectRows);
