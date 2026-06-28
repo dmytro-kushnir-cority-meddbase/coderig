@@ -90,6 +90,105 @@ public sealed class ControlDependenceTests
         }
     }
 
+    // Obviously-correct guard ORACLE: the original O(V^2*E) delete-test (post-dominance via reachability).
+    // ComputeGuards (post-dominator tree + FOW) must equal this for every block on every shape.
+    private static List<ControlDependence.ControlGuard> NaiveGuards(ControlFlowGraph cfg, int block)
+    {
+        var exit = cfg.Blocks.Length - 1;
+        var guards = new List<ControlDependence.ControlGuard>();
+
+        foreach (var a in cfg.Blocks)
+        {
+            var cond = a.ConditionalSuccessor?.Destination?.Ordinal;
+            var fall = a.FallThroughSuccessor?.Destination?.Ordinal;
+            if (a.BranchValue is null || cond is null || fall is null || PostDom(block, a.Ordinal))
+            {
+                continue;
+            }
+
+            if (CanReach(cond.Value) && PostDom(block, cond.Value))
+            {
+                guards.Add(new(a.Ordinal, a.BranchValue.Syntax.ToString(), a.ConditionKind == ControlFlowConditionKind.WhenTrue));
+                continue;
+            }
+
+            if (CanReach(fall.Value) && PostDom(block, fall.Value))
+            {
+                guards.Add(new(a.Ordinal, a.BranchValue.Syntax.ToString(), a.ConditionKind == ControlFlowConditionKind.WhenFalse));
+            }
+        }
+
+        return guards;
+
+        bool PostDom(int x, int y) => x == y || !ReachAvoiding(y, exit, x);
+        bool CanReach(int s) => ReachAvoiding(s, exit, -1);
+
+        bool ReachAvoiding(int start, int target, int excluded)
+        {
+            if (start == excluded)
+            {
+                return false;
+            }
+            if (start == target)
+            {
+                return true;
+            }
+
+            var seen = new HashSet<int> { start };
+            var stack = new Stack<int>();
+            stack.Push(start);
+            while (stack.Count > 0)
+            {
+                var b = cfg.Blocks[stack.Pop()];
+                foreach (var d in new[] { b.ConditionalSuccessor?.Destination?.Ordinal, b.FallThroughSuccessor?.Destination?.Ordinal })
+                {
+                    if (d is not int next || next == excluded)
+                    {
+                        continue;
+                    }
+                    if (next == target)
+                    {
+                        return true;
+                    }
+                    if (seen.Add(next))
+                    {
+                        stack.Push(next);
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
+    [Test]
+    public void Guards_match_the_delete_test_oracle()
+    {
+        string[] sources =
+        [
+            """
+                public sealed class Account { }
+                public sealed class C { void M(Account a) { if (a == null) return; if (a != null) return; Save(a); } void Save(Account a) {} }
+                """,
+            """
+                public sealed class C { void M(bool c) { if (c) A(); else B(); D(); for (int i = 0; i < 9; i++) E(); } void A(){} void B(){} void D(){} void E(){} }
+                """,
+            SugarSource,
+        ];
+        string[] methods = ["M", "M", "Demo"];
+
+        for (var i = 0; i < sources.Length; i++)
+        {
+            var (cfg, _) = Build(sources[i], methods[i]);
+            var fast = ControlDependence.ComputeGuards(cfg);
+            for (var b = 0; b < cfg.Blocks.Length; b++)
+            {
+                var f = fast[b].OrderBy(g => g.BranchBlock).ThenBy(g => g.WhenTrue).ToList();
+                var oracle = NaiveGuards(cfg, b).OrderBy(g => g.BranchBlock).ThenBy(g => g.WhenTrue).ToList();
+                f.ShouldBe(oracle, $"case {i} block {b}");
+            }
+        }
+    }
+
     // The Demo method exercises conditional execution with NO `if` ancestor — the cases the rejected
     // syntactic proxy would have mislabeled must-run.
     private const string SugarSource = """

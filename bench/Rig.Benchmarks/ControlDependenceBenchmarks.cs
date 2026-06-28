@@ -78,14 +78,17 @@ public class ControlDependenceBenchmarks
     [Benchmark]
     public int MustRun() => ControlDependence.MustRunBlocks(_cfg).Count;
 
-    // The guard set for every effect-bearing call-site (post-dominance queries) — the heavier half.
+    // The guard set for every effect-bearing call-site. ComputeGuards does the whole method ONCE (post-dom
+    // tree + FOW); we then index per effect — this is how extraction will use it, NOT the per-block GuardsOf
+    // which recomputes the tree each call.
     [Benchmark]
     public int GuardsForEveryEffect()
     {
+        var guards = ControlDependence.ComputeGuards(_cfg);
         var total = 0;
         foreach (var block in _effectBlocks)
         {
-            total += ControlDependence.GuardsOf(_cfg, block).Count;
+            total += guards[block].Count;
         }
 
         return total;
@@ -97,9 +100,10 @@ public class ControlDependenceBenchmarks
     public int FullMethodAnalysis()
     {
         var total = ControlDependence.MustRunBlocks(_cfg).Count;
+        var guards = ControlDependence.ComputeGuards(_cfg);
         foreach (var block in _effectBlocks)
         {
-            total += ControlDependence.GuardsOf(_cfg, block).Count;
+            total += guards[block].Count;
         }
 
         return total;

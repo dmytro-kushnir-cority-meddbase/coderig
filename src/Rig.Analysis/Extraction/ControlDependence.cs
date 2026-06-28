@@ -211,124 +211,219 @@ internal static class ControlDependence
         return a;
     }
 
-    // The control-dependence (guard) set of `block`: the branch predicates that decide whether it runs.
-    // EMPTY iff the block is must-run (or unreachable). Ferrante-Ottenstein-Warren: a block B is
-    // control-dependent on a CFG edge A->t iff B post-dominates t but B does NOT post-dominate A. We test
-    // both out-edges of every forking block A, recording the polarity of the edge that leads toward B.
-    internal static IReadOnlyList<ControlGuard> GuardsOf(ControlFlowGraph cfg, int block)
+    // The control-dependence (guard) set of `block` — the branch predicates that decide whether it runs;
+    // EMPTY iff the block is must-run (or unreachable). Convenience wrapper: production callers (extraction)
+    // should call ComputeGuards ONCE per CFG and index the result — calling this per-block recomputes the
+    // post-dominator tree each time.
+    internal static IReadOnlyList<ControlGuard> GuardsOf(ControlFlowGraph cfg, int block) => ComputeGuards(cfg)[block];
+
+    // Control dependence for EVERY block, computed ONCE. Ferrante-Ottenstein-Warren over the POST-dominator
+    // tree: a node N is control-dependent on a branch A (taking the edge toward successor B) for every N on
+    // the post-dom-tree path from B up to — but excluding — ipdom(A). This is the dual of MustRunBlocks: the
+    // post-dominator tree is the dominator tree of the REVERSED CFG rooted at the Exit, built with the same
+    // CHK machinery — O(V) allocation, computed once, NO per-query reachability.
+    //
+    // PERF / BACKTRACK: this replaced an O(V^2*E) delete-test (a reachability walk per fork-edge per block)
+    // that allocated MB-GB per method (see the benchmark). The delete-test survives as the differential test
+    // ORACLE (NaiveGuards in ControlDependenceTests) — it is ground truth if a CHK edge case is suspected.
+    // Blocks that cannot reach the Exit (throw arms, infinite loops) are absent from the reversed traversal,
+    // so they're excluded — matching the normal-completion model MustRunBlocks uses.
+    internal static IReadOnlyList<ControlGuard>[] ComputeGuards(ControlFlowGraph cfg)
     {
-        var guards = new List<ControlGuard>();
+        var n = cfg.Blocks.Length;
+        var exit = n - 1; // Roslyn invariant: Blocks[^1] == Exit
+
+        var guards = new List<ControlGuard>[n];
+        for (var i = 0; i < n; i++)
+        {
+            guards[i] = [];
+        }
+
+        var ipdom = PostDominatorTree(cfg, out var rpoIndexR);
+        if (rpoIndexR[exit] < 0)
+        {
+            return guards; // Exit unreachable -> no normal completion -> no guards
+        }
 
         foreach (var a in cfg.Blocks)
         {
-            var conditional = a.ConditionalSuccessor?.Destination;
-            var fallThrough = a.FallThroughSuccessor?.Destination;
+            var conditional = a.ConditionalSuccessor?.Destination?.Ordinal;
+            var fallThrough = a.FallThroughSuccessor?.Destination?.Ordinal;
 
-            // Only a forking block (two distinct out-edges with a branch value) gates anything.
-            if (a.BranchValue is not { } predicate || conditional is null || fallThrough is null)
+            // Only a forking block can gate anything, and it must itself be able to reach the Exit.
+            if (a.BranchValue is not { } predicate || conditional is null || fallThrough is null || rpoIndexR[a.Ordinal] < 0)
             {
                 continue;
             }
 
-            // (FOW condition 2) if B post-dominates A, B runs no matter which edge A takes -> A is not a guard.
-            if (PostDominates(cfg, x: block, y: a.Ordinal))
-            {
-                continue;
-            }
+            var predicateText = predicate.Syntax.ToString();
+            var aOrdinal = a.Ordinal;
+            var stop = ipdom[aOrdinal]; // walk each edge's region up to (excluding) A's immediate post-dominator
 
-            // An out-edge that leads ONLY to abnormal termination — a block with no path to the Exit (a
-            // throw arm, e.g. a switch-expression's synthetic no-match throw; or an infinite loop) — is not
-            // a guard in the normal-completion model. Gating on CanReachExit also avoids VACUOUS
-            // post-dominance: "X post-dominates a block that can't reach Exit" is trivially true (no paths
-            // exist), which otherwise pins a spurious guard on every upstream block. This keeps GuardsOf
-            // consistent with MustRunBlocks, which likewise counts only paths that actually reach the Exit.
-            // (Surfaced by the switch-expression no-match arm in the sugar fixture.)
+            MarkRegion(conditional.Value, a.ConditionKind == ControlFlowConditionKind.WhenTrue);
+            MarkRegion(fallThrough.Value, a.ConditionKind == ControlFlowConditionKind.WhenFalse);
 
-            // (FOW condition 1) the conditional edge: taken when BranchValue == (ConditionKind == WhenTrue).
-            if (CanReachExit(cfg, conditional.Ordinal) && PostDominates(cfg, x: block, y: conditional.Ordinal))
+            // Mark every node on the post-dom path B..stop (exclusive) as control-dependent on (A, polarity).
+            void MarkRegion(int b, bool whenTrue)
             {
-                guards.Add(new ControlGuard(a.Ordinal, predicate.Syntax.ToString(), a.ConditionKind == ControlFlowConditionKind.WhenTrue));
-                continue;
-            }
+                if (rpoIndexR[b] < 0 || PostDominatesInTree(b, aOrdinal, ipdom))
+                {
+                    return; // abnormal-termination edge, or B post-dominates A (A doesn't gate it)
+                }
 
-            // the fall-through edge: taken when the conditional edge is NOT -> the complementary polarity.
-            if (CanReachExit(cfg, fallThrough.Ordinal) && PostDominates(cfg, x: block, y: fallThrough.Ordinal))
-            {
-                guards.Add(new ControlGuard(a.Ordinal, predicate.Syntax.ToString(), a.ConditionKind == ControlFlowConditionKind.WhenFalse));
+                var node = b;
+                var safety = n + 1; // the path is bounded by the tree height; this guards against surprises
+                while (node != stop && node >= 0 && safety-- > 0)
+                {
+                    // Skip the branch block gating ITSELF: a loop-condition block is on the post-dom path of
+                    // its own body (via the back-edge), so FOW would mark it control-dependent on itself.
+                    // That's textbook PDG (a loop header depends on its own predicate) but useless for
+                    // effect-guarding AND wrong for our model — a loop-condition block is MUST-RUN (every
+                    // path checks it to exit), so its guard set must be empty (the must-run<=>no-guards
+                    // invariant). A block does not meaningfully guard itself.
+                    if (node != aOrdinal)
+                    {
+                        guards[node].Add(new ControlGuard(aOrdinal, predicateText, whenTrue));
+                    }
+
+                    var next = ipdom[node];
+                    if (next == node)
+                    {
+                        break; // reached the tree root (Exit)
+                    }
+
+                    node = next;
+                }
             }
         }
 
         return guards;
     }
 
-    // Can `b` reach the Exit at all? A block that cannot (a throw arm, an infinite loop) terminates
-    // abnormally and has no normal-completion path. PERF: this is a full reachability walk; GuardsOf calls
-    // it per fork-edge, so the delete-test path is O(V^2 * E)-ish. Fine for the small per-method CFGs and
-    // as the test oracle — the production hot path uses the dominator/post-dominator TREE (computed once
-    // per CFG) instead. // BACKTRACK: if the tree rewrite regresses, this delete-test is the reference.
-    private static bool CanReachExit(ControlFlowGraph cfg, int b) => Reachable(cfg, start: b, target: cfg.Blocks[^1].Ordinal, excluded: -1);
-
-    // X post-dominates Y iff every path Y->Exit passes through X (delete X; can Y still reach Exit?).
-    private static bool PostDominates(ControlFlowGraph cfg, int x, int y)
+    // CHK dominator tree of the REVERSED CFG rooted at the Exit = the POST-dominator tree. The returned
+    // idom[x] is the immediate POST-dominator of x; rpoIndexR[x] < 0 means x cannot reach the Exit. In the
+    // reversed graph a node's successors are its ORIGINAL predecessors (used for the DFS/RPO) and its
+    // predecessors are its ORIGINAL successors (used in the CHK fixpoint).
+    private static int[] PostDominatorTree(ControlFlowGraph cfg, out int[] rpoIndexR)
     {
-        if (x == y)
+        var n = cfg.Blocks.Length;
+        var exit = n - 1;
+
+        var preds = new List<int>[n]; // original predecessors  == reversed-graph successors
+        var succs = new List<int>[n]; // original successors    == reversed-graph predecessors
+        for (var i = 0; i < n; i++)
         {
-            return true;
+            preds[i] = [];
+            succs[i] = [];
         }
 
-        var exit = cfg.Blocks[^1].Ordinal;
-        return !Reachable(cfg, start: y, target: exit, excluded: x);
+        foreach (var b in cfg.Blocks)
+        {
+            AddEdge(b.Ordinal, b.ConditionalSuccessor?.Destination?.Ordinal);
+            AddEdge(b.Ordinal, b.FallThroughSuccessor?.Destination?.Ordinal);
+        }
+
+        void AddEdge(int from, int? to)
+        {
+            if (to is int t)
+            {
+                succs[from].Add(t);
+                preds[t].Add(from);
+            }
+        }
+
+        // Reverse-postorder of the reversed graph: iterative DFS from Exit over reversed-successors (preds).
+        var postorder = new List<int>(n);
+        var state = new byte[n];
+        var dfs = new Stack<int>();
+        dfs.Push(exit);
+        while (dfs.Count > 0)
+        {
+            var b = dfs.Peek();
+            if (state[b] == 0)
+            {
+                state[b] = 1;
+                foreach (var p in preds[b])
+                {
+                    if (state[p] == 0)
+                    {
+                        dfs.Push(p);
+                    }
+                }
+            }
+            else
+            {
+                dfs.Pop();
+                if (state[b] == 1)
+                {
+                    state[b] = 2;
+                    postorder.Add(b);
+                }
+            }
+        }
+
+        rpoIndexR = new int[n];
+        Array.Fill(rpoIndexR, -1);
+        var rpo = new int[postorder.Count];
+        for (var i = 0; i < postorder.Count; i++)
+        {
+            var ordinal = postorder[postorder.Count - 1 - i]; // reverse
+            rpo[i] = ordinal;
+            rpoIndexR[ordinal] = i;
+        }
+
+        var idom = new int[n];
+        Array.Fill(idom, -1);
+        idom[exit] = exit;
+
+        bool changed;
+        do
+        {
+            changed = false;
+            for (var i = 1; i < rpo.Length; i++) // skip Exit (rpo[0], the reversed-graph root)
+            {
+                var b = rpo[i];
+                var newIdom = -1;
+                foreach (var p in succs[b]) // reversed-graph predecessors == original successors
+                {
+                    if (rpoIndexR[p] < 0 || idom[p] < 0)
+                    {
+                        continue;
+                    }
+
+                    newIdom = newIdom < 0 ? p : Intersect(p, newIdom, idom, rpoIndexR);
+                }
+
+                if (newIdom >= 0 && idom[b] != newIdom)
+                {
+                    idom[b] = newIdom;
+                    changed = true;
+                }
+            }
+        } while (changed);
+
+        return idom;
     }
 
-    // Can `start` reach `target` without ever entering `excluded`? Iterative DFS (no recursion — safe on
-    // the long straight-line block chains that generated code produces).
-    private static bool Reachable(ControlFlowGraph cfg, int start, int target, int excluded)
+    // B post-dominates A iff B is an ancestor of A in the post-dominator tree (walk A's ipdom chain to root).
+    private static bool PostDominatesInTree(int b, int a, int[] ipdom)
     {
-        if (start == excluded)
-        {
-            return false;
-        }
-
-        if (start == target)
+        if (b == a)
         {
             return true;
         }
 
-        var seen = new HashSet<int> { start };
-        var stack = new Stack<int>();
-        stack.Push(start);
-
-        while (stack.Count > 0)
+        var x = a;
+        while (ipdom[x] >= 0 && ipdom[x] != x)
         {
-            var block = cfg.Blocks[stack.Pop()];
-            if (Step(block.ConditionalSuccessor?.Destination?.Ordinal) || Step(block.FallThroughSuccessor?.Destination?.Ordinal))
+            x = ipdom[x];
+            if (x == b)
             {
                 return true;
             }
         }
 
         return false;
-
-        // Visit one out-edge; returns true the moment `target` is hit.
-        bool Step(int? destination)
-        {
-            if (destination is not int next || next == excluded)
-            {
-                return false;
-            }
-
-            if (next == target)
-            {
-                return true;
-            }
-
-            if (seen.Add(next))
-            {
-                stack.Push(next);
-            }
-
-            return false;
-        }
     }
 
     // Iterative walk of an IOperation subtree: does any node's syntax equal `target`?
