@@ -13,12 +13,17 @@ it here, update it here when CLI surface/flags change. The globally-INSTALLED co
 and drift from the repo). Edit the repo copy, then **install via a CLI copy**:
 
 ```pwsh
-Copy-Item -Recurse -Force .claude/skills/rig "$env:USERPROFILE/.claude/skills/rig"   # pwsh
-# or bash:  cp -rf .claude/skills/rig ~/.claude/skills/
+# pwsh — REMOVE the dest first, then copy. Copying onto an EXISTING dir NESTS (creates
+# ~/.claude/skills/rig/rig/ and leaves the top-level SKILL.md/REFERENCE.md STALE) — silent footgun.
+$d = "$env:USERPROFILE/.claude/skills/rig"; Remove-Item -Recurse -Force $d -ErrorAction SilentlyContinue; Copy-Item -Recurse -Force .claude/skills/rig $d
+# or bash:  rm -rf ~/.claude/skills/rig && cp -rf .claude/skills/rig ~/.claude/skills/
 ```
 
 (There's no native `claude skill install`; the copy IS the install. `--plugin-dir`/`--plugin-url` load a
-plugin for one session only.) If the installed skill ever looks stale, reinstall — don't patch it in place.
+plugin for one session only.) **Always delete the dest dir before copying** — `Copy-Item`/`cp -r` onto an
+existing `~/.claude/skills/rig/` nests a `rig/` subdir inside it and the top-level files go stale; verify
+after with e.g. `Get-ChildItem ~/.claude/skills/rig` (should list ONLY `SKILL.md` + `REFERENCE.md`, no
+nested `rig/`). If the installed skill ever looks stale, reinstall — don't patch it in place.
 
 ## Orchestration — director → orchestrator → coding agents
 
