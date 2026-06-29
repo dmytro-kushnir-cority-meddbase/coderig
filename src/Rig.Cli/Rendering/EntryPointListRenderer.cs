@@ -13,23 +13,40 @@ internal static class EntryPointListRenderer
     // The two-line "custom" EP listing line (Format A) when deployment data exists; the plain
     // route + location otherwise. The kind is supplied by the caller's group header, so it's not
     // repeated on the line — only the ▶ marker, route, deployment chip, then the indented location.
+    // When `fqn` is supplied AND differs from the route, the method's fully-qualified dotted name is
+    // rendered on its own `↪` line right under the route — the slash-form route matches nothing as a
+    // query pattern, so this is the copy-pasteable handle that round-trips into `rig tree`/`reaches`.
+    // (Null/empty fqn, or fqn == route as for class-inheritance EPs whose route already IS the FQN,
+    // prints exactly as before — so non-opted callers are byte-for-byte unchanged.)
     internal static void WriteEntryPointLine(
         TextWriter output,
         DeploymentMap deployments,
         string route,
         string filePath,
         int line,
-        IReadOnlyList<string>? requires = null
+        IReadOnlyList<string>? requires = null,
+        string? fqn = null
     )
     {
+        var fqnLine = !string.IsNullOrEmpty(fqn) && !string.Equals(fqn, route, StringComparison.Ordinal) ? $"{Indent.L5}↪ {fqn}" : null;
         if (deployments.IsEmpty)
         {
             output.WriteLine($"{Indent.L3}{route}  {ShortenPath(filePath)}:{line}");
+            if (fqnLine is not null)
+            {
+                output.WriteLine(fqnLine);
+            }
+
             return;
         }
         output.WriteLine(
             $"{Indent.L3}{EntryPointRenderer.Marker} {route}  {EntryPointRenderer.DeployTag(deployments, filePath, requires)}"
         );
+        if (fqnLine is not null)
+        {
+            output.WriteLine(fqnLine);
+        }
+
         output.WriteLine($"{Indent.L5}{ShortenPath(filePath)}:{line}");
     }
 

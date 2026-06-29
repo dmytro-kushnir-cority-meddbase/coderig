@@ -646,17 +646,9 @@ internal static class ImpactCommand
     }
 
     // Strip a DocID's parameter list (and leading `M:`) to a param-free `Namespace.Type.Method` key.
-    internal static string StripParams(string? docId)
-    {
-        if (string.IsNullOrEmpty(docId))
-        {
-            return "";
-        }
-
-        var body = docId.StartsWith("M:", StringComparison.Ordinal) ? docId[2..] : docId;
-        var paren = body.IndexOf('(', StringComparison.Ordinal);
-        return paren >= 0 ? body[..paren] : body;
-    }
+    // Delegates to the shared SymbolNameFormatter.FqnFromDocId so the impact EP card and the derive/
+    // entrypoints/callers EP listings render the identical FQN form from one implementation.
+    internal static string StripParams(string? docId) => FqnFromDocId(docId);
 
     // The copy-pasteable label for an EP card: the method's fully-qualified dotted name (namespace.Type.Member),
     // resolved from the EP's (FilePath, Line) against the in-RAM method index (no extra store I/O — idBySite is

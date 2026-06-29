@@ -435,6 +435,10 @@ internal static class CallersCommand
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
         var (derivedEps, _, promoted) = await DeriveEntryPointsAsync(context, epData, rules);
 
+        // (file,line) -> handler DocID, so each entry-point line/row carries the queryable FQN beside its
+        // slash route (the route matches nothing as a `rig tree`/`reaches` pattern — this is the handle).
+        var docIdBySite = MethodDocIdBySite(epData);
+
         var touching = derivedEps
             .Concat(promoted)
             .Where(e => reachableSites.Contains((e.FilePath, e.Line)))
@@ -524,10 +528,11 @@ internal static class CallersCommand
         var confirmed = touching.Where((_, i) => confirmedFlags[i]).ToList();
         var reverseOnly = touching.Where((_, i) => !confirmedFlags[i]).ToList();
 
-        // --format tsv: one row per touching EP (full path), with the loaded + capability-active services
-        // plus a trailing forwardConfirmed flag (ADDITIVE column — existing columns are unchanged). ALL
-        // touching EPs are emitted (confirmed + reverse-only) so TSV consumers can filter on the flag.
-        // Columns: kind, route, file, line, requires, loadedServices, activeServices, forwardConfirmed.
+        // --format tsv: one row per touching EP (full path), with the loaded + capability-active services,
+        // a forwardConfirmed flag, and a trailing fqn (both ADDITIVE columns — existing columns unchanged).
+        // ALL touching EPs are emitted (confirmed + reverse-only) so TSV consumers can filter on the flag.
+        // Columns: kind, route, file, line, requires, loadedServices, activeServices, forwardConfirmed, fqn
+        // (the queryable dotted name; == route when the route already is the FQN, route fallback otherwise).
         if (tsv)
         {
             for (var i = 0; i < touching.Count; i++)
@@ -536,7 +541,7 @@ internal static class CallersCommand
                 var loaded = deployments.ServicesForFile(e.FilePath);
                 var active = deployments.ActiveServices(loadedServices: loaded, requires: e.Requires);
                 output.WriteLine(
-                    $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}\t{(confirmedFlags[i] ? "true" : "false")}"
+                    $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}\t{(confirmedFlags[i] ? "true" : "false")}\t{FqnOrRoute(route: e.Route, filePath: e.FilePath, line: e.Line, docIdBySite: docIdBySite)}"
                 );
             }
             return 0;
@@ -556,7 +561,15 @@ internal static class CallersCommand
             output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
             foreach (var e in kindGroup)
             {
-                WriteEntryPointLine(output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
+                WriteEntryPointLine(
+                    output,
+                    deployments,
+                    route: e.Route,
+                    filePath: e.FilePath,
+                    line: e.Line,
+                    requires: e.Requires,
+                    fqn: FqnOrRoute(route: e.Route, filePath: e.FilePath, line: e.Line, docIdBySite: docIdBySite)
+                );
             }
         }
         // Defect 2 (non-zero under-report): even with sync EPs present, the async surface can reach MORE — a
@@ -585,7 +598,15 @@ internal static class CallersCommand
                 output.WriteLine($"{Indent.L1}{kindGroup.Key}: {kindGroup.Count()}");
                 foreach (var e in kindGroup)
                 {
-                    WriteEntryPointLine(output, deployments, route: e.Route, filePath: e.FilePath, line: e.Line, requires: e.Requires);
+                    WriteEntryPointLine(
+                        output,
+                        deployments,
+                        route: e.Route,
+                        filePath: e.FilePath,
+                        line: e.Line,
+                        requires: e.Requires,
+                        fqn: FqnOrRoute(route: e.Route, filePath: e.FilePath, line: e.Line, docIdBySite: docIdBySite)
+                    );
                 }
             }
         }

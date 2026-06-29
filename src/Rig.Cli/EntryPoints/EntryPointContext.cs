@@ -141,6 +141,37 @@ internal static class EntryPointContext
         return sb.ToString();
     }
 
+    // (file,line) -> handler-method DocID, for recovering an EP's queryable FQN from its declaration site.
+    // Built from the full method-symbol set (epData.Methods covers page .ctor rows, attribute action methods,
+    // and class-inheritance handlers — every kind whose site IS a method declaration). First symbol wins when
+    // two share a site (rare); ctor-less page types and promoted-handoff registration sites map to no method
+    // here, so FqnOrRoute falls back to their route. Mirrors ImpactCommand's MethodIdBySite (different source,
+    // same shape) so the EP card and the EP listings resolve FQNs the same way.
+    internal static Dictionary<(string File, int Line), string> MethodDocIdBySite(FactEntryPointDeriver.FactEntryPointData epData)
+    {
+        var map = new Dictionary<(string, int), string>();
+        foreach (var m in epData.Methods)
+        {
+            map.TryAdd((m.FilePath, m.Line), m.SymbolId);
+        }
+
+        return map;
+    }
+
+    // The queryable, fully-qualified dotted name for an EP, resolved from its (file,line) against the
+    // site->DocID map; falls back to the path-style Route when the site maps to no indexed method symbol
+    // (ctor-less pages, synthesized/promoted handoff origins). The FQN round-trips straight into `rig tree`/
+    // `reaches`/`callers`, where the slash Route matches nothing — the gap this resolves for the EP listings.
+    internal static string FqnOrRoute(
+        string route,
+        string filePath,
+        int line,
+        IReadOnlyDictionary<(string File, int Line), string> docIdBySite
+    ) =>
+        !string.IsNullOrEmpty(filePath) && docIdBySite.TryGetValue((filePath, line), out var docId)
+            ? SymbolNameFormatter.FqnFromDocId(docId)
+            : route;
+
     // Builds the EP-render context for a tree: the SymbolId->site map (from the loaded graph) and the
     // site->kind map (from the SAME derived entry-point set `derive` emits, incl. promoted handoff
     // origins). Returns null when deployments are unconfigured, so the default tree pays no cost.

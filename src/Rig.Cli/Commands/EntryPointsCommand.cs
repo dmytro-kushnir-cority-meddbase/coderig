@@ -64,6 +64,9 @@ internal static class EntryPointsCommand
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
         var epSet = await DeriveEntryPointsAsync(context, epData, rules);
 
+        // (file,line) -> handler DocID, so each EP line/row can carry the queryable FQN beside its slash route.
+        var docIdBySite = MethodDocIdBySite(epData);
+
         // The full entry-point set: rule-detected EPs + promoted async-handoff origins (what callers
         // --entrypoints / impact seed from), deduped + sorted by (kind, route) for a stable listing.
         var eps = epSet
@@ -76,8 +79,10 @@ internal static class EntryPointsCommand
 
         var deployments = await LoadDeploymentsAsync(context, io.WorkspaceLocation.WorkingDirectory);
 
-        // --format tsv: one row per EP — kind, route, file, line, requires, loaded services, active services
-        // (the last two comma-joined; empty without deployments.json).
+        // --format tsv: one row per EP — kind, route, file, line, requires, loaded services, active services,
+        // fqn (the last new: the queryable dotted name, == route when the route already is the FQN, falls back
+        // to route for sites with no indexed method). The two service columns are comma-joined; empty without
+        // deployments.json.
         if (tsv)
         {
             foreach (var e in eps.Take(max))
@@ -85,7 +90,7 @@ internal static class EntryPointsCommand
                 var loaded = deployments.ServicesForFile(e.FilePath);
                 var active = deployments.ActiveServices(loadedServices: loaded, requires: e.Requires);
                 io.TextOutput.Output.WriteLine(
-                    $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}"
+                    $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}\t{FqnOrRoute(route: e.Route, filePath: e.FilePath, line: e.Line, docIdBySite: docIdBySite)}"
                 );
             }
 
@@ -104,7 +109,8 @@ internal static class EntryPointsCommand
                     route: e.Route,
                     filePath: e.FilePath,
                     line: e.Line,
-                    requires: e.Requires
+                    requires: e.Requires,
+                    fqn: FqnOrRoute(route: e.Route, filePath: e.FilePath, line: e.Line, docIdBySite: docIdBySite)
                 );
             }
 

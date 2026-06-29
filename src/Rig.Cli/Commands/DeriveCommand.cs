@@ -143,6 +143,10 @@ internal static class DeriveCommand
         // gates (e.g. clientpage_proxy = declaring type derives MedDBase.Pages.ProxyBase).
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
 
+        // (file,line) -> handler DocID, so each entry-point line/row can carry the queryable FQN beside its
+        // slash route. Built once here for both the tsv and the human entry-point listings below.
+        var docIdBySite = MethodDocIdBySite(epData);
+
         // --- Effects (whole-store, hazard-augmented): the field-fed shared_state arms + the race_window/
         //     dual_write/thread_local_context post-pass, cached store+rules-keyed and SHARED with `tree
         //     --hazards` (an effect is a per-method fact, EP- and mode-independent). A reindex or rule edit
@@ -208,7 +212,7 @@ internal static class DeriveCommand
             // TSV column reference (tab-separated; one row per record):
             //   effect      \t provider \t operation \t resource \t enclosing \t file \t line \t observations(csv of Type)
             //   hazard      \t type \t confidence \t reason \t cell/context \t enclosing \t file \t line \t detail
-            //   entrypoint  \t kind \t method \t route \t file \t line \t services(csv) \t activeServices(csv)
+            //   entrypoint  \t kind \t method \t route \t file \t line \t services(csv) \t activeServices(csv) \t fqn
             // The `effect` row's observations column keeps the comma-joined Type list (back-compat: existing
             // consumers); the `hazard` row carries the full per-hazard evidence (confidence / reason / detail)
             // the effect row can't — one row per hazard observation on an effect (see HazardKinds for the set).
@@ -235,7 +239,7 @@ internal static class DeriveCommand
                 var loaded = deployments.ServicesForFile(ep.FilePath);
                 var active = deployments.ActiveServices(loadedServices: loaded, requires: ep.Requires);
                 io.TextOutput.Output.WriteLine(
-                    $"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}\t{string.Join(',', loaded)}\t{string.Join(',', active)}"
+                    $"entrypoint\t{ep.Kind}\t{ep.Method}\t{ep.Route}\t{ep.FilePath}\t{ep.Line}\t{string.Join(',', loaded)}\t{string.Join(',', active)}\t{FqnOrRoute(route: ep.Route, filePath: ep.FilePath, line: ep.Line, docIdBySite: docIdBySite)}"
                 );
             }
             return 0;
@@ -296,7 +300,8 @@ internal static class DeriveCommand
                     route: e.Route,
                     filePath: e.FilePath,
                     line: e.Line,
-                    requires: e.Requires
+                    requires: e.Requires,
+                    fqn: FqnOrRoute(route: e.Route, filePath: e.FilePath, line: e.Line, docIdBySite: docIdBySite)
                 );
             }
 
