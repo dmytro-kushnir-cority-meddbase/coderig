@@ -102,7 +102,7 @@ public static partial class FactPathFinder
         // node is not re-dispatched into sibling overrides (suppressed via `fromDispatch`, one-hop). Mirrors
         // the dispatch-edge `fromDispatch` tracking; a parallel map, since the `parent` tuple is path-shape.
         var viaNonVirtualOf = new Dictionary<string, bool>(StringComparer.Ordinal);
-        foreach (var start in index.Nodes.Where(n => Contains(value: n, pattern: fromPattern)))
+        foreach (var start in MatchNodes(index.Nodes, fromPattern))
         {
             if (parent.ContainsKey(start))
             {
@@ -114,11 +114,15 @@ public static partial class FactPathFinder
             queue.Enqueue((start, 0));
         }
 
+        // Resolve the target the same exact-match-wins way as the seeds, once, so a fully-qualified `to`
+        // hits exactly its member rather than every member it is a prefix of (Proceed vs ProceedTo…).
+        var targets = MatchNodes(index.Nodes, toPattern).ToHashSet(StringComparer.Ordinal);
+
         while (queue.Count > 0)
         {
             var (current, depth) = queue.Dequeue();
 
-            if (parent[current] is not null && Contains(value: current, pattern: toPattern))
+            if (parent[current] is not null && targets.Contains(current))
             {
                 return Reconstruct(parent, current);
             }
@@ -238,7 +242,7 @@ public static partial class FactPathFinder
     )
     {
         var index = BuildIndex(graph, narrowDispatch);
-        return ReachesWithFanoutCore(index, index.Nodes.Where(n => Contains(value: n, pattern: fromPattern)), maxDepth, maxNodes, mode);
+        return ReachesWithFanoutCore(index, MatchNodes(index.Nodes, fromPattern), maxDepth, maxNodes, mode);
     }
 
     // Exact-id, one-hop forward reach from EACH seed independently, returning one reachable-node set per
@@ -560,7 +564,7 @@ public static partial class FactPathFinder
         // the "⋯elided" reading before its expansion.)
         var stack = new Stack<MutableNode>();
 
-        var matched = index.Nodes.Where(n => Contains(value: n, pattern: fromPattern)).ToHashSet(StringComparer.Ordinal);
+        var matched = MatchNodes(index.Nodes, fromPattern).ToHashSet(StringComparer.Ordinal);
         foreach (var root in matched.Where(n => !IsContainedLambdaOfMatched(n, matched)).OrderBy(n => n, StringComparer.Ordinal))
         {
             var node = new MutableNode(
@@ -909,7 +913,7 @@ public static partial class FactPathFinder
     {
         var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
         var queue = new Queue<string>();
-        foreach (var start in index.Nodes.Where(n => Contains(value: n, pattern: toPattern)))
+        foreach (var start in MatchNodes(index.Nodes, toPattern))
         {
             if (depthOf.ContainsKey(start))
             {
@@ -1270,6 +1274,48 @@ public static partial class FactPathFinder
     }
 
     private static bool Contains(string value, string pattern) => value.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+
+    // Resolve a from/to PATTERN to the set of node ids it selects, with EXACT MATCH WINS: if the pattern
+    // exactly names one or more nodes — by full DocID, or by the `M:`-stripped, param-free FQN (the form
+    // `rig` renders and a user pastes back) — only those are returned; otherwise the pattern is the usual
+    // case-insensitive SUBSTRING (the partial-name convenience). This stops a fully-qualified name from also
+    // dragging in every member it is a prefix of: `…Search.Proceed` resolves to exactly `Proceed`, not also
+    // `Proceed`'s prefix-twin `ProceedToConfirmationScreen`. A partial/short pattern never equals a full
+    // namespaced FQN, so substring behaviour is preserved for it. One pass collects both buckets; the exact
+    // bucket wins when non-empty. Shared by every seed site (tree/reaches/callers/path roots + path target).
+    internal static IReadOnlyList<string> MatchNodes(IEnumerable<string> nodes, string pattern)
+    {
+        var exact = new List<string>();
+        var substring = new List<string>();
+        foreach (var n in nodes)
+        {
+            if (IsExactNodeMatch(n, pattern))
+            {
+                exact.Add(n);
+            }
+            else if (Contains(value: n, pattern: pattern))
+            {
+                substring.Add(n);
+            }
+        }
+
+        return exact.Count > 0 ? exact : substring;
+    }
+
+    // A node matches a pattern EXACTLY when the pattern is its full DocID, or its param-free FQN (DocID with
+    // the leading two-char `X:` kind prefix and any `(…)` parameter list stripped, namespace + generic arity
+    // kept). Case-insensitive, to match Contains. ParamFreeFqn mirrors SymbolNameFormatter.FqnFromDocId; it is
+    // re-derived here because FactPathFinder (Domain) cannot reference the Cli renderer.
+    private static bool IsExactNodeMatch(string node, string pattern) =>
+        string.Equals(node, pattern, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(ParamFreeFqn(node), pattern, StringComparison.OrdinalIgnoreCase);
+
+    private static string ParamFreeFqn(string node)
+    {
+        var body = node.Length >= 2 && node[1] == ':' ? node[2..] : node;
+        var paren = body.IndexOf('(', StringComparison.Ordinal);
+        return paren >= 0 ? body[..paren] : body;
+    }
 
     // A synthetic lambda node id is `{containerMemberId}~λ{ordinal}` (FactExtractor). When the root pattern
     // matches a method AND its inline lambdas (e.g. `tree "Foo"` matches Foo, Foo~λ0, Foo~λ1), the lambdas
