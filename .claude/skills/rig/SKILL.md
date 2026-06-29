@@ -36,10 +36,14 @@ rig refs "IFoo"  |  rig symbols "Foo" --kind method [--limit n] [--no-lambdas]
 rig impact --base <ref> --head <ref> [--structural] [--format tsv]   # blast radius + behavioral delta (both refs REQUIRED; per-EP diff is the default)
 rig reaches "X" --store <id|sha>             # query a SPECIFIC commit's store
 ```
-**Patterns = case-insensitive substring over DocIDs — use the DOTTED form (`Type.Method`).** The `▶` and
-`callers --entrypoints` lines print the EP ROUTE (`AI/SmartLetter.Send`, with slashes); querying that route
-matches NOTHING — strip to `SmartLetter.Send`. Unexpected empty / "No path" / "0 call edges" → suspect a
-route-form pattern first.
+**Patterns = case-insensitive substring over DocIDs (use the DOTTED form `Type.Method`), but EXACT MATCH
+WINS:** a pattern that exactly equals a node's full DocID or its `M:`-stripped param-free FQN seeds ONLY that
+member — so the full FQN `…Search.Search.Proceed` resolves to exactly `Proceed`, not its prefix-twin
+`…Search.ProceedToConfirmationScreen`; a partial pattern (`Search.Proceed`) stays substring and still matches
+both. Applies to every seed (`tree`/`reaches`/`callers`/`path` roots + the `path` target). The `▶` /
+`callers --entrypoints` / `derive` EP lines print the slash ROUTE (`AI/SmartLetter.Send`) which matches
+NOTHING — but now ALSO print the queryable FQN (`↪ <fqn>` line + tsv `fqn` column); paste THAT (exact-match
+then resolves it precisely). Unexpected empty / "No path" / "0 call edges" → suspect a route-form pattern first.
 
 ## Reading output (don't misread it)
 Effects are emoji-tagged `provider:op` (💾write 🔍read 📥fetch 🌐http 📤queue 📣echo 🗃️cache 📦object-store
