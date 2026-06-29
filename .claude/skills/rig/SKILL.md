@@ -96,8 +96,8 @@ over-approximate superset). Trust the `--async` default for reachability/auth qu
 3. **Validate against SOURCE, not the DB** (it's the fallible Roslyn pass's output): trace from source → replicate with the SHIPPED engine (`reaches`/`path`, never a BFS reimpl) → fix the RULE, not the test.
 
 ## Blast radius & behavioral diff (`rig impact`)
-Diffs the derived graph between two commits (immune to format/rename churn). Needs BOTH commits indexed +
-the source git diff. **BOTH `--base <ref>` AND `--head <ref>` are REQUIRED** (each resolves a ref→sha→store;
+Diffs the derived graph between two commits (immune to format/rename churn). It diffs the two indexed STORES
+— NO git working-tree diff, NO `--repo`. **BOTH `--base <ref>` AND `--head <ref>` are REQUIRED** (each resolves a ref→sha→store;
 there is no LATEST defaulting). The **per-entry-point effect-set diff is the DEFAULT output** — the precise
 lens; surfaces deltas the global diff masks (one EP losing a sink others still reach; `-` on some EPs + `+`
 on others = a relocation). Three layers: changed set (FILE-granular → over-approx), affected EPs (by
@@ -110,7 +110,7 @@ EP's effect set changed).
   `±`; verify with `tree "<EP>" --view effects --store <head>` vs `<base>`. (b) reverse layers
   (`callers`/`--roots`/affected-EP) can MISS an EP reached only via interface-dispatch/lambda — confirm
   forward with `rig path "<EP>" "<target>"`.
-- Setup: index base then branch (each → its own store); `--repo <path>` for a separate source tree.
+- Setup: index base then branch (each → its own store), then `impact --base <store> --head <store>`.
   A full impact run is minutes on a big store (in-process, parallel — no N shell-outs).
 
 ## Deployment attribution (`deployments.json`, opt-in)
