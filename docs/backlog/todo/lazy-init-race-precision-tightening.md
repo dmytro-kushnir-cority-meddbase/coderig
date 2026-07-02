@@ -1,6 +1,25 @@
 # `lazy_init_race` precision tightening (calibration: 57.5% → ~92%)
 
-**Status:** todo · **Found:** 2026-06-26 (adversarial source verification of all 40 MedDBase sites) · **Family:** detector-precision
+**Status:** bucket #1 ✅ SHIPPED (2026-07-02) · bucket #2 deferred (needs condition extraction) · **Found:** 2026-06-26 (adversarial source verification of all 40 MedDBase sites) · **Family:** detector-precision
+
+## Shipped: bucket #1 — the lock-enclosed tier (2026-07-02)
+
+Rode the existing span machinery exactly as designed: the builtin `lock_held_across_effect` resourceSpan
+observation (already on shared_state writes inside a `lock`) classifies a lazy-init pair to the DISTINCT
+disclosed reason **`lazy_init_lock_enclosed_verify_dcl`** (a tier, not a suppression — per the caveat
+below). **MedDBase verification: exactly the 10 predicted FPs moved to the tier, name for name** (the 8
+FDB `*.initialised` + `ImportMsgHub` + `TestbedHub`); 28 sites stay at `lazy_init_heuristic`, including
+all 23 TPs and the 2 real bugs below → top-tier precision ~82% (from 57.5%), every TP kept.
+
+The hard-suppress landed too but is **inert until the next MedDBase re-index**: it requires the cell to
+be `volatile` AND the publish to be the LAST lock-held effect in the method (publish-last, line order) —
+and `volatile` was NOT in `symbol_facts.Modifiers` (the card's assumption was wrong). Now mined
+(`FactExtractor.BuildModifiers`/`ModifierKey`, `VolatileModifierTests`) + loaded
+(`Reads.LoadVolatileFieldIdsAsync`) + threaded (derive/impact both sides); a pre-volatile store yields an
+empty set = never corroborated, tier still applies. `HazardEffectsCacheKey` bumped v2→v3 (classifier
+changed with no key input changing — a warm cache would have served stale reasons). Tests:
+`LazyInitLockTierTests` (6: the safe-DCL/DCL-without-volatile regression pair, publish-early, non-lazy
+race_window unaffected).
 
 ## What was measured
 All 40 `lazy_init_race` sites on the MedDBase store, read against actual source. **23 TP / 17 FP / 0 unsure → precision 57.5%.**

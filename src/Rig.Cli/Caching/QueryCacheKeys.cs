@@ -76,10 +76,12 @@ internal static class QueryCacheKeys
     // Reindex shifts storeKey (miss); a changed rule shifts rulesHash (miss) — so hazards stay query-side
     // data (a rule edit needs no re-index, just recomputes the cache). The payload-schema version bumped
     // v1->v2 when DerivedEffect gained EnclosingGuards (branch-aware-effects); a pre-guard cached set must
-    // miss, else a stale hit would decode null guards and drop the ⎇ markers on effect leaves.
+    // miss, else a stale hit would decode null guards and drop the ⎇ markers on effect leaves. Bumped
+    // v2->v3 for the lazy_init_race lock-enclosed tier (2026-07-02): the CLASSIFIER changed with no key
+    // input changing, so a warm v2 entry would keep serving pre-tier reasons indefinitely.
     internal static string HazardEffectsCacheKey(string storeKey, string rulesHash)
     {
-        var material = $"hazardfx|v2|{storeKey}|{rulesHash}";
+        var material = $"hazardfx|v3|{storeKey}|{rulesHash}";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 

@@ -1883,6 +1883,12 @@ internal static class FactExtractor
         {
             key |= 1 << 9;
         }
+        if (symbol is IFieldSymbol { IsVolatile: true })
+        {
+            // `volatile` corroborates the safe-DCL suppression in the lazy_init_race hazard tier
+            // (FactHazardDeriver): a volatile publish can't hand the lock-free outer read a torn object.
+            key |= 1 << 10;
+        }
         return key;
     }
 
@@ -1931,6 +1937,11 @@ internal static class FactExtractor
         if (symbol is IFieldSymbol { IsReadOnly: true } or IPropertySymbol { IsReadOnly: true })
         {
             parts.Add("readonly");
+        }
+
+        if (symbol is IFieldSymbol { IsVolatile: true })
+        {
+            parts.Add("volatile");
         }
 
         return string.Join(' ', parts);

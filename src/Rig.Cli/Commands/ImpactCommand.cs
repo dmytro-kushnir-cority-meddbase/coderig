@@ -307,6 +307,7 @@ internal static class ImpactCommand
         // F8: one combined scan (RefKind in {read,write}) instead of two back-to-back single-kind queries.
         var (staticFieldWriteRefs, staticFieldReadRefs) = await Reads.LoadStaticFieldAccessRefsByKindAsync(context);
         var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
+        var volatileCells = await Reads.LoadVolatileFieldIdsAsync(context);
         var effects = DeriveEffects(
             rules.Effects,
             rules.Observations,
@@ -318,6 +319,7 @@ internal static class ImpactCommand
             staticFieldReadRefs: staticFieldReadRefs,
             deriveHazards: true,
             threadStaticCells: threadStaticCells,
+            volatileCells: volatileCells,
             gate: gate
         );
         // The branch's enclosing→field/property-access-targets lookup, built ONCE so ComputeReachSets can union
@@ -1212,6 +1214,7 @@ internal static class ImpactCommand
         // F8: one combined scan instead of two back-to-back single-kind queries (mirrors the HEAD side).
         var (staticFieldWriteRefs, staticFieldReadRefs) = await Reads.LoadStaticFieldAccessRefsByKindAsync(context);
         var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
+        var volatileCells = await Reads.LoadVolatileFieldIdsAsync(context);
         var effects = DeriveEffects(
             rules.Effects,
             rules.Observations,
@@ -1223,6 +1226,7 @@ internal static class ImpactCommand
             staticFieldReadRefs: staticFieldReadRefs,
             deriveHazards: true,
             threadStaticCells: threadStaticCells,
+            volatileCells: volatileCells,
             gate: gate
         );
 

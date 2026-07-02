@@ -1346,4 +1346,22 @@ public static class Reads
             .ToListAsync(cancellationToken);
         return ids.ToHashSet(StringComparer.Ordinal);
     }
+
+    // The set of field DocIDs declared `volatile` (symbol_facts.Modifiers, mined by FactExtractor since
+    // 2026-07-02 — a store indexed BEFORE that yields an empty set, which callers treat as "never
+    // corroborated"). One of the two signals hard-suppressing a lock-enclosed lazy-init as a safe DCL
+    // (FactHazardDeriver): a volatile publish can't hand the lock-free outer read a torn object.
+    public static async Task<IReadOnlySet<string>> LoadVolatileFieldIdsAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var ids = await context
+            .SymbolFacts.AsNoTracking()
+            .Where(s => s.Kind == "field" && s.Modifiers.Contains("volatile"))
+            .Select(s => s.SymbolId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+        return ids.ToHashSet(StringComparer.Ordinal);
+    }
 }

@@ -34,6 +34,9 @@ internal static class EffectDerivation
         // from race_window to thread_local_context (thread-confined ⇒ not a race, but the FR-2 surface).
         // Null/empty leaves the legacy race_window classification unchanged.
         IReadOnlySet<string>? threadStaticCells = null,
+        // `volatile` field DocIDs (Reads.LoadVolatileFieldIdsAsync). Corroborates the safe-DCL suppression
+        // in the lazy_init_race lock-enclosed tier (FactHazardDeriver). Null/empty = never suppress.
+        IReadOnlySet<string>? volatileCells = null,
         // FR-1 read-arm WRITE-PAIRING GATE (on by default). When true, a shared_state:read effect is emitted
         // only for a static-field read whose cell ALSO appears as a static-field write target somewhere in the
         // same input set — so a read of a never-written cell (const/enum/other immutable static) is dropped as
@@ -73,7 +76,7 @@ internal static class EffectDerivation
             return effects;
         }
 
-        effects = FactHazardDeriver.DeriveRaceWindows(effects, threadStaticCells);
+        effects = FactHazardDeriver.DeriveRaceWindows(effects, threadStaticCells, volatileCells);
         effects = FactHazardDeriver.DeriveDualWrites(effects);
         return effects;
     }
@@ -100,6 +103,7 @@ internal static class EffectDerivation
         // Perf (#3): one reference_facts scan for both the write and read static-field arms (was two).
         var (staticFieldWriteRefs, staticFieldReadRefs) = await Reads.LoadStaticFieldAccessRefsByKindAsync(context);
         var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
+        var volatileCells = await Reads.LoadVolatileFieldIdsAsync(context);
         return DeriveEffects(
             effectRules: rules.Effects,
             observationRules: rules.Observations,
@@ -111,6 +115,7 @@ internal static class EffectDerivation
             staticFieldReadRefs: staticFieldReadRefs,
             deriveHazards: true,
             threadStaticCells: threadStaticCells,
+            volatileCells: volatileCells,
             gate: gate
         );
     }

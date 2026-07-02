@@ -52,6 +52,24 @@ public static class FactHazardDeriver
     private const string ReasonLazyInitHeuristic = "lazy_init_heuristic";
     private const string ConfidenceLow = "low";
 
+    // The LOCK-ENCLOSED lazy-init TIER (FR-1 precision, calibration 2026-06-26: 10 of 17 lazy_init_race FPs
+    // were textbook double-checked locking — write inside `lock(sync){ if(flag) return; …; flag=true; }`).
+    // A write leg carrying the lock_held_across_effect span observation classifies to this DISTINCT reason:
+    // still disclosed (lock-enclosure is a PROXY, not proof — DCL without `volatile` lets the lock-free
+    // outer read observe a partially-constructed object; the lock serializes writers, it does nothing for
+    // the lock-free reader), but tiered below the bare heuristic so triage can sort/filter it last.
+    // HARD-SUPPRESS only when corroborated by signals rig actually has: the cell is `volatile`
+    // (symbol_facts.Modifiers, via the caller-supplied volatileCells set) AND the publishing write is the
+    // LAST lock-held effect in the method (line order) — the reorder-safe publish-last shape. Lock-enclosed
+    // but non-volatile, or with lock-held effects after the publish, keeps flagging at this tier: that is
+    // exactly the dangerous DCL-without-volatile / publish-early variant.
+    private const string ReasonLazyInitLockEnclosed = "lazy_init_lock_enclosed_verify_dcl";
+
+    // The span observation marking an effect lexically inside a `lock` region. Mirrors the builtin
+    // FactResourceSpanRule for scopeKind "lock" (shared_state is NOT in its deny-list, so static-field
+    // write effects inside a lock carry it).
+    private const string LockSpanType = "lock_held_across_effect";
+
     // The [ThreadStatic] REROUTE. A read→write on a `[ThreadStatic]` cell is NOT a cross-thread race — each
     // thread owns its own copy, so the read/write can never interleave across threads (suppressing the
     // race_window/lazy_init_race FALSE POSITIVE that thread-confined lazy-init/RMW shapes would otherwise
@@ -81,6 +99,11 @@ public static class FactHazardDeriver
         // these is rerouted from race_window/lazy_init_race to thread_local_context (see ThreadLocalContextType).
         // Null/empty = no reroute (every pair classifies as race_window/lazy_init_race, the pre-reroute behavior).
         IReadOnlySet<string>? threadStaticCells = null,
+        // Cell DocIDs whose field is declared `volatile` (Reads.LoadVolatileFieldIdsAsync over
+        // symbol_facts.Modifiers). One of the two corroborations for hard-suppressing a lock-enclosed
+        // lazy-init as a safe DCL (see ReasonLazyInitLockEnclosed). Null/empty = never suppress (stores
+        // indexed before `volatile` was mined into Modifiers yield an empty set — the tier still applies).
+        IReadOnlySet<string>? volatileCells = null,
         string readProvider = DefaultReadProvider,
         string readOperation = DefaultReadOperation,
         string writeProvider = DefaultWriteProvider,
@@ -127,6 +150,22 @@ public static class FactHazardDeriver
             {
                 var key = (e.EnclosingSymbolId, e.ResourceType);
                 writeCountByCell[key] = writeCountByCell.TryGetValue(key, out var n) ? n + 1 : 1;
+            }
+        }
+
+        // Per-method LAST lock-held line — the publish-last corroboration for the safe-DCL suppression:
+        // the publishing write must be the FINAL lock-held effect in its method (any lock-held effect on a
+        // later line means work happens after the publish — the reorder-hazard shape — or a second lock
+        // region follows; both conservatively keep the finding). Built once, O(effects).
+        var lastLockHeldLineByMethod = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var e in effects)
+        {
+            if (e.EnclosingSymbolId is not null && CarriesLockSpan(e))
+            {
+                lastLockHeldLineByMethod[e.EnclosingSymbolId] = Math.Max(
+                    e.Line,
+                    lastLockHeldLineByMethod.TryGetValue(e.EnclosingSymbolId, out var line) ? line : int.MinValue
+                );
             }
         }
 
@@ -193,13 +232,32 @@ public static class FactHazardDeriver
             }
             else if (LooksLikeLazyInit(enclosingId: e.EnclosingSymbolId!, cell: e.ResourceType, singleWrite: singleWrite))
             {
+                var lockEnclosed = CarriesLockSpan(e);
+                // Corroborated-safe DCL — the ONLY suppression in the lazy-init family: the write is inside
+                // a lock AND the cell is `volatile` (the lock-free outer read can't observe a torn publish)
+                // AND the publish is the last lock-held effect in the method (no post-publish work to
+                // reorder above it). Anything less stays disclosed below.
+                if (
+                    lockEnclosed
+                    && volatileCells is not null
+                    && volatileCells.Contains(e.ResourceType)
+                    && lastLockHeldLineByMethod.TryGetValue(e.EnclosingSymbolId!, out var lastLockLine)
+                    && e.Line >= lastLockLine
+                )
+                {
+                    result.Add(e);
+                    continue;
+                }
+
                 observation = new EffectObservationInfo(
                     Type: LazyInitRaceType,
                     Context: e.ResourceType,
                     Detail: $"{pairedRead.FilePath}:{pairedRead.Line}",
                     Confidence: ConfidenceLow,
                     Basis: Basis,
-                    Reason: ReasonLazyInitHeuristic
+                    // Lock-enclosed → the lower disclosed tier (looks like DCL; verify volatile + publish
+                    // order). Bare shape → the original heuristic tier.
+                    Reason: lockEnclosed ? ReasonLazyInitLockEnclosed : ReasonLazyInitHeuristic
                 );
             }
             else
@@ -227,6 +285,9 @@ public static class FactHazardDeriver
 
     private static bool CarriesTransactionSpan(DerivedEffect effect) =>
         effect.Observations is { } obs && obs.Any(o => string.Equals(o.Type, TransactionSpanType, StringComparison.Ordinal));
+
+    private static bool CarriesLockSpan(DerivedEffect effect) =>
+        effect.Observations is { } obs && obs.Any(o => string.Equals(o.Type, LockSpanType, StringComparison.Ordinal));
 
     // ---------------------------------------------------------------------------------------------------------
     // FR-8 `dual_write` — a DISTRIBUTED-CONSISTENCY hazard: one enclosing method performs durable WRITES to
