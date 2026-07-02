@@ -1,5 +1,14 @@
 ## Refactor: single graph-shaping entry point (`LoadShapedGraphAsync`)
 
+**Status:** PARTIAL (audited 2026-07-02) — `Reads.LoadShapedGraphAsync` SHIPPED (`9caef5d1`) and is the
+shaping entry point for `derive` (`DeriveCommand.cs`) and `impact` (`ImpactCommand.cs:298` head, `:1201`
+base); test `LoadShapedGraphTests.cs`. That closed the derive double-load (F1) and impact's delivery-edge
+gap. **Remaining live work: route `GraphMaterializer` through the shared entry point** (it still persists
+via its own `RewriteGenericFactories`/`AddDeliveryEdges` sequence, `GraphMaterializer.cs:86,100`).
+**EF-fallback routing is a WON'T DO** (2026-06-23 decision — see the residual note in
+`../done/perf-redundant-work-per-ep.md`): the fallback only fires on `--no-graph`/pre-graph stores and the
+fix risks the contended shaping path. So acceptance criteria 1–2 below are trimmed accordingly.
+
 ### Problem
 
 The reachability-shaped call graph (`classify methodGroup→handoff` → `RewriteGenericFactories` → delivery
@@ -33,10 +42,11 @@ edge-creating output** to `call_edges` (cut/context stay traversal-time, as toda
 
 ### Acceptance criteria
 
-- [ ] `derive`, `impact`, EF-fallback traversals, and `GraphMaterializer` all obtain the shaped graph from the
-  one entry point; no hand-rolled `classify→factory→delivery` sequence remains at a call site.
-- [ ] `impact --per-ep` and EF-fallback `reaches`/`tree` now traverse delivery (event/actor) edges (new test).
-- [ ] `derive` loads the graph once (verify via the call tree — no duplicate `LoadFactGraphAsync`).
+- [x] `derive` + `impact` obtain the shaped graph from the one entry point (`9caef5d1`). EF-fallback:
+  WON'T DO (see Status). Remaining: `GraphMaterializer` — no hand-rolled `classify→factory→delivery`
+  sequence at its call site.
+- [x] `impact --per-ep` traverses delivery (event/actor) edges (`9caef5d1`). EF-fallback: WON'T DO.
+- [x] `derive` loads the graph once (F1, `9caef5d1`).
 - [ ] Behavior otherwise unchanged: `rig derive` output byte-identical; MedDBase `event_cycle` 24/all-high;
   persisted `call_edges` count unchanged; full suite green.
 - [ ] `dead`'s unshaped-CHA-superset requirement still met (the raw/`--raw` path bypasses delivery shaping).

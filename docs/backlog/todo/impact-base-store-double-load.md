@@ -1,6 +1,7 @@
 ## `rig impact` — base store entry-point data loaded twice
 
-**Status:** todo — open perf bug
+**Status:** todo — open perf bug (re-verified against code 2026-07-02; anchors below refreshed to the
+post-refactor method names — the original `ComputeBehavioral*Async` names no longer exist)
 **Source:** promoted from `docs/bugs/impact-base-store-ep-data-loaded-twice.md` (🟡 open); leave the bugs/
 file in place as the detailed record. 2026-06-25.
 
@@ -15,15 +16,17 @@ Both the `--per-ep` and default paths are affected. See the full runtime trace i
 
 ### Fix direction
 
-Open the base store **once** and share its `epData` (and the derived base EP set) across both
-`ComputeEpDiffAsync` and `ComputeBehavioral*Async` — mirroring what the branch side already does at
-`ImpactCommand.cs:190-191`.
+The two independent opens today (verified 2026-07-02): `ComputeEpDiffAsync` (`ImpactCommand.cs:589-591`)
+and `ComputeBaseSideAsync` (`ImpactCommand.cs:1200-1206`) each `new RigDbContext(baseDbPath, readOnly:true)`
+→ `Reads.LoadFactEntryPointDataAsync` → `DeriveEntryPointsAsync`. Both are reached on a cold run:
+`AssembleImpactDiffAsync` calls `ComputeBaseSideAsync` (`:410`) and `ComputeBranchSideAsync` calls
+`ComputeEpDiffAsync` (`:359`).
 
-Concretely: have `ComputeEpDiffAsync` and `ComputeBehavioral*Async` take a shared base `RigDbContext` and a
-shared `FactEntryPointData` (loaded once by the caller), or fold the EP-diff into
-`ComputeBehavioralAndFootprintsAsync` so the single base load there feeds the EP set-diff too. The base EP
-set the EP-diff needs (`baseSet.Derived.Concat(baseSet.PromotedOrigins)`, `:360`) is already derived by
-`ComputeBehavioralAndFootprintsAsync` at `:654`.
+Open the base store **once** and share its `epData` (and the derived base EP set) across both
+`ComputeEpDiffAsync` and `ComputeBaseSideAsync` — mirroring what the branch side already does with its
+single load. Concretely: have both take a shared base `RigDbContext` and a shared `FactEntryPointData`
+(loaded once by the caller), or fold the EP-diff into `ComputeBaseSideAsync` so its single base load feeds
+the EP set-diff too (the base EP set the EP-diff needs is already derived there).
 
 Net effect: base store opened 1×, `LoadFactEntryPointDataAsync` + `DeriveEntryPointsAsync` each run 1×.
 

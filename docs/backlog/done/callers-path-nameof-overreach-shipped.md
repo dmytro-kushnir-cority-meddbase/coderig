@@ -1,8 +1,22 @@
-## `callers`/`path` over-reach via `nameof` edges — extraction fix
+# `callers`/`path` over-reach via `nameof` edges — extraction fix
 
-**Status:** todo — open correctness bug (high severity)
-**Source:** promoted from `docs/bug-callers-path-overreach.md` (open half — the `nameof` fix; the
-event-subscription half was partially shipped). 2026-06-25.
+**Status:** DONE — shipped `b5c1bd33` 2026-06-16 ("fix(query): stop path/callers over-reaching via
+nameof + event edges"), **including the event-subscription half** this doc listed as out-of-scope:
+`PathCommand`/`CallersCommand` apply `MarkEventSubscriptionHandoffs` in the same commit.
+`ClassifyReference` checks `IsNameOfArgument` first and emits the non-traversable `RefKinds.NameOf`
+(covers dotted `nameof(A.B.Method)` via the ancestor walk). Regression tests:
+`FactExtractorCaptureTests.cs:801-862` (field-initializer `nameof(MarkSent)` emits no methodGroup edge;
+dotted `nameof(Repo.Fetch)` likewise). **Verified on the re-indexed MedDBase store** (in the commit):
+`callers "Xero2.BeforeDebtorInvoiceSent" --entrypoints` 161 → 89; `AddBillingItem` no longer falsely
+reaches Xero; the real invoice-Send path still does.
+
+**Staleness note:** this file was promoted to the backlog on 2026-06-25 from
+`docs/bug-callers-path-overreach.md` (now `docs/archive/`), whose "open half" framing predated the
+2026-06-16 fix — the promotion copied an already-resolved snapshot. Moved to done 2026-07-02.
+
+---
+
+Original writeup below (pre-fix snapshot):
 
 ### Symptom
 
@@ -33,13 +47,6 @@ the name's enclosing `InvocationExpressionSyntax` has expression text `nameof` (
 Regression test: a `nameof(M)` in a field/initializer must NOT make `M` reachable from the enclosing type.
 
 Files: `Rig.Analysis/Extraction/FactExtractor.cs` (`ClassifyReference`).
-
-### Out of scope here: event-subscription alignment
-
-The other half of the original bug — making `PathCommand`/`CallersCommand` apply
-`MarkEventSubscriptionHandoffs` to sync-cut `+=` event handlers the same way `ReachesCommand`/`TreeCommand`
-do — was noted in the original bug file. If not yet shipped, it belongs in a separate slice or here as a
-follow-on; it is NOT the `nameof` extraction fix.
 
 ### Verification
 

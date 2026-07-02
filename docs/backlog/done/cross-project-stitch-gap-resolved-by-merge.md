@@ -1,6 +1,18 @@
 ## Cross-project call-edge stitch gap (F5)
 
-**Status:** todo — VERIFY against multi-solution `rig index --merge` before building
+**Status:** DONE — resolved by `--merge`, NO code change needed. Verified on the MedDBase store 2026-07-02:
+`rig path "SubmitToHealthcode" "ExportQueue"` returns the direct cross-project invocation
+(`Workflows.InvoiceDebtChase.Master.SubmitToHealthcode` → `Core.Background.ExportQueue.BuildUniqueMessageFilename`,
+`Master_HealthcodeServiceImpl.cs:1030`) — the exact edge F5 reported dropped.
+**Code audit (2026-07-02):** materialization is ALREADY cross-run — `Reads.LoadFactGraphAsync` loads every
+method's call edges across all runs (`Reads.cs:306-307`, DocID-keyed, run-agnostic) and `GraphMaterializer`
+builds `call_edges` global/cross-run from deduped facts joined by DocID with no RunId
+(`GraphMaterializer.cs:355`); both predate this card (`b0b2d9ca`, `f1e7b999`). There was never per-run
+scoping to stitch once the solutions were `--merge`-indexed into one store.
+**Caveat on the card's original verification query:** `rig reaches "SubmitToHealthcode" --only queue`
+returns 0 — but that is a RULES question, not a stitch question: `ExportQueue` methods derive only
+`throw`/`io` effects (no `queue`-provider rule matches them). If ExportQueue should classify as `queue`,
+that's a candidate for [rules-only-effect-gaps](../todo/rules-only-effect-gaps.md).
 **Source:** extracted from `docs/rig-review-issues.md`, 2026-06-25 (F5 from the audit register)
 
 ### Finding

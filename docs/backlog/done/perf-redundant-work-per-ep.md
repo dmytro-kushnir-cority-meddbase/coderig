@@ -1,9 +1,16 @@
 ## Perf: redundant work per entry point (rig self-dogfood, F1–F9)
 
+**Status:** DONE — every row terminal (moved to done 2026-07-02, verified against code): F1/F2/F4/F6/F7/F8/F9
+FIXED (`9caef5d1`, `1be1094f`, `78dbe9c2`), F3 conn-reuse fixed + base/head double-load intentional,
+F5 NOT-A-REDUNDANCY (investigated), residuals: `TruncationCause` split DONE (`861bd0c4`), EF-fallback
+routing WON'T DO (2026-06-23 decision, recorded below). No open actionable work remains; kept as the
+redundancy-pattern ledger. Follow-on structural work lives in
+[redundant-graph-index-rebuild-per-query](../todo/redundant-graph-index-rebuild-per-query.md) and
+[warm-graph-across-queries](../todo/warm-graph-across-queries.md).
+
 Found by running `rig` on its own store and reading every EP's `--format llm` call tree (the `x-phase` flag
 makes a re-reached node a first-class row). One command calling the same heavy load more than once in a
-single invocation. The **derive-path** instances are FIXED (commit `perf(derive): cut redundant reloads`);
-the rest are the same patterns in other commands, still open. Severity = the cost of the repeated work.
+single invocation. Severity = the cost of the repeated work.
 
 | # | Redundant work | EPs | Status |
 |---|---|---|---|
