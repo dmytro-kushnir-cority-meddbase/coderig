@@ -1,6 +1,19 @@
 # CLI: an ambiguous symbol pattern is resolved SILENTLY (wrong-tree / merged-results)
 
-**Status:** todo · **Found:** 2026-06-28 (dogfooding `rig tree`/`callers BuildIndex` on rig's own store) · **Family:** cli-ux / correctness-of-disclosure
+**Status:** DONE — shipped 2026-07-02. `AmbiguityNotice` (CLI) + `FactPathFinder.DistinctMatchTargets`
+(Domain: match → drop contained lambdas → dedupe to param-free FQNs, so OVERLOADS never count as
+ambiguity) emit a stderr note on `tree`/`callers`/`reaches`/`path` (both endpoints) when a pattern spans
+>1 distinct symbol: `note: pattern 'X' matched N distinct symbols (…) — results span ALL of them; qualify
+the pattern to narrow.` `tree` derives it from its BUILT roots so the note survives full cache hits.
+Stderr keeps tsv/llm stdout machine-clean. Exact-match-wins was already shipped in `MatchNodes` (predates
+this card — the third bullet of the fix was stale). The `callers` per-root reach-set SPLIT (grouping
+results by matched root, beyond the existing `Matched nodes` list + this note) was deliberately NOT
+built — disclosure covers the trust gap; grouping is a rendering rework to do if the note proves
+insufficient. Tests: `AmbiguousPatternDisclosureTests` (7). Verified on the card's exact repro:
+`rig tree BuildIndex` (rig's own store) now names both `IndexCommands.BuildIndex` +
+`FactPathFinder.BuildIndex` before rendering; MedDBase `callers SubmitToHealthcode` disclosed 6 distinct
+targets (+1-more capping); unambiguous and overload-only patterns stay silent; cache-hit runs still warn.
+**Found:** 2026-06-28 (dogfooding `rig tree`/`callers BuildIndex` on rig's own store) · **Family:** cli-ux / correctness-of-disclosure
 
 ## The gap
 The traversal commands match their `<pattern>` argument by substring/`Contains` over symbol ids, so one pattern

@@ -118,6 +118,9 @@ internal static class ReachesCommand
         graphWatch.Stop();
         timing.Record("graph load", graphWatch.Elapsed);
 
+        // Ambiguity disclosure: a multi-target pattern reports the UNION of every target's reach.
+        AmbiguityNotice.WarnIfAmbiguous(io.TextOutput.Error, opts.FromPattern, graph);
+
         var traversalWatch = Stopwatch.StartNew();
         var reachable = MonomorphCollapse.CollapseReachInfo(
             FactPathFinder.ReachesWithFanout(graph, opts.FromPattern, maxDepth, mode: mode)

@@ -393,6 +393,16 @@ internal static class TreeCommand
             return 1;
         }
 
+        // Ambiguity disclosure, derived from the BUILT roots (one per matched non-lambda node) rather
+        // than a graph re-match, so it also fires on a full cache hit where the graph is never loaded.
+        // Overload roots share a param-free FQN and don't count as ambiguity; a same-named method on an
+        // unrelated type does — the silent wrong-tree case this notice exists for.
+        AmbiguityNotice.WarnIfAmbiguous(
+            io.TextOutput.Error,
+            opts.FromPattern,
+            FactPathFinder.DistinctTargetFqns(roots.Select(r => r.SymbolId))
+        );
+
         // --hazards: surface the pattern HAZARDS (race_window / lazy_init_race / thread_local_context /
         // dual_write / n_plus_1 / unserializable_payload) on this entry point's tree — inline ⚠ marks + a
         // summary section. A hazard is a WHOLE-STORE, per-method fact (EP-independent), so we do NOT re-derive

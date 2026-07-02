@@ -1331,4 +1331,22 @@ public static partial class FactPathFinder
         var marker = nodeId.IndexOf("~λ", StringComparison.Ordinal);
         return marker > 0 && matched.Contains(nodeId.Substring(0, marker));
     }
+
+    // The DISTINCT conceptual targets a pattern resolves to — the ambiguity-disclosure set behind the
+    // CLI's "pattern matched N distinct symbols" notice. Distinctness is by param-free FQN, so a method's
+    // OVERLOADS collapse to one target (a pattern naming a method is not ambiguous because it has two
+    // signatures), while same-named methods on different types stay distinct (`FactPathFinder.BuildIndex`
+    // vs `IndexCommands.BuildIndex` — the silent wrong-tree case). Contained lambdas of a matched
+    // container are dropped exactly like BuildTree root selection: they render inline under the
+    // container, so they are not an independent answer the user could be surprised by.
+    public static IReadOnlyList<string> DistinctMatchTargets(IEnumerable<string> nodes, string pattern)
+    {
+        var matched = MatchNodes(nodes, pattern).ToHashSet(StringComparer.Ordinal);
+        return DistinctTargetFqns(matched.Where(n => !IsContainedLambdaOfMatched(n, matched)));
+    }
+
+    // The distinct param-free FQNs of an already-resolved id set (tree derives disclosure from its BUILT
+    // roots so it works on the cached-forest path too, where the graph is never loaded).
+    public static IReadOnlyList<string> DistinctTargetFqns(IEnumerable<string> ids) =>
+        ids.Select(ParamFreeFqn).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(f => f, StringComparer.Ordinal).ToList();
 }

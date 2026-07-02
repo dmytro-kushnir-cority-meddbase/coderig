@@ -84,6 +84,13 @@ The `<pat>`/`<from>`/`<to>` argument resolves to call-graph nodes via the SAME m
   reached (as a deeper callee), never as an extra root. A **partial/short** pattern (`Search.Proceed`, `Save`)
   never equals a full namespaced FQN, so it keeps the substring behaviour (matches both twins) — exact-wins is
   strictly a refinement, not a behaviour change for partials.
+- **AMBIGUITY IS DISCLOSED (stderr).** When a pattern resolves to >1 **distinct** symbol (same method name on
+  different types — overloads don't count, they share a param-free FQN), every traversal command prints
+  `note: pattern 'X' matched N distinct symbols (…) — results span ALL of them; qualify the pattern to narrow.`
+  The results are the UNION across all matched targets (a tree forest with mixed roots, a merged caller/reach
+  set) — when you see the note and meant ONE symbol, re-run with the qualified `Type.Method`/FQN. On stderr so
+  `--format tsv/llm` stdout stays machine-clean; an LLM driving rig should treat the note as a signal to
+  re-query qualified before trusting the merged answer.
 - **Use the FQN, not the EP route.** The `▶` / `callers --entrypoints` EP lines print the slash-form ROUTE
   (`Appointment/Search/Search.Proceed`), which matches NOTHING as a pattern. `derive`/`entrypoints`/`callers
   --entrypoints` now ALSO print the queryable FQN — a `↪ <fqn>` line in human output and a trailing `fqn`

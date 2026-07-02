@@ -117,6 +117,13 @@ internal static class PathCommand
         graphWatch.Stop();
         timing.Record("graph load", graphWatch.Elapsed);
 
+        // Ambiguity disclosure for BOTH endpoints: the first path found runs between whichever matched
+        // from/to pair connects — a multi-target pattern can silently pick the "wrong" endpoint. NOTE:
+        // the graph is the FROM-side forward slice, so a to-pattern target outside it (no path exists)
+        // is absent here — fine for disclosure: unreachable targets can't be picked into the answer.
+        AmbiguityNotice.WarnIfAmbiguous(io.TextOutput.Error, opts.FromPattern, graph);
+        AmbiguityNotice.WarnIfAmbiguous(io.TextOutput.Error, opts.ToPattern, graph);
+
         if (!tsv)
         {
             io.TextOutput.Output.WriteLine(

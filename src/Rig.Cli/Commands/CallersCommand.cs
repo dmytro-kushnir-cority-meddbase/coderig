@@ -161,6 +161,9 @@ internal static class CallersCommand
         graphWatch.Stop();
         timing.Record("graph load", graphWatch.Elapsed);
 
+        // Ambiguity disclosure (all three modes): a multi-target pattern merges reverse-reach sets.
+        AmbiguityNotice.WarnIfAmbiguous(io.TextOutput.Error, opts.ToPattern, graph);
+
         if (opts.EntrypointsOnly)
         {
             // F9: load the DeploymentMap here and pass it into RunEntryPointsAsync, eliminating the
