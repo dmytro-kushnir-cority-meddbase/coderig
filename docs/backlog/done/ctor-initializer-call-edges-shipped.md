@@ -1,9 +1,11 @@
 # Constructor-initializer edges missing from call graph (`: this(...)` / `: base(...)`)
 
-**Status:** fix SHIPPED 2026-07-02 (`OnConstructorInitializer` in `FactExtractor`, `CtorInitializerEdgeTests`,
-verified end-to-end on a scratch solution: `callers` climbs the chain to the `new` site and a `: base` derived
-ctor). **Remaining:** MedDBase re-index + the InvoiceEntity verification below — extraction change, the
-existing store predates it. Move to `done/` after that.
+**Status:** DONE — shipped `630feddb` 2026-07-02 (`OnConstructorInitializer` in `FactExtractor`,
+`CtorInitializerEdgeTests`) and **verified on the re-indexed MedDBase store** (`72b89c152fd5-dirty`,
+377,776 sym / 2,135,200 refs — ~+14k refs = the new ctor-initializer facts):
+`rig callers "InvoiceEntity.GroupByAccount"` went **8 → 1,216** reachers; both previously-missed callers
+now appear (`Payments.MakePaymentFee` and `WizardBase.InvoiceAccountDirectly`, each at d4 via the
+`#ctor → #ctor → #ctor` chain). Residual (implicit `base()` calls) disclosed below, deliberately not built.
 **Found:** 2026-07-02 (verified on MedDBase) · **Family:** extraction / call-graph recall
 **Source:** promoted from the `C:\Git` memory backlog (§5b) — the repo backlog is the canonical home.
 
