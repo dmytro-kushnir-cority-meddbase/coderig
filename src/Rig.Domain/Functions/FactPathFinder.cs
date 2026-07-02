@@ -539,11 +539,14 @@ public static partial class FactPathFinder
     // among same-depth peers it preserves source order (Successors yields children in line order).
     // Cut + context shaping is carried on `graph` (set by ShapeGraph at load) and applied via BuildIndex:
     // a cut node is expanded as a leaf — its own effects are visible but its subtree is not walked.
+    // Default node budget for BuildTree — the safety cap `tree` runs under when --limit is absent.
+    public const int DefaultTreeNodeBudget = 50000;
+
     public static IReadOnlyList<TraceNode> BuildTree(
         FactGraphData graph,
         string fromPattern,
         int maxDepth = 50,
-        int maxNodes = 50000,
+        int maxNodes = DefaultTreeNodeBudget,
         TraversalMode mode = TraversalMode.SyncCut
     )
     {

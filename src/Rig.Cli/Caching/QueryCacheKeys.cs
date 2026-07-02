@@ -55,11 +55,15 @@ internal static class QueryCacheKeys
         string rulesHash,
         string fromPattern,
         int maxDepth,
+        int maxNodes,
         FactPathFinder.TraversalMode mode,
         bool raw
     )
     {
-        var material = $"tree|v2|{storeKey}|{rulesHash}|{fromPattern}|{maxDepth}|{mode}|{raw}";
+        // maxNodes is in the key because a forest built under one --limit must not serve another (a
+        // budget-capped forest is a DIFFERENT tree, not a different rendering of the same tree). Adding
+        // the field shifts every existing key once (one cache re-warm) — accepted in lieu of a bump.
+        var material = $"tree|v2|{storeKey}|{rulesHash}|{fromPattern}|{maxDepth}|{maxNodes}|{mode}|{raw}";
         return new ForestCacheKey(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material))));
     }
 

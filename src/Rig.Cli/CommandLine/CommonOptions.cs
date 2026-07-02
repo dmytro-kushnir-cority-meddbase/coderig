@@ -96,7 +96,10 @@ internal static class CommonOptions
     // Tier-1 `--limit` with NO fixed default — absent means UNBOUNDED (the action substitutes int.MaxValue).
     // Distinct from Limit(n), which symbols/refs use for their sensible fixed cap; the flood-prone traversal
     // listings (reaches/callers) default to showing everything and truncate only when a limit is given.
-    internal static Option<int?> Limit() => new("--limit") { Description = "Max rows in flood-prone listings (default: unbounded)." };
+    // `tree` overrides the description: there absent means the internal 50k node-budget safety cap (not
+    // unbounded) and the unit is tree NODES, not listing rows.
+    internal static Option<int?> Limit(string? description = null) =>
+        new("--limit") { Description = description ?? "Max rows in flood-prone listings (default: unbounded)." };
 
     internal static Option<bool> NoCache() => new("--no-cache") { Description = "Bypass the query cache." };
 

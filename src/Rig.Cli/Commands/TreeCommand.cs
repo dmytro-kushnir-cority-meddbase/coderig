@@ -64,6 +64,9 @@ internal static class TreeCommand
         };
         var rules = CommonOptions.Rules();
         var depth = CommonOptions.Depth();
+        var limit = CommonOptions.Limit(
+            description: $"Max tree nodes to build (default {FactPathFinder.DefaultTreeNodeBudget}, the safety cap); the node that hits the cap renders as a budget-capped ⋯elided leaf."
+        );
         var only = CommonOptions.Only();
         var exclude = CommonOptions.Exclude();
         var excludeNamespace = CommonOptions.ExcludeNamespace();
@@ -93,6 +96,7 @@ internal static class TreeCommand
             guards,
             rules,
             depth,
+            limit,
             only,
             exclude,
             excludeNamespace,
@@ -141,6 +145,13 @@ internal static class TreeCommand
                 }
             }
 
+            // --limit is a node budget: zero/negative would silently render roots with no truncation
+            // disclosure (the walk never runs), so reject it up front.
+            if (result.GetValue(limit) is { } limitValue && limitValue < 1)
+            {
+                result.AddError("--limit must be a positive node count.");
+            }
+
             // --suppress is a comma-separated subset of {ctors,lambdas} or none; validate each token.
             var suppressValue = result.GetValue(suppress);
             if (suppressValue is not null)
@@ -176,6 +187,7 @@ internal static class TreeCommand
                             Guards: pr.GetValue(guards),
                             ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
                             Depth: pr.GetValue(depth),
+                            Limit: pr.GetValue(limit),
                             Only: CommonOptions.FilterSet(pr.GetValue(only)),
                             Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
                             ExcludeNamespaces: CommonOptions.NamespacePrefixes(pr.GetValue(excludeNamespace)),
@@ -207,6 +219,7 @@ internal static class TreeCommand
         bool Guards,
         IReadOnlyList<string> ExtraRules,
         int? Depth,
+        int? Limit,
         HashSet<string> Only,
         HashSet<string> Exclude,
         IReadOnlyList<string> ExcludeNamespaces,
@@ -234,6 +247,9 @@ internal static class TreeCommand
         var suppressSet = llmFormat || llmIds ? ParseSuppressSet(opts.Suppress) : SuppressSet.Default;
 
         var maxDepth = CommonOptions.DepthOrUnbounded(opts.Depth);
+        // --limit bounds tree NODES; absent keeps the BuildTree safety cap (50k), not unbounded — a
+        // deliberate divergence from callers/reaches, where the listing is flat and unbounded is sane.
+        var maxNodes = opts.Limit ?? FactPathFinder.DefaultTreeNodeBudget;
         var mode = CommonOptions.Mode(async: opts.Async, includeDelivery: opts.IncludeDelivery);
 
         // One merged load for the whole command; --raw zeroes the graph-shaping + render rules (the exact
@@ -268,6 +284,7 @@ internal static class TreeCommand
                 rulesHash: rulesHash,
                 fromPattern: opts.FromPattern,
                 maxDepth: maxDepth,
+                maxNodes: maxNodes,
                 mode: mode,
                 raw: opts.Raw
             );
@@ -341,7 +358,9 @@ internal static class TreeCommand
                 graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
             }
 
-            roots = MonomorphCollapse.CollapseTree(FactPathFinder.BuildTree(graph, opts.FromPattern, maxDepth, mode: mode));
+            roots = MonomorphCollapse.CollapseTree(
+                FactPathFinder.BuildTree(graph, opts.FromPattern, maxDepth, maxNodes: maxNodes, mode: mode)
+            );
             timer.Lap("event marking + BuildTree");
             if (roots.Count == 0)
             {
