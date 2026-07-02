@@ -83,8 +83,9 @@ over-approximate superset). Trust the `--async` default for reachability/auth qu
   receiverTypes|declaringTypes:[…], resource}`), re-run `derive`/`reaches`. Match the API at its
   FIRST-PARTY call site — a `receiverTypes` may name an EXTERNAL type (e.g. `StackExchange.Redis.IDatabase`)
   and rig still tags it where your code calls it. `resource:"argument_name"` captures the key/channel arg
-  (high-signal); others: `receiver_type`/`declaring_type`/`argument_type`/`type_argument`. Gate with the
-  tightest type to avoid same-name misfires.
+  (high-signal); others: `receiver_type`/`declaring_type`/`argument_type`/`type_argument`/`string_argument`
+  (drops when the arg isn't a literal — prefer `string_argument_or_receiver`, which falls back to the
+  receiver instead). Gate with the tightest type to avoid same-name misfires.
 - **Tree render rules** (`render`; ships empty, PRESENTATION-only — never affect reach): `collapseSeams
   {pattern,label}` folds a fan-out HUB into one summary leaf (union of effects + hidden count);
   `opaqueTypes {pattern,label}` draws a type/namespace as a leaf (anchor a namespace with `M:`). `tree

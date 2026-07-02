@@ -698,6 +698,16 @@ public static class FactEffectDeriver
             // The first argument's string template (literal/interpolated). With argumentIndex set, the
             // nth argument's template instead (e.g. a Flurl path segment past position 0).
             "string_argument" => argumentIndex is null ? firstArgTemplate : NthJsonString(argumentTemplates, argumentIndex.Value),
+            // The argument's string template when the call site has one, else the receiver/declaring
+            // type so the effect is NEVER dropped — same recall stance as http_argument. For a
+            // path-taking overload set like XmlDocument.Save(path)/Save(Stream)/Save(XmlWriter), a
+            // literal path names the actual file resource, while variable paths and non-string
+            // overloads keep the receiver-typed effect instead of vanishing (VS-C4).
+            "string_argument_or_receiver" => FirstNonBlank(
+                argumentIndex is null ? firstArgTemplate : NthJsonString(argumentTemplates, argumentIndex.Value),
+                receiver,
+                declaringType
+            ),
             // Prefer the literal URL host/path when the first argument is a string template; otherwise
             // fall back to the receiver type (the HttpClient/SocketsHttpHandler instance) so the effect
             // is NEVER dropped. URLs are built dynamically far more often than not, so the prior

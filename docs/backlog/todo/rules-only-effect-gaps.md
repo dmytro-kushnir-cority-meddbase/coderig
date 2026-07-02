@@ -20,13 +20,21 @@ Reads classified as writes. `AuditsRepository.cs:24`: `ExecuteScalarAsync<long>`
 change. If revisited: a separate `dapper:execute_scalar` op that reads can be a fresh rule entry rather than
 reclassifying all `ExecuteScalar*`.
 
-### VS-C4 — `XmlDocument.Save(path)` resource labelled `Xml.XmlDocument` (the receiver) not the file
+### VS-C4 — `XmlDocument.Save(path)` resource labelled `Xml.XmlDocument` (the receiver) not the file — ✅ SHIPPED (2026-07-02)
 
-`io:write` fires but names the wrong resource. `Master_HealthcodeServiceImpl.cs:1045`. The correct resource
-is the file path argument.
-Fix: `XmlDocument.Save`/`XDocument.Save` → `resource:string_argument argumentIndex:0`.
-Note: requires the `string_argument` resource strategy (which ships `argument_name` today). Verify whether
-`string_argument argumentIndex:0` is already supported in the rule schema before building.
+`io:write` fires but names the wrong resource; the correct resource is the file path argument.
+**Shipped as a NEW strategy, not the card's plain `string_argument`** — that would have been a recall
+regression: `ResolveResource` drops the effect on a null resource, so every `Save(pathVariable)` and the
+`Save(Stream)`/`Save(XmlWriter)` overloads would have LOST their `io:write`. Instead:
+`string_argument_or_receiver` (`FactEffectDeriver.ResolveResource`) = argument's string template, else
+receiver, else declaring type — never drops (mirrors `http_argument`'s recall stance); honors
+`argumentIndex`. Both `xml_document_save_file` AND the symmetric `xml_document_load_file` rules flipped.
+Tests: `StringArgumentOrReceiverEffectTests` (new file). MedDBase A/B: identical counts (968 read /
+9 write XmlDocument + 4 XDocument) — zero recall loss, and zero re-resourced sites because **no XML
+Save/Load call site on MedDBase has a literal path arg** (the VS-C4 site itself,
+`Master_HealthcodeServiceImpl.cs:1030`, computes the path via `ExportQueue.BuildUniqueMessageFilename(…)`
+— a call expression, which mines no template and no `argument_name` either). The improvement manifests
+only on literal/interpolated-path call sites, pinned by the unit tests.
 
 ### VS-G8 — BCL filesystem types partially unmodeled (follow-up)
 

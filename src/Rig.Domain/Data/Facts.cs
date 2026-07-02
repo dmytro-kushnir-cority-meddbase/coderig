@@ -923,7 +923,8 @@ public sealed record FactEffectRule(
     // Resource-resolution strategy (P2a), mirroring the Roslyn EffectExtractor.TryCreateEffect
     // switch, resolved from facts: "receiver_type" -> the receiver's static type (P1a);
     // "argument_type" -> the first argument's static type (P1b); "string_argument" -> the first
-    // argument's string template (P1b); "http_argument" -> that template, scheme/slash-normalized.
+    // argument's string template (P1b); "string_argument_or_receiver" -> that template, else the
+    // receiver/declaring type (never drops); "http_argument" -> that template, scheme/slash-normalized.
     // The "ef_*" strategies are EF-specific and not resolvable from current facts (deferred — they
     // resolve to null). When the strategy resolves to null/empty the effect is DROPPED, exactly as
     // the Roslyn path drops a null resource — this is what aligns fact effects with index effects.

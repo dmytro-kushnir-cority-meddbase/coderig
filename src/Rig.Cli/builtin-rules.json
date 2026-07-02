@@ -355,10 +355,10 @@
         "System.Xml.Linq.XDocument",
         "System.Xml.Linq.XElement"
       ],
-      "resource": "receiver_type",
+      "resource": "string_argument_or_receiver",
       "confidence": "high",
       "basis": "compilation",
-      "reason": "xml_document_save_file"
+      "reason": "xml_document_save_file: Save(path) writes the FILE named by arg 0, so a literal/interpolated path is the resource (VS-C4); Save(Stream)/Save(XmlWriter) and variable paths fall back to the receiver type rather than dropping."
     },
     {
       "provider": "io",
@@ -371,10 +371,10 @@
         "System.Xml.Linq.XDocument",
         "System.Xml.Linq.XElement"
       ],
-      "resource": "receiver_type",
+      "resource": "string_argument_or_receiver",
       "confidence": "high",
       "basis": "compilation",
-      "reason": "xml_document_load_file: XDocument/XmlDocument.Load reads + parses an XML file from disk (symmetric with xml_document_save_file)."
+      "reason": "xml_document_load_file: XDocument/XmlDocument.Load reads + parses an XML file from disk (symmetric with xml_document_save_file); a literal path names the file, else receiver-type fallback."
     },
     {
       "provider": "efcore",
