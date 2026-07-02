@@ -258,6 +258,29 @@ internal static class FactExtractor
             }
         }
 
+        // --- Constructor initializers -> ctor refs ---
+        // `: this(...)` / `: base(...)` chaining carries no creation or name syntax the passes above
+        // see (there is no SimpleName for the target ctor), so without this the declaring-ctor ->
+        // chained-ctor call edge is missing and reach/callers silently stop at the invoked overload
+        // (the InvoiceEntity ctor-chain false negative). Both forms are exact, non-dispatching calls
+        // (CIL `call`), like `base.M(...)`. Implicit base() calls (no initializer syntax) are a known
+        // residual — see docs/backlog/todo/ctor-initializer-call-edges.md.
+        void OnConstructorInitializer(ConstructorInitializerSyntax initializer)
+        {
+            if (model.GetSymbolInfo(initializer).Symbol is IMethodSymbol { MethodKind: MethodKind.Constructor } chained)
+            {
+                AddReference(
+                    references,
+                    chained,
+                    refKind: RefKinds.Ctor,
+                    enclosingId: EnclosingSymbolId(initializer, model, lambdaIds, enclosingCache),
+                    tree: tree,
+                    node: initializer,
+                    symbolCache: symbolCache
+                );
+            }
+        }
+
         // --- 18c: delegate-slot INVOCATIONS -> an invocation edge to the SLOT ---
         // `_handler()` / `Prop()` invokes a delegate via its slot's (field/property/event) Invoke; the
         // SimpleName pass only records a field READ, so the call target is otherwise invisible. Emit an
@@ -340,6 +363,10 @@ internal static class FactExtractor
 
                 case BaseObjectCreationExpressionSyntax creation:
                     OnCreation(creation);
+                    break;
+
+                case ConstructorInitializerSyntax initializer:
+                    OnConstructorInitializer(initializer);
                     break;
 
                 case InvocationExpressionSyntax invocation:
