@@ -1,7 +1,9 @@
+using Rig.Analysis;
 using Rig.Cli.Caching;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Commands;
 using Rig.Cli.Impact;
+using Rig.Cli.Telemetry;
 using static Rig.Cli.Graph.TraversalGraphLoader;
 
 namespace Rig.Cli.Services;
@@ -37,5 +39,35 @@ internal static class ImpactQueryService
             extraRules: extraRules ?? [],
             onPhase: onPhase
         );
+    }
+
+    // The per-run resource telemetry (CPU/mem/disk over time + per-phase labels) for a store-vs-store diff, as
+    // a rig-*-telemetry.csv string the telemetry dashboard renders. Runs the diff with noCache: true so there
+    // is REAL cold work to sample — a warm cache hit does no work and would yield an empty profile. Heavier
+    // than the plain diff (a full recompute), so it backs an explicit "load graphs" action, not the diff view.
+    public static async Task<string> TelemetryCsvAsync(string workingDirectory, string baseRef, string headRef, bool async = false)
+    {
+        var ws = new WorkspaceLocation(workingDirectory, headRef);
+        await using var context = await OpenReadContextGatedAsync(ws with { StoreRef = headRef });
+        var mode = CommonOptions.Mode(async: async, includeDelivery: false);
+        var timings = new PhaseTimings();
+        timings.StartSampling();
+        await ImpactEngine.DiffAsync(
+            headContext: context,
+            ws: ws,
+            baseRef: baseRef,
+            headRef: headRef,
+            mode: mode,
+            gate: true,
+            noCache: true,
+            extraRules: [],
+            onPhase: (name, ms) =>
+            {
+                timings.Record(name, TimeSpan.FromMilliseconds(ms));
+                return Task.CompletedTask;
+            }
+        );
+        var samples = timings.StopSampling();
+        return TimingReport.BuildCsv(timings, samples);
     }
 }

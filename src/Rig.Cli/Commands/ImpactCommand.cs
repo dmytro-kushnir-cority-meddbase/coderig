@@ -5,6 +5,7 @@ using Rig.Cli.CommandLine;
 using Rig.Cli.Deployments;
 using Rig.Cli.Impact;
 using Rig.Cli.Rendering;
+using Rig.Cli.Telemetry;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
@@ -58,6 +59,7 @@ internal static class ImpactCommand
         var limit = CommonOptions.Limit();
         var noCache = CommonOptions.NoCache();
         var noGate = CommonOptions.NoGate();
+        var time = CommonOptions.Time();
         var structural = new Option<bool>("--structural")
         {
             Description =
@@ -89,6 +91,7 @@ internal static class ImpactCommand
             limit,
             noCache,
             noGate,
+            time,
             structural,
             expectNoEffectChange,
         };
@@ -121,6 +124,7 @@ internal static class ImpactCommand
                             Limit: pr.GetValue(limit),
                             NoCache: pr.GetValue(noCache),
                             Gate: !pr.GetValue(noGate),
+                            Time: pr.GetValue(time),
                             Structural: pr.GetValue(structural),
                             ExpectNoEffectChange: pr.GetValue(expectNoEffectChange)
                         ),
@@ -143,6 +147,7 @@ internal static class ImpactCommand
         int? Limit,
         bool NoCache,
         bool Gate,
+        bool Time,
         bool Structural,
         bool ExpectNoEffectChange
     );
@@ -152,6 +157,17 @@ internal static class ImpactCommand
         var tsv = CommonOptions.IsTsv(opts.Format);
         var max = opts.Limit ?? int.MaxValue;
         var mode = CommonOptions.Mode(async: opts.Async, includeDelivery: opts.IncludeDelivery); // --async => walk sound handoffs (delivery fan-out excluded unless --include-delivery)
+
+        // --time: sample CPU/mem/disk across the whole run + record each DiffAsync phase (fed via onPhase
+        // below), then on scope exit print the per-phase breakdown to stderr AND dump rig-impact-telemetry.csv
+        // next to the HEAD store — the SAME format `index --time` emits, so the telemetry dashboard renders it.
+        // Declared first so it disposes LAST (after the store context), capturing the full run. No-op without --time.
+        using var timing = QueryTiming.Start(
+            opts.Time,
+            io.TextOutput.Error,
+            csvDirectory: opts.Time ? StoreLayout.ResolveReadStoreDir(io.WorkspaceLocation with { StoreRef = opts.HeadRef }) : null,
+            csvFileName: "rig-impact-telemetry.csv"
+        );
 
         // The HEAD store: opened once here so the deployment-map read (render chrome) shares it with DiffAsync
         // (which also reads it for provenance + the cold derivation). Opening issues no query.
@@ -171,7 +187,16 @@ internal static class ImpactCommand
             mode: mode,
             gate: opts.Gate,
             noCache: opts.NoCache,
-            extraRules: opts.ExtraRules
+            extraRules: opts.ExtraRules,
+            // --time: record each top-level phase as it completes into the timing scope (whose master clock +
+            // sampler started above). Null (no --time) leaves DiffAsync's fast path untouched.
+            onPhase: opts.Time
+                ? (name, ms) =>
+                {
+                    timing.Record(name, TimeSpan.FromMilliseconds(ms));
+                    return Task.CompletedTask;
+                }
+                : null
         );
 
         RenderImpact(

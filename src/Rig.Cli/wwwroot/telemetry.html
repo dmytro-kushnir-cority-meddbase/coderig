@@ -1,24 +1,68 @@
 <meta charset="utf-8" />
 <title>rig index · telemetry scope</title>
 <style>
+  /* Palette aligned to the rig explorer (index.html) so the dashboard reads as the same app, theme-aware
+     (dark default, light via data-theme or the OS). The chrome tokens (ground/panel/line/text/muted/faint/
+     grid/accent) mirror the explorer's --bg/--panel/--border/--fg/--muted/--accent; the data-SERIES colors
+     (sys/ws/heap/dread/dwrite) are theme-independent — they read on both. The explorer's theme choice is
+     inherited via localStorage (see the inline script below). */
   :root {
-    --ground: #0e1320;
-    --panel: #161c2b;
-    --panel-2: #1e2638;
-    --line: #2a3246;
-    --grid: rgba(255, 255, 255, 0.055);
-    --text: #e6eaf2;
-    --muted: #8794ad;
-    --faint: #5c6680;
-    --accent: #5fd0c8; /* process / self  */
+    /* chart data-series + fonts — theme-independent */
     --sys: #e8a24b; /* whole machine    */
     --ws: #a98be0; /* working set      */
     --heap: #6e74b0; /* managed heap     */
     --dread: #6ba7e8; /* disk read        */
     --dwrite: #e8746b; /* disk write       */
     --idle: #e8746b; /* recoverable idle */
-    --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    --mono:
+      ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Menlo,
+      Consolas, monospace;
     --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    /* chrome — dark defaults (overridden for light below) */
+    --ground: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c2230;
+    --line: #2a3038;
+    --grid: rgba(255, 255, 255, 0.055);
+    --text: #d6dde6;
+    --muted: #8b98a5;
+    --faint: #5c6680;
+    --accent: #58a6ff; /* process / self + accents */
+  }
+  :root[data-theme="dark"] {
+    --ground: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c2230;
+    --line: #2a3038;
+    --grid: rgba(255, 255, 255, 0.055);
+    --text: #d6dde6;
+    --muted: #8b98a5;
+    --faint: #5c6680;
+    --accent: #58a6ff;
+  }
+  :root[data-theme="light"] {
+    --ground: #ffffff;
+    --panel: #f4f6f9;
+    --panel-2: #eef2f6;
+    --line: #d8dee5;
+    --grid: rgba(0, 0, 0, 0.07);
+    --text: #1f2733;
+    --muted: #586573;
+    --faint: #97a2b0;
+    --accent: #0969da;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) {
+      --ground: #ffffff;
+      --panel: #f4f6f9;
+      --panel-2: #eef2f6;
+      --line: #d8dee5;
+      --grid: rgba(0, 0, 0, 0.07);
+      --text: #1f2733;
+      --muted: #586573;
+      --faint: #97a2b0;
+      --accent: #0969da;
+    }
   }
 
   * {
@@ -27,7 +71,7 @@
 
   body {
     margin: 0;
-    background: radial-gradient(1200px 600px at 80% -10%, #182036 0%, transparent 60%), var(--ground);
+    background: var(--ground);
     color: var(--text);
     font-family: var(--mono);
     font-feature-settings:
@@ -514,17 +558,29 @@
   }
 </style>
 
-<div class="drop-hint" id="drophint"><div>drop rig-index-telemetry.csv</div></div>
+<script>
+  // Inherit the explorer's chosen theme (rig-theme in localStorage) so the dashboard opened from its
+  // "load graphs" link matches light/dark instead of always being dark. Falls back to the OS preference.
+  (function () {
+    var t = localStorage.getItem("rig-theme");
+    if (t === "light" || t === "dark")
+      document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+
+<div class="drop-hint" id="drophint"><div>drop rig-*-telemetry.csv</div></div>
 
 <div class="wrap">
   <header class="topbar">
     <div class="brand">
       <span class="dot"></span>
       <h1>rig&nbsp;·&nbsp;telemetry scope</h1>
-      <span class="sub">index resource profile</span>
+      <span class="sub">resource profile</span>
     </div>
     <div class="runmeta" id="runmeta"></div>
-    <label class="load" tabindex="0">load csv<input type="file" id="file" accept=".csv,text/csv" /></label>
+    <label class="load" tabindex="0"
+      >load csv<input type="file" id="file" accept=".csv,text/csv"
+    /></label>
   </header>
 
   <section class="hero">
@@ -536,7 +592,9 @@
 
   <div class="sec">
     <h3>Signal scope</h3>
-    <span class="hint" id="scopehint">hover to scrub — readout tracks every signal at that instant</span>
+    <span class="hint" id="scopehint"
+      >hover to scrub — readout tracks every signal at that instant</span
+    >
   </div>
   <div class="phaserail" id="phaserail"></div>
   <div class="scope" id="scope">
@@ -545,8 +603,13 @@
         <span class="title">CPU</span>
         <span class="legend">
           <span><i style="background: var(--accent)"></i>process (self)</span>
-          <span><i style="background: var(--sys)"></i>system (whole machine)</span>
-          <span><i style="background: var(--idle); opacity: 0.5"></i>idle headroom</span>
+          <span
+            ><i style="background: var(--sys)"></i>system (whole machine)</span
+          >
+          <span
+            ><i style="background: var(--idle); opacity: 0.5"></i>idle
+            headroom</span
+          >
         </span>
       </div>
       <canvas id="c_cpu"></canvas>
@@ -601,6 +664,13 @@
 
 <script>
   "use strict";
+
+  // Read a themed CSS custom property (with a fallback) so the CANVAS chrome — grid, axis labels, crosshair —
+  // tracks the light/dark theme like the CSS-styled parts do. The data-series colors stay hardcoded (they
+  // read on both themes).
+  const cssVar = (name, fallback) =>
+    getComputedStyle(document.documentElement).getPropertyValue(name).trim() ||
+    fallback;
 
   // Embedded default: a real `rig index` run on MedDBase (warm build cache), downsampled for the demo.
   // Load any rig-index-telemetry.csv to replace it — same parser, full fidelity.
@@ -801,7 +871,8 @@
     tail: "#3A4258",
   };
   const phaseColor = (p, i) =>
-    PHASE_COLORS[p] || ["#5FD0C8", "#E8A24B", "#A98BE0", "#6BA7E8", "#E8746B", "#7FBF8B"][i % 6];
+    PHASE_COLORS[p] ||
+    ["#5FD0C8", "#E8A24B", "#A98BE0", "#6BA7E8", "#E8746B", "#7FBF8B"][i % 6];
 
   let DATA = null; // parsed sample rows
   let PHASES = null; // aggregated phase rows
@@ -846,8 +917,14 @@
     for (let i = 0; i < rows.length; i++) {
       const p = rows[i - 1];
       const dt = p ? rows[i].t - p.t : 0;
-      rows[i].drRate = p && dt > 0 && rows[i].dr != null && p.dr != null ? Math.max(0, (rows[i].dr - p.dr) / dt) : 0;
-      rows[i].dwRate = p && dt > 0 && rows[i].dw != null && p.dw != null ? Math.max(0, (rows[i].dw - p.dw) / dt) : 0;
+      rows[i].drRate =
+        p && dt > 0 && rows[i].dr != null && p.dr != null
+          ? Math.max(0, (rows[i].dr - p.dr) / dt)
+          : 0;
+      rows[i].dwRate =
+        p && dt > 0 && rows[i].dw != null && p.dw != null
+          ? Math.max(0, (rows[i].dw - p.dw) / dt)
+          : 0;
     }
     return rows.filter((r) => r.t != null);
   }
@@ -859,7 +936,12 @@
       const next = rows[i + 1];
       const end = next ? next.t : rows[i].t;
       if (!runs.length || runs[runs.length - 1].phase !== rows[i].phase) {
-        runs.push({ phase: rows[i].phase, start: rows[i].t, end, rows: [rows[i]] });
+        runs.push({
+          phase: rows[i].phase,
+          start: rows[i].t,
+          end,
+          rows: [rows[i]],
+        });
       } else {
         const r = runs[runs.length - 1];
         r.end = end;
@@ -868,7 +950,11 @@
     }
     const byPhase = new Map();
     for (const run of runs) {
-      const o = byPhase.get(run.phase) || { phase: run.phase, wall: 0, rows: [] };
+      const o = byPhase.get(run.phase) || {
+        phase: run.phase,
+        wall: 0,
+        rows: [],
+      };
       o.wall += Math.max(0, run.end - run.start);
       o.rows.push(...run.rows);
       byPhase.set(run.phase, o);
@@ -878,7 +964,8 @@
       const v = a.map((r) => r[k]).filter((x) => x != null);
       return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null;
     };
-    const peak = (a, k) => a.reduce((m, r) => (r[k] != null && r[k] > m ? r[k] : m), 0);
+    const peak = (a, k) =>
+      a.reduce((m, r) => (r[k] != null && r[k] > m ? r[k] : m), 0);
     const span = (a, k) => {
       const v = a.map((r) => r[k]).filter((x) => x != null && x >= 0);
       return v.length ? Math.max(...v) - Math.min(...v) : 0;
@@ -913,9 +1000,13 @@
   }
 
   const fmtDur = (s) =>
-    s >= 60 ? `${Math.floor(s / 60)}m${String(Math.round(s % 60)).padStart(2, "0")}s` : `${s.toFixed(1)}s`;
-  const fmtGB = (mb) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`);
-  const esc = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+    s >= 60
+      ? `${Math.floor(s / 60)}m${String(Math.round(s % 60)).padStart(2, "0")}s`
+      : `${s.toFixed(1)}s`;
+  const fmtGB = (mb) =>
+    mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
+  const esc = (s) =>
+    s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
 
   function render() {
     const agg = aggregate(DATA);
@@ -951,10 +1042,16 @@
     document.getElementById("stats").innerHTML = [
       ["total wall", fmtDur(agg.totalWall)],
       ["peak working set", fmtGB(agg.peakWs)],
-      ["top target", `${esc(slow.phase)} <small>${fmtDur(slow.idle)} idle</small>`],
+      [
+        "top target",
+        `${esc(slow.phase)} <small>${fmtDur(slow.idle)} idle</small>`,
+      ],
       ["disk written", fmtGB(agg.totalWrite)],
     ]
-      .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`)
+      .map(
+        ([k, v]) =>
+          `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`,
+      )
       .join("");
 
     // phase rail (proportional ribbon)
@@ -962,7 +1059,10 @@
     for (let i = 0; i < DATA.length; i++) {
       const next = DATA[i + 1],
         end = next ? next.t : DATA[i].t;
-      if (!railPhases.length || railPhases[railPhases.length - 1].phase !== DATA[i].phase)
+      if (
+        !railPhases.length ||
+        railPhases[railPhases.length - 1].phase !== DATA[i].phase
+      )
         railPhases.push({ phase: DATA[i].phase, start: DATA[i].t, end });
       else railPhases[railPhases.length - 1].end = end;
     }
@@ -1048,20 +1148,26 @@
       ticks = [0, 25, 50, 75, 100],
       unit = "%";
     if (cfg.kind === "mem") {
-      ymax = Math.max(1, ...DATA.map((r) => Math.max(r.ws || 0, r.heap || 0))) * 1.08;
+      ymax =
+        Math.max(1, ...DATA.map((r) => Math.max(r.ws || 0, r.heap || 0))) *
+        1.08;
       ticks = [0, ymax / 2, ymax];
       unit = "";
     }
     if (cfg.kind === "disk") {
-      ymax = Math.max(1, ...DATA.map((r) => Math.max(r.drRate || 0, r.dwRate || 0))) * 1.1;
+      ymax =
+        Math.max(
+          1,
+          ...DATA.map((r) => Math.max(r.drRate || 0, r.dwRate || 0)),
+        ) * 1.1;
       ticks = [0, ymax / 2, ymax];
       unit = "";
     }
     const yFor = (v) => PAD.t + plotH - (v / ymax) * plotH;
 
     // grid + y labels
-    x.strokeStyle = "rgba(255,255,255,.055)";
-    x.fillStyle = "#5C6680";
+    x.strokeStyle = cssVar("--grid", "rgba(255,255,255,.055)");
+    x.fillStyle = cssVar("--faint", "#5C6680");
     x.font = "10px ui-monospace, monospace";
     x.textAlign = "right";
     x.lineWidth = 1;
@@ -1146,7 +1252,7 @@
     if (hoverX != null) {
       const px = xFor(hoverX, w);
       if (px >= PAD.l && px <= w - PAD.r) {
-        x.strokeStyle = "rgba(230,234,242,.4)";
+        x.strokeStyle = cssVar("--muted", "rgba(230,234,242,.4)");
         x.setLineDash([3, 3]);
         x.beginPath();
         x.moveTo(px, PAD.t);
@@ -1183,7 +1289,8 @@
     drawAll();
     const ro = document.getElementById("readout");
     ro.classList.add("on");
-    const row = (k, v, c) => `<div class="rr"><span>${k}</span><b style="color:${c || "var(--text)"}">${v}</b></div>`;
+    const row = (k, v, c) =>
+      `<div class="rr"><span>${k}</span><b style="color:${c || "var(--text)"}">${v}</b></div>`;
     ro.innerHTML =
       `<div class="rt">t+${s.t.toFixed(1)}s · ${esc(s.phase)}</div>` +
       row("cpu self", (s.self ?? 0).toFixed(0) + "%", "#5FD0C8") +
@@ -1252,7 +1359,32 @@
     reader.readAsText(file);
   }
 
-  DATA = parseCSV(DEFAULT_CSV);
   initEvents();
-  render();
+  // ?csv=<url> — fetch a telemetry CSV to render instead of the baked-in sample. This is how the explorer's
+  // "load graphs" link feeds a live rig-impact-telemetry run (telemetry.html?csv=/api/impact/telemetry?…).
+  // Falls back to the default sample on any error so the dashboard is never blank.
+  const csvUrl = new URLSearchParams(location.search).get("csv");
+  if (csvUrl) {
+    DATA = parseCSV(DEFAULT_CSV);
+    render();
+    fetch(csvUrl)
+      .then((r) => {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.text();
+      })
+      .then((t) => {
+        if (t.trim()) {
+          DATA = parseCSV(t);
+          render();
+        }
+      })
+      .catch((err) =>
+        console.error(
+          "telemetry: could not load " + csvUrl + " — " + err.message,
+        ),
+      );
+  } else {
+    DATA = parseCSV(DEFAULT_CSV);
+    render();
+  }
 </script>

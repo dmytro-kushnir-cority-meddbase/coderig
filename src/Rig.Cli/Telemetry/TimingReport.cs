@@ -58,8 +58,26 @@ internal static class TimingReport
             return;
         }
 
-        var entries = timings.Entries;
         var path = Path.Combine(directory, fileName);
+        try
+        {
+            File.WriteAllLines(path, BuildCsvLines(timings.Entries, samples));
+            output.WriteLine($"Telemetry: {samples.Count} samples -> {path}");
+        }
+        catch (IOException exception)
+        {
+            output.WriteLine($"Telemetry: could not write {path} ({exception.Message})");
+        }
+    }
+
+    // The telemetry CSV as a single string (header + one row per sample), each row tagged with its phase.
+    // Empty when no samples were taken. Shared by WriteCsv (writes it to a file next to the store) and the web
+    // /api/impact/telemetry endpoint (returns it as the response body for the telemetry dashboard to fetch).
+    public static string BuildCsv(PhaseTimings timings, IReadOnlyList<ResourceSampler.Sample> samples) =>
+        samples.Count == 0 ? "" : string.Join('\n', BuildCsvLines(timings.Entries, samples));
+
+    private static List<string> BuildCsvLines(IReadOnlyList<PhaseTimings.PhaseEntry> entries, IReadOnlyList<ResourceSampler.Sample> samples)
+    {
         var lines = new List<string>(samples.Count + 1)
         {
             "elapsed_s,phase,proc_cpu_pct,sys_cpu_pct,ws_mb,heap_mb,disk_read_cum_mb,disk_write_cum_mb,"
@@ -77,15 +95,7 @@ internal static class TimingReport
             );
         }
 
-        try
-        {
-            File.WriteAllLines(path, lines);
-            output.WriteLine($"Telemetry: {samples.Count} samples -> {path}");
-        }
-        catch (IOException exception)
-        {
-            output.WriteLine($"Telemetry: could not write {path} ({exception.Message})");
-        }
+        return lines;
     }
 
     public static string FormatElapsed(TimeSpan elapsed) =>

@@ -662,7 +662,7 @@ export function ImpactView(s, actions) {
     { class: "impact-summary" },
     h(
       "div",
-      {},
+      { class: "impact-head-row" },
       h("b", {}, d.base.label),
       " → ",
       h("b", {}, d.head.label),
@@ -673,6 +673,25 @@ export function ImpactView(s, actions) {
           title: "traversal mode — toggle 'async' in the toolbar",
         },
         s.impactAsync ? "async" : "sync",
+      ),
+      // Profile this diff: opens the telemetry dashboard on a fresh timed run (CPU/mem/disk over time +
+      // phase rail). A cold recompute — hence an explicit link, not auto-loaded.
+      h(
+        "a",
+        {
+          class: "load-graphs",
+          href:
+            "/telemetry.html?csv=" +
+            encodeURIComponent(
+              `/api/impact/telemetry?base=${s.impactBase}&head=${s.impactHead}` +
+                (s.impactAsync ? "&async=true" : ""),
+            ),
+          target: "_blank",
+          rel: "noopener",
+          title:
+            "profile this diff — CPU/mem/disk over time (runs a fresh timed diff, then opens the telemetry dashboard)",
+        },
+        "⧉ load graphs",
       ),
     ),
     h(

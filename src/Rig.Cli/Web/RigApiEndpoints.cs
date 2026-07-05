@@ -209,6 +209,36 @@ internal static class RigApiEndpoints
             }
         );
 
+        // Per-run resource telemetry (CPU/mem/disk over time, phase-labelled) for a diff, as the same
+        // rig-*-telemetry.csv the telemetry dashboard renders — fetched by telemetry.html?csv=… behind the
+        // explorer's "load graphs" link. Runs a FRESH cold diff to sample real work (TelemetryCsvAsync forces
+        // noCache), so it's minutes on a big store — an explicit profiling action, not part of the diff view.
+        app.MapGet(
+            "/api/impact/telemetry",
+            async (string? @base, string? head, bool? async) =>
+            {
+                if (string.IsNullOrWhiteSpace(@base) || string.IsNullOrWhiteSpace(head))
+                {
+                    return Results.Problem(title: "Missing base/head", detail: "Provide ?base=&head=.", statusCode: 400);
+                }
+
+                try
+                {
+                    var csv = await ImpactQueryService.TelemetryCsvAsync(
+                        workingDirectory,
+                        baseRef: @base,
+                        headRef: head,
+                        async: async ?? false
+                    );
+                    return Results.Text(csv, "text/csv");
+                }
+                catch (Exception ex)
+                {
+                    return Results.Problem(title: "Impact telemetry failed", detail: ex.Message, statusCode: 400);
+                }
+            }
+        );
+
         // Per-method hazard marks for a tree (same set as `rig tree --view hazards`) — the client overlays
         // these on nodes when "hazards" is toggled. Separate from /api/tree because it's an expensive whole-
         // store derivation, independently cacheable by store.
