@@ -3,6 +3,7 @@ using Rig.Cli.CommandLine;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
+using Rig.Storage.Storage;
 using static Rig.Cli.Effects.EffectDerivation;
 using static Rig.Cli.Graph.TraversalGraphLoader;
 
@@ -29,6 +30,16 @@ public static class TreeQueryService
         IReadOnlyDictionary<string, string> EffectEmoji
     );
 
+    // The richer result of the shared cold compute (ComputeAsync): the forest + effects PLUS the graph and
+    // entry-point data the CLI needs downstream. Internal — the web only consumes the public TreeQueryResult
+    // projection; TreeCommand consumes this directly to keep its existing render pipeline unchanged.
+    internal sealed record TreeComputation(
+        IReadOnlyList<TraceNode> Roots,
+        IReadOnlyList<DerivedEffect> Effects,
+        FactGraphData Graph,
+        FactEntryPointDeriver.FactEntryPointData? EpData
+    );
+
     // Build the forest + effects for `fromPattern` over the store at `workingDirectory` (optionally a specific
     // `storeRef` commit/id). Mirrors the cold path of TreeCommand.RunAsync: same shaping rules, same event-
     // subscription handoff marking, same BuildTree + monomorph collapse, same DeriveEffects inputs — so the
@@ -50,6 +61,41 @@ public static class TreeQueryService
 
         await using var context = await OpenReadContextGatedAsync(new WorkspaceLocation(workingDirectory, storeRef));
 
+        var computation = await ComputeAsync(
+            context: context,
+            rules: rules,
+            shaped: shaped,
+            fromPattern: fromPattern,
+            maxDepth: CommonOptions.DepthOrUnbounded(depth),
+            maxNodes: FactPathFinder.DefaultTreeNodeBudget,
+            mode: CommonOptions.Mode(async: async, includeDelivery: includeDelivery),
+            raw: raw
+        );
+
+        var locations = computation
+            .Graph.Methods.GroupBy(m => m.SymbolId, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => new SymbolLocation(g.First().FilePath, g.First().Line), StringComparer.Ordinal);
+
+        return new TreeQueryResult(computation.Roots, computation.Effects, locations, rules.EffectEmoji);
+    }
+
+    // The COLD tree computation shared by the web host (BuildAsync, above) and `rig tree`'s cold path
+    // (TreeCommand). It operates on an ALREADY-OPEN context + ALREADY-LOADED/SHAPED rules, so a caller that
+    // holds those — TreeCommand does, plus its query-cache — reuses them instead of re-opening/re-loading.
+    // Returns the graph + entry-point data too (not just roots/effects): the CLI threads those into its
+    // downstream render stages (locations, seam, EP-site chips, --full library calls). This is the single
+    // source of truth for the forest + effects, so `rig tree` and `/api/tree` cannot diverge.
+    internal static async Task<TreeComputation> ComputeAsync(
+        RigDbContext context,
+        RuleSet rules,
+        RuleSet shaped,
+        string fromPattern,
+        int maxDepth,
+        int maxNodes,
+        FactPathFinder.TraversalMode mode,
+        bool raw
+    )
+    {
         var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, shaped);
         var graph = inputs.Graph;
         // Event subscriptions (`someEvent += Handler`) are deferred handlers, not synchronous calls — mark them
@@ -59,11 +105,7 @@ public static class TreeQueryService
             graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
         }
 
-        var maxDepth = CommonOptions.DepthOrUnbounded(depth);
-        var mode = CommonOptions.Mode(async: async, includeDelivery: includeDelivery);
-        var roots = MonomorphCollapse.CollapseTree(
-            FactPathFinder.BuildTree(graph, fromPattern, maxDepth, maxNodes: FactPathFinder.DefaultTreeNodeBudget, mode: mode)
-        );
+        var roots = MonomorphCollapse.CollapseTree(FactPathFinder.BuildTree(graph, fromPattern, maxDepth, maxNodes: maxNodes, mode: mode));
 
         IReadOnlyList<DerivedEffect> effects =
             roots.Count == 0
@@ -77,10 +119,6 @@ public static class TreeQueryService
                     throwRefs: inputs.ThrowRefs
                 );
 
-        var locations = graph
-            .Methods.GroupBy(m => m.SymbolId, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => new SymbolLocation(g.First().FilePath, g.First().Line), StringComparer.Ordinal);
-
-        return new TreeQueryResult(roots, effects, locations, rules.EffectEmoji);
+        return new TreeComputation(roots, effects, graph, inputs.EpData);
     }
 }

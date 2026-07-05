@@ -2,6 +2,7 @@ using System.CommandLine;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
+using Rig.Cli.Services;
 using Rig.Domain.Data;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
@@ -342,48 +343,30 @@ internal static class TreeCommand
         }
         else
         {
-            var inputs = await LoadEffectReachInputsAsync(
+            // Cold path: the forest + effects come from the SHARED engine (TreeQueryService.ComputeAsync), the
+            // single source of truth `/api/tree` also uses — so `rig tree` and the web view cannot diverge. It
+            // reuses this command's already-open context + already-shaped rules; graph + EP data flow back for
+            // the downstream render stages (locations, seam, EP-site chips, --full library calls) and caching.
+            var computation = await TreeQueryService.ComputeAsync(
                 context: context,
-                pattern: opts.FromPattern,
-                direction: SqlReachability.Direction.Forward,
-                shaped
+                rules: rules,
+                shaped: shaped,
+                fromPattern: opts.FromPattern,
+                maxDepth: maxDepth,
+                maxNodes: maxNodes,
+                mode: mode,
+                raw: opts.Raw
             );
-            graph = inputs.Graph;
-            reachInputsEpData = inputs.EpData; // F2: carry through for the EP-site derivation below.
-            timer.Lap("graph + invocations load");
-            // Event subscriptions (`someEvent += Handler`) are deferred handlers, not synchronous calls —
-            // mark them as handoffs so the sync tree doesn't expand the handler as if RegisterEvents ran it.
-            if (!opts.Raw)
+            graph = computation.Graph;
+            reachInputsEpData = computation.EpData; // F2: carry through for the EP-site derivation below.
+            roots = computation.Roots;
+            effects = computation.Effects;
+            timer.Lap("compute (graph + BuildTree + effects)");
+            // Cache the UNFILTERED forest+effects (--only/--exclude are applied below so they don't fragment
+            // the key). Only when the pattern matched — an empty forest isn't worth a cache slot.
+            if (roots.Count > 0 && cacheKey is { } pk)
             {
-                graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
-            }
-
-            roots = MonomorphCollapse.CollapseTree(
-                FactPathFinder.BuildTree(graph, opts.FromPattern, maxDepth, maxNodes: maxNodes, mode: mode)
-            );
-            timer.Lap("event marking + BuildTree");
-            if (roots.Count == 0)
-            {
-                effects = [];
-            }
-            else
-            {
-                // Effects per enclosing method — same derivation as `reaches` (incl. throws). Cache them
-                // UNFILTERED; --only/--exclude are applied below so they don't fragment the key.
-                effects = DeriveEffects(
-                    effectRules: rules.Effects,
-                    observationRules: rules.Observations,
-                    invocations: inputs.Invocations,
-                    baseEdges: BaseEdgeTuples(graph),
-                    ctorRefs: inputs.CtorRefs,
-                    throwRefs: inputs.ThrowRefs
-                );
-                if (cacheKey is { } pk)
-                {
-                    TryCache(() => cache!.Put(pk.Value, TreeCacheCodec.Encode(new TreeCachePayload(roots, effects))));
-                }
-
-                timer.Lap("derive effects + cache store");
+                TryCache(() => cache!.Put(pk.Value, TreeCacheCodec.Encode(new TreeCachePayload(roots, effects))));
             }
         }
 
