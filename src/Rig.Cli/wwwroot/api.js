@@ -1,12 +1,70 @@
-// The IO layer: all HTTP access + the immutable client cache, and NOTHING else (no DOM, no URL). In a React
-// port each function becomes a TanStack `useQuery` — the shapes already fit.
+// The IO layer: all HTTP access + a two-tier client cache (in-memory + IndexedDB), and NOTHING else (no DOM,
+// no URL). In a React port each function becomes a TanStack `useQuery`.
 //
-// Caching: a commit-scoped store is IMMUTABLE and its id is the version, so a response for
-// (resolvedStoreId, endpoint, params) is frozen forever — safe to keep in-memory and reuse instantly. Keyed
-// by the RESOLVED store id so LATEST and its explicit-id URL share one entry. `runs` is NOT cached (the
-// LATEST pointer moves on reindex).
+// Caching correctness: a commit-scoped store's FACTS are immutable, but derived output (tree/effects/hazards)
+// also depends on the rule set + the tool build. So the cache is keyed by a DERIVATION VERSION (from
+// /api/meta = hash(tool MVID ⊕ rules fingerprint)), not the store id alone. When that version changes (rules
+// edit / rig upgrade) the keys change AND the persisted store is purged — stale derived data is never served.
+// IndexedDB (not localStorage) because trees are >1 MB; it degrades to memory-only if IDB is unavailable.
 
-const cache = new Map();
+const mem = new Map();
+let version = "v0"; // derivation version; set at boot via setCacheVersion()
+
+// ---- IndexedDB (best-effort; any failure degrades to in-memory only) ------------------------------------
+const DB = "rig-cache",
+  STORE = "kv";
+function idb() {
+  return new Promise((resolve, reject) => {
+    const r = indexedDB.open(DB, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(STORE);
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+}
+async function idbGet(k) {
+  try {
+    const db = await idb();
+    return await new Promise((res) => {
+      const q = db.transaction(STORE).objectStore(STORE).get(k);
+      q.onsuccess = () => res(q.result);
+      q.onerror = () => res(undefined);
+    });
+  } catch {
+    return undefined;
+  }
+}
+async function idbPut(k, v) {
+  try {
+    const db = await idb();
+    db.transaction(STORE, "readwrite").objectStore(STORE).put(v, k);
+  } catch {
+    /* quota / unavailable — skip */
+  }
+}
+async function idbClear() {
+  try {
+    const db = await idb();
+    db.transaction(STORE, "readwrite").objectStore(STORE).clear();
+  } catch {
+    /* ignore */
+  }
+}
+
+// Set the derivation version and purge the persisted store if it moved (keys are version-prefixed, so old
+// entries would be unreachable anyway — this reclaims their space). Call once at boot after /api/meta.
+export async function setCacheVersion(v) {
+  version = v;
+  if (localStorage.getItem("rig-cache-ver") !== v) {
+    await idbClear();
+    mem.clear();
+    localStorage.setItem("rig-cache-ver", v);
+  }
+}
+// Force-purge everything (the UI's "purge cache" button).
+export async function purgeCache() {
+  mem.clear();
+  await idbClear();
+}
 
 async function getJson(url) {
   const res = await fetch(url);
@@ -16,16 +74,23 @@ async function getJson(url) {
   }
   return res.json();
 }
-
 async function cached(key, url) {
-  if (cache.has(key)) return cache.get(key);
+  const k = version + "|" + key;
+  if (mem.has(k)) return mem.get(k);
+  const hit = await idbGet(k);
+  if (hit !== undefined) {
+    mem.set(k, hit);
+    return hit;
+  }
   const data = await getJson(url);
-  cache.set(key, data);
+  mem.set(k, data);
+  idbPut(k, data); // fire-and-forget persist
   return data;
 }
 
-// Build a query string; omits null/blank values. `store` is included only when explicit (an id), so implicit
-// LATEST stays out of the URL (and off the server's immutable-cache path).
+// Query string; omits null/blank. `store` is included only when explicit (an id) — implicit LATEST stays off
+// the URL (its response can't be frozen). The RESOLVED id goes in the cache key, so LATEST and its explicit
+// URL share one entry.
 function qs(params) {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
@@ -37,19 +102,16 @@ function qs(params) {
 }
 
 export const api = {
-  runs: () => getJson("/api/runs"),
+  meta: () => getJson("/api/meta"),
+  runs: () => getJson("/api/runs"), // LATEST pointer moves → never cached
   providers: () => cached("providers", "/api/providers"),
-
-  // storeId = the RESOLVED id (for the cache key); explicitStore = the id to put on the URL, or null for LATEST.
   tree: (storeId, explicitStore, from, asyncWalk) =>
-    cached(`tree|${storeId}|${from}|${!!asyncWalk}`, "/api/tree" + qs({ from, store: explicitStore, async: !!asyncWalk })),
-
-  entrypoints: (storeId, explicitStore) =>
-    cached(`eps|${storeId}`, "/api/entrypoints" + qs({ store: explicitStore })),
-
+    cached(
+      `tree|${storeId}|${from}|${!!asyncWalk}`,
+      "/api/tree" + qs({ from, store: explicitStore, async: !!asyncWalk }),
+    ),
+  entrypoints: (storeId, explicitStore) => cached(`eps|${storeId}`, "/api/entrypoints" + qs({ store: explicitStore })),
   hazards: (storeId, explicitStore, from) =>
     cached(`haz|${storeId}|${from}`, "/api/hazards" + qs({ from, store: explicitStore })),
-
-  // search is high-churn and cheap; not cached.
-  search: (explicitStore, q) => getJson("/api/search" + qs({ q, store: explicitStore, limit: 15 })),
+  search: (explicitStore, q) => getJson("/api/search" + qs({ q, store: explicitStore, limit: 15 })), // high-churn, uncached
 };

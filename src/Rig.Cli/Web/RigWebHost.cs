@@ -34,6 +34,20 @@ internal static class RigWebHost
         var app = builder.Build();
         app.UseDefaultFiles(); // serve index.html at "/"
         app.UseStaticFiles();
+        // API responses are `no-store`: derived output isn't frozen by store id alone (it also depends on the
+        // rules + tool build), so the browser HTTP cache must not hold it. The SPA does the caching itself,
+        // keyed by the derivation version (/api/meta) so it invalidates correctly on a rules edit / rig upgrade.
+        app.Use(
+            async (ctx, next) =>
+            {
+                if (ctx.Request.Path.StartsWithSegments("/api"))
+                {
+                    ctx.Response.Headers.CacheControl = "no-store";
+                }
+
+                await next();
+            }
+        );
         RigApiEndpoints.MapApi(app, workingDirectory);
         // SPA fallback: any non-/api, non-file route serves index.html so client-side routing works.
         app.MapFallbackToFile("index.html");

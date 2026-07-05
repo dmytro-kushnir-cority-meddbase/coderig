@@ -39,7 +39,16 @@ export function activeStoreId(s = get()) {
 
 // The query slice, for a watch() that re-serializes the URL only when the query changes.
 export const querySlice = (s) => [
-  s.from, s.storeId, s.view, s.mode, s.tokens.join(","), s.asyncWalk, s.collapse, s.signatures, s.predicates, s.hazards,
+  s.from,
+  s.storeId,
+  s.view,
+  s.mode,
+  s.tokens.join(","),
+  s.asyncWalk,
+  s.collapse,
+  s.signatures,
+  s.predicates,
+  s.hazards,
 ];
 
 // state -> URL (query params only; defaults omitted to keep links terse).

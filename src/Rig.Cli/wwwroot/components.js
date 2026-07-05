@@ -17,7 +17,9 @@ export function filterEffects(effs, mode, tokens) {
     : effs.filter((e) => !toks.some((t) => effMatch(e, t)));
 }
 function subtreeHasEffect(node, ctx) {
-  return filterEffects(node.effects, ctx.mode, ctx.tokens).length > 0 || node.children.some((c) => subtreeHasEffect(c, ctx));
+  return (
+    filterEffects(node.effects, ctx.mode, ctx.tokens).length > 0 || node.children.some((c) => subtreeHasEffect(c, ctx))
+  );
 }
 
 // ---- small components ------------------------------------------------------------------------------------
@@ -27,7 +29,12 @@ function EffectGlyphs(effects) {
     "span",
     { class: "effects" },
     effects.map((e) =>
-      h("span", { class: "eff", title: `${e.provider}:${e.operation} ×${e.sites}` }, e.glyph, e.sites > 1 ? h("span", { class: "sites" }, e.sites) : null),
+      h(
+        "span",
+        { class: "eff", title: `${e.provider}:${e.operation} ×${e.sites}` },
+        e.glyph,
+        e.sites > 1 ? h("span", { class: "sites" }, e.sites) : null,
+      ),
     ),
   );
 }
@@ -37,7 +44,11 @@ function Loc(node) {
 function Trunc(node) {
   if (!node.truncated) return null;
   if (node.truncationCause === "AlreadyExpanded")
-    return h("span", { class: "trunc", title: "cycle / shared callee — expanded elsewhere in this tree" }, "⋯ shown above");
+    return h(
+      "span",
+      { class: "trunc", title: "cycle / shared callee — expanded elsewhere in this tree" },
+      "⋯ shown above",
+    );
   if (node.truncationCause === "BudgetCapped")
     return h("span", { class: "trunc", title: "node-budget safety cap (50k) reached" }, "⋯ budget");
   return h("span", { class: "trunc" }, "⋯elided");
@@ -69,7 +80,12 @@ function Rollup(agg) {
   if (!agg.size) return null;
   const items = [...agg.values()].sort((a, b) => (a.provider + a.operation).localeCompare(b.provider + b.operation));
   const title = "subtree touches: " + items.map((e) => `${e.provider}:${e.operation}×${e.sites}`).join(", ");
-  return h("span", { class: "rollup", title }, "↴ ", items.map((e) => h("span", { class: "eff" }, e.glyph)));
+  return h(
+    "span",
+    { class: "rollup", title },
+    "↴ ",
+    items.map((e) => h("span", { class: "eff" }, e.glyph)),
+  );
 }
 
 // TreeNode(node, depth, ctx): recursive. Returns { el, agg } — agg is the subtree effect rollup, bubbled up
@@ -106,7 +122,9 @@ function TreeNode(node, depth, ctx) {
     node.fanout > 1 ? h("span", { class: "fanout" }, `×${node.fanout} fan-out`) : null,
     node.callSites > 1 ? h("span", { class: "sites" }, `${node.callSites}×`) : null,
     EffectGlyphs(own),
-    ctx.predicates && node.guards ? h("span", { class: "guard" }, "⎇ ", h("span", { class: "guardtxt", title: node.guards }, node.guards)) : null,
+    ctx.predicates && node.guards
+      ? h("span", { class: "guard" }, "⎇ ", h("span", { class: "guardtxt", title: node.guards }, node.guards))
+      : null,
     ctx.hazards ? HazardMark(ctx.hazById.get(node.id)) : null,
     Trunc(node),
     Loc(node),
@@ -115,7 +133,10 @@ function TreeNode(node, depth, ctx) {
   const wrap = h("div", { class: "node" }, row);
   if (hasKids) {
     wrap.append(h("div", { class: "children" }, childEls));
-    if (depth >= ctx.collapseLevel) { wrap.classList.add("collapsed"); twist.textContent = "▸"; }
+    if (depth >= ctx.collapseLevel) {
+      wrap.classList.add("collapsed");
+      twist.textContent = "▸";
+    }
     twist.addEventListener("click", () => {
       wrap.classList.toggle("collapsed");
       twist.textContent = wrap.classList.contains("collapsed") ? "▸" : "▾";
@@ -126,10 +147,14 @@ function TreeNode(node, depth, ctx) {
 
 // effects view: flat DFS list of effectful methods (deduped).
 function flatEffectful(roots, ctx) {
-  const out = [], seen = new Set();
+  const out = [],
+    seen = new Set();
   const walk = (n) => {
     const fe = filterEffects(n.effects, ctx.mode, ctx.tokens);
-    if (fe.length && !seen.has(n.id)) { seen.add(n.id); out.push([n, fe]); }
+    if (fe.length && !seen.has(n.id)) {
+      seen.add(n.id);
+      out.push([n, fe]);
+    }
     n.children.forEach(walk);
   };
   roots.forEach(walk);
@@ -145,8 +170,14 @@ export function ctxOf(s) {
   }
   const level = parseInt(s.collapse, 10);
   return {
-    view: s.view, mode: s.mode, tokens: s.tokens, signatures: s.signatures, predicates: s.predicates,
-    hazards: s.hazards, hazById, collapseLevel: level > 0 ? level : Infinity,
+    view: s.view,
+    mode: s.mode,
+    tokens: s.tokens,
+    signatures: s.signatures,
+    predicates: s.predicates,
+    hazards: s.hazards,
+    hazById,
+    collapseLevel: level > 0 ? level : Infinity,
   };
 }
 
@@ -164,7 +195,11 @@ export function TreeView(s) {
     );
   }
   const roots = s.view === "paths" ? s.tree.roots.filter((r) => subtreeHasEffect(r, ctx)) : s.tree.roots;
-  return h("div", {}, roots.map((r) => TreeNode(r, 0, ctx).el));
+  return h(
+    "div",
+    {},
+    roots.map((r) => TreeNode(r, 0, ctx).el),
+  );
 }
 // the status line for the current tree/view (used after a render so counts reflect the projection).
 export function treeStatus(s) {
@@ -180,7 +215,10 @@ export function treeStatus(s) {
 function RunCard(r, active, onSelect) {
   return h(
     "div",
-    { class: "run" + (r.isLatest ? " latest" : "") + (r.storeId === active ? " active" : ""), onClick: () => onSelect(r.storeId) },
+    {
+      class: "run" + (r.isLatest ? " latest" : "") + (r.storeId === active ? " active" : ""),
+      onClick: () => onSelect(r.storeId),
+    },
     h("div", { class: "id" }, r.storeId),
     h("div", { class: "meta" }, `${r.commit || ""}${r.branch ? " (" + r.branch + ")" : ""}${r.dirty ? " +dirty" : ""}`),
     h("div", { class: "meta" }, `${r.symbols.toLocaleString()} symbols · ${r.references.toLocaleString()} refs`),
@@ -188,12 +226,15 @@ function RunCard(r, active, onSelect) {
 }
 export function RunsList(s, actions) {
   if (!s.runs.length) return h("div", {}, "(no runs)");
-  const active = (s.storeId || (s.runs.find((r) => r.isLatest) || s.runs[0] || {}).storeId);
-  return h("div", {}, s.runs.map((r) => RunCard(r, active, actions.selectStore)));
+  const active = s.storeId || (s.runs.find((r) => r.isLatest) || s.runs[0] || {}).storeId;
+  return h(
+    "div",
+    {},
+    s.runs.map((r) => RunCard(r, active, actions.selectStore)),
+  );
 }
 
-const epRow = (e, onOpen) =>
-  h("div", { class: "ep", title: e.fqn, onClick: () => onOpen(e.fqn) }, e.route);
+const epRow = (e, onOpen) => h("div", { class: "ep", title: e.fqn, onClick: () => onOpen(e.fqn) }, e.route);
 export function EpList(s, actions) {
   if (!s.eps.length) return h("div", {}, "…");
   const f = s.epFilter.trim().toLowerCase();
@@ -208,10 +249,24 @@ export function EpList(s, actions) {
     kinds.map((kind) => {
       const list = byKind[kind];
       const klist = h("div", { class: "klist" });
-      const head = h("div", { class: "khead" }, (f ? "▾ " : "▸ ") + kind, " ", h("span", { class: "kcount" }, list.length));
+      const head = h(
+        "div",
+        { class: "khead" },
+        (f ? "▾ " : "▸ ") + kind,
+        " ",
+        h("span", { class: "kcount" }, list.length),
+      );
       const group = h("div", { class: "kind" + (f ? " open" : "") }, head, klist);
       let populated = false;
-      const populate = () => { if (!populated) { mount(klist, list.map((e) => epRow(e, actions.openTree))); populated = true; } };
+      const populate = () => {
+        if (!populated) {
+          mount(
+            klist,
+            list.map((e) => epRow(e, actions.openTree)),
+          );
+          populated = true;
+        }
+      };
       if (f) populate(); // filtered groups are small → render now
       head.addEventListener("click", () => {
         const open = group.classList.toggle("open");
@@ -228,7 +283,23 @@ export function Chips(s, actions) {
   return h(
     "span",
     {},
-    s.tokens.map((t) => h("span", { class: "chip" }, t, h("b", { onClick: (e) => { e.stopPropagation(); actions.toggleToken(t); } }, "×"))),
+    s.tokens.map((t) =>
+      h(
+        "span",
+        { class: "chip" },
+        t,
+        h(
+          "b",
+          {
+            onClick: (e) => {
+              e.stopPropagation();
+              actions.toggleToken(t);
+            },
+          },
+          "×",
+        ),
+      ),
+    ),
   );
 }
 
@@ -237,10 +308,22 @@ export function Chips(s, actions) {
 // Input events call `actions`; the shell never reads state after construction.
 export function Shell(actions) {
   const refs = {};
-  const themeBtn = (mode, label) => h("button", { dataset: { theme: mode }, onClick: () => actions.setTheme(mode) }, label);
-  refs.theme = h("div", { class: "theme", id: "theme" }, themeBtn("light", "Light"), themeBtn("dark", "Dark"), themeBtn("system", "System"));
+  const themeBtn = (mode, label) =>
+    h("button", { dataset: { theme: mode }, onClick: () => actions.setTheme(mode) }, label);
+  refs.theme = h(
+    "div",
+    { class: "theme", id: "theme" },
+    themeBtn("light", "Light"),
+    themeBtn("dark", "Dark"),
+    themeBtn("system", "System"),
+  );
   refs.storeDir = h("span", { class: "store" });
-  const header = h("header", {}, h("h1", {}, "rig · explorer"), refs.storeDir, h("span", { class: "placeholder" }, "vanilla UI (React parked)"), refs.theme);
+  refs.purge = h(
+    "button",
+    { class: "purge", title: "clear the client cache (in-memory + persisted)", onClick: () => actions.purge() },
+    "purge cache",
+  );
+  const header = h("header", {}, h("h1", {}, "rig · explorer"), refs.storeDir, refs.purge, refs.theme);
 
   // sidebar
   const tab = (id, label) => h("button", { dataset: { tab: id }, onClick: () => actions.setTab(id) }, label);
@@ -248,8 +331,17 @@ export function Shell(actions) {
   refs.tabEps = tab("eps", "Entry points");
   refs.runs = h("div", {}, "…");
   refs.eps = h("div", {}, "…");
-  refs.epFilter = h("input", { id: "epFilter", placeholder: "filter entry points…", onInput: (e) => actions.setEpFilter(e.target.value) });
-  refs.paneRuns = h("div", { class: "pane on" }, h("div", { class: "hint" }, "click a run to query that store (● = active)"), refs.runs);
+  refs.epFilter = h("input", {
+    id: "epFilter",
+    placeholder: "filter entry points…",
+    onInput: (e) => actions.setEpFilter(e.target.value),
+  });
+  refs.paneRuns = h(
+    "div",
+    { class: "pane on" },
+    h("div", { class: "hint" }, "click a run to query that store (● = active)"),
+    refs.runs,
+  );
   refs.paneEps = h("div", { class: "pane" }, refs.epFilter, refs.eps);
   const aside = h("aside", {}, h("div", { class: "tabs" }, refs.tabRuns, refs.tabEps), refs.paneRuns, refs.paneEps);
 
@@ -257,27 +349,71 @@ export function Shell(actions) {
   refs.splitter = h("div", { class: "splitter", title: "drag to resize" });
 
   // toolbar
-  refs.from = h("input", { id: "from", placeholder: "search a symbol, or type an entry-point / pattern…", autocomplete: "off" });
+  refs.from = h("input", {
+    id: "from",
+    placeholder: "search a symbol, or type an entry-point / pattern…",
+    autocomplete: "off",
+  });
   refs.results = h("div", { id: "results" });
   const fromwrap = h("div", { class: "fromwrap" }, refs.from, refs.results);
-  refs.view = h("select", { title: "projection", onChange: (e) => actions.setView(e.target.value) },
-    h("option", { value: "paths" }, "paths"), h("option", { value: "full" }, "full"), h("option", { value: "effects" }, "effects"));
-  refs.filterMode = h("select", { title: "effect filter (only XOR exclude)", onChange: (e) => actions.setMode(e.target.value) },
-    h("option", { value: "none" }, "no filter"), h("option", { value: "only" }, "only"), h("option", { value: "exclude" }, "exclude"));
+  refs.view = h(
+    "select",
+    { title: "projection", onChange: (e) => actions.setView(e.target.value) },
+    h("option", { value: "paths" }, "paths"),
+    h("option", { value: "full" }, "full"),
+    h("option", { value: "effects" }, "effects"),
+  );
+  refs.filterMode = h(
+    "select",
+    { title: "effect filter (only XOR exclude)", onChange: (e) => actions.setMode(e.target.value) },
+    h("option", { value: "none" }, "no filter"),
+    h("option", { value: "only" }, "only"),
+    h("option", { value: "exclude" }, "exclude"),
+  );
   refs.chips = h("div", { class: "ms-control" }, h("span", { class: "ms-ph" }, "providers…"));
-  refs.msSearch = h("input", { class: "ms-search", placeholder: "filter tokens…", autocomplete: "off", onInput: (e) => actions.renderMsList(e.target.value) });
+  refs.msSearch = h("input", {
+    class: "ms-search",
+    placeholder: "filter tokens…",
+    autocomplete: "off",
+    onInput: (e) => actions.renderMsList(e.target.value),
+  });
   refs.msList = h("div", { class: "ms-list" });
   refs.msPop = h("div", { class: "ms-pop" }, refs.msSearch, refs.msList);
   refs.ms = h("div", { class: "ms disabled" }, refs.chips, refs.msPop);
-  refs.collapse = h("input", { id: "collapse", type: "number", min: "1", placeholder: "collapse ≥",
-    title: "auto-collapse at/below this depth — full tree is fetched, children one click away", onInput: (e) => actions.setCollapse(e.target.value) });
-  const toggle = (label, key, title) => h("label", { class: "chk", title }, h("input", { type: "checkbox", dataset: { k: key }, onChange: (e) => actions.setFlag(key, e.target.checked) }), " " + label);
+  refs.collapse = h("input", {
+    id: "collapse",
+    type: "number",
+    min: "1",
+    placeholder: "collapse ≥",
+    title: "auto-collapse at/below this depth — full tree is fetched, children one click away",
+    onInput: (e) => actions.setCollapse(e.target.value),
+  });
+  const toggle = (label, key, title) =>
+    h(
+      "label",
+      { class: "chk", title },
+      h("input", { type: "checkbox", dataset: { k: key }, onChange: (e) => actions.setFlag(key, e.target.checked) }),
+      " " + label,
+    );
   refs.async = toggle("async", "asyncWalk", "walk async handoffs (refetches)");
   refs.sig = toggle("sig", "signatures", "show parameter signatures");
   refs.pred = toggle("pred", "predicates", "show control-dependence guards");
   refs.haz = toggle("haz", "hazards", "overlay hazard marks");
   refs.go = h("button", { class: "go", onClick: () => actions.openTree(refs.from.value.trim()) }, "Tree");
-  const toolbar = h("div", { class: "controls" }, fromwrap, refs.view, refs.filterMode, refs.ms, refs.collapse, refs.async, refs.sig, refs.pred, refs.haz, refs.go);
+  const toolbar = h(
+    "div",
+    { class: "controls" },
+    fromwrap,
+    refs.view,
+    refs.filterMode,
+    refs.ms,
+    refs.collapse,
+    refs.async,
+    refs.sig,
+    refs.pred,
+    refs.haz,
+    refs.go,
+  );
 
   // status + tree
   refs.spin = h("span", { class: "spin" });

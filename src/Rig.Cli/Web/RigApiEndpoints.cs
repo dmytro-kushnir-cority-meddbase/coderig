@@ -1,13 +1,15 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Rig.Analysis.Rules;
 using Rig.Cli.Services;
 
 namespace Rig.Cli.Web;
 
 // The /api surface for `rig serve`. Thin: each endpoint delegates to a Service (the same engine the CLI runs)
 // and projects to a DTO. Errors surface as a 400 with the message (a bad pattern / missing store is user
-// error, not a 500). A commit-scoped store is IMMUTABLE, so responses pinned to an explicit ?store=<id> are
-// marked cacheable-forever (see SetStoreCache) — the client caches by store too.
+// error, not a 500). Responses are `no-store` (see RigWebHost) — the CLIENT caches, keyed by a DERIVATION
+// VERSION (store facts are immutable, but derived output also depends on the rules + tool build). /api/meta
+// exposes that version so the client can key + purge its persistent cache correctly.
 internal static class RigApiEndpoints
 {
     public static void MapApi(WebApplication app, string workingDirectory)
@@ -28,16 +30,33 @@ internal static class RigApiEndpoints
             }
         );
 
-        // Rule-detected entry points (the search/browse panel's source) — same set as `rig entrypoints`.
+        // The derivation version = hash(tool build ⊕ rules fingerprint). It changes when the tool is rebuilt
+        // (new MVID) or the rule set is edited — i.e. whenever the DERIVED output for a given store could
+        // differ. The client keys its cache by this and purges on change, so a rules edit / rig upgrade never
+        // serves stale derived data (the store id alone is not enough).
         app.MapGet(
-            "/api/entrypoints",
-            async (HttpContext http, string? store) =>
+            "/api/meta",
+            () =>
             {
                 try
                 {
-                    var eps = await EntryPointService.ListAsync(workingDirectory, storeRef: NullIfBlank(store));
-                    SetStoreCache(http, store);
-                    return Results.Json(eps);
+                    return Results.Json(new { derivationVersion = DerivationVersion(workingDirectory) });
+                }
+                catch (Exception ex)
+                {
+                    return Results.Problem(title: "Failed to compute meta", detail: ex.Message, statusCode: 400);
+                }
+            }
+        );
+
+        // Rule-detected entry points (the search/browse panel's source) — same set as `rig entrypoints`.
+        app.MapGet(
+            "/api/entrypoints",
+            async (string? store) =>
+            {
+                try
+                {
+                    return Results.Json(await EntryPointService.ListAsync(workingDirectory, storeRef: NullIfBlank(store)));
                 }
                 catch (Exception ex)
                 {
@@ -66,7 +85,7 @@ internal static class RigApiEndpoints
         // Symbol name search for the search box. `q` required; `kind` optional (method/type/…), `limit` caps.
         app.MapGet(
             "/api/search",
-            async (HttpContext http, string? q, string? kind, int? limit, string? store) =>
+            async (string? q, string? kind, int? limit, string? store) =>
             {
                 if (string.IsNullOrWhiteSpace(q))
                 {
@@ -82,7 +101,6 @@ internal static class RigApiEndpoints
                         limit: limit is > 0 ? limit.Value : 25,
                         storeRef: NullIfBlank(store)
                     );
-                    SetStoreCache(http, store);
                     return Results.Json(hits);
                 }
                 catch (Exception ex)
@@ -97,7 +115,7 @@ internal static class RigApiEndpoints
         // store derivation, independently cacheable by store.
         app.MapGet(
             "/api/hazards",
-            async (HttpContext http, string? from, string? store) =>
+            async (string? from, string? store) =>
             {
                 if (string.IsNullOrWhiteSpace(from))
                 {
@@ -107,7 +125,6 @@ internal static class RigApiEndpoints
                 try
                 {
                     var marks = await HazardsService.ForTreeAsync(workingDirectory, from, storeRef: NullIfBlank(store));
-                    SetStoreCache(http, store);
                     return Results.Json(marks);
                 }
                 catch (Exception ex)
@@ -122,7 +139,7 @@ internal static class RigApiEndpoints
         // endpoint returns the one canonical tree + all effects, and the SPA projects/filters without refetch.
         app.MapGet(
             "/api/tree",
-            async (HttpContext http, string? from, int? depth, bool? async, string? store) =>
+            async (string? from, int? depth, bool? async, string? store) =>
             {
                 if (string.IsNullOrWhiteSpace(from))
                 {
@@ -149,7 +166,6 @@ internal static class RigApiEndpoints
                         locations: result.Locations,
                         emoji: result.EffectEmoji
                     );
-                    SetStoreCache(http, store);
                     return Results.Json(response);
                 }
                 catch (Exception ex)
@@ -163,18 +179,17 @@ internal static class RigApiEndpoints
     // A blank query-string value (?store=) arrives as "" not null; normalize so services see null (LATEST).
     private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
-    // A commit-scoped store is IMMUTABLE — its derived facts never change once indexed. So when the caller
-    // pinned an explicit ?store=<id>, mark the response cacheable forever: the browser (and any proxy) may
-    // reuse it without revalidation. Implicit LATEST is deliberately NOT marked — the LATEST pointer moves on
-    // reindex, so that response is not frozen. (The SPA also caches by resolved store id — see index.html.)
-    private static void SetStoreCache(HttpContext http, string? store)
+    // The cache-invalidation version for DERIVED output. A store's facts are immutable, but tree/effects/
+    // hazards also depend on (a) the tool's derivation LOGIC and (b) the rule set — so the client must key its
+    // cache by more than the store id. MVID changes on every tool rebuild; RulesFingerprint changes on any
+    // rule edit. Their hash is a compact token: same input ⇒ same output ⇒ cache is safe; either moves ⇒ the
+    // client's keys change and it purges. Loaded fresh per call so a mid-session rig.rules.json edit is caught.
+    private static string DerivationVersion(string workingDirectory)
     {
-        if (string.IsNullOrWhiteSpace(store))
-        {
-            return;
-        }
-
-        http.Response.Headers.CacheControl = "public, max-age=31536000, immutable";
-        http.Response.Headers.ETag = $"\"{store}\"";
+        RuleSetLoader.Load(workingDirectory, [], out var loadedPaths);
+        var rulesHash = RulesFingerprint.ComputeFromPaths(loadedPaths);
+        var mvid = typeof(RigApiEndpoints).Module.ModuleVersionId.ToString("N");
+        var bytes = System.Text.Encoding.UTF8.GetBytes(mvid + "|" + rulesHash);
+        return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes))[..16];
     }
 }
