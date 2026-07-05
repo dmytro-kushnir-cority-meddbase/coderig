@@ -37,6 +37,7 @@ internal static class TreeMapper
             Fanout: node.Fanout,
             CallSites: node.CallSites,
             Truncated: node.Truncated,
+            TruncationCause: node.TruncationCause == Rig.Domain.Data.TruncationCause.None ? null : node.TruncationCause.ToString(),
             DispatchBasis: node.DispatchBasis,
             File: loc?.File,
             Line: loc?.Line ?? 0,

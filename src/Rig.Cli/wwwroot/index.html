@@ -5,25 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>rig — explorer</title>
     <style>
-      /* Semantic design tokens — the ONLY place colors are defined. Both themes are declared; the active one
-         is chosen by data-theme on <html> (set by the switcher), falling back to the OS preference. Components
-         reference var(--x), never raw hex, so light/dark is a palette swap. (If this ports to React, the
-         ThemeProvider reproduces exactly this: three modes, data-theme on the root, localStorage.) */
+      /* Semantic design tokens — the ONLY place colors are defined. data-theme on <html> selects the palette
+         (set by the switcher); falls back to the OS preference. Components reference var(--x), never raw hex. */
       :root, :root[data-theme="dark"] {
         --bg: #0e1116; --panel: #161b22; --border: #2a3038; --fg: #d6dde6;
         --muted: #8b98a5; --accent: #58a6ff; --chip: #21262d; --warn: #d29922;
-        --btn-fg: #0e1116; --hover: #1c2230; --danger: #f85149;
+        --btn-fg: #0e1116; --hover: #1c2230; --danger: #f85149; --sel: #1f6feb33;
       }
       :root[data-theme="light"] {
         --bg: #ffffff; --panel: #f4f6f9; --border: #d8dee5; --fg: #1f2733;
         --muted: #6a7684; --accent: #0969da; --chip: #eaeef2; --warn: #9a6700;
-        --btn-fg: #ffffff; --hover: #eef2f6; --danger: #cf222e;
+        --btn-fg: #ffffff; --hover: #eef2f6; --danger: #cf222e; --sel: #0969da22;
       }
       @media (prefers-color-scheme: light) {
         :root:not([data-theme]) {
           --bg: #ffffff; --panel: #f4f6f9; --border: #d8dee5; --fg: #1f2733;
           --muted: #6a7684; --accent: #0969da; --chip: #eaeef2; --warn: #9a6700;
-          --btn-fg: #ffffff; --hover: #eef2f6; --danger: #cf222e;
+          --btn-fg: #ffffff; --hover: #eef2f6; --danger: #cf222e; --sel: #0969da22;
         }
       }
       * { box-sizing: border-box; }
@@ -39,44 +37,51 @@
       .theme button { background: transparent; color: var(--muted); font-weight: 500; padding: 3px 9px;
         font-size: 12px; border-radius: 4px; border: none; cursor: pointer; }
       .theme button.on { background: var(--accent); color: var(--btn-fg); }
-      main { display: grid; grid-template-columns: 300px 1fr; height: calc(100vh - 51px); }
-      aside { border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+      main { display: grid; grid-template-columns: var(--rail, 300px) 5px 1fr; height: calc(100vh - 51px); }
+      aside { border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+      .splitter { cursor: col-resize; background: transparent; }
+      .splitter:hover, .splitter.drag { background: var(--accent); }
       .tabs { display: flex; border-bottom: 1px solid var(--border); }
       .tabs button { flex: 1; background: transparent; border: none; color: var(--muted); cursor: pointer;
         padding: 9px; font: inherit; font-size: 12px; border-bottom: 2px solid transparent; }
       .tabs button.on { color: var(--fg); border-bottom-color: var(--accent); }
       .pane { flex: 1; overflow: auto; padding: 12px; display: none; }
       .pane.on { display: block; }
+      .hint { color: var(--muted); font-size: 11px; margin-bottom: 8px; }
       .run { background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
-        padding: 8px 10px; margin-bottom: 8px; font-size: 12px; }
+        padding: 8px 10px; margin-bottom: 8px; font-size: 12px; cursor: pointer; }
+      .run:hover { border-color: var(--accent); }
+      .run.active { border-color: var(--accent); background: var(--sel); }
       .run .id { font-weight: 600; }
       .run.latest .id::after { content: " ← latest"; color: var(--accent); font-weight: 400; }
+      .run.active .id::before { content: "● "; color: var(--accent); }
       .run .meta { color: var(--muted); margin-top: 3px; }
-      #epFilter { width: 100%; margin-bottom: 10px; }
-      .kind { margin-bottom: 4px; }
+      #epFilter { width: 100%; margin-bottom: 8px; }
+      .kind { margin-bottom: 2px; }
       .kind > .khead { cursor: pointer; user-select: none; font-size: 12px; padding: 4px 2px;
         color: var(--fg); display: flex; gap: 6px; align-items: center; }
+      .kind > .khead:hover { color: var(--accent); }
       .kind > .khead .kcount { color: var(--muted); font-size: 11px; }
       .kind .klist { display: none; }
       .kind.open .klist { display: block; }
       .ep { font-size: 12px; padding: 3px 6px; border-radius: 4px; cursor: pointer;
-        font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--muted); }
+        font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--muted); white-space: nowrap;
+        overflow: hidden; text-overflow: ellipsis; }
       .ep:hover { background: var(--hover); color: var(--fg); }
-      section { display: flex; flex-direction: column; min-height: 0; }
+      section { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
       .controls { display: flex; gap: 8px; align-items: center; padding: 12px 18px; flex-wrap: wrap;
         border-bottom: 1px solid var(--border); position: relative; }
       input, select { background: var(--panel); border: 1px solid var(--border); color: var(--fg);
         border-radius: 6px; padding: 7px 10px; font: inherit; font-size: 13px; }
-      .fromwrap { position: relative; flex: 1; min-width: 260px; }
+      .fromwrap { position: relative; flex: 1; min-width: 240px; }
       input#from { width: 100%; }
       button.go { background: var(--accent); border: none; color: var(--btn-fg); font-weight: 600;
         border-radius: 6px; padding: 7px 14px; cursor: pointer; }
+      button.go:disabled { opacity: .5; cursor: default; }
       label.chk { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 5px; }
-      input#filterTokens { width: 150px; }
-      input#filterTokens:disabled { opacity: .5; }
-      input#depth { width: 78px; }
+      input#collapse { width: 92px; }
       /* search dropdown */
-      #results { position: absolute; top: 100%; left: 0; right: 0; z-index: 20; background: var(--panel);
+      #results { position: absolute; top: 100%; left: 0; right: 0; z-index: 30; background: var(--panel);
         border: 1px solid var(--border); border-radius: 0 0 6px 6px; max-height: 320px; overflow: auto;
         display: none; box-shadow: 0 8px 20px rgba(0,0,0,.25); }
       #results.show { display: block; }
@@ -85,10 +90,39 @@
       .hit:hover, .hit.active { background: var(--hover); }
       .hit .hkind { color: var(--accent); font-size: 10px; }
       .hit .hfile { color: var(--muted); font-size: 10px; display: block; }
-      #status { color: var(--muted); font-size: 12px; padding: 8px 18px 0; min-height: 16px; }
+      /* multi-value filter selector */
+      .ms { position: relative; }
+      .ms-control { min-width: 150px; max-width: 320px; min-height: 33px; display: flex; flex-wrap: wrap;
+        gap: 4px; align-items: center; background: var(--panel); border: 1px solid var(--border);
+        border-radius: 6px; padding: 4px 8px; cursor: text; }
+      .ms.disabled .ms-control { opacity: .45; pointer-events: none; }
+      .ms-ph { color: var(--muted); font-size: 13px; }
+      .chip { background: var(--chip); border: 1px solid var(--border); border-radius: 4px; font-size: 11px;
+        padding: 1px 4px 1px 6px; display: inline-flex; align-items: center; gap: 4px;
+        font-family: ui-monospace, Menlo, Consolas, monospace; }
+      .chip b { cursor: pointer; color: var(--muted); font-weight: 700; }
+      .chip b:hover { color: var(--danger); }
+      .ms-pop { position: absolute; top: 100%; left: 0; z-index: 40; margin-top: 3px; width: 260px;
+        background: var(--panel); border: 1px solid var(--border); border-radius: 6px; display: none;
+        box-shadow: 0 8px 20px rgba(0,0,0,.25); }
+      .ms.open .ms-pop { display: block; }
+      .ms-search { width: calc(100% - 12px); margin: 6px; }
+      .ms-list { max-height: 300px; overflow: auto; padding: 0 6px 6px; }
+      .ms-opt { display: flex; align-items: center; gap: 6px; padding: 3px 4px; font-size: 12px;
+        font-family: ui-monospace, Menlo, Consolas, monospace; border-radius: 4px; cursor: pointer; }
+      .ms-opt:hover { background: var(--hover); }
+      .ms-op { color: var(--muted); font-size: 9px; border: 1px solid var(--border); border-radius: 3px; padding: 0 3px; }
+      /* status + busy spinner */
+      #statusbar { padding: 8px 18px 0; display: flex; align-items: center; gap: 7px; min-height: 24px; }
+      #status { color: var(--muted); font-size: 12px; }
       #status.err { color: var(--danger); }
+      .spin { display: none; width: 13px; height: 13px; border: 2px solid var(--border);
+        border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+      #statusbar.busy .spin { display: inline-block; }
+      @keyframes spin { to { transform: rotate(360deg); } }
       .tree { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px;
         padding: 10px 18px 20px; overflow: auto; flex: 1; }
+      .tree.busy { opacity: .5; }
       .node { padding: 1px 0; }
       .row { display: flex; align-items: center; gap: 7px; padding: 1px 4px; border-radius: 4px; }
       .row:hover { background: var(--panel); }
@@ -124,12 +158,16 @@
           <button data-tab="runs" class="on">Runs</button>
           <button data-tab="eps">Entry points</button>
         </div>
-        <div class="pane on" id="pane-runs"><div id="runs">…</div></div>
+        <div class="pane on" id="pane-runs">
+          <div class="hint">click a run to query that store (● = active)</div>
+          <div id="runs">…</div>
+        </div>
         <div class="pane" id="pane-eps">
           <input id="epFilter" placeholder="filter entry points…" />
           <div id="eps">…</div>
         </div>
       </aside>
+      <div class="splitter" id="splitter" title="drag to resize"></div>
       <section>
         <div class="controls">
           <div class="fromwrap">
@@ -146,14 +184,19 @@
             <option value="only">only</option>
             <option value="exclude">exclude</option>
           </select>
-          <input id="filterTokens" list="providerList" placeholder="providers/effects…" disabled
-                 title="comma-separated; autocompletes from the rule set" />
-          <datalist id="providerList"></datalist>
-          <input id="depth" type="number" min="1" placeholder="depth" />
+          <div class="ms disabled" id="ms">
+            <div class="ms-control" id="msControl"><span class="ms-ph">providers…</span></div>
+            <div class="ms-pop" id="msPop">
+              <input class="ms-search" id="msSearch" placeholder="filter tokens…" autocomplete="off" />
+              <div class="ms-list" id="msList"></div>
+            </div>
+          </div>
+          <input id="collapse" type="number" min="1" placeholder="collapse ≥"
+                 title="auto-collapse nodes at/below this depth — the FULL tree is still fetched, children are one click away" />
           <label class="chk"><input type="checkbox" id="async" /> async</label>
           <button class="go" id="go">Tree</button>
         </div>
-        <div id="status"></div>
+        <div id="statusbar"><span class="spin"></span><span id="status"></span></div>
         <div class="tree" id="tree"></div>
       </section>
     </main>
@@ -161,6 +204,8 @@
       const $ = (id) => document.getElementById(id);
       const status = (msg, err = false) => { const s = $("status"); s.textContent = msg; s.className = err ? "err" : ""; };
       const baseName = (p) => (p ? p.split(/[\\/]/).pop() : "");
+      // busy indicator for load ops: spinner in the status bar, tree dimmed, Tree button disabled.
+      function setBusy(on) { $("statusbar").classList.toggle("busy", on); $("tree").classList.toggle("busy", on); $("go").disabled = on; }
 
       // ---- theme (light | dark | system) --------------------------------------------------------------
       function applyTheme(mode) {
@@ -172,6 +217,52 @@
       $("theme").addEventListener("click", (e) => { if (e.target.dataset.theme) applyTheme(e.target.dataset.theme); });
       applyTheme(localStorage.getItem("rig-theme") || "system");
 
+      // ---- resizable left rail (drag the splitter; width persisted) ------------------------------------
+      (function () {
+        const saved = localStorage.getItem("rig-rail");
+        if (saved) document.documentElement.style.setProperty("--rail", saved + "px");
+        let dragging = false;
+        $("splitter").addEventListener("mousedown", () => { dragging = true; $("splitter").classList.add("drag"); document.body.style.userSelect = "none"; });
+        document.addEventListener("mousemove", (e) => {
+          if (!dragging) return;
+          document.documentElement.style.setProperty("--rail", Math.min(640, Math.max(180, e.clientX)) + "px");
+        });
+        document.addEventListener("mouseup", () => {
+          if (!dragging) return; dragging = false; $("splitter").classList.remove("drag"); document.body.style.userSelect = "";
+          localStorage.setItem("rig-rail", parseInt(getComputedStyle(document.documentElement).getPropertyValue("--rail")) || 300);
+        });
+      })();
+
+      // ---- URL as the source of truth for the QUERY (shareable, refresh- and back/forward-safe) --------
+      // Preferences (theme, rail width) live in localStorage; WHAT YOU'RE LOOKING AT lives in the URL.
+      let selectedStore = null; // null => LATEST (the read default)
+      function withStore(params) { if (selectedStore) params.set("store", selectedStore); return params; }
+      function writeUrl() {
+        const p = new URLSearchParams();
+        if (lastFrom) p.set("from", lastFrom);
+        if (selectedStore) p.set("store", selectedStore);
+        if ($("view").value !== "paths") p.set("view", $("view").value);
+        if ($("filterMode").value !== "none") p.set("mode", $("filterMode").value);
+        if (selectedTokens.size) p.set("tokens", [...selectedTokens].join(","));
+        if ($("async").checked) p.set("async", "1");
+        if ($("collapse").value.trim()) p.set("collapse", $("collapse").value.trim());
+        history.replaceState(null, "", location.pathname + (p.toString() ? "?" + p : ""));
+      }
+      function restoreFromUrl() {
+        const p = new URLSearchParams(location.search);
+        if (p.get("view")) $("view").value = p.get("view");
+        if (p.get("mode")) $("filterMode").value = p.get("mode");
+        (p.get("tokens") || "").split(",").filter(Boolean).forEach((t) => selectedTokens.add(t));
+        if (p.get("async") === "1") $("async").checked = true;
+        if (p.get("collapse")) $("collapse").value = p.get("collapse");
+        // A persisted store can vanish (pruned / re-indexed) — fall back to LATEST silently, never error.
+        const store = p.get("store");
+        selectedStore = store && runsData.some((r) => r.storeId === store) ? store : null;
+        setFilterEnabled(); renderChips(); renderRuns();
+        const from = p.get("from");
+        if (from) { $("from").value = from; loadTree(from); }
+      }
+
       // ---- left-rail tabs ------------------------------------------------------------------------------
       document.querySelector(".tabs").addEventListener("click", (e) => {
         const tab = e.target.dataset.tab; if (!tab) return;
@@ -181,48 +272,70 @@
         if (tab === "eps") loadEntrypoints();
       });
 
-      // ---- runs ----------------------------------------------------------------------------------------
+      // ---- runs (selectable store picker) --------------------------------------------------------------
+      let runsData = [];
       async function loadRuns() {
         try {
-          const runs = await (await fetch("/api/runs")).json();
-          if (!Array.isArray(runs) || runs.length === 0) { $("runs").textContent = "(no runs)"; return; }
-          const latest = runs.find((r) => r.isLatest) || runs[0];
-          $("storeDir").textContent = latest.solutionPath || "";
-          $("runs").innerHTML = runs.map((r) => `
-            <div class="run ${r.isLatest ? "latest" : ""}">
-              <div class="id">${r.storeId}</div>
-              <div class="meta">${r.commit || ""}${r.branch ? " (" + r.branch + ")" : ""}${r.dirty ? " +dirty" : ""}</div>
-              <div class="meta">${r.symbols.toLocaleString()} symbols · ${r.references.toLocaleString()} refs</div>
-            </div>`).join("");
+          runsData = await (await fetch("/api/runs")).json();
+          if (!Array.isArray(runsData) || runsData.length === 0) { $("runs").textContent = "(no runs)"; return; }
+          renderRuns();
         } catch (e) { $("runs").textContent = "error: " + e.message; }
       }
+      function activeStoreId() { return selectedStore || (runsData.find((r) => r.isLatest) || runsData[0] || {}).storeId; }
+      function renderRuns() {
+        const active = activeStoreId();
+        const latest = runsData.find((r) => r.isLatest) || runsData[0];
+        $("storeDir").textContent = latest ? latest.solutionPath || "" : "";
+        $("runs").innerHTML = runsData.map((r) => `
+          <div class="run ${r.isLatest ? "latest" : ""} ${r.storeId === active ? "active" : ""}" data-store="${r.storeId}">
+            <div class="id">${r.storeId}</div>
+            <div class="meta">${r.commit || ""}${r.branch ? " (" + r.branch + ")" : ""}${r.dirty ? " +dirty" : ""}</div>
+            <div class="meta">${r.symbols.toLocaleString()} symbols · ${r.references.toLocaleString()} refs</div>
+          </div>`).join("");
+      }
+      $("runs").addEventListener("click", (e) => {
+        const card = e.target.closest(".run[data-store]"); if (!card) return;
+        const id = card.dataset.store;
+        selectedStore = (runsData.find((r) => r.storeId === id) || {}).isLatest ? null : id;
+        renderRuns();
+        allEps = null; // entry points are per-store
+        if ($("pane-eps").classList.contains("on")) loadEntrypoints();
+        if (lastFrom) loadTree(lastFrom); else writeUrl();
+      });
 
-      // ---- entry points (browse) -----------------------------------------------------------------------
-      let allEps = null;
+      // ---- entry points (lazy, per-group, no truncation) -----------------------------------------------
+      let allEps = null, epGroups = {};
       async function loadEntrypoints() {
         if (allEps) return;
         $("eps").textContent = "loading…";
-        try { allEps = await (await fetch("/api/entrypoints")).json(); renderEps(""); }
+        try { allEps = await (await fetch("/api/entrypoints?" + withStore(new URLSearchParams()))).json(); renderEps($("epFilter").value); }
         catch (e) { $("eps").textContent = "error: " + e.message; }
       }
       function renderEps(filter) {
         const f = filter.trim().toLowerCase();
         const match = allEps.filter((e) => !f || e.route.toLowerCase().includes(f) || e.fqn.toLowerCase().includes(f));
-        const byKind = {};
-        for (const e of match) (byKind[e.kind] ||= []).push(e);
-        const CAP = 150;
-        $("eps").innerHTML = Object.keys(byKind).sort().map((kind) => {
-          const list = byKind[kind];
-          const shown = list.slice(0, CAP).map((e) =>
-            `<div class="ep" data-fqn="${encodeURIComponent(e.fqn)}" title="${e.fqn}">${e.route}</div>`).join("");
-          const more = list.length > CAP ? `<div class="ep" style="cursor:default">… ${list.length - CAP} more (filter to narrow)</div>` : "";
-          return `<div class="kind ${f ? "open" : ""}"><div class="khead">▸ ${kind} <span class="kcount">${list.length}</span></div><div class="klist">${shown}${more}</div></div>`;
+        epGroups = {};
+        for (const e of match) (epGroups[e.kind] ||= []).push(e);
+        // With a filter, groups are small — render OPEN + populated. Without, render collapsed and populate
+        // lazily on expand, so a 5000-EP kind never lands in the DOM until you ask for it (no truncation).
+        $("eps").innerHTML = Object.keys(epGroups).sort().map((kind) => {
+          const list = epGroups[kind];
+          return `<div class="kind ${f ? "open" : ""}" data-kind="${kind}" data-pop="${f ? 1 : 0}">
+            <div class="khead">${f ? "▾" : "▸"} ${kind} <span class="kcount">${list.length}</span></div>
+            <div class="klist">${f ? list.map(epRow).join("") : ""}</div></div>`;
         }).join("") || "(no matches)";
       }
+      const epRow = (e) => `<div class="ep" data-fqn="${encodeURIComponent(e.fqn)}" title="${e.fqn}">${e.route}</div>`;
       $("epFilter").addEventListener("input", (e) => allEps && renderEps(e.target.value));
       $("eps").addEventListener("click", (e) => {
         const head = e.target.closest(".khead");
-        if (head) { head.parentElement.classList.toggle("open"); head.textContent = head.parentElement.classList.contains("open") ? head.textContent.replace("▸", "▾") : head.textContent.replace("▾", "▸"); return; }
+        if (head) {
+          const kdiv = head.parentElement, kind = kdiv.dataset.kind;
+          const open = kdiv.classList.toggle("open");
+          if (open && kdiv.dataset.pop === "0") { kdiv.querySelector(".klist").innerHTML = (epGroups[kind] || []).map(epRow).join(""); kdiv.dataset.pop = "1"; }
+          head.firstChild.textContent = open ? "▾" : "▸";
+          return;
+        }
         const ep = e.target.closest(".ep[data-fqn]");
         if (ep) { const fqn = decodeURIComponent(ep.dataset.fqn); $("from").value = fqn; loadTree(fqn); }
       });
@@ -237,7 +350,7 @@
       });
       async function doSearch(q) {
         try {
-          const hits = await (await fetch("/api/search?limit=15&q=" + encodeURIComponent(q))).json();
+          const hits = await (await fetch("/api/search?" + withStore(new URLSearchParams({ limit: "15", q })))).json();
           if (!Array.isArray(hits) || !hits.length) { hideResults(); return; }
           activeHit = -1;
           $("results").innerHTML = hits.map((h, i) =>
@@ -248,10 +361,8 @@
       function hideResults() { $("results").classList.remove("show"); $("results").innerHTML = ""; activeHit = -1; }
       $("results").addEventListener("mousedown", (e) => {
         const hit = e.target.closest(".hit"); if (!hit) return;
-        const id = decodeURIComponent(hit.dataset.id);
-        $("from").value = id; hideResults(); loadTree(id);
+        const id = decodeURIComponent(hit.dataset.id); $("from").value = id; hideResults(); loadTree(id);
       });
-      // keyboard nav in the dropdown
       $("from").addEventListener("keydown", (e) => {
         const hits = [...$("results").querySelectorAll(".hit")];
         if ($("results").classList.contains("show") && hits.length) {
@@ -260,71 +371,98 @@
             hits.forEach((h, i) => h.classList.toggle("active", i === activeHit));
             hits[activeHit].scrollIntoView({ block: "nearest" }); return;
           }
-          if (e.key === "Enter" && activeHit >= 0) {
-            e.preventDefault(); const id = decodeURIComponent(hits[activeHit].dataset.id); $("from").value = id; hideResults(); loadTree(id); return;
-          }
+          if (e.key === "Enter" && activeHit >= 0) { e.preventDefault(); const id = decodeURIComponent(hits[activeHit].dataset.id); $("from").value = id; hideResults(); loadTree(id); return; }
           if (e.key === "Escape") { hideResults(); return; }
         }
         if (e.key === "Enter") loadTree($("from").value.trim());
       });
       document.addEventListener("click", (e) => { if (!e.target.closest(".fromwrap")) hideResults(); });
 
-      // ---- tree: fetch the canonical tree once, project + filter client-side ---------------------------
-      let currentTree = null; // { from, roots } from the last /api/tree fetch
+      // ---- effect filter: mode (none|only|exclude) + multi-value token selector ------------------------
+      let providerTokens = [];
+      const selectedTokens = new Set();
+      async function loadProviders() {
+        try {
+          const p = await (await fetch("/api/providers")).json();
+          providerTokens = [...p.providers.map((t) => ({ token: t, op: false })), ...p.providerOps.map((t) => ({ token: t, op: true }))];
+          renderMsList("");
+        } catch { /* filtering still works once tokens load; degrade quietly */ }
+      }
+      function renderMsList(filter) {
+        const f = filter.trim().toLowerCase();
+        $("msList").innerHTML = providerTokens.filter((t) => !f || t.token.includes(f)).map((t) =>
+          `<label class="ms-opt"><input type="checkbox" value="${t.token}" ${selectedTokens.has(t.token) ? "checked" : ""}/> ${t.token}${t.op ? '<span class="ms-op">op</span>' : ""}</label>`).join("");
+      }
+      function renderChips() {
+        $("msControl").innerHTML = selectedTokens.size
+          ? [...selectedTokens].map((t) => `<span class="chip">${t}<b data-t="${encodeURIComponent(t)}">×</b></span>`).join("")
+          : '<span class="ms-ph">providers…</span>';
+      }
+      function setFilterEnabled() {
+        const on = $("filterMode").value !== "none";
+        $("ms").classList.toggle("disabled", !on);
+        if (!on) $("ms").classList.remove("open");
+      }
+      $("filterMode").addEventListener("change", () => { setFilterEnabled(); reproject(); });
+      $("msControl").addEventListener("click", (e) => {
+        const rm = e.target.closest("b[data-t]");
+        if (rm) { selectedTokens.delete(decodeURIComponent(rm.dataset.t)); renderChips(); renderMsList($("msSearch").value); reproject(); return; }
+        $("ms").classList.toggle("open");
+      });
+      $("msList").addEventListener("change", (e) => {
+        const cb = e.target; if (cb.type !== "checkbox") return;
+        if (cb.checked) selectedTokens.add(cb.value); else selectedTokens.delete(cb.value);
+        renderChips(); reproject();
+      });
+      $("msSearch").addEventListener("input", (e) => renderMsList(e.target.value));
+      document.addEventListener("click", (e) => { if (!e.target.closest("#ms")) $("ms").classList.remove("open"); });
+
+      function tokens() { return [...selectedTokens].map((t) => t.toLowerCase()); }
+      function effMatch(e, t) { return t === e.provider.toLowerCase() || t === (e.provider + ":" + e.operation).toLowerCase(); }
+      function filterEffects(effs) {
+        const mode = $("filterMode").value; const toks = tokens();
+        if (mode === "none" || !toks.length) return effs;
+        return mode === "only"
+          ? effs.filter((e) => toks.some((t) => effMatch(e, t)))
+          : effs.filter((e) => !toks.some((t) => effMatch(e, t)));
+      }
+      function subtreeHasEffect(n) { return filterEffects(n.effects).length > 0 || n.children.some(subtreeHasEffect); }
+
+      // ---- tree render (project + filter client-side; one fetch per pattern) ---------------------------
+      let currentTree = null, lastFrom = null;
       async function loadTree(pattern) {
         if (!pattern) { status("enter a pattern", true); return; }
-        hideResults();
-        const params = new URLSearchParams({ from: pattern });
-        const depth = $("depth").value.trim(); if (depth) params.set("depth", depth);
+        hideResults(); lastFrom = pattern;
+        // NOTE: no `depth` param — always fetch the FULL tree (bounded only by the 50k node budget). Depth is
+        // a client-side collapse level (see render), so depth-capping never produces a dead elided leaf.
+        const params = withStore(new URLSearchParams({ from: pattern }));
         if ($("async").checked) params.set("async", "true");
-        status("querying…");
+        setBusy(true); status("querying…");
         try {
           const res = await fetch("/api/tree?" + params);
           const data = await res.json();
           if (!res.ok) { status(data.detail || data.title || "error", true); $("tree").innerHTML = ""; return; }
           if (!data.matched) { status(`no symbol matches '${pattern}'`, true); $("tree").innerHTML = ""; currentTree = null; return; }
-          currentTree = data;
-          render();
+          currentTree = data; render(); writeUrl();
         } catch (e) { status(e.message, true); }
+        finally { setBusy(false); }
       }
-
-      // --- effect filter: a single MODE (none | only | exclude) — mutually exclusive by construction — over
-      // comma-separated tokens; a token matches a provider OR a provider:op (mirrors `rig`'s --only/--exclude).
-      // The token list autocompletes from the rule set (/api/providers), so users pick real tokens.
-      async function loadProviders() {
-        try {
-          const p = await (await fetch("/api/providers")).json();
-          $("providerList").innerHTML = [...p.providers, ...p.providerOps].map((o) => `<option value="${o}">`).join("");
-        } catch { /* filter still works via free text if this fails */ }
-      }
-      function tokenSet(id) { return $(id).value.split(/[,\s]+/).map((t) => t.trim().toLowerCase()).filter(Boolean); }
-      function effMatch(e, t) { return t === e.provider.toLowerCase() || t === (e.provider + ":" + e.operation).toLowerCase(); }
-      function filterEffects(effs) {
-        const mode = $("filterMode").value;
-        if (mode === "none") return effs;
-        const toks = tokenSet("filterTokens");
-        if (!toks.length) return effs;
-        return mode === "only"
-          ? effs.filter((e) => toks.some((t) => effMatch(e, t)))
-          : effs.filter((e) => !toks.some((t) => effMatch(e, t)));
-      }
-      // the token input is meaningless without a mode — disable it when mode=none.
-      $("filterMode").addEventListener("change", () => { $("filterTokens").disabled = $("filterMode").value === "none"; });
-      // does this subtree carry any (filtered) effect? — the `paths` prune gate + the effectful-root gate.
-      function subtreeHasEffect(n) {
-        if (filterEffects(n.effects).length) return true;
-        return n.children.some(subtreeHasEffect);
-      }
-
       function effHtml(effects) {
         if (!effects.length) return "";
         return `<span class="effects">${effects.map((e) =>
           `<span class="eff" title="${e.provider}:${e.operation} ×${e.sites}">${e.glyph}${e.sites > 1 ? '<span class="sites">' + e.sites + "</span>" : ""}</span>`).join(" ")}</span>`;
       }
-      function locHtml(n) { return n.file ? `<span class="loc">${baseName(n.file)}:${n.line}</span>` : ""; }
-
-      // full/paths tree node (paths prunes branches with no downstream filtered effect)
-      function nodeEl(node, prune) {
+      const locHtml = (n) => (n.file ? `<span class="loc">${baseName(n.file)}:${n.line}</span>` : "");
+      // honest elision labels (depth-capping no longer happens — we fetch full): the remaining truncations are
+      // real structural limits, not the collapse knob.
+      function truncHtml(n) {
+        if (!n.truncated) return "";
+        if (n.truncationCause === "AlreadyExpanded") return `<span class="trunc" title="cycle / shared callee — this subtree is expanded elsewhere in the tree">⋯ shown above</span>`;
+        if (n.truncationCause === "BudgetCapped") return `<span class="trunc" title="node-budget safety cap (50k) reached">⋯ budget</span>`;
+        return `<span class="trunc">⋯elided</span>`;
+      }
+      function collapseLevel() { const v = parseInt($("collapse").value, 10); return v > 0 ? v : Infinity; }
+      function nodeEl(node, prune, depth) {
         const wrap = document.createElement("div"); wrap.className = "node";
         const kids = node.children.filter((c) => !prune || subtreeHasEffect(c));
         const hasKids = kids.length > 0;
@@ -338,52 +476,53 @@
           ${node.fanout > 1 ? `<span class="fanout">×${node.fanout} fan-out</span>` : ""}
           ${node.callSites > 1 ? `<span class="sites">${node.callSites}×</span>` : ""}
           ${effHtml(filterEffects(node.effects))}
-          ${node.truncated ? `<span class="trunc">⋯elided</span>` : ""}
+          ${truncHtml(node)}
           ${locHtml(node)}`;
         wrap.appendChild(row);
         if (hasKids) {
           const kdiv = document.createElement("div"); kdiv.className = "children";
-          kids.forEach((c) => kdiv.appendChild(nodeEl(c, prune)));
+          kids.forEach((c) => kdiv.appendChild(nodeEl(c, prune, depth + 1)));
           wrap.appendChild(kdiv);
           const twist = row.querySelector(".twist");
+          // collapse ≥ level: the full subtree is in the DOM, just hidden — one click reveals the real deal.
+          if (depth >= collapseLevel()) { wrap.classList.add("collapsed"); twist.textContent = "▸"; }
           twist.onclick = () => { wrap.classList.toggle("collapsed"); twist.textContent = wrap.classList.contains("collapsed") ? "▸" : "▾"; };
         }
         return wrap;
       }
-
-      // effects view: flat DFS list of effectful methods (deduped by id) — "what does this EP actually DO"
       function collectEffectful(node, seen, out) {
         const fe = filterEffects(node.effects);
         if (fe.length && !seen.has(node.id)) { seen.add(node.id); out.push({ node, fe }); }
         node.children.forEach((c) => collectEffectful(c, seen, out));
       }
-
       function render() {
         if (!currentTree) return;
-        const view = $("view").value;
-        const tree = $("tree"); tree.innerHTML = ""; tree.className = "tree";
+        const view = $("view").value; const tree = $("tree"); tree.innerHTML = ""; tree.className = "tree";
         if (view === "effects") {
           tree.classList.add("flat");
           const out = [], seen = new Set();
           currentTree.roots.forEach((r) => collectEffectful(r, seen, out));
           if (!out.length) { status(`${currentTree.from}: no effects (matching filters)`); return; }
-          tree.innerHTML = out.map(({ node, fe }) =>
-            `<div class="frow"><span class="fname">${node.name}</span> ${effHtml(fe)} ${locHtml(node)}</div>`).join("");
-          status(`${currentTree.from} — ${out.length} effectful method(s)`);
-          return;
+          tree.innerHTML = out.map(({ node, fe }) => `<div class="frow"><span class="fname">${node.name}</span> ${effHtml(fe)} ${locHtml(node)}</div>`).join("");
+          status(`${currentTree.from} — ${out.length} effectful method(s)`); return;
         }
         const prune = view === "paths";
         const roots = prune ? currentTree.roots.filter(subtreeHasEffect) : currentTree.roots;
         if (!roots.length) { status(`${currentTree.from}: no effects reachable (matching filters) — try view=full`); return; }
-        roots.forEach((r) => tree.appendChild(nodeEl(r, prune)));
+        roots.forEach((r) => tree.appendChild(nodeEl(r, prune, 0)));
         status(`${currentTree.from} — ${roots.length} root(s), view=${view}`);
       }
+      // re-project (view/filter/collapse) — client-side only, no refetch — and keep the URL in sync.
+      function reproject() { if (currentTree) render(); writeUrl(); }
+      $("view").addEventListener("input", reproject);
+      $("collapse").addEventListener("input", reproject);
+      $("async").addEventListener("change", writeUrl);
 
-      // re-project on control change (no refetch); depth/async need a refetch via the Tree button.
-      ["view", "filterMode", "filterTokens"].forEach((id) => $(id).addEventListener("input", () => currentTree && render()));
       $("go").onclick = () => loadTree($("from").value.trim());
-      loadRuns();
+      // boot: prefs (theme/rail) already applied; load runs, THEN restore the query from the URL (so a
+      // persisted ?store= can be validated against the available runs). Providers load in parallel.
       loadProviders();
+      loadRuns().then(restoreFromUrl);
     </script>
   </body>
 </html>

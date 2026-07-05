@@ -14,7 +14,11 @@ internal sealed record TreeNodeDto(
     string EdgeKind, // how this node was reached from its parent ("entry"/"invocation"/"impl-dispatch"/…).
     int Fanout, // dispatch fan-out degree of the reaching edge (>1 = "could be any of these N", not a real call).
     int CallSites, // distinct call sites under the same parent that collapsed into this child.
-    bool Truncated, // subtree not expanded (cycle / shared callee / depth or budget cap) — an "⋯elided" leaf.
+    bool Truncated, // subtree not expanded — an "⋯elided" leaf. The cause is in TruncationCause.
+    // WHY the subtree was cut: "AlreadyExpanded" (cycle / shared callee — shown elsewhere), "BudgetCapped"
+    // (50k node safety cap), "DepthCapped" (depth limit — the web never sends one, so it fetches full). Null
+    // when not truncated. Lets the client label elisions honestly instead of a generic "⋯elided".
+    string? TruncationCause,
     string? DispatchBasis, // "heuristic" = inferred dispatch (verify); null/"roslyn" = exact mined fact.
     string? File,
     int Line,

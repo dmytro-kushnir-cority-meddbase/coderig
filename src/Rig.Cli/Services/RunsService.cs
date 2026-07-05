@@ -46,7 +46,9 @@ public static class RunsService
             await AppendRunsAsync(context, storeId, isLatest, views);
         }
 
-        return views;
+        // Order for the picker: LATEST (the read default) first, then most-recently-indexed — enumeration
+        // order (AvailableStoreIds) is by store-id string, which is meaningless to a human choosing a store.
+        return views.OrderByDescending(v => v.IsLatest).ThenByDescending(v => v.IndexedUtc).ToList();
     }
 
     private static async Task AppendRunsAsync(RigDbContext context, string storeId, bool isLatest, List<RunView> into)
