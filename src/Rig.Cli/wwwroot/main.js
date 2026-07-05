@@ -5,7 +5,17 @@
 import { h, mount, watch } from "./lib.js";
 import { api, setCacheVersion, purgeCache } from "./api.js";
 import { store, get, set, activeStoreId, querySlice, serializeUrl, readUrl } from "./store.js";
-import { Shell, RunsList, EpList, TreeView, ImpactView, Chips, treeStatus, baseName } from "./components.js";
+import {
+  Shell,
+  RunsList,
+  EpList,
+  TreeView,
+  ImpactView,
+  ImpactProgress,
+  Chips,
+  treeStatus,
+  baseName,
+} from "./components.js";
 
 const explicit = () => get().storeId; // the id to put on URLs (null => LATEST)
 const resolved = () => activeStoreId(); // the resolved id (for cache keys)
@@ -74,7 +84,7 @@ function selectStore(id) {
   if (get().tab === "eps") loadEntrypoints();
   if (get().treeFrom) openTree(get().treeFrom);
 }
-async function loadImpact() {
+function loadImpact() {
   const { impactBase, impactHead } = get();
   if (!impactBase || !impactHead) {
     status("pick a base and a head store", true);
@@ -85,18 +95,41 @@ async function loadImpact() {
     return;
   }
   setBusy(true);
-  status("diffing… (loads + derives BOTH stores — can take a while on a big store)");
-  try {
-    set({ impactData: await api.impact(impactBase, impactHead) });
-    const d = get().impactData;
-    status(
-      `impact: ${d.perEp.length.toLocaleString()} behavioral change(s), +${d.addedEps.length}/−${d.removedEps.length} EPs`,
-    );
-  } catch (e) {
-    status(e.message, true);
-  } finally {
+  status("diffing…");
+  // Stream live phase progress over SSE (the stream ALSO warms the disk cache); on `done`, GET the now-warm
+  // /api/impact for the data. Warm cache → `cache hit` → `done` almost immediately. (Hacky but "not sad".)
+  const log = [];
+  mount(refs.impact, ImpactProgress(log));
+  const es = new EventSource(
+    `/api/impact/stream?base=${encodeURIComponent(impactBase)}&head=${encodeURIComponent(impactHead)}`,
+  );
+  let settled = false;
+  const finish = (fn) => {
+    if (settled) return;
+    settled = true;
+    es.close();
     setBusy(false);
-  }
+    fn();
+  };
+  es.addEventListener("phase", (e) => {
+    log.push(e.data);
+    mount(refs.impact, ImpactProgress(log));
+  });
+  es.addEventListener("done", () =>
+    finish(async () => {
+      try {
+        set({ impactData: await api.impact(impactBase, impactHead) });
+        const d = get().impactData;
+        status(
+          `impact: ${d.perEp.length.toLocaleString()} behavioral change(s), +${d.addedEps.length}/−${d.removedEps.length} EPs`,
+        );
+      } catch (e) {
+        status(e.message, true);
+      }
+    }),
+  );
+  es.addEventListener("failed", (e) => finish(() => status("diff failed: " + e.data, true)));
+  es.onerror = () => finish(() => status("diff stream connection lost", true));
 }
 
 // ---- actions passed to components -----------------------------------------------------------------------

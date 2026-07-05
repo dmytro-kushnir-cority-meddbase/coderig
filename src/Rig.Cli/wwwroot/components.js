@@ -443,6 +443,20 @@ function EpDeltaCard(p, actions) {
   wrap.append(head, body);
   return wrap;
 }
+// Live progress panel shown while a cold diff streams (SSE phase events). Replaced by ImpactView on done.
+export function ImpactProgress(lines) {
+  return h(
+    "div",
+    { class: "impact-progress" },
+    h(
+      "div",
+      { class: "prog-title" },
+      h("span", { class: "prog-spin" }),
+      " diffing… (cold: loads + derives BOTH stores — a few minutes)",
+    ),
+    h("pre", { class: "prog-log" }, lines.join("\n")),
+  );
+}
 export function ImpactView(s, actions) {
   const d = s.impactData;
   if (!d) return h("div", { class: "impact-empty" }, "pick a base and head store above, then press Diff.");

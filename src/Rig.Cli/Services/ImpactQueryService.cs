@@ -18,7 +18,8 @@ internal static class ImpactQueryService
         bool async = false,
         bool includeDelivery = false,
         bool gate = true,
-        IReadOnlyList<string>? extraRules = null
+        IReadOnlyList<string>? extraRules = null,
+        Func<string, long, Task>? onPhase = null
     )
     {
         var ws = new WorkspaceLocation(workingDirectory, headRef);
@@ -32,7 +33,8 @@ internal static class ImpactQueryService
             mode: mode,
             gate: gate,
             noCache: false,
-            extraRules: extraRules ?? []
+            extraRules: extraRules ?? [],
+            onPhase: onPhase
         );
     }
 }

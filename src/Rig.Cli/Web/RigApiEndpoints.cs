@@ -134,6 +134,49 @@ internal static class RigApiEndpoints
             }
         );
 
+        // Hacky live-progress stream for the expensive cold diff (SSE): runs the diff, emitting a `phase` event
+        // per top-level phase as it completes (which ALSO warms the disk cache), then `done`. The client shows
+        // the phases live, then GETs the now-warm /api/impact for the data. On a warm cache it just fires
+        // `cache hit` → `done` immediately. Progress-only — the result comes from /api/impact.
+        app.MapGet(
+            "/api/impact/stream",
+            async (HttpContext http, string? @base, string? head) =>
+            {
+                http.Response.Headers.ContentType = "text/event-stream";
+                http.Response.Headers.CacheControl = "no-store";
+                http.Response.Headers.Append("X-Accel-Buffering", "no"); // don't let a proxy buffer the stream
+
+                async Task Send(string ev, string data)
+                {
+                    await http.Response.WriteAsync($"event: {ev}\ndata: {data}\n\n");
+                    await http.Response.Body.FlushAsync();
+                }
+
+                if (string.IsNullOrWhiteSpace(@base) || string.IsNullOrWhiteSpace(head))
+                {
+                    await Send("failed", "provide ?base=&head=");
+                    return;
+                }
+
+                try
+                {
+                    await Send("phase", "starting…");
+                    await ImpactQueryService.DiffAsync(
+                        workingDirectory,
+                        baseRef: @base,
+                        headRef: head,
+                        onPhase: (name, ms) => Send("phase", $"{name} · {ms} ms")
+                    );
+                    await Send("done", "ready");
+                }
+                catch (Exception ex)
+                {
+                    // custom "failed" (not "error") so it doesn't collide with EventSource's built-in error.
+                    await Send("failed", ex.Message);
+                }
+            }
+        );
+
         // Per-method hazard marks for a tree (same set as `rig tree --view hazards`) — the client overlays
         // these on nodes when "hazards" is toggled. Separate from /api/tree because it's an expensive whole-
         // store derivation, independently cacheable by store.

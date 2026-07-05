@@ -236,7 +236,11 @@ internal static class ImpactCommand
         FactPathFinder.TraversalMode mode,
         bool gate,
         bool noCache,
-        IReadOnlyList<string> extraRules
+        IReadOnlyList<string> extraRules,
+        // Optional coarse progress callback (phase name, ms since previous phase) — awaited between the
+        // top-level phases so a caller (the SSE endpoint) can stream live progress on a cold diff. Null (the
+        // CLI) makes this a no-op; the diff RESULT is unchanged either way.
+        Func<string, long, Task>? onPhase = null
     )
     {
         var (rules, baseDbPath, cacheRaw, cacheKey) = ResolveStoresAndCache(ws, baseRef, headRef, extraRules, gate, noCache, mode);
@@ -246,13 +250,32 @@ internal static class ImpactCommand
         // base store or shaping/walking either graph.
         if (cacheKey is not null && cache!.Get(cacheKey) is { } cachedBlob && ImpactCacheCodec.Decode(cachedBlob) is { } art)
         {
+            if (onPhase is not null)
+            {
+                await onPhase("cache hit", 0);
+            }
+
             return art;
+        }
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        async Task Tick(string name)
+        {
+            if (onPhase is not null)
+            {
+                await onPhase(name, sw.ElapsedMilliseconds);
+            }
+
+            sw.Restart();
         }
 
         var headProv = await ReadProvenanceAsync(headContext, headRef);
         var baseProv = await ResolveBaseProvenanceAsync(baseDbPath: baseDbPath, baseRef: baseRef);
+        await Tick("provenance");
         var headData = await LoadHeadSideDataAsync(headContext, rules, gate: gate);
+        await Tick("head: load graph + derive effects");
         var branchSide = await ComputeBranchSideAsync(baseDbPath: baseDbPath, rules: rules, mode: mode, headData: headData);
+        await Tick("head: reach sets + footprints + hazards");
         var impactDiff = await AssembleImpactDiffAsync(
             baseDbPath: baseDbPath,
             rules: rules,
@@ -261,6 +284,7 @@ internal static class ImpactCommand
             branchSide: branchSide,
             gate: gate
         );
+        await Tick("base: load + derive + diff");
         var fqnSites = branchSide.IdBySite;
         TrySaveDiffToCache(cache, cacheKey, impactDiff, baseProv, headProv, fqnSites);
         return new ImpactCacheArtifact(Diff: impactDiff, BaseProvenance: baseProv, HeadProvenance: headProv, FqnSites: fqnSites);
