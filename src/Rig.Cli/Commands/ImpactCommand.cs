@@ -473,7 +473,28 @@ internal static class ImpactCommand
         output.WriteLine(DiffSummary(baseProv, diff));
         output.WriteLine();
         output.WriteLine($"Impact: {baseProv.Label}  ->  {headProv.Label}{asyncNote}");
+        if (SyncModeDisclosure(mode) is { } note)
+        {
+            output.WriteLine(note);
+        }
     }
+
+    // Bug A (impact-silent-async-handoff-underreport): in the DEFAULT sync mode, impact CUTS async/scheduled
+    // handoff edges (background workers, actor inboxes, events), so an effect reachable from an entry point
+    // ONLY across such a handoff is absent from that EP's footprint — and the diff previously said nothing
+    // about it, letting a reviewer read the behavioral count as the whole picture (`callers` discloses the
+    // same limitation; impact did not). Disclose the mode + the exclusion + the remedy so the count is never
+    // taken as unconditional. The async modes already state their scope in WriteHeader's asyncNote, so this
+    // is SYNC-only (returns null otherwise — nothing is excluded to disclose). Internal for unit-testing the
+    // per-mode text. Deliberately NOT a quantified "+N EPs via async" count: that needs a second async-mode
+    // reach pass over both stores (~2x the walk), too costly to impose on every default run — the actionable
+    // remedy (`--async`) is one flag away, so the disclosure points there instead.
+    internal static string? SyncModeDisclosure(FactPathFinder.TraversalMode mode) =>
+        mode == FactPathFinder.TraversalMode.SyncCut
+            ? "Note: computed in SYNC mode — paths through async/scheduled handoffs (background workers, actor "
+                + "inboxes, events) are not followed, so effects reachable only that way are excluded. Re-run "
+                + "with --async to include them."
+            : null;
 
     // The one-line takeaway: the PROVEN change vs the base store — entry points added/removed, entry points
     // whose behavior (reachable-effect set) changed, and entry points whose reachable tree changed.
