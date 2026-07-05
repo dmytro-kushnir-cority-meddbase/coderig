@@ -298,9 +298,49 @@
       label.chk {
         color: var(--muted);
         font-size: 13px;
-        display: flex;
+        display: inline-flex;
         align-items: center;
-        gap: 4px;
+        gap: 6px;
+        cursor: pointer;
+        user-select: none;
+      }
+      /* iOS-style animated switch for the boolean toolbar toggles (async / sig / pred / haz). The native
+         checkbox is repainted as a pill track + sliding knob; the knob stays white on both the off (--border)
+         and on (--accent) tracks so it reads in light and dark. */
+      label.chk input[type="checkbox"] {
+        appearance: none;
+        -webkit-appearance: none;
+        margin: 0;
+        flex: none;
+        position: relative;
+        width: 32px;
+        height: 18px;
+        border-radius: 9px;
+        background: var(--border);
+        cursor: pointer;
+        transition: background 0.18s ease;
+      }
+      label.chk input[type="checkbox"]::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: #fff;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+        transition: transform 0.18s ease;
+      }
+      label.chk input[type="checkbox"]:checked {
+        background: var(--accent);
+      }
+      label.chk input[type="checkbox"]:checked::after {
+        transform: translateX(14px);
+      }
+      label.chk input[type="checkbox"]:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
       }
       input#collapse {
         width: 92px;
@@ -625,7 +665,12 @@
       }
       /* impact toolbar + view */
       .impact-toolbar select {
-        max-width: 300px;
+        max-width: 260px;
+        /* Native selects don't ellipsis long values by default — a long branch name hard-cut into the arrow.
+           Constrain + ellipsis the CLOSED display; the open option list still shows each option in full. */
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        overflow: hidden;
       }
       .impact-toolbar .arrow {
         color: var(--muted);
