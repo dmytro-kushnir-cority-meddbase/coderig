@@ -115,5 +115,8 @@ export const api = {
     cached(`haz|${storeId}|${from}`, "/api/hazards" + qs({ from, store: explicitStore })),
   // impact is keyed by (base, head) — both immutable stores, so safe to cache under the derivation version.
   impact: (base, head) => cached(`impact|${base}|${head}`, "/api/impact" + qs({ base, head })),
+  // per-EP structural reach delta (added/removed reachable methods) for the tree diff overlay.
+  impactReach: (base, head, kind, route) =>
+    cached(`reach|${base}|${head}|${kind}|${route}`, "/api/impact/reach" + qs({ base, head, kind, route })),
   search: (explicitStore, q) => getJson("/api/search" + qs({ q, store: explicitStore, limit: 15 })), // high-churn, uncached
 };

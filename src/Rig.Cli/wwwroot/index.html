@@ -835,6 +835,43 @@
         white-space: pre-wrap;
         line-height: 1.7;
       }
+      /* structural reach-diff overlay: add=newly reachable (green), eff+=gained effect (amber), eff-=lost (red) */
+      .diffbanner {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .diffbanner-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .diff-effadd {
+        color: var(--warn);
+      }
+      .diff-effdel {
+        color: var(--danger);
+      }
+      .row-effadd {
+        box-shadow: inset 3px 0 0 var(--warn);
+      }
+      .row-effdel {
+        box-shadow: inset 3px 0 0 var(--danger);
+      }
+      .diff-removed {
+        font-size: 12px;
+        margin-top: 2px;
+      }
+      .diff-removed summary {
+        cursor: pointer;
+        color: var(--muted);
+      }
+      .diff-removed-list {
+        max-height: 160px;
+        overflow: auto;
+        margin-top: 4px;
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+      }
     </style>
   </head>
   <body>

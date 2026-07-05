@@ -28,6 +28,13 @@ internal sealed record ImpactEpDeltaDto(
 
 internal sealed record ImpactKindRouteDto(string Kind, string Route);
 
+// Per-EP STRUCTURAL reach delta (from ImpactCommand.EpReachDelta): the methods newly reachable in head
+// (Added — DocIDs, matched to head-tree node ids to tint newly-reached nodes) and no longer reachable
+// (Removed — base-only, shown as a list since they're absent from the head tree).
+internal sealed record ImpactReachNodeDto(string Id, string Name);
+
+internal sealed record ImpactReachDto(IReadOnlyList<ImpactReachNodeDto> Added, IReadOnlyList<ImpactReachNodeDto> Removed);
+
 internal sealed record ImpactResponseDto(
     ImpactProvenanceDto Base,
     ImpactProvenanceDto Head,

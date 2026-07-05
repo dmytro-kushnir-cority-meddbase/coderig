@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Rig.Analysis.Rules;
+using Rig.Cli.Rendering;
 using Rig.Cli.Services;
 
 namespace Rig.Cli.Web;
@@ -173,6 +174,36 @@ internal static class RigApiEndpoints
                 {
                     // custom "failed" (not "error") so it doesn't collide with EventSource's built-in error.
                     await Send("failed", ex.Message);
+                }
+            }
+        );
+
+        // Per-EP STRUCTURAL reach delta (for the tree diff overlay): the methods newly reachable (Added) /
+        // no-longer reachable (Removed) for ONE entry point, looked up from the (warm-cached) impact diff's
+        // AffectedEps by (kind, route). Bounded to one EP — no recompute; reads the same cached artifact.
+        app.MapGet(
+            "/api/impact/reach",
+            async (string? @base, string? head, string? kind, string? route) =>
+            {
+                if (string.IsNullOrWhiteSpace(@base) || string.IsNullOrWhiteSpace(head) || string.IsNullOrWhiteSpace(route))
+                {
+                    return Results.Problem(title: "Missing base/head/route", detail: "Provide ?base=&head=&route=.", statusCode: 400);
+                }
+
+                try
+                {
+                    var art = await ImpactQueryService.DiffAsync(workingDirectory, baseRef: @base, headRef: head);
+                    var ep = art.Diff.AffectedEps.FirstOrDefault(e => e.Route == route && (string.IsNullOrEmpty(kind) || e.Kind == kind));
+                    ImpactReachNodeDto Node(string id) => new(id, SymbolNameFormatter.ShortName(id));
+                    return Results.Json(
+                        ep is null
+                            ? new ImpactReachDto([], [])
+                            : new ImpactReachDto(ep.Added.Select(Node).ToList(), ep.Removed.Select(Node).ToList())
+                    );
+                }
+                catch (Exception ex)
+                {
+                    return Results.Problem(title: "Impact reach lookup failed", detail: ex.Message, statusCode: 400);
                 }
             }
         );

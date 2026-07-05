@@ -103,7 +103,9 @@ function TreeNode(node, depth, ctx) {
   const hasKids = kids.length > 0;
   const heur = node.dispatchBasis === "heuristic";
   const edgeTxt = node.edgeKind && node.edgeKind !== "entry" ? node.edgeKind + (heur ? " ~heuristic" : "") : "";
-  const dstat = diffStatus(node, ctx); // "add" | "del" | ""
+  const dstat = diffStatus(node, ctx); // "add" | "eff+" | "eff-" | ""
+  const dcls = dstat === "add" ? "add" : dstat === "eff+" ? "effadd" : dstat === "eff-" ? "effdel" : "";
+  const dglyph = dstat === "add" ? "+" : dstat === "eff+" ? "~" : dstat === "eff-" ? "−" : "";
 
   const own = filterEffects(node.effects, ctx.mode, ctx.tokens);
   const agg = new Map();
@@ -121,9 +123,18 @@ function TreeNode(node, depth, ctx) {
 
   const row = h(
     "div",
-    { class: "row" + (dstat ? " row-" + dstat : "") },
+    { class: "row" + (dcls ? " row-" + dcls : "") },
     twist,
-    dstat ? h("span", { class: "diffmark diff-" + dstat }, dstat === "add" ? "+" : "−") : null,
+    dcls
+      ? h(
+          "span",
+          {
+            class: "diffmark diff-" + dcls,
+            title: dstat === "add" ? "newly reachable" : dstat === "eff+" ? "gained effect" : "lost effect",
+          },
+          dglyph,
+        )
+      : null,
     h("span", { class: "name" }, node.name),
     ctx.signatures && node.signature ? h("span", { class: "sig" }, node.signature) : null,
     edgeTxt ? h("span", { class: "edge" + (heur ? " heur" : "") }, edgeTxt) : null,
@@ -179,11 +190,18 @@ function enclFqn(id) {
   if (lam >= 0) s = s.slice(0, lam);
   return s;
 }
-// diff status of a node under an active overlay: "add" (method gained effects), "del" (lost), or "".
+// diff status of a node under an active overlay, in precedence order:
+//   "add"  — STRUCTURAL: this exact node is newly reachable in head (base couldn't reach it)
+//   "eff+" — the method gained an effect (behavior changed on an already-reachable node)
+//   "eff-" — the method lost an effect
+// (removed-reach methods are base-only → absent from the head tree, listed in the banner instead.)
 function diffStatus(node, ctx) {
   if (!ctx.diffOn) return "";
+  if (ctx.addedReach.has(node.id)) return "add";
   const f = enclFqn(node.id);
-  return ctx.diffAdded.has(f) ? "add" : ctx.diffRemoved.has(f) ? "del" : "";
+  if (ctx.effAdded.has(f)) return "eff+";
+  if (ctx.effRemoved.has(f)) return "eff-";
+  return "";
 }
 function subtreeHasDiff(node, ctx) {
   return !!diffStatus(node, ctx) || node.children.some((c) => subtreeHasDiff(c, ctx));
@@ -198,7 +216,8 @@ export function ctxOf(s) {
   }
   const level = parseInt(s.collapse, 10);
   // diff overlay: active only when it was opened for THIS tree's `from` (guards against a stale overlay after
-  // navigating elsewhere). added/removed are the enclosing FQNs from the source impact EP delta.
+  // navigating elsewhere). Carries the STRUCTURAL reach delta (addedReach node ids) + the EFFECT delta
+  // (effAdded/effRemoved enclosing FQNs) from the source impact EP.
   const ov = s.diffOverlay && s.tree && s.diffOverlay.from === s.tree.from ? s.diffOverlay : null;
   return {
     view: s.view,
@@ -210,8 +229,9 @@ export function ctxOf(s) {
     hazById,
     collapseLevel: level > 0 ? level : Infinity,
     diffOn: !!ov,
-    diffAdded: new Set(ov ? ov.added : []),
-    diffRemoved: new Set(ov ? ov.removed : []),
+    addedReach: new Set(ov ? ov.addedReach : []),
+    effAdded: new Set(ov ? ov.effAdded : []),
+    effRemoved: new Set(ov ? ov.effRemoved : []),
     changedOnly: !!(ov && ov.changedOnly),
   };
 }
@@ -221,22 +241,43 @@ export function ctxOf(s) {
 function DiffBanner(s, actions) {
   const ov = s.diffOverlay;
   if (!ov || !s.tree || ov.from !== s.tree.from) return null;
-  return h(
+  const removed = ov.removedReach || [];
+  const line1 = h(
     "div",
-    { class: "diffbanner" },
-    h("span", { class: "diff-add" }, `+${ov.added.length}`),
-    "/",
-    h("span", { class: "diff-del" }, `−${ov.removed.length}`),
-    " methods changed vs ",
+    { class: "diffbanner-row" },
+    "diff vs ",
     h("b", {}, ov.base),
+    " · ",
+    h("span", { class: "diff-add" }, `+${(ov.addedReach || []).length} reachable`),
+    " ",
+    h("span", { class: "diff-del" }, `−${removed.length} reachable`),
+    " · ",
+    h("span", { class: "diff-effadd" }, `~${(ov.effAdded || []).length}`),
+    "/",
+    h("span", { class: "diff-effdel" }, `−${(ov.effRemoved || []).length}`),
+    " effect-changed",
     h(
       "label",
       { class: "chk", style: "margin-left:10px" },
       h("input", { type: "checkbox", checked: !!ov.changedOnly, onChange: () => actions.toggleChangedOnly() }),
       " changed only",
     ),
-    h("button", { class: "diff-clear", onClick: () => actions.clearDiff() }, "clear diff"),
+    h("button", { class: "diff-clear", onClick: () => actions.clearDiff() }, "clear"),
   );
+  // removed-reach methods are base-only (absent from the head tree) → list them (collapsed).
+  const removedList = removed.length
+    ? h(
+        "details",
+        { class: "diff-removed" },
+        h("summary", {}, `${removed.length} method(s) no longer reachable (base-only)`),
+        h(
+          "div",
+          { class: "diff-removed-list" },
+          removed.map((n) => h("div", { class: "diff-del" }, "− " + n.name)),
+        ),
+      )
+    : null;
+  return h("div", { class: "diffbanner" }, line1, removedList);
 }
 export function TreeView(s, actions) {
   if (!s.tree) return h("div", {});

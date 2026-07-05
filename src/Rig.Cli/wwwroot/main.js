@@ -187,22 +187,36 @@ const actions = {
   // enclosing methods highlighted). Uses the impact head store + the EP delta already loaded client-side.
   openDiffTree(p) {
     const enc = (arr) => [...new Set(arr.map((e) => e.enclosing))];
+    const base = get().impactData?.base?.label || "base";
+    const head = get().impactData?.head?.label || "head";
+    // Set the overlay immediately (effect deltas — already loaded), open the head tree, then ENRICH with the
+    // structural reach delta (added/removed reachable methods) fetched from /api/impact/reach (warm lookup).
     set({
       appMode: "tree",
       storeId: get().impactHead, // view the HEAD store's tree
       from: p.fqn,
       diffOverlay: {
         from: p.fqn,
-        base: get().impactData?.base?.label || "base",
-        head: get().impactData?.head?.label || "head",
-        added: enc(p.added),
-        removed: enc(p.removed),
+        base,
+        head,
+        effAdded: enc(p.added),
+        effRemoved: enc(p.removed),
+        addedReach: [],
+        removedReach: [],
         changedOnly: true,
       },
     });
     refs.from.value = p.fqn;
     refs.view.value = get().view;
     openTree(p.fqn);
+    api
+      .impactReach(get().impactBase, get().impactHead, p.kind, p.route)
+      .then((r) => {
+        const ov = get().diffOverlay;
+        if (ov && ov.from === p.fqn)
+          set({ diffOverlay: { ...ov, addedReach: r.added.map((n) => n.id), removedReach: r.removed } });
+      })
+      .catch(() => {}); // structural enrichment is best-effort; the effect overlay still stands
   },
   toggleChangedOnly() {
     set((s) => (s.diffOverlay ? { diffOverlay: { ...s.diffOverlay, changedOnly: !s.diffOverlay.changedOnly } } : {}));
