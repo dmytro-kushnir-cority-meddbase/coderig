@@ -464,7 +464,7 @@ internal static class ImpactEngine
     {
         var distinct = eps.GroupBy(e => (e.Kind, e.Route, e.FilePath, e.Line)).Select(g => g.Key).ToList();
         var seedIds = distinct.Select(e => idBySite.TryGetValue((e.FilePath, e.Line), out var id) ? id : "").ToList();
-        var reached = FactPathFinder.ReachesFromEachSeed(graph, seedIds, maxDepth: int.MaxValue, mode: mode);
+        var reached = FactPathFinder.ReachesFromEachSeed(graph, seedIds, maxDepth: int.MaxValue, maxNodes: int.MaxValue, mode: mode);
 
         var sets = new Dictionary<(string, string), HashSet<HazardFinding>>();
         for (var i = 0; i < distinct.Count; i++)
@@ -526,8 +526,11 @@ internal static class ImpactEngine
         var seedIds = distinct.Select(e => idBySite.TryGetValue((e.FilePath, e.Line), out var id) ? id : "").ToList();
         // Unbounded depth (matching `reaches`/`tree`): the default maxDepth=20 truncates effects whose shortest
         // reach is deeper than 20 hops, which made impact emit spurious per-EP +/- deltas when a change merely
-        // shifted an effect's shortest depth across the 20 boundary. maxNodes + cycle dedup still bound/terminate.
-        var reached = FactPathFinder.ReachesInfoFromEachSeed(graph, seedIds, maxDepth: int.MaxValue, mode: mode);
+        // shifted an effect's shortest depth across the 20 boundary. maxNodes is ALSO unbounded here: the default
+        // 20000-node budget silently truncated the reach BFS with no signal (unlike BuildTree's BudgetCapped) —
+        // so a >20k-node EP dropped its tail effect/hazard deltas as a false "unchanged". The reach is bounded by
+        // the finite graph (+ the MaxBinding re-enqueue cap) and cycle dedup, so the walk still terminates.
+        var reached = FactPathFinder.ReachesInfoFromEachSeed(graph, seedIds, maxDepth: int.MaxValue, maxNodes: int.MaxValue, mode: mode);
 
         var footprints = new Dictionary<(string, string), Dictionary<(string, string, string, string), EffectReach>>();
         for (var i = 0; i < distinct.Count; i++)
@@ -600,8 +603,11 @@ internal static class ImpactEngine
         var seedIds = distinct.Select(e => idBySite.TryGetValue((e.FilePath, e.Line), out var id) ? id : "").ToList();
         // Unbounded depth (matching `reaches`/`tree`): the default maxDepth=20 truncates effects whose shortest
         // reach is deeper than 20 hops, which made impact emit spurious per-EP +/- deltas when a change merely
-        // shifted an effect's shortest depth across the 20 boundary. maxNodes + cycle dedup still bound/terminate.
-        var reached = FactPathFinder.ReachesFromEachSeed(graph, seedIds, maxDepth: int.MaxValue, mode: mode);
+        // shifted an effect's shortest depth across the 20 boundary. maxNodes is ALSO unbounded here: the default
+        // 20000-node budget silently truncated the reach BFS with no signal (unlike BuildTree's BudgetCapped) —
+        // so a >20k-node EP dropped its tail effect/hazard deltas as a false "unchanged". The reach is bounded by
+        // the finite graph (+ the MaxBinding re-enqueue cap) and cycle dedup, so the walk still terminates.
+        var reached = FactPathFinder.ReachesFromEachSeed(graph, seedIds, maxDepth: int.MaxValue, maxNodes: int.MaxValue, mode: mode);
 
         var sets = new Dictionary<(string, string), HashSet<string>>();
         for (var i = 0; i < distinct.Count; i++)
