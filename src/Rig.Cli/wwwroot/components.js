@@ -93,11 +93,17 @@ function Rollup(agg) {
 // so each ancestor can show what its folded branch touches. ctx = {view, mode, tokens, collapseLevel,
 // signatures, predicates, hazards, hazById}. Collapse ≥ level hides children in the DOM (one click reveals).
 function TreeNode(node, depth, ctx) {
-  const prune = ctx.view === "paths";
-  const kids = prune ? node.children.filter((c) => subtreeHasEffect(c, ctx)) : node.children;
+  // prune gate: "changed only" (diff overlay) beats the paths gate; else paths prunes to effectful branches.
+  const gate = ctx.changedOnly
+    ? (c) => subtreeHasDiff(c, ctx)
+    : ctx.view === "paths"
+      ? (c) => subtreeHasEffect(c, ctx)
+      : null;
+  const kids = gate ? node.children.filter(gate) : node.children;
   const hasKids = kids.length > 0;
   const heur = node.dispatchBasis === "heuristic";
   const edgeTxt = node.edgeKind && node.edgeKind !== "entry" ? node.edgeKind + (heur ? " ~heuristic" : "") : "";
+  const dstat = diffStatus(node, ctx); // "add" | "del" | ""
 
   const own = filterEffects(node.effects, ctx.mode, ctx.tokens);
   const agg = new Map();
@@ -115,8 +121,9 @@ function TreeNode(node, depth, ctx) {
 
   const row = h(
     "div",
-    { class: "row" },
+    { class: "row" + (dstat ? " row-" + dstat : "") },
     twist,
+    dstat ? h("span", { class: "diffmark diff-" + dstat }, dstat === "add" ? "+" : "−") : null,
     h("span", { class: "name" }, node.name),
     ctx.signatures && node.signature ? h("span", { class: "sig" }, node.signature) : null,
     edgeTxt ? h("span", { class: "edge" + (heur ? " heur" : "") }, edgeTxt) : null,
@@ -162,6 +169,26 @@ function flatEffectful(roots, ctx) {
   return out;
 }
 
+// Param-free FQN from a DocID ("M:NS.Type.Method(args)~λ0" -> "NS.Type.Method"), to match a tree node against
+// an impact effect's `enclosing` (which is the param-free FQN, StripParams = FqnFromDocId).
+function enclFqn(id) {
+  let s = id.replace(/^[A-Za-z]:/, "");
+  const paren = s.indexOf("(");
+  if (paren >= 0) s = s.slice(0, paren);
+  const lam = s.indexOf("~");
+  if (lam >= 0) s = s.slice(0, lam);
+  return s;
+}
+// diff status of a node under an active overlay: "add" (method gained effects), "del" (lost), or "".
+function diffStatus(node, ctx) {
+  if (!ctx.diffOn) return "";
+  const f = enclFqn(node.id);
+  return ctx.diffAdded.has(f) ? "add" : ctx.diffRemoved.has(f) ? "del" : "";
+}
+function subtreeHasDiff(node, ctx) {
+  return !!diffStatus(node, ctx) || node.children.some((c) => subtreeHasDiff(c, ctx));
+}
+
 // ---- region views (state -> nodes) ----------------------------------------------------------------------
 export function ctxOf(s) {
   const hazById = new Map();
@@ -170,6 +197,9 @@ export function ctxOf(s) {
     hazById.get(m.methodId).push(m);
   }
   const level = parseInt(s.collapse, 10);
+  // diff overlay: active only when it was opened for THIS tree's `from` (guards against a stale overlay after
+  // navigating elsewhere). added/removed are the enclosing FQNs from the source impact EP delta.
+  const ov = s.diffOverlay && s.tree && s.diffOverlay.from === s.tree.from ? s.diffOverlay : null;
   return {
     view: s.view,
     mode: s.mode,
@@ -179,26 +209,60 @@ export function ctxOf(s) {
     hazards: s.hazards,
     hazById,
     collapseLevel: level > 0 ? level : Infinity,
+    diffOn: !!ov,
+    diffAdded: new Set(ov ? ov.added : []),
+    diffRemoved: new Set(ov ? ov.removed : []),
+    changedOnly: !!(ov && ov.changedOnly),
   };
 }
 
-export function TreeView(s) {
+// The diff-overlay banner shown above a tree opened from an impact EP card: base→head, the +/− method counts,
+// a "changed only" prune toggle, and a clear. Only rendered when the overlay is active for this tree.
+function DiffBanner(s, actions) {
+  const ov = s.diffOverlay;
+  if (!ov || !s.tree || ov.from !== s.tree.from) return null;
+  return h(
+    "div",
+    { class: "diffbanner" },
+    h("span", { class: "diff-add" }, `+${ov.added.length}`),
+    "/",
+    h("span", { class: "diff-del" }, `−${ov.removed.length}`),
+    " methods changed vs ",
+    h("b", {}, ov.base),
+    h(
+      "label",
+      { class: "chk", style: "margin-left:10px" },
+      h("input", { type: "checkbox", checked: !!ov.changedOnly, onChange: () => actions.toggleChangedOnly() }),
+      " changed only",
+    ),
+    h("button", { class: "diff-clear", onClick: () => actions.clearDiff() }, "clear diff"),
+  );
+}
+export function TreeView(s, actions) {
   if (!s.tree) return h("div", {});
   const ctx = ctxOf(s);
+  const banner = DiffBanner(s, actions);
   if (s.view === "effects") {
     const out = flatEffectful(s.tree.roots, ctx);
     return h(
       "div",
       { class: "flat" },
+      banner,
       out.map(([n, fe]) =>
         h("div", { class: "frow" }, h("span", { class: "fname" }, n.name), " ", EffectGlyphs(fe), " ", Loc(n)),
       ),
     );
   }
-  const roots = s.view === "paths" ? s.tree.roots.filter((r) => subtreeHasEffect(r, ctx)) : s.tree.roots;
+  const rootGate = ctx.changedOnly
+    ? (r) => subtreeHasDiff(r, ctx)
+    : s.view === "paths"
+      ? (r) => subtreeHasEffect(r, ctx)
+      : null;
+  const roots = rootGate ? s.tree.roots.filter(rootGate) : s.tree.roots;
   return h(
     "div",
     {},
+    banner,
     roots.map((r) => TreeNode(r, 0, ctx).el),
   );
 }
@@ -334,13 +398,13 @@ function EpDeltaCard(p, actions) {
     "button",
     {
       class: "epd-open",
-      title: "open this entry point's call tree",
+      title: "open this entry point's call tree with the diff overlaid",
       onClick: (e) => {
         e.stopPropagation();
-        actions.openTreeFrom(p.fqn);
+        actions.openDiffTree(p);
       },
     },
-    "↗ tree",
+    "↗ diff tree",
   );
   const head = h(
     "div",

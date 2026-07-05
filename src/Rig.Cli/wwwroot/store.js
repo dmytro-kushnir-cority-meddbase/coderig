@@ -29,6 +29,9 @@ export const store = createStore({
   impactHead: "", // head store id
   impactData: null, // /api/impact response
   impactFilter: "", // filter over per-EP deltas (route / effect substring)
+  // diff overlay on a tree: when you open a tree FROM an impact EP card, this carries that EP's changed
+  // methods so the head tree can highlight what the diff touched. Session-only (not URL-synced). null = off.
+  diffOverlay: null, // { from, base, head, added:[enclosingFqn], removed:[enclosingFqn], changedOnly:bool }
   // ui
   tab: "runs", // runs | eps
   epFilter: "",

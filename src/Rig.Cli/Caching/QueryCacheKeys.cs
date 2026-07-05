@@ -109,7 +109,13 @@ internal static class QueryCacheKeys
     // so the base side's identity lives only in this key — a stale base store can never serve a hit.
     internal static string ImpactCacheKey(string baseStoreKey, string headStoreKey, string rulesHash, FactPathFinder.TraversalMode mode)
     {
-        var material = $"impact|v1|{baseStoreKey}|{headStoreKey}|{rulesHash}|{mode}";
+        // Fold the TOOL BUILD (assembly MVID, regenerated every compile) into the key alongside the two store
+        // keys, rules, and mode. The diff is a function of the derivation LOGIC too, not just the stores +
+        // rules — so a `rig` upgrade that changes how effects/reachability are computed must miss (else the
+        // disk cache would serve a stale diff, and the client's derivation-version purge would refetch right
+        // into it). Recompute-on-upgrade is the correct default for a fact tool; the diff is idempotent.
+        var toolBuild = typeof(QueryCacheKeys).Assembly.ManifestModule.ModuleVersionId.ToString("N");
+        var material = $"impact|v2|{toolBuild}|{baseStoreKey}|{headStoreKey}|{rulesHash}|{mode}";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 

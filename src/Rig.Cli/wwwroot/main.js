@@ -31,6 +31,9 @@ async function openTree(pattern) {
     return;
   }
   hideResults();
+  // drop a stale diff overlay when navigating to a DIFFERENT EP (openDiffTree sets it for the same pattern
+  // right before calling here, so that case is preserved).
+  if (get().diffOverlay && get().diffOverlay.from !== pattern) set({ diffOverlay: null });
   set({ from: pattern });
   setBusy(true);
   status("querying…");
@@ -67,7 +70,7 @@ async function loadHazards() {
 }
 function selectStore(id) {
   const latest = get().runs.find((r) => r.isLatest) || get().runs[0];
-  set({ storeId: latest && id === latest.storeId ? null : id });
+  set({ storeId: latest && id === latest.storeId ? null : id, diffOverlay: null }); // a manual store switch invalidates any diff overlay
   if (get().tab === "eps") loadEntrypoints();
   if (get().treeFrom) openTree(get().treeFrom);
 }
@@ -147,11 +150,32 @@ const actions = {
     set({ impactFilter: v });
   },
   loadImpact,
-  // cross-link: an impact EP card → open that EP's tree
-  openTreeFrom(fqn) {
-    set({ appMode: "tree", from: fqn });
-    refs.from.value = fqn;
-    openTree(fqn);
+  // cross-link: an impact EP card → open that EP's HEAD tree with the diff overlaid (added/removed effects'
+  // enclosing methods highlighted). Uses the impact head store + the EP delta already loaded client-side.
+  openDiffTree(p) {
+    const enc = (arr) => [...new Set(arr.map((e) => e.enclosing))];
+    set({
+      appMode: "tree",
+      storeId: get().impactHead, // view the HEAD store's tree
+      from: p.fqn,
+      diffOverlay: {
+        from: p.fqn,
+        base: get().impactData?.base?.label || "base",
+        head: get().impactData?.head?.label || "head",
+        added: enc(p.added),
+        removed: enc(p.removed),
+        changedOnly: true,
+      },
+    });
+    refs.from.value = p.fqn;
+    refs.view.value = get().view;
+    openTree(p.fqn);
+  },
+  toggleChangedOnly() {
+    set((s) => (s.diffOverlay ? { diffOverlay: { ...s.diffOverlay, changedOnly: !s.diffOverlay.changedOnly } } : {}));
+  },
+  clearDiff() {
+    set({ diffOverlay: null });
   },
 };
 
@@ -386,9 +410,10 @@ function setupWatches() {
       s.predicates,
       s.hazards,
       s.hazardMarks,
+      s.diffOverlay,
     ],
     (s) => {
-      mount(refs.tree, TreeView(s));
+      mount(refs.tree, TreeView(s, actions));
       if (s.tree) status(treeStatus(s));
     },
   );
