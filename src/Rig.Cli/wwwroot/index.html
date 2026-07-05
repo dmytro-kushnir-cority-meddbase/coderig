@@ -27,7 +27,7 @@
         --panel: #f4f6f9;
         --border: #d8dee5;
         --fg: #1f2733;
-        --muted: #6a7684;
+        --muted: #586573;
         --accent: #0969da;
         --chip: #eaeef2;
         --warn: #9a6700;
@@ -42,7 +42,7 @@
           --panel: #f4f6f9;
           --border: #d8dee5;
           --fg: #1f2733;
-          --muted: #6a7684;
+          --muted: #586573;
           --accent: #0969da;
           --chip: #eaeef2;
           --warn: #9a6700;
@@ -725,6 +725,42 @@
       }
       .effline .eencl {
         color: var(--muted);
+      }
+      /* UX-review fixes */
+      .edge,
+      .fanout,
+      .sites {
+        white-space: nowrap;
+      } /* keep one node per row; long rows use the tree's horizontal scroll */
+      .epd.collapsed .epd-body {
+        display: none;
+      } /* impact cards start collapsed — headers are the scannable index */
+      .epd-twist {
+        color: var(--muted);
+        width: 12px;
+        display: inline-block;
+        text-align: center;
+      }
+      .epd-counts .add {
+        color: var(--add);
+      }
+      .epd-counts .del {
+        color: var(--danger);
+      }
+      .epd-open {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 10px;
+        border-radius: 4px;
+        padding: 1px 6px;
+        margin-left: 6px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .epd-open:hover {
+        color: var(--accent);
+        border-color: var(--accent);
       }
     </style>
   </head>

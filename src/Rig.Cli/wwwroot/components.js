@@ -80,11 +80,12 @@ function Rollup(agg) {
   if (!agg.size) return null;
   const items = [...agg.values()].sort((a, b) => (a.provider + a.operation).localeCompare(b.provider + b.operation));
   const title = "subtree touches: " + items.map((e) => `${e.provider}:${e.operation}×${e.sites}`).join(", ");
+  // Reuse the inline treatment: one glyph per DISTINCT effect kind with a ×N count (not a raw repeated strip).
   return h(
     "span",
     { class: "rollup", title },
     "↴ ",
-    items.map((e) => h("span", { class: "eff" }, e.glyph)),
+    items.map((e) => h("span", { class: "eff" }, e.glyph, e.sites > 1 ? h("span", { class: "sites" }, e.sites) : null)),
   );
 }
 
@@ -325,15 +326,47 @@ function HazLine(sign, hz) {
 }
 function EpDeltaCard(p, actions) {
   const hazN = p.hazardsAdded.length + p.hazardsRemoved.length;
+  // Cards start COLLAPSED — with 200 shown, the headers ARE the scannable blast-radius index; the effect
+  // list opens on demand. Head click toggles the body; a separate "↗ tree" button cross-links to the tree.
+  const wrap = h("div", { class: "epd collapsed" });
+  const twist = h("span", { class: "epd-twist" }, "▸");
+  const openBtn = h(
+    "button",
+    {
+      class: "epd-open",
+      title: "open this entry point's call tree",
+      onClick: (e) => {
+        e.stopPropagation();
+        actions.openTreeFrom(p.fqn);
+      },
+    },
+    "↗ tree",
+  );
   const head = h(
     "div",
-    { class: "epd-head", title: p.fqn + "  (click → open tree)", onClick: () => actions.openTreeFrom(p.fqn) },
+    {
+      class: "epd-head",
+      title: p.fqn,
+      onClick: () => {
+        twist.textContent = wrap.classList.toggle("collapsed") ? "▸" : "▾";
+      },
+    },
+    twist,
     h("span", { class: "epd-route" }, p.route),
-    h("span", { class: "epd-counts" }, `+${p.added.length}/−${p.removed.length} eff`),
+    // colored add/remove tallies so "mostly additions" vs "heavy removals" reads at a glance across 200 cards
+    h(
+      "span",
+      { class: "epd-counts" },
+      h("span", { class: "add" }, `+${p.added.length}`),
+      "/",
+      h("span", { class: "del" }, `−${p.removed.length}`),
+      " eff",
+    ),
     hazN ? h("span", { class: "epd-haz" }, `⚠ +${p.hazardsAdded.length}/−${p.hazardsRemoved.length}`) : null,
     p.sharedMutationOnPath
       ? h("span", { class: "epd-shared", title: "shared-state mutation still on the path" }, "shared-state")
       : null,
+    openBtn,
   );
   const body = h(
     "div",
@@ -343,7 +376,8 @@ function EpDeltaCard(p, actions) {
     p.hazardsAdded.map((hz) => HazLine("+", hz)),
     p.hazardsRemoved.map((hz) => HazLine("−", hz)),
   );
-  return h("div", { class: "epd" }, head, body);
+  wrap.append(head, body);
+  return wrap;
 }
 export function ImpactView(s, actions) {
   const d = s.impactData;
