@@ -27,6 +27,7 @@ export const store = createStore({
   appMode: "tree", // tree | impact  (top-level view)
   impactBase: "", // base store id
   impactHead: "", // head store id
+  impactAsync: false, // --async for the diff: walk async/scheduled handoffs (changes the diff → refetch)
   impactData: null, // /api/impact response
   impactFilter: "", // filter over per-EP deltas (route / effect substring)
   // diff overlay on a tree: when you open a tree FROM an impact EP card, this carries that EP's changed
@@ -43,7 +44,9 @@ export const set = (patch) => store.setState(patch);
 
 // The resolved store id: explicit selection, else the LATEST run's id. Used for cache keys + display.
 export function activeStoreId(s = get()) {
-  return s.storeId || (s.runs.find((r) => r.isLatest) || s.runs[0] || {}).storeId;
+  return (
+    s.storeId || (s.runs.find((r) => r.isLatest) || s.runs[0] || {}).storeId
+  );
 }
 
 // The query slice, for a watch() that re-serializes the URL only when the query changes.
@@ -61,6 +64,7 @@ export const querySlice = (s) => [
   s.appMode,
   s.impactBase,
   s.impactHead,
+  s.impactAsync,
 ];
 
 // state -> URL (query params only; defaults omitted to keep links terse).
@@ -80,8 +84,13 @@ export function serializeUrl(s = get()) {
     p.set("app", "impact");
     if (s.impactBase) p.set("ibase", s.impactBase);
     if (s.impactHead) p.set("ihead", s.impactHead);
+    if (s.impactAsync) p.set("iasync", "1");
   }
-  history.replaceState(null, "", location.pathname + (p.toString() ? "?" + p : ""));
+  history.replaceState(
+    null,
+    "",
+    location.pathname + (p.toString() ? "?" + p : ""),
+  );
 }
 
 // URL -> a query-state patch. A persisted ?store= that no longer exists falls back to LATEST (null) silently.
@@ -101,7 +110,12 @@ export function readUrl(runs, search = location.search) {
     predicates: p.get("pred") === "1",
     hazards: p.get("haz") === "1",
     appMode: p.get("app") === "impact" ? "impact" : "tree",
-    impactBase: runs.some((r) => r.storeId === p.get("ibase")) ? p.get("ibase") : "",
-    impactHead: runs.some((r) => r.storeId === p.get("ihead")) ? p.get("ihead") : "",
+    impactBase: runs.some((r) => r.storeId === p.get("ibase"))
+      ? p.get("ibase")
+      : "",
+    impactHead: runs.some((r) => r.storeId === p.get("ihead"))
+      ? p.get("ihead")
+      : "",
+    impactAsync: p.get("iasync") === "1",
   };
 }

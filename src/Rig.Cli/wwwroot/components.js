@@ -8,7 +8,9 @@ import { h, mount } from "./lib.js";
 export const baseName = (p) => (p ? p.split(/[\\/]/).pop() : "");
 
 // ---- effect filter + projection (pure) -------------------------------------------------------------------
-const effMatch = (e, t) => t === e.provider.toLowerCase() || t === (e.provider + ":" + e.operation).toLowerCase();
+const effMatch = (e, t) =>
+  t === e.provider.toLowerCase() ||
+  t === (e.provider + ":" + e.operation).toLowerCase();
 export function filterEffects(effs, mode, tokens) {
   if (mode === "none" || !tokens.length) return effs;
   const toks = tokens.map((t) => t.toLowerCase());
@@ -18,7 +20,8 @@ export function filterEffects(effs, mode, tokens) {
 }
 function subtreeHasEffect(node, ctx) {
   return (
-    filterEffects(node.effects, ctx.mode, ctx.tokens).length > 0 || node.children.some((c) => subtreeHasEffect(c, ctx))
+    filterEffects(node.effects, ctx.mode, ctx.tokens).length > 0 ||
+    node.children.some((c) => subtreeHasEffect(c, ctx))
   );
 }
 
@@ -39,18 +42,27 @@ function EffectGlyphs(effects) {
   );
 }
 function Loc(node) {
-  return node.file ? h("span", { class: "loc" }, `${baseName(node.file)}:${node.line}`) : null;
+  return node.file
+    ? h("span", { class: "loc" }, `${baseName(node.file)}:${node.line}`)
+    : null;
 }
 function Trunc(node) {
   if (!node.truncated) return null;
   if (node.truncationCause === "AlreadyExpanded")
     return h(
       "span",
-      { class: "trunc", title: "cycle / shared callee — expanded elsewhere in this tree" },
+      {
+        class: "trunc",
+        title: "cycle / shared callee — expanded elsewhere in this tree",
+      },
       "⋯ shown above",
     );
   if (node.truncationCause === "BudgetCapped")
-    return h("span", { class: "trunc", title: "node-budget safety cap (50k) reached" }, "⋯ budget");
+    return h(
+      "span",
+      { class: "trunc", title: "node-budget safety cap (50k) reached" },
+      "⋯ budget",
+    );
   return h("span", { class: "trunc" }, "⋯elided");
 }
 // hazard mark for a method: types sorted, each "type(worstConfidence)×N".
@@ -70,7 +82,13 @@ function accInto(agg, effects) {
     const k = e.provider + ":" + e.operation;
     const prev = agg.get(k);
     if (prev) prev.sites += e.sites;
-    else agg.set(k, { provider: e.provider, operation: e.operation, glyph: e.glyph, sites: e.sites });
+    else
+      agg.set(k, {
+        provider: e.provider,
+        operation: e.operation,
+        glyph: e.glyph,
+        sites: e.sites,
+      });
   }
 }
 // The subtree rollup shown ONLY when a branch is collapsed: distinct effects of everything hidden below (the
@@ -78,14 +96,25 @@ function accInto(agg, effects) {
 // unless the node carries `.collapsed`; the effects are summed once at render (no recompute on toggle).
 function Rollup(agg) {
   if (!agg.size) return null;
-  const items = [...agg.values()].sort((a, b) => (a.provider + a.operation).localeCompare(b.provider + b.operation));
-  const title = "subtree touches: " + items.map((e) => `${e.provider}:${e.operation}×${e.sites}`).join(", ");
+  const items = [...agg.values()].sort((a, b) =>
+    (a.provider + a.operation).localeCompare(b.provider + b.operation),
+  );
+  const title =
+    "subtree touches: " +
+    items.map((e) => `${e.provider}:${e.operation}×${e.sites}`).join(", ");
   // Reuse the inline treatment: one glyph per DISTINCT effect kind with a ×N count (not a raw repeated strip).
   return h(
     "span",
     { class: "rollup", title },
     "↴ ",
-    items.map((e) => h("span", { class: "eff" }, e.glyph, e.sites > 1 ? h("span", { class: "sites" }, e.sites) : null)),
+    items.map((e) =>
+      h(
+        "span",
+        { class: "eff" },
+        e.glyph,
+        e.sites > 1 ? h("span", { class: "sites" }, e.sites) : null,
+      ),
+    ),
   );
 }
 
@@ -102,16 +131,37 @@ function TreeNode(node, depth, ctx) {
   const kids = gate ? node.children.filter(gate) : node.children;
   const hasKids = kids.length > 0;
   const heur = node.dispatchBasis === "heuristic";
-  const edgeTxt = node.edgeKind && node.edgeKind !== "entry" ? node.edgeKind + (heur ? " ~heuristic" : "") : "";
+  const edgeTxt =
+    node.edgeKind && node.edgeKind !== "entry"
+      ? node.edgeKind + (heur ? " ~heuristic" : "")
+      : "";
   const dstat = diffStatus(node, ctx); // "add" | "eff+" | "eff-" | ""
-  const dcls = dstat === "add" ? "add" : dstat === "eff+" ? "effadd" : dstat === "eff-" ? "effdel" : "";
-  const dglyph = dstat === "add" ? "+" : dstat === "eff+" ? "~" : dstat === "eff-" ? "−" : "";
+  const dcls =
+    dstat === "add"
+      ? "add"
+      : dstat === "eff+"
+        ? "effadd"
+        : dstat === "eff-"
+          ? "effdel"
+          : "";
+  const dglyph =
+    dstat === "add"
+      ? "+"
+      : dstat === "eff+"
+        ? "~"
+        : dstat === "eff-"
+          ? "−"
+          : "";
 
   const own = filterEffects(node.effects, ctx.mode, ctx.tokens);
   const agg = new Map();
   accInto(agg, own);
 
-  const twist = h("span", { class: "twist" + (hasKids ? "" : " leaf") }, hasKids ? "▾" : "•");
+  const twist = h(
+    "span",
+    { class: "twist" + (hasKids ? "" : " leaf") },
+    hasKids ? "▾" : "•",
+  );
   const childEls = [];
   if (hasKids) {
     for (const c of kids) {
@@ -130,19 +180,37 @@ function TreeNode(node, depth, ctx) {
           "span",
           {
             class: "diffmark diff-" + dcls,
-            title: dstat === "add" ? "newly reachable" : dstat === "eff+" ? "gained effect" : "lost effect",
+            title:
+              dstat === "add"
+                ? "newly reachable"
+                : dstat === "eff+"
+                  ? "gained effect"
+                  : "lost effect",
           },
           dglyph,
         )
       : null,
     h("span", { class: "name" }, node.name),
-    ctx.signatures && node.signature ? h("span", { class: "sig" }, node.signature) : null,
-    edgeTxt ? h("span", { class: "edge" + (heur ? " heur" : "") }, edgeTxt) : null,
-    node.fanout > 1 ? h("span", { class: "fanout" }, `×${node.fanout} fan-out`) : null,
-    node.callSites > 1 ? h("span", { class: "sites" }, `${node.callSites}×`) : null,
+    ctx.signatures && node.signature
+      ? h("span", { class: "sig" }, node.signature)
+      : null,
+    edgeTxt
+      ? h("span", { class: "edge" + (heur ? " heur" : "") }, edgeTxt)
+      : null,
+    node.fanout > 1
+      ? h("span", { class: "fanout" }, `×${node.fanout} fan-out`)
+      : null,
+    node.callSites > 1
+      ? h("span", { class: "sites" }, `${node.callSites}×`)
+      : null,
     EffectGlyphs(own),
     ctx.predicates && node.guards
-      ? h("span", { class: "guard" }, "⎇ ", h("span", { class: "guardtxt", title: node.guards }, node.guards))
+      ? h(
+          "span",
+          { class: "guard" },
+          "⎇ ",
+          h("span", { class: "guardtxt", title: node.guards }, node.guards),
+        )
       : null,
     ctx.hazards ? HazardMark(ctx.hazById.get(node.id)) : null,
     Trunc(node),
@@ -204,7 +272,9 @@ function diffStatus(node, ctx) {
   return "";
 }
 function subtreeHasDiff(node, ctx) {
-  return !!diffStatus(node, ctx) || node.children.some((c) => subtreeHasDiff(c, ctx));
+  return (
+    !!diffStatus(node, ctx) || node.children.some((c) => subtreeHasDiff(c, ctx))
+  );
 }
 
 // ---- region views (state -> nodes) ----------------------------------------------------------------------
@@ -218,7 +288,10 @@ export function ctxOf(s) {
   // diff overlay: active only when it was opened for THIS tree's `from` (guards against a stale overlay after
   // navigating elsewhere). Carries the STRUCTURAL reach delta (addedReach node ids) + the EFFECT delta
   // (effAdded/effRemoved enclosing FQNs) from the source impact EP.
-  const ov = s.diffOverlay && s.tree && s.diffOverlay.from === s.tree.from ? s.diffOverlay : null;
+  const ov =
+    s.diffOverlay && s.tree && s.diffOverlay.from === s.tree.from
+      ? s.diffOverlay
+      : null;
   return {
     view: s.view,
     mode: s.mode,
@@ -248,7 +321,11 @@ function DiffBanner(s, actions) {
     "diff vs ",
     h("b", {}, ov.base),
     " · ",
-    h("span", { class: "diff-add" }, `+${(ov.addedReach || []).length} reachable`),
+    h(
+      "span",
+      { class: "diff-add" },
+      `+${(ov.addedReach || []).length} reachable`,
+    ),
     " ",
     h("span", { class: "diff-del" }, `−${removed.length} reachable`),
     " · ",
@@ -259,17 +336,29 @@ function DiffBanner(s, actions) {
     h(
       "label",
       { class: "chk", style: "margin-left:10px" },
-      h("input", { type: "checkbox", checked: !!ov.changedOnly, onChange: () => actions.toggleChangedOnly() }),
+      h("input", {
+        type: "checkbox",
+        checked: !!ov.changedOnly,
+        onChange: () => actions.toggleChangedOnly(),
+      }),
       " changed only",
     ),
-    h("button", { class: "diff-clear", onClick: () => actions.clearDiff() }, "clear"),
+    h(
+      "button",
+      { class: "diff-clear", onClick: () => actions.clearDiff() },
+      "clear",
+    ),
   );
   // removed-reach methods are base-only (absent from the head tree) → list them (collapsed).
   const removedList = removed.length
     ? h(
         "details",
         { class: "diff-removed" },
-        h("summary", {}, `${removed.length} method(s) no longer reachable (base-only)`),
+        h(
+          "summary",
+          {},
+          `${removed.length} method(s) no longer reachable (base-only)`,
+        ),
         h(
           "div",
           { class: "diff-removed-list" },
@@ -290,7 +379,15 @@ export function TreeView(s, actions) {
       { class: "flat" },
       banner,
       out.map(([n, fe]) =>
-        h("div", { class: "frow" }, h("span", { class: "fname" }, n.name), " ", EffectGlyphs(fe), " ", Loc(n)),
+        h(
+          "div",
+          { class: "frow" },
+          h("span", { class: "fname" }, n.name),
+          " ",
+          EffectGlyphs(fe),
+          " ",
+          Loc(n),
+        ),
       ),
     );
   }
@@ -311,8 +408,12 @@ export function TreeView(s, actions) {
 export function treeStatus(s) {
   if (!s.tree) return "";
   const ctx = ctxOf(s);
-  if (s.view === "effects") return `${s.tree.from} — ${flatEffectful(s.tree.roots, ctx).length} effectful method(s)`;
-  const roots = s.view === "paths" ? s.tree.roots.filter((r) => subtreeHasEffect(r, ctx)) : s.tree.roots;
+  if (s.view === "effects")
+    return `${s.tree.from} — ${flatEffectful(s.tree.roots, ctx).length} effectful method(s)`;
+  const roots =
+    s.view === "paths"
+      ? s.tree.roots.filter((r) => subtreeHasEffect(r, ctx))
+      : s.tree.roots;
   return roots.length
     ? `${s.tree.from} — ${roots.length} root(s), view=${s.view}`
     : `${s.tree.from}: no effects reachable (matching filters) — try view=full`;
@@ -322,17 +423,29 @@ function RunCard(r, active, onSelect) {
   return h(
     "div",
     {
-      class: "run" + (r.isLatest ? " latest" : "") + (r.storeId === active ? " active" : ""),
+      class:
+        "run" +
+        (r.isLatest ? " latest" : "") +
+        (r.storeId === active ? " active" : ""),
       onClick: () => onSelect(r.storeId),
     },
     h("div", { class: "id" }, r.storeId),
-    h("div", { class: "meta" }, `${r.commit || ""}${r.branch ? " (" + r.branch + ")" : ""}${r.dirty ? " +dirty" : ""}`),
-    h("div", { class: "meta" }, `${r.symbols.toLocaleString()} symbols · ${r.references.toLocaleString()} refs`),
+    h(
+      "div",
+      { class: "meta" },
+      `${r.commit || ""}${r.branch ? " (" + r.branch + ")" : ""}${r.dirty ? " +dirty" : ""}`,
+    ),
+    h(
+      "div",
+      { class: "meta" },
+      `${r.symbols.toLocaleString()} symbols · ${r.references.toLocaleString()} refs`,
+    ),
   );
 }
 export function RunsList(s, actions) {
   if (!s.runs.length) return h("div", {}, "(no runs)");
-  const active = s.storeId || (s.runs.find((r) => r.isLatest) || s.runs[0] || {}).storeId;
+  const active =
+    s.storeId || (s.runs.find((r) => r.isLatest) || s.runs[0] || {}).storeId;
   return h(
     "div",
     {},
@@ -340,11 +453,21 @@ export function RunsList(s, actions) {
   );
 }
 
-const epRow = (e, onOpen) => h("div", { class: "ep", title: e.fqn, onClick: () => onOpen(e.fqn) }, e.route);
+const epRow = (e, onOpen) =>
+  h(
+    "div",
+    { class: "ep", title: e.fqn, onClick: () => onOpen(e.fqn) },
+    e.route,
+  );
 export function EpList(s, actions) {
   if (!s.eps.length) return h("div", {}, "…");
   const f = s.epFilter.trim().toLowerCase();
-  const match = s.eps.filter((e) => !f || e.route.toLowerCase().includes(f) || e.fqn.toLowerCase().includes(f));
+  const match = s.eps.filter(
+    (e) =>
+      !f ||
+      e.route.toLowerCase().includes(f) ||
+      e.fqn.toLowerCase().includes(f),
+  );
   const byKind = {};
   for (const e of match) (byKind[e.kind] ||= []).push(e);
   const kinds = Object.keys(byKind).sort();
@@ -362,7 +485,12 @@ export function EpList(s, actions) {
         " ",
         h("span", { class: "kcount" }, list.length),
       );
-      const group = h("div", { class: "kind" + (f ? " open" : "") }, head, klist);
+      const group = h(
+        "div",
+        { class: "kind" + (f ? " open" : "") },
+        head,
+        klist,
+      );
       let populated = false;
       const populate = () => {
         if (!populated) {
@@ -467,9 +595,22 @@ function EpDeltaCard(p, actions) {
       h("span", { class: "del" }, `−${p.removed.length}`),
       " eff",
     ),
-    hazN ? h("span", { class: "epd-haz" }, `⚠ +${p.hazardsAdded.length}/−${p.hazardsRemoved.length}`) : null,
+    hazN
+      ? h(
+          "span",
+          { class: "epd-haz" },
+          `⚠ +${p.hazardsAdded.length}/−${p.hazardsRemoved.length}`,
+        )
+      : null,
     p.sharedMutationOnPath
-      ? h("span", { class: "epd-shared", title: "shared-state mutation still on the path" }, "shared-state")
+      ? h(
+          "span",
+          {
+            class: "epd-shared",
+            title: "shared-state mutation still on the path",
+          },
+          "shared-state",
+        )
       : null,
     openBtn,
   );
@@ -500,7 +641,12 @@ export function ImpactProgress(lines) {
 }
 export function ImpactView(s, actions) {
   const d = s.impactData;
-  if (!d) return h("div", { class: "impact-empty" }, "pick a base and head store above, then press Diff.");
+  if (!d)
+    return h(
+      "div",
+      { class: "impact-empty" },
+      "pick a base and head store above, then press Diff.",
+    );
   const f = s.impactFilter.trim().toLowerCase();
   const match = d.perEp.filter(
     (p) =>
@@ -514,15 +660,42 @@ export function ImpactView(s, actions) {
   const summary = h(
     "div",
     { class: "impact-summary" },
-    h("div", {}, h("b", {}, d.base.label), " → ", h("b", {}, d.head.label)),
+    h(
+      "div",
+      {},
+      h("b", {}, d.base.label),
+      " → ",
+      h("b", {}, d.head.label),
+      h(
+        "span",
+        {
+          class: "mode-chip",
+          title: "traversal mode — toggle 'async' in the toolbar",
+        },
+        s.impactAsync ? "async" : "sync",
+      ),
+    ),
     h(
       "div",
       { class: "impact-stats" },
       h("span", { class: "add" }, `+${d.addedEps.length} EPs`),
       h("span", { class: "del" }, `−${d.removedEps.length} EPs`),
-      h("span", {}, `${d.affectedEpCount.toLocaleString()} affected (structural)`),
+      h(
+        "span",
+        {},
+        `${d.affectedEpCount.toLocaleString()} affected (structural)`,
+      ),
       h("span", {}, `${d.perEp.length.toLocaleString()} behavioral`),
     ),
+    // Disclose the sync-mode limitation in the web too (the CLI header does the same): async/scheduled
+    // handoffs are cut, so effects reachable only that way are excluded until you toggle async.
+    s.impactAsync
+      ? null
+      : h(
+          "div",
+          { class: "impact-mode-note" },
+          "SYNC mode — effects reachable only via async/scheduled handoffs are excluded; toggle async above to include them.",
+        ),
   );
   const note = h(
     "div",
@@ -548,7 +721,11 @@ export function ImpactView(s, actions) {
 export function Shell(actions) {
   const refs = {};
   const themeBtn = (mode, label) =>
-    h("button", { dataset: { theme: mode }, onClick: () => actions.setTheme(mode) }, label);
+    h(
+      "button",
+      { dataset: { theme: mode }, onClick: () => actions.setTheme(mode) },
+      label,
+    );
   refs.theme = h(
     "div",
     { class: "theme", id: "theme" },
@@ -557,17 +734,44 @@ export function Shell(actions) {
     themeBtn("system", "System"),
   );
   refs.storeDir = h("span", { class: "store" });
-  const modeBtn = (m, label) => h("button", { dataset: { app: m }, onClick: () => actions.setAppMode(m) }, label);
-  refs.appmode = h("div", { class: "appmode" }, modeBtn("tree", "Tree"), modeBtn("impact", "Impact"));
+  const modeBtn = (m, label) =>
+    h(
+      "button",
+      { dataset: { app: m }, onClick: () => actions.setAppMode(m) },
+      label,
+    );
+  refs.appmode = h(
+    "div",
+    { class: "appmode" },
+    modeBtn("tree", "Tree"),
+    modeBtn("impact", "Impact"),
+  );
   refs.purge = h(
     "button",
-    { class: "purge", title: "clear the client cache (in-memory + persisted)", onClick: () => actions.purge() },
+    {
+      class: "purge",
+      title: "clear the client cache (in-memory + persisted)",
+      onClick: () => actions.purge(),
+    },
     "purge cache",
   );
-  const header = h("header", {}, h("h1", {}, "rig · explorer"), refs.appmode, refs.storeDir, refs.purge, refs.theme);
+  const header = h(
+    "header",
+    {},
+    h("h1", {}, "rig · explorer"),
+    refs.appmode,
+    refs.storeDir,
+    refs.purge,
+    refs.theme,
+  );
 
   // sidebar
-  const tab = (id, label) => h("button", { dataset: { tab: id }, onClick: () => actions.setTab(id) }, label);
+  const tab = (id, label) =>
+    h(
+      "button",
+      { dataset: { tab: id }, onClick: () => actions.setTab(id) },
+      label,
+    );
   refs.tabRuns = tab("runs", "Runs");
   refs.tabEps = tab("eps", "Entry points");
   refs.runs = h("div", {}, "…");
@@ -584,7 +788,13 @@ export function Shell(actions) {
     refs.runs,
   );
   refs.paneEps = h("div", { class: "pane" }, refs.epFilter, refs.eps);
-  const aside = h("aside", {}, h("div", { class: "tabs" }, refs.tabRuns, refs.tabEps), refs.paneRuns, refs.paneEps);
+  const aside = h(
+    "aside",
+    {},
+    h("div", { class: "tabs" }, refs.tabRuns, refs.tabEps),
+    refs.paneRuns,
+    refs.paneEps,
+  );
 
   // splitter
   refs.splitter = h("div", { class: "splitter", title: "drag to resize" });
@@ -606,12 +816,19 @@ export function Shell(actions) {
   );
   refs.filterMode = h(
     "select",
-    { title: "effect filter (only XOR exclude)", onChange: (e) => actions.setMode(e.target.value) },
+    {
+      title: "effect filter (only XOR exclude)",
+      onChange: (e) => actions.setMode(e.target.value),
+    },
     h("option", { value: "none" }, "no filter"),
     h("option", { value: "only" }, "only"),
     h("option", { value: "exclude" }, "exclude"),
   );
-  refs.chips = h("div", { class: "ms-control" }, h("span", { class: "ms-ph" }, "providers…"));
+  refs.chips = h(
+    "div",
+    { class: "ms-control" },
+    h("span", { class: "ms-ph" }, "providers…"),
+  );
   refs.msSearch = h("input", {
     class: "ms-search",
     placeholder: "filter tokens…",
@@ -626,21 +843,30 @@ export function Shell(actions) {
     type: "number",
     min: "1",
     placeholder: "collapse ≥",
-    title: "auto-collapse at/below this depth — full tree is fetched, children one click away",
+    title:
+      "auto-collapse at/below this depth — full tree is fetched, children one click away",
     onInput: (e) => actions.setCollapse(e.target.value),
   });
   const toggle = (label, key, title) =>
     h(
       "label",
       { class: "chk", title },
-      h("input", { type: "checkbox", dataset: { k: key }, onChange: (e) => actions.setFlag(key, e.target.checked) }),
+      h("input", {
+        type: "checkbox",
+        dataset: { k: key },
+        onChange: (e) => actions.setFlag(key, e.target.checked),
+      }),
       " " + label,
     );
   refs.async = toggle("async", "asyncWalk", "walk async handoffs (refetches)");
   refs.sig = toggle("sig", "signatures", "show parameter signatures");
   refs.pred = toggle("pred", "predicates", "show control-dependence guards");
   refs.haz = toggle("haz", "hazards", "overlay hazard marks");
-  refs.go = h("button", { class: "go", onClick: () => actions.openTree(refs.from.value.trim()) }, "Tree");
+  refs.go = h(
+    "button",
+    { class: "go", onClick: () => actions.openTree(refs.from.value.trim()) },
+    "Tree",
+  );
   const toolbar = h(
     "div",
     { class: "controls" },
@@ -661,15 +887,33 @@ export function Shell(actions) {
   // impact toolbar (base/head store pickers + Diff + filter) — hidden until appMode=impact
   refs.impactBase = h(
     "select",
-    { title: "base store", onChange: (e) => actions.setImpactStore("base", e.target.value) },
+    {
+      title: "base store",
+      onChange: (e) => actions.setImpactStore("base", e.target.value),
+    },
     h("option", { value: "" }, "base…"),
   );
   refs.impactHead = h(
     "select",
-    { title: "head store", onChange: (e) => actions.setImpactStore("head", e.target.value) },
+    {
+      title: "head store",
+      onChange: (e) => actions.setImpactStore("head", e.target.value),
+    },
     h("option", { value: "" }, "head…"),
   );
-  refs.impactGo = h("button", { class: "go", onClick: () => actions.loadImpact() }, "Diff");
+  refs.impactGo = h(
+    "button",
+    { class: "go", onClick: () => actions.loadImpact() },
+    "Diff",
+  );
+  // Sync/async toggle for the diff — mirrors the tree toolbar's `async`. Off (sync) cuts async/scheduled
+  // handoffs (the sound default); on walks them, surfacing effects reachable only via background workers /
+  // actor inboxes / events. Reuses `toggle` → setFlag("impactAsync"), which reloads the diff on change.
+  refs.impactAsync = toggle(
+    "async",
+    "impactAsync",
+    "walk async/scheduled handoffs (background workers, actor inboxes, events)",
+  );
   refs.impactFilter = h("input", {
     placeholder: "filter EPs / effects…",
     autocomplete: "off",
@@ -681,6 +925,7 @@ export function Shell(actions) {
     refs.impactBase,
     h("span", { class: "arrow" }, "→"),
     refs.impactHead,
+    refs.impactAsync,
     refs.impactGo,
     refs.impactFilter,
   );
@@ -691,7 +936,15 @@ export function Shell(actions) {
   refs.statusbar = h("div", { id: "statusbar" }, refs.spin, refs.status);
   refs.tree = h("div", { class: "tree" });
   refs.impact = h("div", { class: "tree impact-wrap hidden" });
-  const section = h("section", {}, refs.treeToolbar, refs.impactToolbar, refs.statusbar, refs.tree, refs.impact);
+  const section = h(
+    "section",
+    {},
+    refs.treeToolbar,
+    refs.impactToolbar,
+    refs.statusbar,
+    refs.tree,
+    refs.impact,
+  );
 
   refs.root = h("main", {}, aside, refs.splitter, section);
   return { root: h("div", {}, header, refs.root), refs };

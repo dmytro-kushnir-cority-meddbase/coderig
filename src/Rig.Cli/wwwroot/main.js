@@ -4,7 +4,15 @@
 
 import { h, mount, watch } from "./lib.js";
 import { api, setCacheVersion, purgeCache } from "./api.js";
-import { store, get, set, activeStoreId, querySlice, serializeUrl, readUrl } from "./store.js";
+import {
+  store,
+  get,
+  set,
+  activeStoreId,
+  querySlice,
+  serializeUrl,
+  readUrl,
+} from "./store.js";
 import {
   Shell,
   RunsList,
@@ -43,12 +51,18 @@ async function openTree(pattern) {
   hideResults();
   // drop a stale diff overlay when navigating to a DIFFERENT EP (openDiffTree sets it for the same pattern
   // right before calling here, so that case is preserved).
-  if (get().diffOverlay && get().diffOverlay.from !== pattern) set({ diffOverlay: null });
+  if (get().diffOverlay && get().diffOverlay.from !== pattern)
+    set({ diffOverlay: null });
   set({ from: pattern });
   setBusy(true);
   status("querying…");
   try {
-    const data = await api.tree(resolved(), explicit(), pattern, get().asyncWalk);
+    const data = await api.tree(
+      resolved(),
+      explicit(),
+      pattern,
+      get().asyncWalk,
+    );
     if (!data.matched) {
       set({ tree: null, treeFrom: "" });
       status(`no symbol matches '${pattern}'`, true);
@@ -80,12 +94,15 @@ async function loadHazards() {
 }
 function selectStore(id) {
   const latest = get().runs.find((r) => r.isLatest) || get().runs[0];
-  set({ storeId: latest && id === latest.storeId ? null : id, diffOverlay: null }); // a manual store switch invalidates any diff overlay
+  set({
+    storeId: latest && id === latest.storeId ? null : id,
+    diffOverlay: null,
+  }); // a manual store switch invalidates any diff overlay
   if (get().tab === "eps") loadEntrypoints();
   if (get().treeFrom) openTree(get().treeFrom);
 }
 function loadImpact() {
-  const { impactBase, impactHead } = get();
+  const { impactBase, impactHead, impactAsync } = get();
   if (!impactBase || !impactHead) {
     status("pick a base and a head store", true);
     return;
@@ -101,7 +118,8 @@ function loadImpact() {
   const log = [];
   mount(refs.impact, ImpactProgress(log));
   const es = new EventSource(
-    `/api/impact/stream?base=${encodeURIComponent(impactBase)}&head=${encodeURIComponent(impactHead)}`,
+    `/api/impact/stream?base=${encodeURIComponent(impactBase)}&head=${encodeURIComponent(impactHead)}` +
+      (impactAsync ? "&async=true" : ""),
   );
   let settled = false;
   const finish = (fn) => {
@@ -118,7 +136,9 @@ function loadImpact() {
   es.addEventListener("done", () =>
     finish(async () => {
       try {
-        set({ impactData: await api.impact(impactBase, impactHead) });
+        set({
+          impactData: await api.impact(impactBase, impactHead, impactAsync),
+        });
         const d = get().impactData;
         status(
           `impact: ${d.perEp.length.toLocaleString()} behavioral change(s), +${d.addedEps.length}/−${d.removedEps.length} EPs`,
@@ -128,7 +148,9 @@ function loadImpact() {
       }
     }),
   );
-  es.addEventListener("failed", (e) => finish(() => status("diff failed: " + e.data, true)));
+  es.addEventListener("failed", (e) =>
+    finish(() => status("diff failed: " + e.data, true)),
+  );
   es.onerror = () => finish(() => status("diff stream connection lost", true));
 }
 
@@ -154,12 +176,18 @@ const actions = {
     set({ collapse: v });
   },
   toggleToken(t) {
-    set((s) => ({ tokens: s.tokens.includes(t) ? s.tokens.filter((x) => x !== t) : [...s.tokens, t] }));
+    set((s) => ({
+      tokens: s.tokens.includes(t)
+        ? s.tokens.filter((x) => x !== t)
+        : [...s.tokens, t],
+    }));
   },
   renderMsList,
   setFlag(key, val) {
     set({ [key]: val });
     if (key === "asyncWalk" && get().treeFrom) openTree(get().treeFrom); // async changes the fetched tree
+    if (key === "impactAsync" && get().impactBase && get().impactHead)
+      loadImpact(); // async changes the diff
     if (key === "hazards" && val) loadHazards();
   },
   async purge() {
@@ -195,6 +223,7 @@ const actions = {
       appMode: "tree",
       storeId: get().impactHead, // view the HEAD store's tree
       from: p.fqn,
+      asyncWalk: get().impactAsync, // match the diff's traversal mode so the tree reaches what the diff diffed
       diffOverlay: {
         from: p.fqn,
         base,
@@ -210,16 +239,37 @@ const actions = {
     refs.view.value = get().view;
     openTree(p.fqn);
     api
-      .impactReach(get().impactBase, get().impactHead, p.kind, p.route)
+      .impactReach(
+        get().impactBase,
+        get().impactHead,
+        p.kind,
+        p.route,
+        get().impactAsync,
+      )
       .then((r) => {
         const ov = get().diffOverlay;
         if (ov && ov.from === p.fqn)
-          set({ diffOverlay: { ...ov, addedReach: r.added.map((n) => n.id), removedReach: r.removed } });
+          set({
+            diffOverlay: {
+              ...ov,
+              addedReach: r.added.map((n) => n.id),
+              removedReach: r.removed,
+            },
+          });
       })
       .catch(() => {}); // structural enrichment is best-effort; the effect overlay still stands
   },
   toggleChangedOnly() {
-    set((s) => (s.diffOverlay ? { diffOverlay: { ...s.diffOverlay, changedOnly: !s.diffOverlay.changedOnly } } : {}));
+    set((s) =>
+      s.diffOverlay
+        ? {
+            diffOverlay: {
+              ...s.diffOverlay,
+              changedOnly: !s.diffOverlay.changedOnly,
+            },
+          }
+        : {},
+    );
   },
   clearDiff() {
     set({ diffOverlay: null });
@@ -241,7 +291,12 @@ function renderMsList(filter = "") {
       h(
         "label",
         { class: "ms-opt" },
-        h("input", { type: "checkbox", value: t, checked: toks.has(t), onChange: () => actions.toggleToken(t) }),
+        h("input", {
+          type: "checkbox",
+          value: t,
+          checked: toks.has(t),
+          onChange: () => actions.toggleToken(t),
+        }),
         " " + t,
         op ? h("span", { class: "ms-op" }, "op") : null,
       ),
@@ -254,7 +309,8 @@ function applyTheme(mode) {
   if (mode === "system") document.documentElement.removeAttribute("data-theme");
   else document.documentElement.setAttribute("data-theme", mode);
   localStorage.setItem("rig-theme", mode);
-  for (const b of refs.theme.children) b.classList.toggle("on", b.dataset.theme === mode);
+  for (const b of refs.theme.children)
+    b.classList.toggle("on", b.dataset.theme === mode);
 }
 function initSplitter() {
   const saved = localStorage.getItem("rig-rail");
@@ -266,7 +322,11 @@ function initSplitter() {
     document.body.style.userSelect = "none";
   });
   document.addEventListener("mousemove", (e) => {
-    if (dragging) document.documentElement.style.setProperty("--rail", Math.min(640, Math.max(180, e.clientX)) + "px");
+    if (dragging)
+      document.documentElement.style.setProperty(
+        "--rail",
+        Math.min(640, Math.max(180, e.clientX)) + "px",
+      );
   });
   document.addEventListener("mouseup", () => {
     if (!dragging) return;
@@ -275,7 +335,9 @@ function initSplitter() {
     document.body.style.userSelect = "";
     localStorage.setItem(
       "rig-rail",
-      parseInt(getComputedStyle(document.documentElement).getPropertyValue("--rail")) || 300,
+      parseInt(
+        getComputedStyle(document.documentElement).getPropertyValue("--rail"),
+      ) || 300,
     );
   });
 }
@@ -336,7 +398,9 @@ function setupSearch() {
     if (refs.results.classList.contains("show") && hits.length) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
-        activeHit = (activeHit + (e.key === "ArrowDown" ? 1 : hits.length - 1)) % hits.length;
+        activeHit =
+          (activeHit + (e.key === "ArrowDown" ? 1 : hits.length - 1)) %
+          hits.length;
         hits.forEach((hh, i) => hh.classList.toggle("active", i === activeHit));
         hits[activeHit].scrollIntoView({ block: "nearest" });
         return;
@@ -361,7 +425,8 @@ function setupSearch() {
   });
   // multiselect popover open/close
   refs.chips.addEventListener("click", () => {
-    if (!refs.ms.classList.contains("disabled")) refs.ms.classList.toggle("open");
+    if (!refs.ms.classList.contains("disabled"))
+      refs.ms.classList.toggle("open");
   });
   document.addEventListener("click", (e) => {
     if (!e.target.closest(".ms")) refs.ms.classList.remove("open");
@@ -375,12 +440,19 @@ function applyAppMode(m) {
   refs.tree.classList.toggle("hidden", impact);
   refs.impactToolbar.classList.toggle("hidden", !impact);
   refs.impact.classList.toggle("hidden", !impact);
-  for (const b of refs.appmode.children) b.classList.toggle("on", b.dataset.app === m);
+  for (const b of refs.appmode.children)
+    b.classList.toggle("on", b.dataset.app === m);
 }
 function populateImpactStores(s) {
   const opts = (ph) => [
     h("option", { value: "" }, ph),
-    ...s.runs.map((r) => h("option", { value: r.storeId }, `${r.storeId}${r.branch ? " · " + r.branch : ""}`)),
+    ...s.runs.map((r) =>
+      h(
+        "option",
+        { value: r.storeId },
+        `${r.storeId}${r.branch ? " · " + r.branch : ""}`,
+      ),
+    ),
   ];
   mount(refs.impactBase, opts("base…"));
   mount(refs.impactHead, opts("head…"));
@@ -401,6 +473,7 @@ function syncControls(s) {
   refs.ms.classList.toggle("disabled", s.mode === "none");
   refs.impactBase.value = s.impactBase;
   refs.impactHead.value = s.impactHead;
+  refs.impactAsync.querySelector("input").checked = s.impactAsync;
   refs.impactFilter.value = s.impactFilter;
   applyAppMode(s.appMode);
 }
@@ -471,7 +544,7 @@ function setupWatches() {
   );
   watch(
     store,
-    (s) => [s.impactData, s.impactFilter, s.appMode],
+    (s) => [s.impactData, s.impactFilter, s.appMode, s.impactAsync],
     (s) => {
       if (s.appMode === "impact") mount(refs.impact, ImpactView(s, actions));
     },

@@ -13,9 +13,11 @@ export function h(tag, props, ...children) {
       if (k === "class") el.className = v;
       else if (k === "html") el.innerHTML = v;
       else if (k === "dataset") Object.assign(el.dataset, v);
-      else if (k.startsWith("on") && typeof v === "function") el.addEventListener(k.slice(2).toLowerCase(), v);
+      else if (k.startsWith("on") && typeof v === "function")
+        el.addEventListener(k.slice(2).toLowerCase(), v);
       else if (k === "value") el.value = v;
-      else if (k === "checked" || k === "disabled" || k === "selected") el[k] = !!v;
+      else if (k === "checked" || k === "disabled" || k === "selected")
+        el[k] = !!v;
       else el.setAttribute(k, v);
     }
   }
@@ -38,7 +40,10 @@ export function createStore(initial) {
   return {
     getState: () => state,
     setState(patch) {
-      state = { ...state, ...(typeof patch === "function" ? patch(state) : patch) };
+      state = {
+        ...state,
+        ...(typeof patch === "function" ? patch(state) : patch),
+      };
       subs.forEach((f) => f(state));
     },
     subscribe(fn) {
@@ -55,7 +60,12 @@ export function watch(store, selector, onChange) {
   let prev = null;
   const run = (s) => {
     const next = selector(s);
-    if (prev && next.length === prev.length && next.every((x, i) => x === prev[i])) return;
+    if (
+      prev &&
+      next.length === prev.length &&
+      next.every((x, i) => x === prev[i])
+    )
+      return;
     prev = next;
     onChange(s);
   };

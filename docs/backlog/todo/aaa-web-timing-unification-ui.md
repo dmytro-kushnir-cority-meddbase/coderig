@@ -15,16 +15,22 @@ spinner — "sad". Meanwhile a full timing toolkit already exists and is UNUSED 
   canvas dashboard that renders that CSV.
 
 ## Plan (as scoped in the session)
-- **C0 — instrument `ImpactCommand.DiffAsync` with `PhaseTimings`** (coarse phases: resolve+open, head-load,
-  head-derive, branch reach-sets, footprints, hazards, base-side, assemble). Non-invasive — wrap the top-level
-  awaits. This also gives CLI `rig impact --time` the breakdown `TimingReport` was built for.
-- **C1 — live progress via web events (SSE).** `/api/impact/stream?base&head` streams each phase-completion as
-  it happens; the explorer shows a live phase log/bar instead of a dead spinner, then the result (or a signal
-  to GET the now-cached `/api/impact`). Threads an `IProgress<(phase, ms)>` through `DiffAsync`.
-- **C2 — "where time went" (bonus, cheap).** The diff also dumps `rig-impact-telemetry.csv` via the existing
-  `TimingReport.WriteCsv` + `ResourceSampler`; reuse `tools/telemetry-dashboard.html` (serve/link it, or fold
-  its canvas charts into the explorer) to render the CPU/mem/disk/phase timeline. UNIFY: the same viz should
-  serve `index --time`, `impact`, and cold queries.
+- **C1 — live progress via web events (SSE). ✅ DONE this session** (commit `a78cd6d5`; endpoint now
+  `/api/impact/stream?base&head&async`). `ImpactEngine.DiffAsync` takes a `Func<string,long,Task>? onPhase`
+  awaited between the top-level phases (provenance / head-load / branch-compute / base-assemble); the explorer
+  shows a live phase log via `ImpactProgress`, then GETs the now-warm `/api/impact`. This is COARSE progress,
+  NOT the full `PhaseTimings`/`ResourceSampler` breakdown — C0/C2 below remain.
+- **C0 — instrument `ImpactEngine.DiffAsync` with `PhaseTimings`** (the finer phases: resolve+open, head-load,
+  head-derive, branch reach-sets, footprints, hazards, base-side, assemble — the `Tick` boundaries already
+  exist as coarse SSE phases; promote them to real `PhaseTimings` intervals + `ResourceSampler`). This gives
+  CLI `rig impact --time` the per-phase breakdown `TimingReport.WriteBreakdown` was built for (its own comment
+  names impact as the intended next consumer) and a `rig-impact-telemetry.csv`.
+- **C2 — UNIFY the `--time` viz (the enqueued ask).** Today `index --time` emits `TimingReport` +
+  `rig-index-telemetry.csv` rendered by `tools/telemetry-dashboard.html`; the web impact view has its own ad-hoc
+  SSE phase log (C1). Fold these into ONE timing model + ONE viz: serve `telemetry-dashboard.html` from the web
+  host (it's already copied to `wwwroot/telemetry.html`), point it at the C0 CSV, and reuse it for `index --time`,
+  `impact`, and cold queries alike — so terminal `--time` and the web explorer show the same CPU/mem/disk +
+  phase-rail timeline instead of two divergent representations.
 
 ## Notes
 - The on-disk diff cache is already correct as of this session (`ImpactCacheKey` now folds the tool MVID), so a

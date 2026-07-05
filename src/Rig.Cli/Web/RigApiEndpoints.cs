@@ -116,7 +116,7 @@ internal static class RigApiEndpoints
         // minutes on a big store; the client shows a busy state.
         app.MapGet(
             "/api/impact",
-            async (string? @base, string? head) =>
+            async (string? @base, string? head, bool? async) =>
             {
                 if (string.IsNullOrWhiteSpace(@base) || string.IsNullOrWhiteSpace(head))
                 {
@@ -125,7 +125,7 @@ internal static class RigApiEndpoints
 
                 try
                 {
-                    var art = await ImpactQueryService.DiffAsync(workingDirectory, baseRef: @base, headRef: head);
+                    var art = await ImpactQueryService.DiffAsync(workingDirectory, baseRef: @base, headRef: head, async: async ?? false);
                     return Results.Json(ImpactMapper.ToResponse(art));
                 }
                 catch (Exception ex)
@@ -141,7 +141,7 @@ internal static class RigApiEndpoints
         // `cache hit` → `done` immediately. Progress-only — the result comes from /api/impact.
         app.MapGet(
             "/api/impact/stream",
-            async (HttpContext http, string? @base, string? head) =>
+            async (HttpContext http, string? @base, string? head, bool? async) =>
             {
                 http.Response.Headers.ContentType = "text/event-stream";
                 http.Response.Headers.CacheControl = "no-store";
@@ -166,6 +166,7 @@ internal static class RigApiEndpoints
                         workingDirectory,
                         baseRef: @base,
                         headRef: head,
+                        async: async ?? false,
                         onPhase: (name, ms) => Send("phase", $"{name} · {ms} ms")
                     );
                     await Send("done", "ready");
@@ -183,7 +184,7 @@ internal static class RigApiEndpoints
         // AffectedEps by (kind, route). Bounded to one EP — no recompute; reads the same cached artifact.
         app.MapGet(
             "/api/impact/reach",
-            async (string? @base, string? head, string? kind, string? route) =>
+            async (string? @base, string? head, string? kind, string? route, bool? async) =>
             {
                 if (string.IsNullOrWhiteSpace(@base) || string.IsNullOrWhiteSpace(head) || string.IsNullOrWhiteSpace(route))
                 {
@@ -192,7 +193,7 @@ internal static class RigApiEndpoints
 
                 try
                 {
-                    var art = await ImpactQueryService.DiffAsync(workingDirectory, baseRef: @base, headRef: head);
+                    var art = await ImpactQueryService.DiffAsync(workingDirectory, baseRef: @base, headRef: head, async: async ?? false);
                     var ep = art.Diff.AffectedEps.FirstOrDefault(e => e.Route == route && (string.IsNullOrEmpty(kind) || e.Kind == kind));
                     ImpactReachNodeDto Node(string id) => new(id, SymbolNameFormatter.ShortName(id));
                     return Results.Json(

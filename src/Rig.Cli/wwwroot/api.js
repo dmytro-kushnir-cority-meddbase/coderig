@@ -110,13 +110,27 @@ export const api = {
       `tree|${storeId}|${from}|${!!asyncWalk}`,
       "/api/tree" + qs({ from, store: explicitStore, async: !!asyncWalk }),
     ),
-  entrypoints: (storeId, explicitStore) => cached(`eps|${storeId}`, "/api/entrypoints" + qs({ store: explicitStore })),
+  entrypoints: (storeId, explicitStore) =>
+    cached(`eps|${storeId}`, "/api/entrypoints" + qs({ store: explicitStore })),
   hazards: (storeId, explicitStore, from) =>
-    cached(`haz|${storeId}|${from}`, "/api/hazards" + qs({ from, store: explicitStore })),
-  // impact is keyed by (base, head) — both immutable stores, so safe to cache under the derivation version.
-  impact: (base, head) => cached(`impact|${base}|${head}`, "/api/impact" + qs({ base, head })),
-  // per-EP structural reach delta (added/removed reachable methods) for the tree diff overlay.
-  impactReach: (base, head, kind, route) =>
-    cached(`reach|${base}|${head}|${kind}|${route}`, "/api/impact/reach" + qs({ base, head, kind, route })),
-  search: (explicitStore, q) => getJson("/api/search" + qs({ q, store: explicitStore, limit: 15 })), // high-churn, uncached
+    cached(
+      `haz|${storeId}|${from}`,
+      "/api/hazards" + qs({ from, store: explicitStore }),
+    ),
+  // impact is keyed by (base, head, mode) — both stores are immutable, so safe to cache under the derivation
+  // version; the sync/async traversal mode changes the diff, so it MUST be in the key (else an async request
+  // would be served a cached sync result, or vice versa).
+  impact: (base, head, asyncWalk) =>
+    cached(
+      `impact|${base}|${head}|${!!asyncWalk}`,
+      "/api/impact" + qs({ base, head, async: !!asyncWalk }),
+    ),
+  // per-EP structural reach delta (added/removed reachable methods) for the tree diff overlay — same mode key.
+  impactReach: (base, head, kind, route, asyncWalk) =>
+    cached(
+      `reach|${base}|${head}|${kind}|${route}|${!!asyncWalk}`,
+      "/api/impact/reach" + qs({ base, head, kind, route, async: !!asyncWalk }),
+    ),
+  search: (explicitStore, q) =>
+    getJson("/api/search" + qs({ q, store: explicitStore, limit: 15 })), // high-churn, uncached
 };
