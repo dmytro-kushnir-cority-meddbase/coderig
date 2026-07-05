@@ -11,6 +11,8 @@ internal sealed record EffectDto(string Provider, string Operation, string Glyph
 internal sealed record TreeNodeDto(
     string Id, // SymbolId (DocID) — the stable identity for client-side collapse/re-root state.
     string Name, // ShortName — display label.
+    string Signature, // compact param signature "(SiteId, ITransaction)" — shown in the "signatures" render mode.
+    string Guards, // control-dependence predicate gating this call (⎇), empty if must-run — the "predicates" mode.
     string EdgeKind, // how this node was reached from its parent ("entry"/"invocation"/"impl-dispatch"/…).
     int Fanout, // dispatch fan-out degree of the reaching edge (>1 = "could be any of these N", not a real call).
     int CallSites, // distinct call sites under the same parent that collapsed into this child.

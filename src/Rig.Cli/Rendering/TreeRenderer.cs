@@ -72,7 +72,11 @@ internal static class TreeRenderer
     // predicate and is kept. while/for carry no " in " collection marker, so they are never filtered (and
     // empirically don't emit the redundant condition-guard). Returns "" when nothing remains (all guards were
     // loop-redundant, or the set decoded empty) — the caller then omits the ⎇ glyph entirely.
-    internal static string ShortGuards(string? encoded, string? loopDetail = null)
+    // maxLength caps the rendered predicate (default 60, the terminal-friendly cap the CLI uses). Callers that
+    // present their own truncation — e.g. the web UI, which sends full text and ellipsises in CSS — pass a
+    // large value to get the UNtruncated predicate. The semantic formatting (foreach-guard filtering, else-arm
+    // negation, short-circuit join) is unaffected; only the trailing length clamp honours maxLength.
+    internal static string ShortGuards(string? encoded, string? loopDetail = null, int maxLength = 60)
     {
         var guards = FactStructuralContext.DecodeGuards(encoded);
         if (guards.Count == 0)
@@ -103,7 +107,7 @@ internal static class TreeRenderer
         }
 
         var s = string.Join(" && ", parts);
-        return s.Length <= 60 ? s : s.Substring(startIndex: 0, length: 57) + "...";
+        return s.Length <= maxLength ? s : s.Substring(startIndex: 0, length: maxLength - 3) + "...";
     }
 
     // The COLL of a `foreach (ident in COLL)` loop detail (StructuralContext's "{ident} in {expr}" form),
