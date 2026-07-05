@@ -303,6 +303,92 @@ export function Chips(s, actions) {
   );
 }
 
+// ---- impact (store-vs-store diff) -----------------------------------------------------------------------
+const shortEncl = (fqn) => (fqn ? fqn.split(".").slice(-2).join(".") : "");
+function EffectLine(sign, e) {
+  return h(
+    "div",
+    { class: "effline " + (sign === "+" ? "add" : "del") },
+    sign + " ",
+    h("span", { class: "eprov" }, `${e.provider}:${e.operation}`),
+    e.resource ? " " + e.resource : "",
+    h("span", { class: "eencl" }, " " + shortEncl(e.enclosing)),
+  );
+}
+function HazLine(sign, hz) {
+  return h(
+    "div",
+    { class: "effline haz " + (sign === "+" ? "add" : "del") },
+    `${sign} ⚠ ${hz.type}(${hz.confidence})`,
+    h("span", { class: "eencl" }, " " + shortEncl(hz.enclosing)),
+  );
+}
+function EpDeltaCard(p, actions) {
+  const hazN = p.hazardsAdded.length + p.hazardsRemoved.length;
+  const head = h(
+    "div",
+    { class: "epd-head", title: p.fqn + "  (click → open tree)", onClick: () => actions.openTreeFrom(p.fqn) },
+    h("span", { class: "epd-route" }, p.route),
+    h("span", { class: "epd-counts" }, `+${p.added.length}/−${p.removed.length} eff`),
+    hazN ? h("span", { class: "epd-haz" }, `⚠ +${p.hazardsAdded.length}/−${p.hazardsRemoved.length}`) : null,
+    p.sharedMutationOnPath
+      ? h("span", { class: "epd-shared", title: "shared-state mutation still on the path" }, "shared-state")
+      : null,
+  );
+  const body = h(
+    "div",
+    { class: "epd-body" },
+    p.added.map((e) => EffectLine("+", e)),
+    p.removed.map((e) => EffectLine("−", e)),
+    p.hazardsAdded.map((hz) => HazLine("+", hz)),
+    p.hazardsRemoved.map((hz) => HazLine("−", hz)),
+  );
+  return h("div", { class: "epd" }, head, body);
+}
+export function ImpactView(s, actions) {
+  const d = s.impactData;
+  if (!d) return h("div", { class: "impact-empty" }, "pick a base and head store above, then press Diff.");
+  const f = s.impactFilter.trim().toLowerCase();
+  const match = d.perEp.filter(
+    (p) =>
+      !f ||
+      p.route.toLowerCase().includes(f) ||
+      p.fqn.toLowerCase().includes(f) ||
+      p.added.some((e) => `${e.provider}:${e.operation}`.includes(f)) ||
+      p.removed.some((e) => `${e.provider}:${e.operation}`.includes(f)),
+  );
+  const CAP = 200;
+  const summary = h(
+    "div",
+    { class: "impact-summary" },
+    h("div", {}, h("b", {}, d.base.label), " → ", h("b", {}, d.head.label)),
+    h(
+      "div",
+      { class: "impact-stats" },
+      h("span", { class: "add" }, `+${d.addedEps.length} EPs`),
+      h("span", { class: "del" }, `−${d.removedEps.length} EPs`),
+      h("span", {}, `${d.affectedEpCount.toLocaleString()} affected (structural)`),
+      h("span", {}, `${d.perEp.length.toLocaleString()} behavioral`),
+    ),
+  );
+  const note = h(
+    "div",
+    { class: "impact-note" },
+    `${match.length.toLocaleString()} EP(s) with a behavioral effect change${f ? ` matching "${f}"` : ""}${match.length > CAP ? ` — showing first ${CAP} (filter to narrow)` : ""}`,
+  );
+  return h(
+    "div",
+    { class: "impact" },
+    summary,
+    note,
+    h(
+      "div",
+      {},
+      match.slice(0, CAP).map((p) => EpDeltaCard(p, actions)),
+    ),
+  );
+}
+
 // ---- the static Shell (built once) ----------------------------------------------------------------------
 // Returns { root, refs }. refs holds the containers the regions re-render into + the (uncontrolled) inputs.
 // Input events call `actions`; the shell never reads state after construction.
@@ -318,12 +404,14 @@ export function Shell(actions) {
     themeBtn("system", "System"),
   );
   refs.storeDir = h("span", { class: "store" });
+  const modeBtn = (m, label) => h("button", { dataset: { app: m }, onClick: () => actions.setAppMode(m) }, label);
+  refs.appmode = h("div", { class: "appmode" }, modeBtn("tree", "Tree"), modeBtn("impact", "Impact"));
   refs.purge = h(
     "button",
     { class: "purge", title: "clear the client cache (in-memory + persisted)", onClick: () => actions.purge() },
     "purge cache",
   );
-  const header = h("header", {}, h("h1", {}, "rig · explorer"), refs.storeDir, refs.purge, refs.theme);
+  const header = h("header", {}, h("h1", {}, "rig · explorer"), refs.appmode, refs.storeDir, refs.purge, refs.theme);
 
   // sidebar
   const tab = (id, label) => h("button", { dataset: { tab: id }, onClick: () => actions.setTab(id) }, label);
@@ -415,12 +503,42 @@ export function Shell(actions) {
     refs.go,
   );
 
-  // status + tree
+  refs.treeToolbar = toolbar;
+
+  // impact toolbar (base/head store pickers + Diff + filter) — hidden until appMode=impact
+  refs.impactBase = h(
+    "select",
+    { title: "base store", onChange: (e) => actions.setImpactStore("base", e.target.value) },
+    h("option", { value: "" }, "base…"),
+  );
+  refs.impactHead = h(
+    "select",
+    { title: "head store", onChange: (e) => actions.setImpactStore("head", e.target.value) },
+    h("option", { value: "" }, "head…"),
+  );
+  refs.impactGo = h("button", { class: "go", onClick: () => actions.loadImpact() }, "Diff");
+  refs.impactFilter = h("input", {
+    placeholder: "filter EPs / effects…",
+    autocomplete: "off",
+    onInput: (e) => actions.setImpactFilter(e.target.value),
+  });
+  refs.impactToolbar = h(
+    "div",
+    { class: "controls impact-toolbar hidden" },
+    refs.impactBase,
+    h("span", { class: "arrow" }, "→"),
+    refs.impactHead,
+    refs.impactGo,
+    refs.impactFilter,
+  );
+
+  // status + content (tree OR impact, toggled by appMode)
   refs.spin = h("span", { class: "spin" });
   refs.status = h("span", { id: "status" });
   refs.statusbar = h("div", { id: "statusbar" }, refs.spin, refs.status);
   refs.tree = h("div", { class: "tree" });
-  const section = h("section", {}, toolbar, refs.statusbar, refs.tree);
+  refs.impact = h("div", { class: "tree impact-wrap hidden" });
+  const section = h("section", {}, refs.treeToolbar, refs.impactToolbar, refs.statusbar, refs.tree, refs.impact);
 
   refs.root = h("main", {}, aside, refs.splitter, section);
   return { root: h("div", {}, header, refs.root), refs };

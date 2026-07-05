@@ -5,7 +5,7 @@
 import { h, mount, watch } from "./lib.js";
 import { api, setCacheVersion, purgeCache } from "./api.js";
 import { store, get, set, activeStoreId, querySlice, serializeUrl, readUrl } from "./store.js";
-import { Shell, RunsList, EpList, TreeView, Chips, treeStatus, baseName } from "./components.js";
+import { Shell, RunsList, EpList, TreeView, ImpactView, Chips, treeStatus, baseName } from "./components.js";
 
 const explicit = () => get().storeId; // the id to put on URLs (null => LATEST)
 const resolved = () => activeStoreId(); // the resolved id (for cache keys)
@@ -19,7 +19,9 @@ function status(msg, err = false) {
 function setBusy(on) {
   refs.statusbar.classList.toggle("busy", on);
   refs.tree.classList.toggle("busy", on);
+  refs.impact.classList.toggle("busy", on);
   refs.go.disabled = on;
+  refs.impactGo.disabled = on;
 }
 
 // ---- data actions ---------------------------------------------------------------------------------------
@@ -69,6 +71,30 @@ function selectStore(id) {
   if (get().tab === "eps") loadEntrypoints();
   if (get().treeFrom) openTree(get().treeFrom);
 }
+async function loadImpact() {
+  const { impactBase, impactHead } = get();
+  if (!impactBase || !impactHead) {
+    status("pick a base and a head store", true);
+    return;
+  }
+  if (impactBase === impactHead) {
+    status("base and head are the same store", true);
+    return;
+  }
+  setBusy(true);
+  status("diffing… (loads + derives BOTH stores — can take a while on a big store)");
+  try {
+    set({ impactData: await api.impact(impactBase, impactHead) });
+    const d = get().impactData;
+    status(
+      `impact: ${d.perEp.length.toLocaleString()} behavioral change(s), +${d.addedEps.length}/−${d.removedEps.length} EPs`,
+    );
+  } catch (e) {
+    status(e.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
 
 // ---- actions passed to components -----------------------------------------------------------------------
 const actions = {
@@ -109,6 +135,23 @@ const actions = {
     }
     if (get().treeFrom) openTree(get().treeFrom);
     else status("cache purged");
+  },
+  // impact mode
+  setAppMode(m) {
+    set({ appMode: m });
+  },
+  setImpactStore(which, id) {
+    set(which === "base" ? { impactBase: id } : { impactHead: id });
+  },
+  setImpactFilter(v) {
+    set({ impactFilter: v });
+  },
+  loadImpact,
+  // cross-link: an impact EP card → open that EP's tree
+  openTreeFrom(fqn) {
+    set({ appMode: "tree", from: fqn });
+    refs.from.value = fqn;
+    openTree(fqn);
   },
 };
 
@@ -254,6 +297,26 @@ function setupSearch() {
   });
 }
 
+// ---- impact mode: toggle Tree/Impact UI + populate the base/head store pickers --------------------------
+function applyAppMode(m) {
+  const impact = m === "impact";
+  refs.treeToolbar.classList.toggle("hidden", impact);
+  refs.tree.classList.toggle("hidden", impact);
+  refs.impactToolbar.classList.toggle("hidden", !impact);
+  refs.impact.classList.toggle("hidden", !impact);
+  for (const b of refs.appmode.children) b.classList.toggle("on", b.dataset.app === m);
+}
+function populateImpactStores(s) {
+  const opts = (ph) => [
+    h("option", { value: "" }, ph),
+    ...s.runs.map((r) => h("option", { value: r.storeId }, `${r.storeId}${r.branch ? " · " + r.branch : ""}`)),
+  ];
+  mount(refs.impactBase, opts("base…"));
+  mount(refs.impactHead, opts("head…"));
+  refs.impactBase.value = s.impactBase;
+  refs.impactHead.value = s.impactHead;
+}
+
 // ---- sync uncontrolled inputs from state (once, after URL restore) --------------------------------------
 function syncControls(s) {
   refs.from.value = s.from;
@@ -265,6 +328,10 @@ function syncControls(s) {
   refs.pred.querySelector("input").checked = s.predicates;
   refs.haz.querySelector("input").checked = s.hazards;
   refs.ms.classList.toggle("disabled", s.mode === "none");
+  refs.impactBase.value = s.impactBase;
+  refs.impactHead.value = s.impactHead;
+  refs.impactFilter.value = s.impactFilter;
+  applyAppMode(s.appMode);
 }
 
 // ---- region subscriptions (re-render only the affected region when its slice changes) -------------------
@@ -274,6 +341,7 @@ function setupWatches() {
     (s) => [s.runs, s.storeId],
     (s) => {
       mount(refs.runs, RunsList(s, actions));
+      populateImpactStores(s);
       const latest = s.runs.find((r) => r.isLatest) || s.runs[0];
       refs.storeDir.textContent = latest ? latest.solutionPath || "" : "";
     },
@@ -324,6 +392,18 @@ function setupWatches() {
       if (s.tree) status(treeStatus(s));
     },
   );
+  watch(
+    store,
+    (s) => [s.appMode],
+    (s) => applyAppMode(s.appMode),
+  );
+  watch(
+    store,
+    (s) => [s.impactData, s.impactFilter, s.appMode],
+    (s) => {
+      if (s.appMode === "impact") mount(refs.impact, ImpactView(s, actions));
+    },
+  );
   watch(store, querySlice, (s) => serializeUrl(s)); // URL stays in sync with the query
 }
 
@@ -356,7 +436,11 @@ function setupWatches() {
     const patch = readUrl(runs, initialSearch); // validate ?store= against known runs
     set(patch);
     syncControls(get());
-    if (patch.from) openTree(patch.from);
+    if (patch.appMode === "impact") {
+      if (patch.impactBase && patch.impactHead) loadImpact();
+    } else if (patch.from) {
+      openTree(patch.from);
+    }
   } catch (e) {
     status("failed to load runs: " + e.message, true);
   }

@@ -23,6 +23,12 @@ export const store = createStore({
   treeFrom: "", // the pattern `tree` was loaded for
   eps: [], // entry points for the active store
   hazardMarks: null, // /api/hazards response (array of {methodId,type,confidence,sites}) for the current tree
+  // impact mode (store-vs-store diff)
+  appMode: "tree", // tree | impact  (top-level view)
+  impactBase: "", // base store id
+  impactHead: "", // head store id
+  impactData: null, // /api/impact response
+  impactFilter: "", // filter over per-EP deltas (route / effect substring)
   // ui
   tab: "runs", // runs | eps
   epFilter: "",
@@ -49,6 +55,9 @@ export const querySlice = (s) => [
   s.signatures,
   s.predicates,
   s.hazards,
+  s.appMode,
+  s.impactBase,
+  s.impactHead,
 ];
 
 // state -> URL (query params only; defaults omitted to keep links terse).
@@ -64,6 +73,11 @@ export function serializeUrl(s = get()) {
   if (s.signatures) p.set("sig", "1");
   if (s.predicates) p.set("pred", "1");
   if (s.hazards) p.set("haz", "1");
+  if (s.appMode === "impact") {
+    p.set("app", "impact");
+    if (s.impactBase) p.set("ibase", s.impactBase);
+    if (s.impactHead) p.set("ihead", s.impactHead);
+  }
   history.replaceState(null, "", location.pathname + (p.toString() ? "?" + p : ""));
 }
 
@@ -83,5 +97,8 @@ export function readUrl(runs, search = location.search) {
     signatures: p.get("sig") === "1",
     predicates: p.get("pred") === "1",
     hazards: p.get("haz") === "1",
+    appMode: p.get("app") === "impact" ? "impact" : "tree",
+    impactBase: runs.some((r) => r.storeId === p.get("ibase")) ? p.get("ibase") : "",
+    impactHead: runs.some((r) => r.storeId === p.get("ihead")) ? p.get("ihead") : "",
   };
 }

@@ -150,89 +150,40 @@ internal static class ImpactCommand
         var max = opts.Limit ?? int.MaxValue;
         var mode = CommonOptions.Mode(async: opts.Async, includeDelivery: opts.IncludeDelivery); // --async => walk sound handoffs (delivery fan-out excluded unless --include-delivery)
 
-        // One rule load for the whole run — rules are working-dir-scoped, so the SAME set serves both stores.
-        var (rules, baseDbPath, cacheRaw, cacheKey) = ResolveStoresAndCache(opts, io, mode);
-        // cache is IDisposable — using ensures it's closed even when the cold path throws.
-        using var cache = cacheRaw;
+        // The HEAD store: opened once here so the deployment-map read (render chrome) shares it with DiffAsync
+        // (which also reads it for provenance + the cold derivation). Opening issues no query.
+        await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation with { StoreRef = opts.HeadRef });
 
-        // The HEAD store: opened for the (cheap) deployment-map read on a hit, and the full derivation on a
-        // miss. Opening issues no query — the cost is in the graph load + reach a hit skips.
-        var headLocation = io.WorkspaceLocation with
-        {
-            StoreRef = opts.HeadRef,
-        };
-        await using var context = await OpenReadContextGatedAsync(headLocation);
-
-        // F4: load the DeploymentMap ONCE here so both the warm-path (cache hit) and cold-path share the
-        // same result — eliminates the duplicate LoadDeploymentsAsync that previously appeared in each branch.
+        // F4: load the DeploymentMap ONCE (render-only — the --structural chips). Not part of the diff, so it
+        // stays here rather than in DiffAsync (which the web endpoint also calls, without deployment chrome).
         var deployments = await LoadDeploymentsAsync(context, io.WorkspaceLocation.WorkingDirectory, io.TextOutput.Error);
 
-        // WARM PATH: a fully-materialized diff + provenance + per-EP FQN subset → render WITHOUT loading the
-        // base store or shaping/walking either graph. Deployments are loaded once above for the --structural chips.
-        if (cacheKey is not null && cache!.Get(cacheKey) is { } cachedBlob && ImpactCacheCodec.Decode(cachedBlob) is { } art)
-        {
-            RenderImpact(
-                output: io.TextOutput.Output,
-                impactDiff: art.Diff,
-                baseProv: art.BaseProvenance,
-                headProv: art.HeadProvenance,
-                mode: mode,
-                deployments: deployments,
-                fqnSites: art.FqnSites,
-                tsv: tsv,
-                structural: opts.Structural,
-                max: max
-            );
-            return ExpectNoEffectChangeExit(opts.ExpectNoEffectChange, EffectChangedEpCount(art.Diff), io.TextOutput.Error);
-        }
-
-        // Provenance for the header: each store's source branch + short commit (12-char sha), read from its
-        // own run row. Falls back to the store-id when a store has no commit/branch provenance.
-        var headProv = await ReadProvenanceAsync(context, opts.HeadRef);
-        var baseProv = await ResolveBaseProvenanceAsync(baseDbPath: baseDbPath, baseRef: opts.BaseRef);
-
-        // HEAD (branch) side: load and shape the full graph, derive entry points + effects. All reads are
-        // done once and threaded into the per-EP computations below.
-        var headData = await LoadHeadSideDataAsync(context, rules, gate: opts.Gate);
-
-        // Branch-side per-EP outputs: the EP-set diff vs base, the reach sets, the epByKey site map, the
-        // effect footprints, and the hazard sets — all over the HEAD graph loaded above.
-        var branchSide = await ComputeBranchSideAsync(baseDbPath: baseDbPath, rules: rules, mode: mode, headData: headData);
-
-        // Assemble the proven store-vs-store ImpactDiff: load the base store ONCE, diff reach sets +
-        // footprints/hazards against the branch, and wrap the three signals into ImpactDiff. The gate must
-        // match the HEAD side so both stores' static-field-read effects are filtered identically.
-        var impactDiff = await AssembleImpactDiffAsync(
-            baseDbPath: baseDbPath,
-            rules: rules,
+        // The store-vs-store diff (warm-cached or freshly derived) — the SAME artifact the web /api/impact
+        // returns, so `rig impact` and the web view cannot diverge.
+        var art = await DiffAsync(
+            headContext: context,
+            ws: io.WorkspaceLocation,
+            baseRef: opts.BaseRef,
+            headRef: opts.HeadRef,
             mode: mode,
-            headData: headData,
-            branchSide: branchSide,
-            gate: opts.Gate
+            gate: opts.Gate,
+            noCache: opts.NoCache,
+            extraRules: opts.ExtraRules
         );
-
-        // (FilePath, Line) -> method DocID, in-RAM (no store I/O) — lets the affected-EP card render each EP's
-        // fully-qualified dotted name (FqnForCard), which round-trips into `rig tree`, instead of the path route.
-        var fqnSites = branchSide.IdBySite;
-
-        // Cache the proven diff + both sides' provenance + the diff-site FQN subset (best-effort) so a re-run —
-        // including one that only changes render flags — replays it instead of reloading both stores. Stored
-        // UNTRUNCATED (--limit is a render concern), so every --limit value renders correctly from one blob.
-        TrySaveDiffToCache(cache, cacheKey, impactDiff, baseProv, headProv, fqnSites);
 
         RenderImpact(
             output: io.TextOutput.Output,
-            impactDiff: impactDiff,
-            baseProv: baseProv,
-            headProv: headProv,
+            impactDiff: art.Diff,
+            baseProv: art.BaseProvenance,
+            headProv: art.HeadProvenance,
             mode: mode,
             deployments: deployments,
-            fqnSites: fqnSites,
+            fqnSites: art.FqnSites,
             tsv: tsv,
             structural: opts.Structural,
             max: max
         );
-        return ExpectNoEffectChangeExit(opts.ExpectNoEffectChange, EffectChangedEpCount(impactDiff), io.TextOutput.Error);
+        return ExpectNoEffectChangeExit(opts.ExpectNoEffectChange, EffectChangedEpCount(art.Diff), io.TextOutput.Error);
     }
 
     // Resolve BOTH per-commit stores up front (sha / short-sha / store-id → store dir), load the rule set,
@@ -243,33 +194,76 @@ internal static class ImpactCommand
     // diff and must not fragment it. F6: LoadedRulePaths are passed to ComputeFromPaths so the fingerprint
     // reuses the already-resolved paths instead of re-running the cascade merge.
     private static (RuleSet Rules, string BaseDbPath, QueryCache? Cache, string? CacheKey) ResolveStoresAndCache(
-        Options opts,
-        CommandIo io,
+        WorkspaceLocation ws,
+        string baseRef,
+        string headRef,
+        IReadOnlyList<string> extraRules,
+        bool gate,
+        bool noCache,
         FactPathFinder.TraversalMode mode
     )
     {
-        var rules = RuleSetLoader.Load(
-            workingDirectory: io.WorkspaceLocation.WorkingDirectory,
-            extraRules: opts.ExtraRules,
-            loadedPaths: out var loadedRulePaths
-        );
+        var rules = RuleSetLoader.Load(workingDirectory: ws.WorkingDirectory, extraRules: extraRules, loadedPaths: out var loadedRulePaths);
 
-        var headDir = StoreLayout.ResolveReadStoreDir(io.WorkspaceLocation with { StoreRef = opts.HeadRef });
-        var baseDir = StoreLayout.ResolveReadStoreDir(io.WorkspaceLocation with { StoreRef = opts.BaseRef });
+        var headDir = StoreLayout.ResolveReadStoreDir(ws with { StoreRef = headRef });
+        var baseDir = StoreLayout.ResolveReadStoreDir(ws with { StoreRef = baseRef });
         var baseDbPath = Path.Combine(baseDir, StoreLayout.DbFileName);
         var headStoreKey = StoreKey(Path.Combine(headDir, StoreLayout.DbFileName));
         var baseStoreKey = StoreKey(baseDbPath);
-        var cache = opts.NoCache ? null : QueryCache.Open(rigDirectory: headDir, storeKey: headStoreKey);
+        var cache = noCache ? null : QueryCache.Open(rigDirectory: headDir, storeKey: headStoreKey);
         // Fold the shared_state:read write-pairing gate state into the rule-fingerprint slot so the gated and
         // ungated (--no-gate) diffs never share a cache entry. BOTH carry an explicit token (not the bare
         // rulesHash) so a diff cached by a PRE-gate binary can never be served as a gated result (a one-time
         // recompute on upgrade; correctness over a warm-cache hit).
         var rulesHash = RulesFingerprint.ComputeFromPaths(loadedRulePaths); // F6: reuse paths Load resolved.
-        var keyRulesHash = opts.Gate ? $"{rulesHash}|gate" : $"{rulesHash}|nogate";
+        var keyRulesHash = gate ? $"{rulesHash}|gate" : $"{rulesHash}|nogate";
         var cacheKey = cache is null
             ? null
             : ImpactCacheKey(baseStoreKey: baseStoreKey, headStoreKey: headStoreKey, rulesHash: keyRulesHash, mode: mode);
         return (rules, baseDbPath, cache, cacheKey);
+    }
+
+    // The reusable store-vs-store DIFF, shared by `rig impact` (RunAsync) and the web /api/impact endpoint (via
+    // ImpactQueryService). Produces the full ImpactCacheArtifact (diff + both provenances + the diff-site FQN
+    // map) — everything a renderer needs — with NO rendering/deployment concerns. Warm path returns the cached
+    // artifact without loading either graph; cold path loads + derives + caches. The caller owns `headContext`
+    // (opened at StoreRef=headRef) so it can also read deployments off it without a second open.
+    internal static async Task<ImpactCacheArtifact> DiffAsync(
+        RigDbContext headContext,
+        WorkspaceLocation ws,
+        string baseRef,
+        string headRef,
+        FactPathFinder.TraversalMode mode,
+        bool gate,
+        bool noCache,
+        IReadOnlyList<string> extraRules
+    )
+    {
+        var (rules, baseDbPath, cacheRaw, cacheKey) = ResolveStoresAndCache(ws, baseRef, headRef, extraRules, gate, noCache, mode);
+        using var cache = cacheRaw;
+
+        // WARM PATH: a fully-materialized diff + provenance + per-EP FQN subset → return WITHOUT loading the
+        // base store or shaping/walking either graph.
+        if (cacheKey is not null && cache!.Get(cacheKey) is { } cachedBlob && ImpactCacheCodec.Decode(cachedBlob) is { } art)
+        {
+            return art;
+        }
+
+        var headProv = await ReadProvenanceAsync(headContext, headRef);
+        var baseProv = await ResolveBaseProvenanceAsync(baseDbPath: baseDbPath, baseRef: baseRef);
+        var headData = await LoadHeadSideDataAsync(headContext, rules, gate: gate);
+        var branchSide = await ComputeBranchSideAsync(baseDbPath: baseDbPath, rules: rules, mode: mode, headData: headData);
+        var impactDiff = await AssembleImpactDiffAsync(
+            baseDbPath: baseDbPath,
+            rules: rules,
+            mode: mode,
+            headData: headData,
+            branchSide: branchSide,
+            gate: gate
+        );
+        var fqnSites = branchSide.IdBySite;
+        TrySaveDiffToCache(cache, cacheKey, impactDiff, baseProv, headProv, fqnSites);
+        return new ImpactCacheArtifact(Diff: impactDiff, BaseProvenance: baseProv, HeadProvenance: headProv, FqnSites: fqnSites);
     }
 
     // The HEAD (branch) store data needed by the per-EP computations: the shaped graph, the entry points,

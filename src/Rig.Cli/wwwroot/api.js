@@ -113,5 +113,7 @@ export const api = {
   entrypoints: (storeId, explicitStore) => cached(`eps|${storeId}`, "/api/entrypoints" + qs({ store: explicitStore })),
   hazards: (storeId, explicitStore, from) =>
     cached(`haz|${storeId}|${from}`, "/api/hazards" + qs({ from, store: explicitStore })),
+  // impact is keyed by (base, head) — both immutable stores, so safe to cache under the derivation version.
+  impact: (base, head) => cached(`impact|${base}|${head}`, "/api/impact" + qs({ base, head })),
   search: (explicitStore, q) => getJson("/api/search" + qs({ q, store: explicitStore, limit: 15 })), // high-churn, uncached
 };

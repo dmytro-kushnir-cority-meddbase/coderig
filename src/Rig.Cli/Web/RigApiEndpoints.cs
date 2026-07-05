@@ -110,6 +110,30 @@ internal static class RigApiEndpoints
             }
         );
 
+        // Store-vs-store impact diff (same as `rig impact --base --head`): per-EP behavioral effect/hazard
+        // deltas + entry-point add/remove. Both refs required. Expensive (loads + derives BOTH stores) —
+        // minutes on a big store; the client shows a busy state.
+        app.MapGet(
+            "/api/impact",
+            async (string? @base, string? head) =>
+            {
+                if (string.IsNullOrWhiteSpace(@base) || string.IsNullOrWhiteSpace(head))
+                {
+                    return Results.Problem(title: "Missing base/head", detail: "Provide ?base=<store>&head=<store>.", statusCode: 400);
+                }
+
+                try
+                {
+                    var art = await ImpactQueryService.DiffAsync(workingDirectory, baseRef: @base, headRef: head);
+                    return Results.Json(ImpactMapper.ToResponse(art));
+                }
+                catch (Exception ex)
+                {
+                    return Results.Problem(title: "Impact diff failed", detail: ex.Message, statusCode: 400);
+                }
+            }
+        );
+
         // Per-method hazard marks for a tree (same set as `rig tree --view hazards`) — the client overlays
         // these on nodes when "hazards" is toggled. Separate from /api/tree because it's an expensive whole-
         // store derivation, independently cacheable by store.

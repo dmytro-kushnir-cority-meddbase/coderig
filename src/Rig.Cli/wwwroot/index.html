@@ -584,6 +584,148 @@
       .flat .fname {
         color: var(--fg);
       }
+      /* --add (diff green) — theme-scoped overrides, kept out of the token blocks above */
+      :root,
+      :root[data-theme="dark"] {
+        --add: #3fb950;
+      }
+      :root[data-theme="light"] {
+        --add: #1a7f37;
+      }
+      @media (prefers-color-scheme: light) {
+        :root:not([data-theme]) {
+          --add: #1a7f37;
+        }
+      }
+      .hidden {
+        display: none !important;
+      }
+      /* Tree/Impact mode switch (mirrors .theme) */
+      .appmode {
+        display: flex;
+        gap: 2px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 2px;
+      }
+      .appmode button {
+        background: transparent;
+        color: var(--muted);
+        font-weight: 500;
+        padding: 3px 10px;
+        font-size: 12px;
+        border-radius: 4px;
+        border: none;
+        cursor: pointer;
+      }
+      .appmode button.on {
+        background: var(--accent);
+        color: var(--btn-fg);
+      }
+      /* impact toolbar + view */
+      .impact-toolbar select {
+        max-width: 300px;
+      }
+      .impact-toolbar .arrow {
+        color: var(--muted);
+      }
+      .impact-toolbar input {
+        flex: 1;
+        min-width: 200px;
+      }
+      .impact-wrap {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 13px;
+      }
+      .impact-empty {
+        color: var(--muted);
+        padding: 12px 0;
+      }
+      .impact-summary {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-bottom: 12px;
+        background: var(--panel);
+      }
+      .impact-stats {
+        display: flex;
+        gap: 14px;
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .impact-note {
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 10px;
+      }
+      .epd {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        margin-bottom: 8px;
+        overflow: hidden;
+      }
+      .epd-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 7px 10px;
+        cursor: pointer;
+        background: var(--panel);
+      }
+      .epd-head:hover {
+        background: var(--hover);
+      }
+      .epd-route {
+        color: var(--fg);
+        font-weight: 600;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .epd-counts {
+        color: var(--muted);
+        font-size: 11px;
+        margin-left: auto;
+        white-space: nowrap;
+      }
+      .epd-haz {
+        color: var(--danger);
+        font-size: 11px;
+      }
+      .epd-shared {
+        color: var(--warn);
+        font-size: 10px;
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        padding: 0 4px;
+      }
+      .epd-body {
+        padding: 6px 10px 8px 24px;
+      }
+      .effline {
+        font-size: 12px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .effline.add {
+        color: var(--add);
+      }
+      .effline.del {
+        color: var(--danger);
+      }
+      .effline.haz {
+        font-style: italic;
+      }
+      .effline .eprov {
+        font-weight: 600;
+      }
+      .effline .eencl {
+        color: var(--muted);
+      }
     </style>
   </head>
   <body>
