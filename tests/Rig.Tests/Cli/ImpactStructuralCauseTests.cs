@@ -1,4 +1,5 @@
 using Rig.Cli.Commands;
+using Rig.Cli.Impact;
 using Shouldly;
 
 namespace Rig.Tests.Cli;
@@ -13,12 +14,7 @@ public sealed class ImpactStructuralCauseTests
 {
     // Build an EpReachDelta with only the fields the classifier reads (stems + in-place count); the rest are
     // display/ranking fields irrelevant here.
-    private static ImpactCommand.EpReachDelta Delta(
-        string[]? added = null,
-        string[]? removed = null,
-        string[]? changed = null,
-        int inPlace = 0
-    ) =>
+    private static EpReachDelta Delta(string[]? added = null, string[]? removed = null, string[]? changed = null, int inPlace = 0) =>
         new(
             Kind: "action",
             Route: "X/Y.Z",
@@ -47,7 +43,7 @@ public sealed class ImpactStructuralCauseTests
             ]
         );
 
-        ImpactCommand.ClassifyStructuralCause(d).ShouldBe(ImpactCommand.StructuralCause.RecordShape);
+        ImpactEngine.ClassifyStructuralCause(d).ShouldBe(StructuralCause.RecordShape);
     }
 
     [Test]
@@ -76,7 +72,7 @@ public sealed class ImpactStructuralCauseTests
             ]
         );
 
-        ImpactCommand.ClassifyStructuralCause(d).ShouldBe(ImpactCommand.StructuralCause.RecordShape);
+        ImpactEngine.ClassifyStructuralCause(d).ShouldBe(StructuralCause.RecordShape);
     }
 
     [Test]
@@ -89,7 +85,7 @@ public sealed class ImpactStructuralCauseTests
             removed: ["App.Service.OldHandler", "App.Service.OldValidator", "R:P:App.Record.SomeField"]
         );
 
-        ImpactCommand.ClassifyStructuralCause(d).ShouldBe(ImpactCommand.StructuralCause.Other);
+        ImpactEngine.ClassifyStructuralCause(d).ShouldBe(StructuralCause.Other);
     }
 
     [Test]
@@ -98,7 +94,7 @@ public sealed class ImpactStructuralCauseTests
         // A record's ctor params moved and nothing else — no new accessor, just a re-signing of the ctor.
         var d = Delta(changed: ["App.CompanyRecord.#ctor", "App.SiteRecord.#ctor"]);
 
-        ImpactCommand.ClassifyStructuralCause(d).ShouldBe(ImpactCommand.StructuralCause.CtorSig);
+        ImpactEngine.ClassifyStructuralCause(d).ShouldBe(StructuralCause.CtorSig);
     }
 
     [Test]
@@ -107,7 +103,7 @@ public sealed class ImpactStructuralCauseTests
         // Phase-2 signal only: a reachable method's body changed (a constant edit) with no add/remove/re-sign.
         var d = Delta(inPlace: 3);
 
-        ImpactCommand.ClassifyStructuralCause(d).ShouldBe(ImpactCommand.StructuralCause.InPlace);
+        ImpactEngine.ClassifyStructuralCause(d).ShouldBe(StructuralCause.InPlace);
     }
 
     [Test]
@@ -121,7 +117,7 @@ public sealed class ImpactStructuralCauseTests
                 "M:MedDBase.Pages.Patient.Medical.ObservationRequest.Save(System.Boolean)",
         };
 
-        var label = ImpactCommand.FqnForCard(
+        var label = ImpactEngine.FqnForCard(
             route: "Patient/Medical/ObservationRequest.Save", // the path-style route must NOT win
             filePath: "C:/repo/Patient/Medical/ObservationRequest.cs",
             line: 224,
@@ -138,10 +134,10 @@ public sealed class ImpactStructuralCauseTests
         // blank. The diff still keys on (Kind, Route) regardless.
         var empty = new Dictionary<(string, int), string>();
 
-        ImpactCommand
+        ImpactEngine
             .FqnForCard(route: "background/Some/Route.Tick", filePath: "", line: 0, idBySite: empty)
             .ShouldBe("background/Some/Route.Tick");
-        ImpactCommand
+        ImpactEngine
             .FqnForCard(route: "X/Y.Z", filePath: "C:/repo/X.cs", line: 99, idBySite: empty) // file present but no (file,line) hit
             .ShouldBe("X/Y.Z");
     }
@@ -155,6 +151,6 @@ public sealed class ImpactStructuralCauseTests
             changed: ["App.CompanyRecord.#ctor"]
         );
 
-        ImpactCommand.ClassifyStructuralCause(d).ShouldBe(ImpactCommand.StructuralCause.RecordShape);
+        ImpactEngine.ClassifyStructuralCause(d).ShouldBe(StructuralCause.RecordShape);
     }
 }

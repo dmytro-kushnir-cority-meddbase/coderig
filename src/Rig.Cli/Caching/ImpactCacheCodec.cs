@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Rig.Cli.Commands;
+using Rig.Cli.Impact;
 
 namespace Rig.Cli.Caching;
 
@@ -20,9 +21,9 @@ namespace Rig.Cli.Caching;
 // time for the diff's sites and stored here, so FqnForCard needs no idBySite on the warm path. Stored
 // UNTRUNCATED — --limit is applied at render, so it doesn't fragment the cache.
 internal sealed record ImpactCacheArtifact(
-    ImpactCommand.ImpactDiff Diff,
-    ImpactCommand.StoreProvenance BaseProvenance,
-    ImpactCommand.StoreProvenance HeadProvenance,
+    ImpactDiff Diff,
+    StoreProvenance BaseProvenance,
+    StoreProvenance HeadProvenance,
     // (FilePath, Line) -> method DocID for every site referenced by the diff (FqnForCard input). Restricted
     // to the diff's sites, not the whole store, so the blob stays small. Concrete Dictionary so it drops
     // straight into FqnForCard's parameter on the warm render path.
@@ -40,9 +41,9 @@ internal static class ImpactCacheCodec
     );
 
     public static byte[] Encode(
-        ImpactCommand.ImpactDiff diff,
-        ImpactCommand.StoreProvenance baseProvenance,
-        ImpactCommand.StoreProvenance headProvenance,
+        ImpactDiff diff,
+        StoreProvenance baseProvenance,
+        StoreProvenance headProvenance,
         IReadOnlyDictionary<(string File, int Line), string> idBySite
     )
     {
@@ -108,10 +109,10 @@ internal static class ImpactCacheCodec
                 return null;
             }
 
-            var diff = new ImpactCommand.ImpactDiff(
+            var diff = new ImpactDiff(
                 Ep: payload.Ep is null
                     ? null
-                    : new ImpactCommand.EpDiff(Added: UnmapKindRoutes(payload.Ep.Added), Removed: UnmapKindRoutes(payload.Ep.Removed)),
+                    : new EpDiff(Added: UnmapKindRoutes(payload.Ep.Added), Removed: UnmapKindRoutes(payload.Ep.Removed)),
                 AffectedEps: payload.AffectedEps.Select(UnmapReach).ToArray(),
                 PerEp: payload.PerEp.Select(UnmapFootprint).ToArray()
             );
@@ -135,11 +136,9 @@ internal static class ImpactCacheCodec
         }
     }
 
-    private static ProvenanceDto MapProv(ImpactCommand.StoreProvenance p) =>
-        new(Branch: p.Branch, ShortCommit: p.ShortCommit, Fallback: p.Fallback);
+    private static ProvenanceDto MapProv(StoreProvenance p) => new(Branch: p.Branch, ShortCommit: p.ShortCommit, Fallback: p.Fallback);
 
-    private static ImpactCommand.StoreProvenance UnmapProv(ProvenanceDto p) =>
-        new(Branch: p.Branch, ShortCommit: p.ShortCommit, Fallback: p.Fallback);
+    private static StoreProvenance UnmapProv(ProvenanceDto p) => new(Branch: p.Branch, ShortCommit: p.ShortCommit, Fallback: p.Fallback);
 
     private static List<KindRouteDto> MapKindRoutes(IReadOnlyList<(string Kind, string Route)> items) =>
         items.Select(kr => new KindRouteDto(Kind: kr.Kind, Route: kr.Route)).ToList();
@@ -147,7 +146,7 @@ internal static class ImpactCacheCodec
     private static List<(string Kind, string Route)> UnmapKindRoutes(IReadOnlyList<KindRouteDto> items) =>
         items.Select(kr => (kr.Kind, kr.Route)).ToList();
 
-    private static ReachDeltaDto MapReach(ImpactCommand.EpReachDelta d) =>
+    private static ReachDeltaDto MapReach(EpReachDelta d) =>
         new(
             Kind: d.Kind,
             Route: d.Route,
@@ -164,7 +163,7 @@ internal static class ImpactCacheCodec
             InPlace: d.InPlace
         );
 
-    private static ImpactCommand.EpReachDelta UnmapReach(ReachDeltaDto d) =>
+    private static EpReachDelta UnmapReach(ReachDeltaDto d) =>
         new(
             Kind: d.Kind,
             Route: d.Route,
@@ -181,7 +180,7 @@ internal static class ImpactCacheCodec
             InPlace: d.InPlace
         );
 
-    private static FootprintDeltaDto MapFootprint(ImpactCommand.EpFootprintDelta d) =>
+    private static FootprintDeltaDto MapFootprint(EpFootprintDelta d) =>
         new(
             Kind: d.Kind,
             Route: d.Route,
@@ -197,7 +196,7 @@ internal static class ImpactCacheCodec
             HazardsRemoved: d.HazardsRemovedOrEmpty.Select(MapHazard).ToArray()
         );
 
-    private static ImpactCommand.EpFootprintDelta UnmapFootprint(FootprintDeltaDto d) =>
+    private static EpFootprintDelta UnmapFootprint(FootprintDeltaDto d) =>
         new(
             Kind: d.Kind,
             Route: d.Route,
@@ -215,10 +214,10 @@ internal static class ImpactCacheCodec
             HazardsRemoved: (d.HazardsRemoved ?? []).Select(UnmapHazard).ToArray()
         );
 
-    private static HazardFindingDto MapHazard(ImpactCommand.HazardFinding h) =>
+    private static HazardFindingDto MapHazard(HazardFinding h) =>
         new(Type: h.Type, Cell: h.Cell, Enclosing: h.Enclosing, Confidence: h.Confidence);
 
-    private static ImpactCommand.HazardFinding UnmapHazard(HazardFindingDto h) =>
+    private static HazardFinding UnmapHazard(HazardFindingDto h) =>
         new(Type: h.Type, Cell: h.Cell, Enclosing: h.Enclosing, Confidence: h.Confidence);
 
     private static EffectKeyDto MapEffectKey((string Provider, string Operation, string Resource, string Enclosing) k) =>
@@ -227,7 +226,7 @@ internal static class ImpactCacheCodec
     private static (string Provider, string Operation, string Resource, string Enclosing) UnmapEffectKey(EffectKeyDto k) =>
         (k.Provider, k.Operation, k.Resource, k.Enclosing);
 
-    private static AmplifiedDto MapAmplified(ImpactCommand.EpEffectAmplified a) =>
+    private static AmplifiedDto MapAmplified(EpEffectAmplified a) =>
         new(
             Provider: a.Provider,
             Operation: a.Operation,
@@ -239,7 +238,7 @@ internal static class ImpactCacheCodec
             BranchInLoop: a.BranchInLoop
         );
 
-    private static ImpactCommand.EpEffectAmplified UnmapAmplified(AmplifiedDto a) =>
+    private static EpEffectAmplified UnmapAmplified(AmplifiedDto a) =>
         new(
             Provider: a.Provider,
             Operation: a.Operation,

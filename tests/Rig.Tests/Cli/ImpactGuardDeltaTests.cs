@@ -1,4 +1,5 @@
 using Rig.Cli.Commands;
+using Rig.Cli.Impact;
 using Shouldly;
 
 namespace Rig.Tests.Cli;
@@ -9,7 +10,7 @@ namespace Rig.Tests.Cli;
 // are flagged for review. These pin the pure classification over footprint maps, without touching a store.
 public sealed class ImpactGuardDeltaTests
 {
-    private static ImpactCommand.EntryPointRef Ep(string kind, string route) => new(kind, route, $"/{route}.cs", 1, null);
+    private static EntryPointRef Ep(string kind, string route) => new(kind, route, $"/{route}.cs", 1, null);
 
     private static (string, string, string, string) Lock(string enclosing = "N.T.M") => ("lock", "acquire", "Monitor", enclosing);
 
@@ -18,26 +19,26 @@ public sealed class ImpactGuardDeltaTests
 
     private static (string, string, string, string) Http(string enclosing = "N.T.M") => ("http", "GET", "Account", enclosing);
 
-    private static Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), ImpactCommand.EffectReach>> Map(
+    private static Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>> Map(
         string kind,
         string route,
         params (string, string, string, string)[] keys
     )
     {
-        var inner = new Dictionary<(string, string, string, string), ImpactCommand.EffectReach>();
+        var inner = new Dictionary<(string, string, string, string), EffectReach>();
         foreach (var k in keys)
         {
-            inner[k] = new ImpactCommand.EffectReach(Count: 1, InLoop: false);
+            inner[k] = new EffectReach(Count: 1, InLoop: false);
         }
 
-        return new Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), ImpactCommand.EffectReach>>
+        return new Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>>
         {
             [(kind, route)] = inner,
         };
     }
 
-    private static IReadOnlyDictionary<(string Kind, string Route), ImpactCommand.EntryPointRef> EpByKey(string kind, string route) =>
-        new Dictionary<(string Kind, string Route), ImpactCommand.EntryPointRef> { [(kind, route)] = Ep(kind, route) };
+    private static IReadOnlyDictionary<(string Kind, string Route), EntryPointRef> EpByKey(string kind, string route) =>
+        new Dictionary<(string Kind, string Route), EntryPointRef> { [(kind, route)] = Ep(kind, route) };
 
     [Test]
     public void Lock_gained_on_a_path_that_still_mutates_shared_state_is_flagged()
@@ -46,13 +47,13 @@ public sealed class ImpactGuardDeltaTests
         var branch = Map("http", "x", Lock(), SharedMutate());
         var @base = Map("http", "x", SharedMutate());
 
-        var deltas = ImpactCommand.DiffFootprints(branch, @base, EpByKey("http", "x"));
+        var deltas = ImpactEngine.DiffFootprints(branch, @base, EpByKey("http", "x"));
 
         deltas.Count.ShouldBe(1);
         deltas[0].SharedMutationOnPath.ShouldBeTrue();
-        ImpactCommand.HasGuardDeltaOnSharedMutation(deltas[0]).ShouldBeTrue();
+        ImpactEngine.HasGuardDeltaOnSharedMutation(deltas[0]).ShouldBeTrue();
 
-        var (added, removed) = ImpactCommand.GuardEffectDelta(deltas[0]);
+        var (added, removed) = ImpactEngine.GuardEffectDelta(deltas[0]);
         added.ShouldBe(["lock:acquire"]);
         removed.ShouldBeEmpty();
     }
@@ -64,12 +65,12 @@ public sealed class ImpactGuardDeltaTests
         var branch = Map("http", "x", SharedMutate());
         var @base = Map("http", "x", Lock(), SharedMutate());
 
-        var deltas = ImpactCommand.DiffFootprints(branch, @base, EpByKey("http", "x"));
+        var deltas = ImpactEngine.DiffFootprints(branch, @base, EpByKey("http", "x"));
 
         deltas.Count.ShouldBe(1);
-        ImpactCommand.HasGuardDeltaOnSharedMutation(deltas[0]).ShouldBeTrue();
+        ImpactEngine.HasGuardDeltaOnSharedMutation(deltas[0]).ShouldBeTrue();
 
-        var (added, removed) = ImpactCommand.GuardEffectDelta(deltas[0]);
+        var (added, removed) = ImpactEngine.GuardEffectDelta(deltas[0]);
         added.ShouldBeEmpty();
         removed.ShouldBe(["lock:acquire"]);
     }
@@ -81,11 +82,11 @@ public sealed class ImpactGuardDeltaTests
         var branch = Map("http", "x", Lock(), Http());
         var @base = Map("http", "x", Http());
 
-        var deltas = ImpactCommand.DiffFootprints(branch, @base, EpByKey("http", "x"));
+        var deltas = ImpactEngine.DiffFootprints(branch, @base, EpByKey("http", "x"));
 
         deltas.Count.ShouldBe(1);
         deltas[0].SharedMutationOnPath.ShouldBeFalse();
-        ImpactCommand.HasGuardDeltaOnSharedMutation(deltas[0]).ShouldBeFalse();
+        ImpactEngine.HasGuardDeltaOnSharedMutation(deltas[0]).ShouldBeFalse();
     }
 
     [Test]
@@ -96,11 +97,11 @@ public sealed class ImpactGuardDeltaTests
         var branch = Map("http", "x", SharedMutate(), Http());
         var @base = Map("http", "x", SharedMutate());
 
-        var deltas = ImpactCommand.DiffFootprints(branch, @base, EpByKey("http", "x"));
+        var deltas = ImpactEngine.DiffFootprints(branch, @base, EpByKey("http", "x"));
 
         deltas.Count.ShouldBe(1);
         deltas[0].SharedMutationOnPath.ShouldBeTrue();
-        ImpactCommand.HasGuardDeltaOnSharedMutation(deltas[0]).ShouldBeFalse();
+        ImpactEngine.HasGuardDeltaOnSharedMutation(deltas[0]).ShouldBeFalse();
     }
 
     [Test]
@@ -109,9 +110,9 @@ public sealed class ImpactGuardDeltaTests
         var branch = Map("http", "x", ("async_lock", "acquire", "SemaphoreSlim", "N.T.M"), SharedMutate());
         var @base = Map("http", "x", SharedMutate());
 
-        var deltas = ImpactCommand.DiffFootprints(branch, @base, EpByKey("http", "x"));
+        var deltas = ImpactEngine.DiffFootprints(branch, @base, EpByKey("http", "x"));
 
-        ImpactCommand.HasGuardDeltaOnSharedMutation(deltas[0]).ShouldBeTrue();
-        ImpactCommand.GuardEffectDelta(deltas[0]).Added.ShouldBe(["async_lock:acquire"]);
+        ImpactEngine.HasGuardDeltaOnSharedMutation(deltas[0]).ShouldBeTrue();
+        ImpactEngine.GuardEffectDelta(deltas[0]).Added.ShouldBe(["async_lock:acquire"]);
     }
 }

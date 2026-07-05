@@ -2,6 +2,7 @@ using Rig.Cli;
 using Rig.Cli.Caching;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Commands;
+using Rig.Cli.Impact;
 using Rig.Domain.Data;
 using Rig.Storage.Queries;
 using Rig.Storage.Storage;
@@ -150,8 +151,8 @@ public sealed class ImpactCacheTests(AnalyzedPlaygrounds playgrounds)
     [Test]
     public async Task Hazard_delta_round_trips_through_the_codec()
     {
-        var prov = new ImpactCommand.StoreProvenance(Branch: "b", ShortCommit: "abc123", Fallback: "id");
-        var delta = new ImpactCommand.EpFootprintDelta(
+        var prov = new StoreProvenance(Branch: "b", ShortCommit: "abc123", Fallback: "id");
+        var delta = new EpFootprintDelta(
             Kind: "http",
             Route: "x",
             FilePath: "/x.cs",
@@ -162,13 +163,10 @@ public sealed class ImpactCacheTests(AnalyzedPlaygrounds playgrounds)
             Removed: [],
             Amplified: [],
             SharedMutationOnPath: false,
-            HazardsAdded:
-            [
-                new ImpactCommand.HazardFinding(Type: "race_window", Cell: "N.T._status", Enclosing: "N.T.M", Confidence: "high"),
-            ],
-            HazardsRemoved: [new ImpactCommand.HazardFinding(Type: "n_plus_1", Cell: "id", Enclosing: "N.T.Q", Confidence: "high")]
+            HazardsAdded: [new HazardFinding(Type: "race_window", Cell: "N.T._status", Enclosing: "N.T.M", Confidence: "high")],
+            HazardsRemoved: [new HazardFinding(Type: "n_plus_1", Cell: "id", Enclosing: "N.T.Q", Confidence: "high")]
         );
-        var diff = new ImpactCommand.ImpactDiff(Ep: null, AffectedEps: [], PerEp: [delta]);
+        var diff = new ImpactDiff(Ep: null, AffectedEps: [], PerEp: [delta]);
 
         var blob = ImpactCacheCodec.Encode(
             diff: diff,

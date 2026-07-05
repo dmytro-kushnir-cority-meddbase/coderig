@@ -1,6 +1,7 @@
 using Rig.Analysis.Rules;
 using Rig.Cli.Commands;
 using Rig.Cli.EntryPoints;
+using Rig.Cli.Impact;
 using Rig.Domain.Data;
 using Rig.Storage.Queries;
 using Rig.Storage.Storage;
@@ -41,14 +42,14 @@ public sealed class ImpactEpDiffTests(AnalyzedPlaygrounds playgrounds)
         diff.Removed.ShouldNotBeEmpty();
     }
 
-    private static async Task<ImpactCommand.EpDiff> DiffAsync(string branchDb, string baseDb, string wd)
+    private static async Task<EpDiff> DiffAsync(string branchDb, string baseDb, string wd)
     {
         var rules = RuleSetLoader.Load(wd);
         await using var branchCtx = new RigDbContext(branchDb, pooling: false, readOnly: true);
         var branchEpData = await Reads.LoadFactEntryPointDataAsync(branchCtx);
         var branchSet = await EntryPointContext.DeriveEntryPointsAsync(branchCtx, branchEpData, rules);
         var branchEps = branchSet.Derived.Concat(branchSet.PromotedOrigins).ToList();
-        return await ImpactCommand.ComputeEpDiffAsync(baseDb, branchEps, rules);
+        return await ImpactEngine.ComputeEpDiffAsync(baseDb, branchEps, rules);
     }
 
     private static async Task<(string BranchDb, string BaseDb, string Wd)> TwoStoresAsync(AnalysisResult branch, AnalysisResult @base)

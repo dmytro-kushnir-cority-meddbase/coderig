@@ -1,5 +1,6 @@
 using System.IO;
 using Rig.Cli.Commands;
+using Rig.Cli.Impact;
 using Shouldly;
 
 namespace Rig.Tests.Cli;
@@ -11,47 +12,44 @@ namespace Rig.Tests.Cli;
 // PURE hazard gain (no effect-set change) still surfaces the EP in PerEp.
 public sealed class ImpactHazardDeltaTests
 {
-    private static ImpactCommand.EntryPointRef Ep(string kind, string route) => new(kind, route, $"/{route}.cs", 1, null);
+    private static EntryPointRef Ep(string kind, string route) => new(kind, route, $"/{route}.cs", 1, null);
 
     private static (string, string, string, string) Http(string enclosing = "N.T.M") => ("http", "GET", "Account", enclosing);
 
-    private static ImpactCommand.HazardFinding RaceWindow(
-        string cell = "N.T._status",
-        string enclosing = "N.T.M",
-        string confidence = "high"
-    ) => new(Type: "race_window", Cell: cell, Enclosing: enclosing, Confidence: confidence);
+    private static HazardFinding RaceWindow(string cell = "N.T._status", string enclosing = "N.T.M", string confidence = "high") =>
+        new(Type: "race_window", Cell: cell, Enclosing: enclosing, Confidence: confidence);
 
-    private static ImpactCommand.HazardFinding NPlusOne(string cell = "id", string enclosing = "N.T.M") =>
+    private static HazardFinding NPlusOne(string cell = "id", string enclosing = "N.T.M") =>
         new(Type: "n_plus_1", Cell: cell, Enclosing: enclosing, Confidence: "high");
 
     // A one-EP effect-footprint map.
-    private static Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), ImpactCommand.EffectReach>> Effects(
+    private static Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>> Effects(
         string kind,
         string route,
         params (string, string, string, string)[] keys
     )
     {
-        var inner = new Dictionary<(string, string, string, string), ImpactCommand.EffectReach>();
+        var inner = new Dictionary<(string, string, string, string), EffectReach>();
         foreach (var k in keys)
         {
-            inner[k] = new ImpactCommand.EffectReach(Count: 1, InLoop: false);
+            inner[k] = new EffectReach(Count: 1, InLoop: false);
         }
 
-        return new Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), ImpactCommand.EffectReach>>
+        return new Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>>
         {
             [(kind, route)] = inner,
         };
     }
 
     // A one-EP hazard-set map.
-    private static Dictionary<(string Kind, string Route), HashSet<ImpactCommand.HazardFinding>> Hazards(
+    private static Dictionary<(string Kind, string Route), HashSet<HazardFinding>> Hazards(
         string kind,
         string route,
-        params ImpactCommand.HazardFinding[] findings
-    ) => new() { [(kind, route)] = new HashSet<ImpactCommand.HazardFinding>(findings) };
+        params HazardFinding[] findings
+    ) => new() { [(kind, route)] = new HashSet<HazardFinding>(findings) };
 
-    private static IReadOnlyDictionary<(string Kind, string Route), ImpactCommand.EntryPointRef> EpByKey(string kind, string route) =>
-        new Dictionary<(string Kind, string Route), ImpactCommand.EntryPointRef> { [(kind, route)] = Ep(kind, route) };
+    private static IReadOnlyDictionary<(string Kind, string Route), EntryPointRef> EpByKey(string kind, string route) =>
+        new Dictionary<(string Kind, string Route), EntryPointRef> { [(kind, route)] = Ep(kind, route) };
 
     [Test]
     public void Hazard_gained_on_an_ep_with_an_unchanged_effect_set_surfaces_in_per_ep()
@@ -63,7 +61,7 @@ public sealed class ImpactHazardDeltaTests
         var branchHaz = Hazards("http", "x", RaceWindow());
         var baseHaz = Hazards("http", "x"); // none on base
 
-        var deltas = ImpactCommand.DiffFootprints(
+        var deltas = ImpactEngine.DiffFootprints(
             branch: branchEffects,
             baseStore: baseEffects,
             epByKey: EpByKey("http", "x"),
@@ -87,7 +85,7 @@ public sealed class ImpactHazardDeltaTests
         var branchHaz = Hazards("http", "x");
         var baseHaz = Hazards("http", "x", RaceWindow());
 
-        var deltas = ImpactCommand.DiffFootprints(
+        var deltas = ImpactEngine.DiffFootprints(
             branch: branchEffects,
             baseStore: baseEffects,
             epByKey: EpByKey("http", "x"),
@@ -110,7 +108,7 @@ public sealed class ImpactHazardDeltaTests
         var branchHaz = Hazards("http", "x", haz);
         var baseHaz = Hazards("http", "x", haz);
 
-        var deltas = ImpactCommand.DiffFootprints(
+        var deltas = ImpactEngine.DiffFootprints(
             branch: branchEffects,
             baseStore: baseEffects,
             epByKey: EpByKey("http", "x"),
@@ -130,7 +128,7 @@ public sealed class ImpactHazardDeltaTests
         var branchHaz = Hazards("http", "x", NPlusOne());
         var baseHaz = Hazards("http", "x");
 
-        var deltas = ImpactCommand.DiffFootprints(
+        var deltas = ImpactEngine.DiffFootprints(
             branch: branchEffects,
             baseStore: baseEffects,
             epByKey: EpByKey("http", "x"),
@@ -153,7 +151,7 @@ public sealed class ImpactHazardDeltaTests
         var branchHaz = Hazards("http", "x", RaceWindow(), NPlusOne(cell: "newId"));
         var baseHaz = Hazards("http", "x", RaceWindow(), NPlusOne(cell: "oldId"));
 
-        var deltas = ImpactCommand.DiffFootprints(
+        var deltas = ImpactEngine.DiffFootprints(
             branch: branchEffects,
             baseStore: baseEffects,
             epByKey: EpByKey("http", "x"),
@@ -176,7 +174,7 @@ public sealed class ImpactHazardDeltaTests
         var branchHaz = Hazards("http", "x", RaceWindow(confidence: "medium"));
         var baseHaz = Hazards("http", "x", RaceWindow(confidence: "high"));
 
-        var deltas = ImpactCommand.DiffFootprints(
+        var deltas = ImpactEngine.DiffFootprints(
             branch: branchEffects,
             baseStore: baseEffects,
             epByKey: EpByKey("http", "x"),
@@ -195,7 +193,7 @@ public sealed class ImpactHazardDeltaTests
         var branchEffects = Effects("http", "x", Http(), ("sql", "read", "T", "N.T.M"));
         var baseEffects = Effects("http", "x", Http());
 
-        var deltas = ImpactCommand.DiffFootprints(branch: branchEffects, baseStore: baseEffects, epByKey: EpByKey("http", "x"));
+        var deltas = ImpactEngine.DiffFootprints(branch: branchEffects, baseStore: baseEffects, epByKey: EpByKey("http", "x"));
 
         deltas.Count.ShouldBe(1);
         deltas[0].HazardsAddedOrEmpty.ShouldBeEmpty();
@@ -209,7 +207,7 @@ public sealed class ImpactHazardDeltaTests
         // EP in PerEp (for display), but must NOT count as an effect change — otherwise a behavior-preserving
         // refactor that merely trips a (heuristic) hazard would fail the gate. EffectChangedEpCount is the
         // count the gate uses; it excludes hazard-only deltas.
-        var deltas = ImpactCommand.DiffFootprints(
+        var deltas = ImpactEngine.DiffFootprints(
             branch: Effects("http", "x", Http()),
             baseStore: Effects("http", "x", Http()),
             epByKey: EpByKey("http", "x"),
@@ -218,12 +216,12 @@ public sealed class ImpactHazardDeltaTests
         );
         deltas.Count.ShouldBe(1); // the EP surfaces (pure hazard gain)
 
-        var diff = new ImpactCommand.ImpactDiff(Ep: null, AffectedEps: [], PerEp: deltas);
-        ImpactCommand.EffectChangedEpCount(diff).ShouldBe(0); // ...but it is NOT an effect-set change
+        var diff = new ImpactDiff(Ep: null, AffectedEps: [], PerEp: deltas);
+        ImpactEngine.EffectChangedEpCount(diff).ShouldBe(0); // ...but it is NOT an effect-set change
 
         using var err = new StringWriter();
         ImpactCommand
-            .ExpectNoEffectChangeExit(expect: true, behavioralEpCount: ImpactCommand.EffectChangedEpCount(diff), error: err)
+            .ExpectNoEffectChangeExit(expect: true, behavioralEpCount: ImpactEngine.EffectChangedEpCount(diff), error: err)
             .ShouldBe(0);
     }
 
@@ -231,18 +229,18 @@ public sealed class ImpactHazardDeltaTests
     public void An_actual_effect_change_still_trips_the_expect_no_effect_change_gate()
     {
         // Sanity: the fix did not neuter FR-4 — a real added effect still counts and still trips the gate.
-        var deltas = ImpactCommand.DiffFootprints(
+        var deltas = ImpactEngine.DiffFootprints(
             branch: Effects("http", "x", Http(), ("sql", "read", "T", "N.T.M")),
             baseStore: Effects("http", "x", Http()),
             epByKey: EpByKey("http", "x")
         );
 
-        var diff = new ImpactCommand.ImpactDiff(Ep: null, AffectedEps: [], PerEp: deltas);
-        ImpactCommand.EffectChangedEpCount(diff).ShouldBe(1);
+        var diff = new ImpactDiff(Ep: null, AffectedEps: [], PerEp: deltas);
+        ImpactEngine.EffectChangedEpCount(diff).ShouldBe(1);
 
         using var err = new StringWriter();
         ImpactCommand
-            .ExpectNoEffectChangeExit(expect: true, behavioralEpCount: ImpactCommand.EffectChangedEpCount(diff), error: err)
+            .ExpectNoEffectChangeExit(expect: true, behavioralEpCount: ImpactEngine.EffectChangedEpCount(diff), error: err)
             .ShouldBe(1);
     }
 }

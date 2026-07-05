@@ -1,4 +1,5 @@
 using Rig.Cli.Commands;
+using Rig.Cli.Impact;
 using Shouldly;
 
 namespace Rig.Tests.Cli;
@@ -11,31 +12,31 @@ namespace Rig.Tests.Cli;
 // per-key (Count, InLoop), without touching a store.
 public sealed class ImpactAmplificationTests
 {
-    private static ImpactCommand.EntryPointRef Ep(string kind, string route) => new(kind, route, $"/{route}.cs", 1, null);
+    private static EntryPointRef Ep(string kind, string route) => new(kind, route, $"/{route}.cs", 1, null);
 
     // (provider, operation, resource, enclosing) — the effect key shape used throughout impact.
     private static (string, string, string, string) Key(string enclosing = "N.T.M") => ("llblgen", "write", "Account", enclosing);
 
-    private static Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), ImpactCommand.EffectReach>> Map(
+    private static Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>> Map(
         string kind,
         string route,
         params ((string, string, string, string) Key, int Count, bool InLoop)[] entries
     )
     {
-        var inner = new Dictionary<(string, string, string, string), ImpactCommand.EffectReach>();
+        var inner = new Dictionary<(string, string, string, string), EffectReach>();
         foreach (var e in entries)
         {
-            inner[e.Key] = new ImpactCommand.EffectReach(Count: e.Count, InLoop: e.InLoop);
+            inner[e.Key] = new EffectReach(Count: e.Count, InLoop: e.InLoop);
         }
 
-        return new Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), ImpactCommand.EffectReach>>
+        return new Dictionary<(string Kind, string Route), Dictionary<(string, string, string, string), EffectReach>>
         {
             [(kind, route)] = inner,
         };
     }
 
-    private static IReadOnlyDictionary<(string Kind, string Route), ImpactCommand.EntryPointRef> EpByKey(string kind, string route) =>
-        new Dictionary<(string Kind, string Route), ImpactCommand.EntryPointRef> { [(kind, route)] = Ep(kind, route) };
+    private static IReadOnlyDictionary<(string Kind, string Route), EntryPointRef> EpByKey(string kind, string route) =>
+        new Dictionary<(string Kind, string Route), EntryPointRef> { [(kind, route)] = Ep(kind, route) };
 
     [Test]
     public void Count_increase_on_a_shared_key_is_flagged_amplified()
@@ -43,7 +44,7 @@ public sealed class ImpactAmplificationTests
         var branch = Map("http", "x", (Key(), 4, false));
         var @base = Map("http", "x", (Key(), 1, false));
 
-        var deltas = ImpactCommand.DiffFootprints(branch, @base, EpByKey("http", "x"));
+        var deltas = ImpactEngine.DiffFootprints(branch, @base, EpByKey("http", "x"));
 
         deltas.Count.ShouldBe(1);
         var amp = deltas[0].Amplified;
@@ -62,7 +63,7 @@ public sealed class ImpactAmplificationTests
         var branch = Map("http", "x", (Key(), 1, true));
         var @base = Map("http", "x", (Key(), 1, false));
 
-        var deltas = ImpactCommand.DiffFootprints(branch, @base, EpByKey("http", "x"));
+        var deltas = ImpactEngine.DiffFootprints(branch, @base, EpByKey("http", "x"));
 
         deltas.Count.ShouldBe(1);
         deltas[0].Amplified.Count.ShouldBe(1);
@@ -76,7 +77,7 @@ public sealed class ImpactAmplificationTests
         var branch = Map("http", "x", (Key(), 2, true));
         var @base = Map("http", "x", (Key(), 2, true));
 
-        var deltas = ImpactCommand.DiffFootprints(branch, @base, EpByKey("http", "x"));
+        var deltas = ImpactEngine.DiffFootprints(branch, @base, EpByKey("http", "x"));
 
         deltas.ShouldBeEmpty();
     }
@@ -90,7 +91,7 @@ public sealed class ImpactAmplificationTests
         var branch = Map("http", "x", (Key(), 1, false), (addedKey, 3, true));
         var @base = Map("http", "x", (Key(), 1, false));
 
-        var deltas = ImpactCommand.DiffFootprints(branch, @base, EpByKey("http", "x"));
+        var deltas = ImpactEngine.DiffFootprints(branch, @base, EpByKey("http", "x"));
 
         deltas.Count.ShouldBe(1);
         deltas[0].Added.ShouldContain(addedKey);
@@ -104,7 +105,7 @@ public sealed class ImpactAmplificationTests
         var branch = Map("http", "x", (Key(), 1, false));
         var @base = Map("http", "x", (Key(), 5, false));
 
-        var deltas = ImpactCommand.DiffFootprints(branch, @base, EpByKey("http", "x"));
+        var deltas = ImpactEngine.DiffFootprints(branch, @base, EpByKey("http", "x"));
 
         deltas.ShouldBeEmpty();
     }
@@ -115,7 +116,7 @@ public sealed class ImpactAmplificationTests
         var branch = Map("http", "x", (Key(), 1, false));
         var @base = Map("http", "x", (Key(), 1, true));
 
-        var deltas = ImpactCommand.DiffFootprints(branch, @base, EpByKey("http", "x"));
+        var deltas = ImpactEngine.DiffFootprints(branch, @base, EpByKey("http", "x"));
 
         deltas.ShouldBeEmpty();
     }
@@ -128,7 +129,7 @@ public sealed class ImpactAmplificationTests
         var branch = Map("action", "stable", (Key(), 6, false));
         var @base = Map("action", "stable", (Key(), 2, false));
 
-        var deltas = ImpactCommand.DiffFootprints(branch, @base, EpByKey("action", "stable"));
+        var deltas = ImpactEngine.DiffFootprints(branch, @base, EpByKey("action", "stable"));
 
         deltas.Count.ShouldBe(1);
         deltas[0].Added.ShouldBeEmpty();

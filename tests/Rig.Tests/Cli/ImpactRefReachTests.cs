@@ -1,4 +1,5 @@
 using Rig.Cli.Commands;
+using Rig.Cli.Impact;
 using Rig.Storage.Queries;
 using Rig.Storage.Storage;
 using Rig.Tests.Fixtures;
@@ -25,7 +26,7 @@ public sealed class ImpactRefReachTests
             ["M:N.NotReached.X()"] = new[] { "F:N.T.Unrelated" }, // not reachable => not unioned
         };
 
-        var union = ImpactCommand.RefTargetsFor(reachable, refsByEnclosing);
+        var union = ImpactEngine.RefTargetsFor(reachable, refsByEnclosing);
 
         union.ShouldBe(new[] { "R:F:N.T.Field", "R:P:N.T.Prop" }, ignoreOrder: true);
     }
@@ -36,7 +37,7 @@ public sealed class ImpactRefReachTests
         var reachable = new HashSet<string>(StringComparer.Ordinal) { "M:N.T.Method()" };
         var refsByEnclosing = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
 
-        ImpactCommand.RefTargetsFor(reachable, refsByEnclosing).ShouldBeEmpty();
+        ImpactEngine.RefTargetsFor(reachable, refsByEnclosing).ShouldBeEmpty();
     }
 
     [Test]
@@ -53,12 +54,12 @@ public sealed class ImpactRefReachTests
         {
             [("http", "x")] = new(StringComparer.Ordinal) { "M:N.T.M()" },
         };
-        var epByKey = new Dictionary<(string Kind, string Route), ImpactCommand.EntryPointRef>
+        var epByKey = new Dictionary<(string Kind, string Route), EntryPointRef>
         {
             [("http", "x")] = new(Kind: "http", Route: "x", FilePath: "x.cs", Line: 1, Requires: null),
         };
 
-        var deltas = ImpactCommand.DiffReachSets(branch: branch, baseStore: baseStore, epByKey: epByKey);
+        var deltas = ImpactEngine.DiffReachSets(branch: branch, baseStore: baseStore, epByKey: epByKey);
 
         deltas.Count.ShouldBe(1);
         // The degenerate node has no `(` so StripParams leaves it intact => it's a genuine added stem.
@@ -99,7 +100,7 @@ public sealed class ImpactRefReachStorageTests(AnalyzedPlaygrounds playgrounds)
                 g => (IReadOnlyList<string>)g.Select(r => r.Target).Distinct(StringComparer.Ordinal).ToList(),
                 StringComparer.Ordinal
             );
-        var union = ImpactCommand.RefTargetsFor(new HashSet<string>(StringComparer.Ordinal) { anyEnclosing }, byEnclosing);
+        var union = ImpactEngine.RefTargetsFor(new HashSet<string>(StringComparer.Ordinal) { anyEnclosing }, byEnclosing);
 
         union.ShouldNotBeEmpty();
         union.ShouldAllBe(n => n.StartsWith("R:"));

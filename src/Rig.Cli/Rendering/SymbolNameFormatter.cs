@@ -44,7 +44,7 @@ internal static class SymbolNameFormatter
     // parameter list are stripped, leaving `Namespace.Type.Member`. This is the exact suffix `rig tree` /
     // `reaches` / `callers` match on, so a rendered FQN round-trips straight back into a query — unlike the
     // slash-form EP `Route`, which matches nothing. Empty in, empty out. (Same reduction as
-    // ImpactCommand.StripParams, which now delegates here so the EP card and the EP listings agree.)
+    // ImpactEngine.StripParams, which now delegates here so the EP card and the EP listings agree.)
     internal static string FqnFromDocId(string? docId)
     {
         if (string.IsNullOrEmpty(docId))

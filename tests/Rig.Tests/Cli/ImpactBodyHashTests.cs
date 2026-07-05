@@ -1,4 +1,5 @@
 using Rig.Cli.Commands;
+using Rig.Cli.Impact;
 using Rig.Storage.Queries;
 using Rig.Storage.Storage;
 using Rig.Tests.Fixtures;
@@ -21,7 +22,7 @@ public sealed class ImpactBodyHashLogicTests
         var branch = Hashes(("M:N.A.M()", "aaaa"), ("M:N.A.Changed()", "bbbb"), ("M:N.A.OnlyBranch()", "cccc"));
         var @base = Hashes(("M:N.A.M()", "aaaa"), ("M:N.A.Changed()", "ZZZZ"), ("M:N.A.OnlyBase()", "dddd"));
 
-        var changed = ImpactCommand.BodyChangedSymbols(branch, @base);
+        var changed = ImpactEngine.BodyChangedSymbols(branch, @base);
 
         changed.ShouldBe(new[] { "M:N.A.Changed()", "M:N.A.OnlyBranch()", "M:N.A.OnlyBase()" }, ignoreOrder: true);
         changed.Contains("M:N.A.M()").ShouldBeFalse(); // identical hash => not changed
@@ -33,8 +34,8 @@ public sealed class ImpactBodyHashLogicTests
         var branch = Hashes(("M:N.A.M()", "aaaa"));
 
         // base has no BodyHash fact (pre-Phase-2 store) => guarded read returned empty => skip silently.
-        ImpactCommand.BodyChangedSymbols(branch, Hashes()).ShouldBeEmpty();
-        ImpactCommand.BodyChangedSymbols(Hashes(), branch).ShouldBeEmpty();
+        ImpactEngine.BodyChangedSymbols(branch, Hashes()).ShouldBeEmpty();
+        ImpactEngine.BodyChangedSymbols(Hashes(), branch).ShouldBeEmpty();
     }
 
     [Test]
@@ -48,13 +49,10 @@ public sealed class ImpactBodyHashLogicTests
         {
             [("http", "x")] = new(shared, StringComparer.Ordinal),
         };
-        var epByKey = new Dictionary<(string Kind, string Route), ImpactCommand.EntryPointRef>
-        {
-            [("http", "x")] = new("http", "x", "/x.cs", 1, null),
-        };
+        var epByKey = new Dictionary<(string Kind, string Route), EntryPointRef> { [("http", "x")] = new("http", "x", "/x.cs", 1, null) };
         var bodyChanged = new HashSet<string>(StringComparer.Ordinal) { "M:N.A.M()" };
 
-        var deltas = ImpactCommand.DiffReachSets(branch, baseStore, epByKey, bodyChanged);
+        var deltas = ImpactEngine.DiffReachSets(branch, baseStore, epByKey, bodyChanged);
 
         deltas.Count.ShouldBe(1);
         deltas[0].AddedStems.ShouldBeEmpty();
@@ -79,13 +77,10 @@ public sealed class ImpactBodyHashLogicTests
         {
             [("http", "x")] = new(new[] { "M:N.A.M()" }, StringComparer.Ordinal),
         };
-        var epByKey = new Dictionary<(string Kind, string Route), ImpactCommand.EntryPointRef>
-        {
-            [("http", "x")] = new("http", "x", "/x.cs", 1, null),
-        };
+        var epByKey = new Dictionary<(string Kind, string Route), EntryPointRef> { [("http", "x")] = new("http", "x", "/x.cs", 1, null) };
         var bodyChanged = new HashSet<string>(StringComparer.Ordinal) { "M:N.A.New()" };
 
-        var deltas = ImpactCommand.DiffReachSets(branch, baseStore, epByKey, bodyChanged);
+        var deltas = ImpactEngine.DiffReachSets(branch, baseStore, epByKey, bodyChanged);
 
         deltas.Count.ShouldBe(1);
         deltas[0].AddedStems.ShouldBe(new[] { "N.A.New" });
