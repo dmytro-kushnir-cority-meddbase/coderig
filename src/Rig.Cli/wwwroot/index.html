@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>rig — explorer</title>
+    <style>
+      /* Semantic design tokens — the ONLY place colors are defined. Both themes are declared; the active one
+         is chosen by data-theme on <html> (set by the switcher), falling back to the OS preference. This
+         token discipline is the pattern the React SPA (unit 2) inherits: components reference var(--x), never
+         raw hex, so light/dark is a palette swap, not a rewrite. */
+      :root, :root[data-theme="dark"] {
+        --bg: #0e1116; --panel: #161b22; --border: #2a3038; --fg: #d6dde6;
+        --muted: #8b98a5; --accent: #58a6ff; --chip: #21262d; --warn: #d29922;
+        --btn-fg: #0e1116; --hover: #161b22;
+      }
+      :root[data-theme="light"] {
+        --bg: #ffffff; --panel: #f4f6f9; --border: #d8dee5; --fg: #1f2733;
+        --muted: #6a7684; --accent: #0969da; --chip: #eaeef2; --warn: #9a6700;
+        --btn-fg: #ffffff; --hover: #f0f3f6;
+      }
+      @media (prefers-color-scheme: light) {
+        :root:not([data-theme]) {
+          --bg: #ffffff; --panel: #f4f6f9; --border: #d8dee5; --fg: #1f2733;
+          --muted: #6a7684; --accent: #0969da; --chip: #eaeef2; --warn: #9a6700;
+          --btn-fg: #ffffff; --hover: #f0f3f6;
+        }
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--fg);
+        font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }
+      header { padding: 12px 18px; border-bottom: 1px solid var(--border); display: flex;
+        align-items: baseline; gap: 14px; flex-wrap: wrap; }
+      header h1 { font-size: 15px; margin: 0; letter-spacing: .5px; }
+      header .store { color: var(--muted); font-size: 12px; }
+      .placeholder { margin-left: auto; color: var(--warn); font-size: 11px; padding-right: 8px; }
+      main { display: grid; grid-template-columns: 280px 1fr; gap: 0; height: calc(100vh - 51px); }
+      aside { border-right: 1px solid var(--border); padding: 14px; overflow: auto; }
+      aside h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .8px;
+        color: var(--muted); margin: 0 0 8px; }
+      .run { background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+        padding: 8px 10px; margin-bottom: 8px; font-size: 12px; }
+      .run .id { font-weight: 600; }
+      .run.latest .id::after { content: " ← latest"; color: var(--accent); font-weight: 400; }
+      .run .meta { color: var(--muted); margin-top: 3px; }
+      section { padding: 14px 18px; overflow: auto; }
+      .controls { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+      input, select { background: var(--panel); border: 1px solid var(--border); color: var(--fg);
+        border-radius: 6px; padding: 7px 10px; font: inherit; }
+      input#from { flex: 1; min-width: 260px; }
+      button { background: var(--accent); border: none; color: var(--btn-fg); font-weight: 600;
+        border-radius: 6px; padding: 7px 14px; cursor: pointer; }
+      .theme { display: flex; gap: 2px; background: var(--panel);
+        border: 1px solid var(--border); border-radius: 6px; padding: 2px; }
+      .theme button { background: transparent; color: var(--muted); font-weight: 500;
+        padding: 3px 9px; font-size: 12px; border-radius: 4px; }
+      .theme button.on { background: var(--accent); color: var(--btn-fg); }
+      .placeholder { color: var(--warn); font-size: 11px; }
+      label.chk { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 5px; }
+      #status { color: var(--muted); font-size: 12px; margin-bottom: 10px; min-height: 16px; }
+      #status.err { color: #f85149; }
+      .tree { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+      .node { padding: 1px 0; }
+      .row { display: flex; align-items: center; gap: 7px; padding: 1px 4px; border-radius: 4px; }
+      .row:hover { background: var(--panel); }
+      .twist { width: 12px; color: var(--muted); cursor: pointer; user-select: none; text-align: center; }
+      .twist.leaf { visibility: hidden; }
+      .name { cursor: default; }
+      .edge { font-size: 10px; color: var(--muted); background: var(--chip); border-radius: 4px;
+        padding: 0 5px; }
+      .edge.heur { color: var(--warn); }
+      .fanout { font-size: 10px; color: var(--warn); }
+      .sites { font-size: 10px; color: var(--muted); }
+      .effects { margin-left: 4px; }
+      .eff { cursor: default; }
+      .loc { color: var(--muted); font-size: 11px; margin-left: 6px; }
+      .children { margin-left: 15px; border-left: 1px solid var(--border); padding-left: 4px; }
+      .collapsed > .children { display: none; }
+      .trunc { color: var(--muted); font-style: italic; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>rig · explorer</h1>
+      <span class="store" id="storeDir"></span>
+      <span class="placeholder">placeholder UI — React SPA lands in unit 2</span>
+      <div class="theme" id="theme">
+        <button data-theme="light">Light</button>
+        <button data-theme="dark">Dark</button>
+        <button data-theme="system">System</button>
+      </div>
+    </header>
+    <main>
+      <aside>
+        <h2>Runs</h2>
+        <div id="runs">…</div>
+      </aside>
+      <section>
+        <div class="controls">
+          <input id="from" placeholder="entry point or symbol pattern, e.g. Type.Method" />
+          <input id="depth" type="number" min="1" placeholder="depth" style="width: 90px" />
+          <label class="chk"><input type="checkbox" id="async" /> async</label>
+          <button id="go">Tree</button>
+        </div>
+        <div id="status"></div>
+        <div class="tree" id="tree"></div>
+      </section>
+    </main>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const status = (msg, err = false) => { const s = $("status"); s.textContent = msg; s.className = err ? "err" : ""; };
+
+      // Theme: light | dark | system. "system" removes data-theme so the prefers-color-scheme media query
+      // governs; the others pin it. Persisted to localStorage. This is the token/switcher pattern the React
+      // SPA will reproduce (ThemeProvider + the same three modes).
+      function applyTheme(mode) {
+        if (mode === "system") document.documentElement.removeAttribute("data-theme");
+        else document.documentElement.setAttribute("data-theme", mode);
+        localStorage.setItem("rig-theme", mode);
+        for (const b of $("theme").children) b.classList.toggle("on", b.dataset.theme === mode);
+      }
+      $("theme").addEventListener("click", (e) => { if (e.target.dataset.theme) applyTheme(e.target.dataset.theme); });
+      applyTheme(localStorage.getItem("rig-theme") || "system");
+
+      async function loadRuns() {
+        try {
+          const runs = await (await fetch("/api/runs")).json();
+          if (!Array.isArray(runs) || runs.length === 0) { $("runs").textContent = "(no runs)"; return; }
+          $("storeDir").textContent = runs[0].solutionPath || "";
+          $("runs").innerHTML = runs.map((r) => `
+            <div class="run ${r.isLatest ? "latest" : ""}">
+              <div class="id">${r.storeId}</div>
+              <div class="meta">${(r.commit || "")}${r.branch ? " (" + r.branch + ")" : ""}${r.dirty ? " +dirty" : ""}</div>
+              <div class="meta">${r.symbols.toLocaleString()} symbols · ${r.references.toLocaleString()} refs</div>
+            </div>`).join("");
+        } catch (e) { $("runs").textContent = "error: " + e.message; }
+      }
+
+      function effHtml(effects) {
+        if (!effects || !effects.length) return "";
+        const glyphs = effects.map((e) => `<span class="eff" title="${e.provider}:${e.operation} ×${e.sites}">${e.glyph}${e.sites > 1 ? '<span class="sites">' + e.sites + "</span>" : ""}</span>`).join(" ");
+        return `<span class="effects">${glyphs}</span>`;
+      }
+
+      function nodeEl(node) {
+        const wrap = document.createElement("div");
+        wrap.className = "node";
+        const hasKids = node.children && node.children.length > 0;
+        const row = document.createElement("div");
+        row.className = "row";
+        const edgeClass = node.dispatchBasis === "heuristic" ? "edge heur" : "edge";
+        const edgeTxt = node.edgeKind && node.edgeKind !== "entry" ? node.edgeKind + (node.dispatchBasis === "heuristic" ? " ~heuristic" : "") : "";
+        row.innerHTML = `
+          <span class="twist ${hasKids ? "" : "leaf"}">${hasKids ? "▾" : "•"}</span>
+          <span class="name">${node.name}</span>
+          ${edgeTxt ? `<span class="${edgeClass}">${edgeTxt}</span>` : ""}
+          ${node.fanout > 1 ? `<span class="fanout">×${node.fanout} fan-out</span>` : ""}
+          ${node.callSites > 1 ? `<span class="sites">${node.callSites}×</span>` : ""}
+          ${effHtml(node.effects)}
+          ${node.truncated ? `<span class="trunc">⋯elided</span>` : ""}
+          ${node.file ? `<span class="loc">${node.file.split(/[\\/]/).pop()}:${node.line}</span>` : ""}`;
+        wrap.appendChild(row);
+        if (hasKids) {
+          const kids = document.createElement("div");
+          kids.className = "children";
+          node.children.forEach((c) => kids.appendChild(nodeEl(c)));
+          wrap.appendChild(kids);
+          const twist = row.querySelector(".twist");
+          twist.onclick = () => {
+            wrap.classList.toggle("collapsed");
+            twist.textContent = wrap.classList.contains("collapsed") ? "▸" : "▾";
+          };
+        }
+        return wrap;
+      }
+
+      async function loadTree() {
+        const from = $("from").value.trim();
+        if (!from) { status("enter a pattern", true); return; }
+        const depth = $("depth").value.trim();
+        const params = new URLSearchParams({ from });
+        if (depth) params.set("depth", depth);
+        if ($("async").checked) params.set("async", "true");
+        status("querying…");
+        try {
+          const res = await fetch("/api/tree?" + params);
+          const data = await res.json();
+          if (!res.ok) { status(data.detail || data.title || "error", true); return; }
+          $("tree").innerHTML = "";
+          if (!data.matched) { status(`no symbol matches '${from}'`, true); return; }
+          data.roots.forEach((r) => $("tree").appendChild(nodeEl(r)));
+          status(`${data.roots.length} root(s)`);
+        } catch (e) { status(e.message, true); }
+      }
+
+      $("go").onclick = loadTree;
+      $("from").addEventListener("keydown", (e) => { if (e.key === "Enter") loadTree(); });
+      loadRuns();
+    </script>
+  </body>
+</html>

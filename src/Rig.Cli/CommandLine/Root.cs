@@ -39,6 +39,7 @@ internal static class Root
             EffectsDiffCommand.Build(output, error, workingDirectory),
             EntryPointsCommand.Build(output, error, workingDirectory),
             ImpactCommand.Build(output, error, workingDirectory),
+            ServeCommand.Build(output, error, workingDirectory),
             // DeadCommand.Build(output, error, workingDirectory),
 
             FactCommands.BuildFiles(output, error, workingDirectory),

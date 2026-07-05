@@ -22,6 +22,13 @@
     <PackageReference Include="System.CommandLine" />
     <PackageReference Remove="Meziantou.Analyzer" />
   </ItemGroup>
+  <!-- `rig serve` hosts an in-process minimal-API + static React SPA (see Web/). The FrameworkReference
+       makes this console tool ASP.NET-capable (Kestrel); the trade is that the packed tool now requires the
+       ASP.NET Core shared runtime installed (virtually every .NET dev has it). The web host is deliberately
+       self-contained under Web/ so it can be lifted to a standalone Rig.Web project later without a rewrite. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Rig.Tests" />
   </ItemGroup>
@@ -31,6 +38,13 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="builtin-rules.json" Pack="true" PackagePath="tools/net10.0/any/builtin-rules.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <!-- The built React SPA (committed under wwwroot/). Copied next to the assembly for local runs and packed
+       into the tool layout so the globally-installed `rig serve` serves the same assets. -->
+  <ItemGroup>
+    <None Include="wwwroot\**\*" Pack="true" PackagePath="tools/net10.0/any/wwwroot/">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
