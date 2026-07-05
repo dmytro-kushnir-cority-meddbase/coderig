@@ -27,7 +27,70 @@ internal static class RigApiEndpoints
             }
         );
 
+        // Rule-detected entry points (the search/browse panel's source) — same set as `rig entrypoints`.
+        app.MapGet(
+            "/api/entrypoints",
+            async (string? store) =>
+            {
+                try
+                {
+                    return Results.Json(await EntryPointService.ListAsync(workingDirectory, storeRef: NullIfBlank(store)));
+                }
+                catch (Exception ex)
+                {
+                    return Results.Problem(title: "Failed to list entry points", detail: ex.Message, statusCode: 400);
+                }
+            }
+        );
+
+        // The valid only/exclude filter tokens (providers + provider:operation) from the effective rules —
+        // feeds the filter control's autocomplete so users pick real tokens instead of typing from memory.
+        app.MapGet(
+            "/api/providers",
+            () =>
+            {
+                try
+                {
+                    return Results.Json(ProvidersService.List(workingDirectory));
+                }
+                catch (Exception ex)
+                {
+                    return Results.Problem(title: "Failed to list providers", detail: ex.Message, statusCode: 400);
+                }
+            }
+        );
+
+        // Symbol name search for the search box. `q` required; `kind` optional (method/type/…), `limit` caps.
+        app.MapGet(
+            "/api/search",
+            async (string? q, string? kind, int? limit, string? store) =>
+            {
+                if (string.IsNullOrWhiteSpace(q))
+                {
+                    return Results.Problem(title: "Missing 'q'", detail: "Provide a ?q= search query.", statusCode: 400);
+                }
+
+                try
+                {
+                    var hits = await SymbolSearchService.SearchAsync(
+                        workingDirectory: workingDirectory,
+                        query: q,
+                        kind: NullIfBlank(kind),
+                        limit: limit is > 0 ? limit.Value : 25,
+                        storeRef: NullIfBlank(store)
+                    );
+                    return Results.Json(hits);
+                }
+                catch (Exception ex)
+                {
+                    return Results.Problem(title: "Search failed", detail: ex.Message, statusCode: 400);
+                }
+            }
+        );
+
         // The call tree from an entry-point / symbol pattern. `from` is required; the rest mirror `rig tree`.
+        // NOTE: `view` (paths/full/effects) and `only`/`exclude` effect filters are applied CLIENT-side — the
+        // endpoint returns the one canonical tree + all effects, and the SPA projects/filters without refetch.
         app.MapGet(
             "/api/tree",
             async (string? from, int? depth, bool? async, string? store) =>
@@ -46,7 +109,7 @@ internal static class RigApiEndpoints
                     var result = await TreeQueryService.BuildAsync(
                         workingDirectory: workingDirectory,
                         fromPattern: from,
-                        storeRef: string.IsNullOrWhiteSpace(store) ? null : store,
+                        storeRef: NullIfBlank(store),
                         depth: depth,
                         async: async ?? false
                     );
@@ -66,4 +129,7 @@ internal static class RigApiEndpoints
             }
         );
     }
+
+    // A blank query-string value (?store=) arrives as "" not null; normalize so services see null (LATEST).
+    private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 }
