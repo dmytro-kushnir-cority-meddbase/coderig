@@ -771,38 +771,39 @@ export function ImpactView(s, actions) {
 // The reverse-navigation drawer: "who reaches this node". Opened from a tree node's context menu, backed by
 // /api/callers. entrypoints mode groups the rule-detected EPs by owning deployed service (the "which services
 // can trigger this" lens); roots mode lists no-predecessor origins. Any row re-roots the tree onto itself.
+// The node-inspector drawer (state key `s.callers`, but it serves all reverse/inventory lenses). Modes:
+//   entrypoints — rule-detected EPs reaching the target, grouped by owning service (/api/callers)
+//   roots       — flat no-predecessor origins (/api/callers)
+//   reaches     — flat effect inventory FROM the target (/api/reaches)
+//   path        — one concrete From->To path (/api/path), opened per-EP from the entrypoints view
 export function CallersPanel(s, actions) {
   const c = s.callers;
   if (!c) return h("div", { class: "callers-drawer hidden" });
+  const isCallers = c.mode === "entrypoints" || c.mode === "roots";
+  const title =
+    c.mode === "entrypoints" ? "entry points reaching"
+    : c.mode === "roots" ? "callers of"
+    : c.mode === "reaches" ? "effects reachable from"
+    : "path to";
+
   const header = h(
     "div",
     { class: "callers-head" },
-    h("span", { class: "callers-title" }, c.mode === "entrypoints" ? "entry points reaching" : "callers of"),
+    h("span", { class: "callers-title" }, title),
     h("span", { class: "callers-target", title: c.target }, shortLabel(c.target)),
-    h(
-      "span",
-      { class: "callers-modes" },
-      h(
-        "button",
-        { class: "callers-mode" + (c.mode === "entrypoints" ? " on" : ""), onClick: () => actions.openCallers({ id: c.target }, "entrypoints", c.async) },
-        "entry points",
-      ),
-      h(
-        "button",
-        { class: "callers-mode" + (c.mode === "roots" ? " on" : ""), onClick: () => actions.openCallers({ id: c.target }, "roots", c.async) },
-        "roots",
-      ),
-      // async opt-in: also walk async-handoff edges (background workers / actor inboxes / events). Refetches.
-      h(
-        "button",
-        {
-          class: "callers-mode" + (c.async ? " on" : ""),
-          title: "also walk async/scheduled handoffs (background workers, actor inboxes, events)",
-          onClick: () => actions.openCallers({ id: c.target }, c.mode, !c.async),
-        },
-        "async",
-      ),
-    ),
+    // Lens toggles only for the two reverse-callers modes; reaches/path are single-shot views.
+    isCallers
+      ? h(
+          "span",
+          { class: "callers-modes" },
+          h("button", { class: "callers-mode" + (c.mode === "entrypoints" ? " on" : ""), onClick: () => actions.openCallers({ id: c.target }, "entrypoints", c.async) }, "entry points"),
+          h("button", { class: "callers-mode" + (c.mode === "roots" ? " on" : ""), onClick: () => actions.openCallers({ id: c.target }, "roots", c.async) }, "roots"),
+          // async opt-in: also walk async-handoff edges (background workers / actor inboxes / events). Refetches.
+          h("button", { class: "callers-mode" + (c.async ? " on" : ""), title: "also walk async/scheduled handoffs (background workers, actor inboxes, events)", onClick: () => actions.openCallers({ id: c.target }, c.mode, !c.async) }, "async"),
+        )
+      : c.mode === "path"
+        ? h("span", { class: "callers-modes" }, h("span", { class: "path-from", title: c.from }, "from " + shortLabel(c.from)))
+        : null,
     h("button", { class: "callers-close", title: "close", onClick: () => actions.closeCallers() }, "✕"),
   );
 
@@ -810,7 +811,11 @@ export function CallersPanel(s, actions) {
   if (c.loading) {
     body = h("div", { class: "callers-empty callers-loading" }, h("span", { class: "spinner" }), "querying…");
   } else if (!c.matched) {
-    body = h("div", { class: "callers-empty" }, "nothing reaches this (synchronously)");
+    const msg =
+      c.mode === "reaches" ? "no effects reachable"
+      : c.mode === "path" ? "no path (pattern matched, but no route exists)"
+      : "nothing reaches this (synchronously)";
+    body = h("div", { class: "callers-empty" }, msg);
   } else if (c.mode === "entrypoints") {
     // group EPs by service (loaded-in). "—" bucket = no deployments.json / unattributed.
     const groups = new Map();
@@ -832,12 +837,14 @@ export function CallersPanel(s, actions) {
               { class: "callers-ep", title: ep.fqn, onClick: () => actions.openTree(ep.fqn) },
               h("span", { class: "ep-kind" }, ep.kind),
               h("span", { class: "ep-route" }, ep.route),
+              // per-EP: prove this reverse candidate with a concrete forward path EP -> target.
+              h("button", { class: "ep-path", title: "show a concrete path from this entry point to the target", onClick: (e) => { e.stopPropagation(); actions.openPath(ep.fqn, c.target); } }, "path"),
             ),
           ),
         ),
       ),
     );
-  } else {
+  } else if (c.mode === "roots") {
     body = h(
       "div",
       { class: "callers-list" },
@@ -850,11 +857,42 @@ export function CallersPanel(s, actions) {
         ),
       ),
     );
+  } else if (c.mode === "reaches") {
+    // flat effect inventory: reachable-method count + provider:op tallies (the "what does this touch" lens).
+    body = h(
+      "div",
+      { class: "callers-list" },
+      h("div", { class: "reach-count" }, `${(c.reachableCount || 0).toLocaleString()} reachable methods`),
+      (c.effects || []).map((e) =>
+        h(
+          "div",
+          { class: "callers-ep reach-eff" },
+          h("span", { class: "eff-glyph" }, e.glyph),
+          h("span", { class: "ep-route" }, `${e.provider}:${e.operation}`),
+          h("span", { class: "svc-count" }, `×${e.sites}`),
+        ),
+      ),
+    );
+  } else {
+    // path: the ordered concrete chain from -> target; each hop re-roots the tree.
+    body = h(
+      "div",
+      { class: "callers-list" },
+      (c.nodes || []).map((n) =>
+        h(
+          "div",
+          { class: "callers-ep path-node", title: n.id, onClick: () => actions.openTree(n.id) },
+          h("span", { class: "ep-route" }, n.name),
+          n.file ? h("span", { class: "loc" }, `${baseName(n.file)}:${n.line}`) : null,
+        ),
+      ),
+    );
   }
+
   // In-place text filter over the rendered rows — no state round-trip (keeps focus, matches the SPA's
-  // uncontrolled-input convention). Hides non-matching EP/root rows and any service group left empty.
+  // uncontrolled-input convention). Only the list-y reverse modes need it.
   const filter =
-    c.loading || !c.matched
+    !isCallers || c.loading || !c.matched
       ? null
       : h("input", {
           class: "callers-filter",

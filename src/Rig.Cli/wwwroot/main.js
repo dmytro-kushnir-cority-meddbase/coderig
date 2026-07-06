@@ -172,6 +172,7 @@ function showNodeMenu(node, e) {
     item("Re-root here", () => openTree(node.id)),
     item("Entry points reaching this →", () => actions.openCallers(node, "entrypoints")),
     item("Who reaches this (roots)", () => actions.openCallers(node, "roots")),
+    item("Effects reachable from here →", () => actions.openReaches(node)),
   );
   menu.style.left = Math.min(e.clientX, window.innerWidth - 240) + "px";
   menu.style.top = e.clientY + "px";
@@ -198,6 +199,27 @@ const actions = {
   },
   closeCallers() {
     set({ callers: null });
+  },
+  async openReaches(node) {
+    const from = node.id;
+    set({ callers: { target: from, mode: "reaches", loading: true } });
+    try {
+      const data = await api.reaches(resolved(), explicit(), from);
+      set({ callers: { target: from, mode: "reaches", matched: data.matched, reachableCount: data.reachableCount, effects: data.effects } });
+    } catch (err) {
+      status("reaches: " + err.message, true);
+      set({ callers: null });
+    }
+  },
+  async openPath(fromFqn, targetId) {
+    set({ callers: { target: targetId, from: fromFqn, mode: "path", loading: true } });
+    try {
+      const data = await api.path(resolved(), explicit(), fromFqn, targetId);
+      set({ callers: { target: targetId, from: fromFqn, mode: "path", matched: data.matched, nodes: data.nodes } });
+    } catch (err) {
+      status("path: " + err.message, true);
+      set({ callers: null });
+    }
   },
   setTab(id) {
     set({ tab: id });

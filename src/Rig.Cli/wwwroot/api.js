@@ -122,6 +122,12 @@ export const api = {
       `callers|${storeId}|${from}|${mode}|${!!asyncWalk}`,
       "/api/callers" + qs({ from, store: explicitStore, mode, async: asyncWalk ? true : undefined }),
     ),
+  // flat effect inventory reachable from `from` (provider:op tallies + reachable-method count).
+  reaches: (storeId, explicitStore, from) =>
+    cached(`reaches|${storeId}|${from}`, "/api/reaches" + qs({ from, store: explicitStore })),
+  // one concrete From->To path.
+  path: (storeId, explicitStore, from, to) =>
+    cached(`path|${storeId}|${from}|${to}`, "/api/path" + qs({ from, to, store: explicitStore })),
   hazards: (storeId, explicitStore, from) =>
     cached(
       `haz|${storeId}|${from}`,
