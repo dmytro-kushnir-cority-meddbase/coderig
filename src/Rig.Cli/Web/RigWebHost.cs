@@ -49,6 +49,10 @@ internal static class RigWebHost
             }
         );
         RigApiEndpoints.MapApi(app, workingDirectory);
+        // Reverse-navigation + inventory endpoints (each a self-contained extension in Web/).
+        app.MapCallers(workingDirectory); // /api/callers — who reaches X (roots | entrypoints)
+        app.MapPath(workingDirectory); //    /api/path    — one concrete From->To path
+        app.MapReaches(workingDirectory); // /api/reaches — flat effect inventory from X
         // SPA fallback: any non-/api, non-file route serves index.html so client-side routing works.
         app.MapFallbackToFile("index.html");
         return app;
