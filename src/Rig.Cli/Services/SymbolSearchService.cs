@@ -28,15 +28,34 @@ public static class SymbolSearchService
         // post-filter). Compiler-generated lambdas (~λ) are dropped by default — they're noise in a picker.
         var hits = await Reads.SearchSymbolsAsync(context, pattern: query, kind: kind, limit: int.MaxValue);
         var filtered = noLambdas ? hits.Where(h => !h.SymbolId.Contains("~λ", StringComparison.Ordinal)) : hits;
+
+        // Rank for a NAVIGATION picker before applying the cap. The shared query orders by symbolid
+        // (alphabetical), which puts DocID prefixes E:/F: (events/fields) ahead of M:/T: (methods/types) — so a
+        // common term (e.g. "invoice") fills the 25-row cap with events/fields and buries the methods/types the
+        // user actually navigates to. Re-rank: best name match first, then navigable kinds, then shorter (more
+        // specific) names. Web-only — the CLI's alphabetical `rig symbols` order is unchanged.
+        var q = query.Trim();
         return filtered
+            .Select(h => (h, name: SymbolNameFormatter.ShortName(h.SymbolId)))
+            .OrderBy(x => NameRank(x.name, q))
+            .ThenBy(x => KindRank(x.h.Kind))
+            .ThenBy(x => x.name.Length)
+            .ThenBy(x => x.h.SymbolId, StringComparer.Ordinal)
             .Take(limit)
-            .Select(h => new SymbolHit(
-                Id: h.SymbolId,
-                Kind: h.Kind,
-                Name: SymbolNameFormatter.ShortName(h.SymbolId),
-                File: h.FilePath,
-                Line: h.Line
-            ))
+            .Select(x => new SymbolHit(Id: x.h.SymbolId, Kind: x.h.Kind, Name: x.name, File: x.h.FilePath, Line: x.h.Line))
             .ToList();
     }
+
+    // How well the display name matches the query: exact > prefix > contains > matched-only-via-DocID.
+    private static int NameRank(string name, string q) =>
+        name.Equals(q, StringComparison.OrdinalIgnoreCase) ? 0
+        : name.StartsWith(q, StringComparison.OrdinalIgnoreCase) ? 1
+        : name.Contains(q, StringComparison.OrdinalIgnoreCase) ? 2
+        : 3;
+
+    // Navigable call-graph nodes (methods, types) first; then properties; events/fields/other last.
+    private static int KindRank(string kind) =>
+        kind is "method" or "type" ? 0
+        : kind is "property" ? 1
+        : 2;
 }
