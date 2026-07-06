@@ -25,7 +25,14 @@ internal sealed record TreeNodeDto(
     string? File,
     int Line,
     IReadOnlyList<EffectDto> Effects,
-    IReadOnlyList<TreeNodeDto> Children
+    IReadOnlyList<TreeNodeDto> Children,
+    // Render-rule fold: set when an opaque/collapse rule matched this node, so the SPA draws it as a labelled
+    // seam leaf instead of the raw subtree (parity with the pretty/llm renderers). Null Children on a folded
+    // node — the subtree is intentionally hidden; a folded COLLAPSE node's Effects carry the union of what it
+    // hides (with FoldHidden = the hidden node count). Absent (null Fold*) when no rule matched or ?raw=true.
+    string? FoldKind = null, // "opaque" | "collapse"
+    string? FoldLabel = null, // the rule's human label, e.g. "charge-band pricing engine"
+    int FoldHidden = 0 // number of descendant nodes folded away (collapse only; 0 for opaque)
 );
 
 internal sealed record TreeResponseDto(string From, bool Matched, IReadOnlyList<TreeNodeDto> Roots);

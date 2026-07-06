@@ -648,6 +648,23 @@
         color: var(--muted);
         font-style: italic;
       }
+      /* opaque/collapse seam badge — a folded node drawn as a labelled leaf (subtree hidden server-side). */
+      .seam {
+        font-size: 10px;
+        border-radius: 4px;
+        padding: 0 6px;
+        white-space: nowrap;
+        cursor: help;
+      }
+      .seam-collapse {
+        color: var(--warn);
+        background: color-mix(in srgb, var(--warn) 14%, transparent);
+      }
+      .seam-opaque {
+        color: var(--muted);
+        background: var(--chip);
+        font-style: italic;
+      }
       .flat .frow {
         padding: 2px 0;
       }

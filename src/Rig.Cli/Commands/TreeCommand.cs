@@ -544,7 +544,8 @@ internal static class TreeCommand
                     projection: projection,
                     output: io.TextOutput.Output,
                     suppress: suppressSet,
-                    guards: opts.Guards
+                    guards: opts.Guards,
+                    renderRules: renderRules
                 );
             }
             else
@@ -555,7 +556,8 @@ internal static class TreeCommand
                     projection: projection,
                     output: io.TextOutput.Output,
                     suppress: suppressSet,
-                    guards: opts.Guards
+                    guards: opts.Guards,
+                    renderRules: renderRules
                 );
             }
 

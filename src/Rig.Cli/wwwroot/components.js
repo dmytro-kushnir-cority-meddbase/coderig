@@ -46,6 +46,26 @@ function Loc(node) {
     ? h("span", { class: "loc" }, `${baseName(node.file)}:${node.line}`)
     : null;
 }
+// Opaque/collapse seam badge: a folded node is a labelled leaf (its subtree hidden server-side). A collapse
+// badge shows the hidden node count; the union of effects it hides rides on node.effects (rendered as glyphs).
+// Toggle "raw" in the toolbar to refetch the unfolded tree. Null when the node did not fold.
+function FoldBadge(node) {
+  if (!node.foldKind) return null;
+  const collapse = node.foldKind === "collapse";
+  const text = collapse
+    ? `⋯ ${node.foldLabel}${node.foldHidden ? ` +${node.foldHidden} hidden` : ""}`
+    : `${node.foldLabel}`;
+  return h(
+    "span",
+    {
+      class: "seam seam-" + node.foldKind,
+      title: collapse
+        ? `collapsed seam — ${node.foldHidden} nodes folded away (effects shown are the union it touches). Toggle "raw" to expand.`
+        : `opaque type — subtree hidden. Toggle "raw" to expand.`,
+    },
+    (collapse ? "" : "◻ ") + text,
+  );
+}
 function Trunc(node) {
   if (!node.truncated) return null;
   if (node.truncationCause === "AlreadyExpanded")
@@ -203,6 +223,7 @@ function TreeNode(node, depth, ctx) {
     node.callSites > 1
       ? h("span", { class: "sites" }, `${node.callSites}×`)
       : null,
+    FoldBadge(node),
     EffectGlyphs(own),
     ctx.predicates && node.guards
       ? h(
@@ -881,6 +902,7 @@ export function Shell(actions) {
       label,
     );
   refs.async = toggle("async", "asyncWalk", "walk async handoffs (refetches)");
+  refs.raw = toggle("raw", "rawTree", "show the raw unfolded tree — bypass opaque/collapse seam folds (refetches)");
   refs.sig = toggle("sig", "signatures", "show parameter signatures");
   refs.pred = toggle("pred", "predicates", "show control-dependence guards");
   refs.haz = toggle("haz", "hazards", "overlay hazard marks");
@@ -898,6 +920,7 @@ export function Shell(actions) {
     refs.ms,
     refs.collapse,
     refs.async,
+    refs.raw,
     refs.sig,
     refs.pred,
     refs.haz,

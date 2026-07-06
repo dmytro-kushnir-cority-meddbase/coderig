@@ -12,6 +12,7 @@ export const store = createStore({
   mode: "none", // none | only | exclude   (effect filter)
   tokens: [], // provider / provider:op filter tokens
   asyncWalk: false, // --async (changes the fetched tree → refetch)
+  rawTree: false, // show the raw unfolded tree (bypass opaque/collapse seam folds → ?raw=true, refetch)
   collapse: "", // client-side collapse depth ("" = none)
   signatures: false, // render mode: show param signatures
   predicates: false, // render mode: show control-dependence guards

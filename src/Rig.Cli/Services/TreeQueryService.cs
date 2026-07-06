@@ -27,7 +27,10 @@ public static class TreeQueryService
         IReadOnlyDictionary<string, SymbolLocation> Locations,
         // The repo's provider:operation -> glyph map (from rig.effect-emoji.json / builtins), carried through
         // so a renderer shows the SAME glyphs as `rig tree` without re-loading the rule set.
-        IReadOnlyDictionary<string, string> EffectEmoji
+        IReadOnlyDictionary<string, string> EffectEmoji,
+        // Opaque/collapse render rules so the web mapper folds seams the same way the pretty/llm renderers do.
+        // Empty under raw=true (the endpoint's ?raw= opt-out) — the tree is then served fully unfolded.
+        FactRenderRules Render
     );
 
     // The richer result of the shared cold compute (ComputeAsync): the forest + effects PLUS the graph and
@@ -78,7 +81,9 @@ public static class TreeQueryService
             .Graph.Methods.GroupBy(m => m.SymbolId, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => new SymbolLocation(g.First().FilePath, g.First().Line), StringComparer.Ordinal);
 
-        return new TreeQueryResult(computation.Roots, computation.Effects, locations, rules.EffectEmoji);
+        // raw parity: no fold rules either, so the web serves the exact unfolded tree (mirrors CLI --raw).
+        var renderRules = raw ? FactRenderRules.Empty : rules.Render;
+        return new TreeQueryResult(computation.Roots, computation.Effects, locations, rules.EffectEmoji, renderRules);
     }
 
     // The COLD tree computation shared by the web host (BuildAsync, above) and `rig tree`'s cold path

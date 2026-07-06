@@ -62,6 +62,7 @@ async function openTree(pattern) {
       explicit(),
       pattern,
       get().asyncWalk,
+      get().rawTree,
     );
     if (!data.matched) {
       set({ tree: null, treeFrom: "" });
@@ -186,6 +187,7 @@ const actions = {
   setFlag(key, val) {
     set({ [key]: val });
     if (key === "asyncWalk" && get().treeFrom) openTree(get().treeFrom); // async changes the fetched tree
+    if (key === "rawTree" && get().treeFrom) openTree(get().treeFrom); // raw/folded changes the fetched tree
     if (key === "impactAsync" && get().impactBase && get().impactHead)
       loadImpact(); // async changes the diff
     if (key === "hazards" && val) loadHazards();
@@ -467,6 +469,7 @@ function syncControls(s) {
   refs.filterMode.value = s.mode;
   refs.collapse.value = s.collapse;
   refs.async.querySelector("input").checked = s.asyncWalk;
+  refs.raw.querySelector("input").checked = s.rawTree;
   refs.sig.querySelector("input").checked = s.signatures;
   refs.pred.querySelector("input").checked = s.predicates;
   refs.haz.querySelector("input").checked = s.hazards;

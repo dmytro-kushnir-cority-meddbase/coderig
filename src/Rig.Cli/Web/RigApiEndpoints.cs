@@ -270,7 +270,7 @@ internal static class RigApiEndpoints
         // endpoint returns the one canonical tree + all effects, and the SPA projects/filters without refetch.
         app.MapGet(
             "/api/tree",
-            async (string? from, int? depth, bool? async, string? store) =>
+            async (string? from, int? depth, bool? async, string? store, bool? raw) =>
             {
                 if (string.IsNullOrWhiteSpace(from))
                 {
@@ -283,19 +283,23 @@ internal static class RigApiEndpoints
 
                 try
                 {
+                    // ?raw=true opts out of BOTH the graph-shaping rules (factory/cut) AND the opaque/collapse
+                    // fold — the SPA's "raw" toggle, mirroring the CLI's `tree --raw`. Default folds the seams.
                     var result = await TreeQueryService.BuildAsync(
                         workingDirectory: workingDirectory,
                         fromPattern: from,
                         storeRef: NullIfBlank(store),
                         depth: depth,
-                        async: async ?? false
+                        async: async ?? false,
+                        raw: raw ?? false
                     );
                     var response = TreeMapper.ToResponse(
                         from: from,
                         roots: result.Roots,
                         effects: result.Effects,
                         locations: result.Locations,
-                        emoji: result.EffectEmoji
+                        emoji: result.EffectEmoji,
+                        renderRules: result.Render
                     );
                     return Results.Json(response);
                 }

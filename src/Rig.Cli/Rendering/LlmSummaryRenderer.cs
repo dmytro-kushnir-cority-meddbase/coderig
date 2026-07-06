@@ -113,9 +113,14 @@ internal static class LlmSummaryRenderer
         TextWriter output,
         SuppressSet suppress = SuppressSet.Default,
         // --guards: append the per-node control-dependence guard condition as a trailing `guards` column.
-        bool guards = false
+        bool guards = false,
+        // Opaque/collapse render rules: a matching node is drawn as a leaf (its subtree folded away, a
+        // `opaque:<label>` / `collapsed:<label>` flag emitted). Null / Empty (e.g. under --raw) → no folding,
+        // matching the historical unfolded output. Threaded so this format folds like the pretty renderer.
+        FactRenderRules? renderRules = null
     )
     {
+        var rules = renderRules ?? FactRenderRules.Empty;
         output.WriteLine(Header(projection, guards));
         foreach (var root in roots)
         {
@@ -133,7 +138,8 @@ internal static class LlmSummaryRenderer
                 projection: projection,
                 output: output,
                 suppress: suppress,
-                guards: guards
+                guards: guards,
+                renderRules: rules
             );
         }
     }
@@ -155,9 +161,12 @@ internal static class LlmSummaryRenderer
         TextWriter output,
         SuppressSet suppress = SuppressSet.Default,
         // --guards: append the per-node control-dependence guard condition as a trailing `guards` column.
-        bool guards = false
+        bool guards = false,
+        // Opaque/collapse render rules (see Render). Null / Empty → no folding.
+        FactRenderRules? renderRules = null
     )
     {
+        var rules = renderRules ?? FactRenderRules.Empty;
         output.WriteLine(guards ? LlmIdsHeader + "\tguards" : LlmIdsHeader);
 
         // Counter for the next id to emit (1-based, monotonic).
@@ -186,7 +195,8 @@ internal static class LlmSummaryRenderer
                 nextId: ref nextId,
                 firstEmissionId: firstEmissionId,
                 parentIdAtDepth: parentIdAtDepth,
-                guards: guards
+                guards: guards,
+                renderRules: rules
             );
         }
     }
@@ -482,9 +492,12 @@ internal static class LlmSummaryRenderer
         LlmProjection projection,
         TextWriter output,
         SuppressSet suppress,
-        bool guards = false
+        bool guards = false,
+        FactRenderRules? renderRules = null
     )
     {
+        var rules = renderRules ?? FactRenderRules.Empty;
+
         // Determine whether this node is suppressed.
         if (IsSuppressed(node.SymbolId, suppress))
         {
@@ -510,12 +523,19 @@ internal static class LlmSummaryRenderer
                     rawEffectsByMethod: rawEffectsByMethod,
                     projection: projection,
                     output: output,
-                    suppress: suppress
+                    suppress: suppress,
+                    guards: guards,
+                    renderRules: rules
                 );
             }
 
             return;
         }
+
+        // Opaque/collapse fold decision (Empty rules under --raw → always None). A folded node is drawn as a
+        // leaf: its row still emits (with a fold flag; a collapse row also carries the union of the effects it
+        // hides), but its children are NOT walked — the fix that makes this format fold like the pretty view.
+        var fold = TreeFoldSupport.Decide(rules, node.SymbolId, isRoot: depth == 0);
 
         // Non-suppressed node: collect effects from any immediately-suppressed direct children
         // (roll-up) BEFORE emitting this row, so the row can include those effects.
@@ -540,8 +560,11 @@ internal static class LlmSummaryRenderer
         // EffectfulPaths: emit this node because the caller already checked the subtree has an effect
         //   (so the spine is always present), but we don't re-check here — the child walk below prunes.
         // Full: emit every node unconditionally.
+        // A collapse fold also emits (even in EffectsFlat with no own effect) — it summarises the effects it
+        // hides, so it belongs in the flat effect view.
         var hasRolledUp = rolledUp is { Count: > 0 };
-        if (projection != LlmProjection.EffectsFlat || hasEffect || hasRolledUp)
+        var isCollapseFold = fold.Kind == TreeFoldSupport.FoldKind.Collapse;
+        if (projection != LlmProjection.EffectsFlat || hasEffect || hasRolledUp || isCollapseFold)
         {
             var name = LlmName(node.SymbolId);
             var arity = ParseArity(node.SymbolId).ToString(CultureInfo.InvariantCulture);
@@ -569,11 +592,23 @@ internal static class LlmSummaryRenderer
                 rawEffects = [];
             }
 
+            // Collapse fold: fold the subtree's effect multiset onto this leaf so it reports what the hidden
+            // branch touches (e.g. "llblgen:fetch*14"). Copy first — rawEffects may alias the shared dict entry.
+            if (isCollapseFold)
+            {
+                var (hiddenEffects, _) = TreeFoldSupport.SummarizeHidden(node.Children, rawEffectsByMethod);
+                if (hiddenEffects.Count > 0)
+                {
+                    rawEffects = [.. rawEffects, .. hiddenEffects];
+                }
+            }
+
             var effectsStr = FormatEffects(rawEffects);
 
             // Flags: cause-specific token for Truncated nodes; empty for non-truncated non-cycle nodes.
             // AlreadyExpanded → "seen"; DepthCapped → "depth-capped"; BudgetCapped → "budget-capped".
-            var flags = BuildFlags(node);
+            // A folded node adds opaque:<label> / collapsed:<label> so the fold is greppable + machine-parseable.
+            var flags = AppendFoldFlag(BuildFlags(node), fold);
 
             // Emit the row: fixed column count, no trailing tab.
             // Each projection has a fixed column count (paths/full = 6, effects = 7); empty fields
@@ -591,8 +626,9 @@ internal static class LlmSummaryRenderer
             EmitRow(output, row.ToArray());
         }
 
-        // Truncated nodes do NOT expand their children (the tree already chose not to).
-        if (node.Truncated)
+        // Truncated nodes do NOT expand their children (the tree already chose not to). A folded node
+        // (opaque/collapse) is likewise a leaf here — its subtree is intentionally hidden.
+        if (node.Truncated || fold.Kind != TreeFoldSupport.FoldKind.None)
         {
             return;
         }
@@ -614,7 +650,8 @@ internal static class LlmSummaryRenderer
                 projection: projection,
                 output: output,
                 suppress: suppress,
-                guards: guards
+                guards: guards,
+                renderRules: rules
             );
         }
     }
@@ -652,6 +689,21 @@ internal static class LlmSummaryRenderer
         return parts.Count > 0 ? string.Join("|", parts) : "";
     }
 
+    // Append the opaque/collapse fold token to an existing (possibly empty) `|`-joined flags string.
+    // `opaque:<label>` / `collapsed:<label>` — the same fold the pretty renderer shows as «opaque: …» /
+    // "[seam: …]". Any `|` in a label is replaced with `/` so it can't be misread as a flag separator.
+    private static string AppendFoldFlag(string flags, TreeFoldSupport.Fold fold)
+    {
+        if (fold.Kind == TreeFoldSupport.FoldKind.None)
+        {
+            return flags;
+        }
+
+        var prefix = fold.Kind == TreeFoldSupport.FoldKind.Opaque ? "opaque:" : "collapsed:";
+        var token = prefix + fold.Label.Replace('|', '/');
+        return flags.Length > 0 ? flags + "|" + token : token;
+    }
+
     // llm-ids walk: mirrors WalkNode exactly (same selection/suppression/effects logic) but emits 8-column
     // rows with explicit id/parent_id surrogate linkage and seen:<canonicalId> back-references.
     private static void WalkNodeWithIds(
@@ -665,9 +717,12 @@ internal static class LlmSummaryRenderer
         ref int nextId,
         Dictionary<string, int> firstEmissionId,
         List<int> parentIdAtDepth,
-        bool guards = false
+        bool guards = false,
+        FactRenderRules? renderRules = null
     )
     {
+        var rules = renderRules ?? FactRenderRules.Empty;
+
         if (IsSuppressed(node.SymbolId, suppress))
         {
             if (node.Truncated)
@@ -693,12 +748,16 @@ internal static class LlmSummaryRenderer
                     nextId: ref nextId,
                     firstEmissionId: firstEmissionId,
                     parentIdAtDepth: parentIdAtDepth,
-                    guards: guards
+                    guards: guards,
+                    renderRules: rules
                 );
             }
 
             return;
         }
+
+        // Opaque/collapse fold decision (see WalkNode). A folded node emits a leaf row and does not recurse.
+        var fold = TreeFoldSupport.Decide(rules, node.SymbolId, isRoot: depth == 0);
 
         // Roll up effects from immediately-suppressed direct children.
         List<string>? rolledUp = null;
@@ -716,8 +775,9 @@ internal static class LlmSummaryRenderer
 
         var hasEffect = rawEffectsByMethod.ContainsKey(node.SymbolId);
         var hasRolledUp = rolledUp is { Count: > 0 };
+        var isCollapseFold = fold.Kind == TreeFoldSupport.FoldKind.Collapse;
 
-        if (projection != LlmProjection.EffectsFlat || hasEffect || hasRolledUp)
+        if (projection != LlmProjection.EffectsFlat || hasEffect || hasRolledUp || isCollapseFold)
         {
             var thisId = nextId++;
             // parent_id: nearest emitted ancestor, determined by the stack at depth-1 (empty for roots).
@@ -755,6 +815,16 @@ internal static class LlmSummaryRenderer
             else
             {
                 rawEffects = [];
+            }
+
+            // Collapse fold: fold the hidden subtree's effect multiset onto this leaf (copy-safe).
+            if (isCollapseFold)
+            {
+                var (hiddenEffects, _) = TreeFoldSupport.SummarizeHidden(node.Children, rawEffectsByMethod);
+                if (hiddenEffects.Count > 0)
+                {
+                    rawEffects = [.. rawEffects, .. hiddenEffects];
+                }
             }
 
             var effectsStr = FormatEffects(rawEffects);
@@ -805,6 +875,9 @@ internal static class LlmSummaryRenderer
                 flags = node.EdgeKind == "cycle" ? "cycle" : "";
             }
 
+            // A folded node adds opaque:<label> / collapsed:<label> (same fold the pretty renderer shows).
+            flags = AppendFoldFlag(flags, fold);
+
             var row = new List<string>
             {
                 thisId.ToString(CultureInfo.InvariantCulture),
@@ -824,7 +897,8 @@ internal static class LlmSummaryRenderer
             EmitRow(output, row.ToArray());
         }
 
-        if (node.Truncated)
+        // Truncated OR folded (opaque/collapse) → leaf here; do not walk children.
+        if (node.Truncated || fold.Kind != TreeFoldSupport.FoldKind.None)
         {
             return;
         }
@@ -848,7 +922,8 @@ internal static class LlmSummaryRenderer
                 nextId: ref nextId,
                 firstEmissionId: firstEmissionId,
                 parentIdAtDepth: parentIdAtDepth,
-                guards: guards
+                guards: guards,
+                renderRules: rules
             );
         }
     }

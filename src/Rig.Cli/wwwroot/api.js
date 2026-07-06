@@ -106,10 +106,12 @@ export const api = {
   meta: () => getJson("/api/meta"),
   runs: () => getJson("/api/runs"), // LATEST pointer moves → never cached
   providers: () => cached("providers", "/api/providers"),
-  tree: (storeId, explicitStore, from, asyncWalk) =>
+  // raw=true bypasses the opaque/collapse seam folds (server returns the full unfolded tree). It changes the
+  // payload, so it MUST be in the cache key alongside the async-walk mode.
+  tree: (storeId, explicitStore, from, asyncWalk, raw) =>
     cached(
-      `tree|${storeId}|${from}|${!!asyncWalk}`,
-      "/api/tree" + qs({ from, store: explicitStore, async: !!asyncWalk }),
+      `tree|${storeId}|${from}|${!!asyncWalk}|${!!raw}`,
+      "/api/tree" + qs({ from, store: explicitStore, async: !!asyncWalk, raw: raw ? true : undefined }),
     ),
   entrypoints: (storeId, explicitStore) =>
     cached(`eps|${storeId}`, "/api/entrypoints" + qs({ store: explicitStore })),
