@@ -68,6 +68,7 @@ Implemented detectors (intra-method / effect-local, tier 1):
 | `n_plus_1` | a read inside a loop whose key varies per iteration | high |
 | `unserializable_payload` | a store/serialize whose payload type is serializer-unsupported (e.g. `Option<T>`) | high |
 | `dual_write` | a method writing to ≥2 distinct durable systems (db/queue/search/cache/http/…) | medium (no-outbox-check disclosed) |
+| `sync_over_async` | a blocking wait (`Task.Wait()`/`.GetAwaiter().GetResult()`, bare or `.ConfigureAwait(false)`) inside a method declared `async` — threadpool starvation / deadlock risk; the fix is always "just await" | high (disclosed gap: `Task<T>.Result` is a property access, not a method invocation, and is NOT covered — the effect-rule engine only matches method invocations) |
 
 Backlog detectors:
 

@@ -37,6 +37,11 @@ internal static class EffectDerivation
         // `volatile` field DocIDs (Reads.LoadVolatileFieldIdsAsync). Corroborates the safe-DCL suppression
         // in the lazy_init_race lock-enclosed tier (FactHazardDeriver). Null/empty = never suppress.
         IReadOnlySet<string>? volatileCells = null,
+        // Symbol ids of methods declared `async` (Reads.LoadDeadCodeMethodsAsync, filtered on the "async"
+        // token in Modifiers). Feeds the sync_over_async hazard (an `async_block` effect — Task.Wait /
+        // .GetAwaiter().GetResult() — whose enclosing method is itself async). Null/empty = no findings
+        // (FactHazardDeriver.DeriveSyncOverAsync's null-safety convention, same as threadStaticCells/volatileCells).
+        IReadOnlySet<string>? asyncMethodIds = null,
         // FR-1 read-arm WRITE-PAIRING GATE (on by default). When true, a shared_state:read effect is emitted
         // only for a static-field read whose cell ALSO appears as a static-field write target somewhere in the
         // same input set — so a read of a never-written cell (const/enum/other immutable static) is dropped as
@@ -71,6 +76,8 @@ internal static class EffectDerivation
         //   - race_window: a read-before-write of the same shared cell in one method (RMW / TOCTOU);
         //   - dual_write: durable writes to ≥2 distinct system classes in one method (FR-8, distributed
         //     consistency — DB + queue / search / cache / external HTTP with no atomicity).
+        //   - sync_over_async: a blocking Task.Wait()/.GetAwaiter().GetResult() whose enclosing method is
+        //     itself declared async (threadpool starvation / deadlock risk — "just await instead").
         if (!deriveHazards)
         {
             return effects;
@@ -78,6 +85,7 @@ internal static class EffectDerivation
 
         effects = FactHazardDeriver.DeriveRaceWindows(effects, threadStaticCells, volatileCells);
         effects = FactHazardDeriver.DeriveDualWrites(effects);
+        effects = FactHazardDeriver.DeriveSyncOverAsync(effects, asyncMethodIds);
         return effects;
     }
 
@@ -104,6 +112,13 @@ internal static class EffectDerivation
         var (staticFieldWriteRefs, staticFieldReadRefs) = await Reads.LoadStaticFieldAccessRefsByKindAsync(context);
         var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
         var volatileCells = await Reads.LoadVolatileFieldIdsAsync(context);
+        // sync_over_async feed: the method universe's `async` modifier bit (already mined by FactExtractor;
+        // not loaded elsewhere on this path, so loaded fresh here).
+        var methods = await Reads.LoadDeadCodeMethodsAsync(context);
+        var asyncMethodIds = methods
+            .Where(m => m.Modifiers.Split(' ').Contains("async"))
+            .Select(m => m.SymbolId)
+            .ToHashSet(StringComparer.Ordinal);
         return DeriveEffects(
             effectRules: rules.Effects,
             observationRules: rules.Observations,
@@ -116,6 +131,7 @@ internal static class EffectDerivation
             deriveHazards: true,
             threadStaticCells: threadStaticCells,
             volatileCells: volatileCells,
+            asyncMethodIds: asyncMethodIds,
             gate: gate
         );
     }

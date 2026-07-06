@@ -1559,6 +1559,29 @@
       "reason": "parallel_await_all: Task.WhenAll/WhenAny joins concurrently-running tasks."
     },
     {
+      "provider": "async_block",
+      "operation": "wait",
+      "methods": [ "Wait" ],
+      "declaringTypes": [ "System.Threading.Tasks.Task" ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "async_block_wait: Task.Wait() blocks the calling thread on a task synchronously (Task<T>.Wait is the same inherited member) — the FR sync-over-async hazard fires when the ENCLOSING method is itself declared async (see FactHazardDeriver.DeriveSyncOverAsync)."
+    },
+    {
+      "provider": "async_block",
+      "operation": "get_result",
+      "methods": [ "GetResult" ],
+      "declaringTypes": [
+        "System.Runtime.CompilerServices.TaskAwaiter",
+        "System.Runtime.CompilerServices.ConfiguredTaskAwaitable.ConfiguredTaskAwaiter"
+      ],
+      "resource": "declaring_type",
+      "confidence": "high",
+      "basis": "compilation",
+      "reason": "async_block_get_result: the `.GetAwaiter().GetResult()` idiom (bare or `.ConfigureAwait(false)`) is a synchronous block on a task, equivalent in effect to Task.Wait(). Generic (TaskAwaiter<T>, ConfiguredTaskAwaitable<T>.ConfiguredTaskAwaiter) and non-generic forms both normalize to these declaring types after arity-marker stripping (see FactEffectDeriver.StripTypeArityMarkers), so one entry per family covers both. Task<T>.Result (a property, not a method invocation) is a KNOWN, DISCLOSED scope gap — the effect-rule engine only matches method invocations by declaringTypes/methods; see docs/hazards.md."
+    },
+    {
       "provider": "inproc_cache",
       "operation": "write",
       "methods": [ "Set", "SetAsync", "Add", "AddAsync", "AddOrGetExisting", "CreateEntry", "Insert", "GetOrCreate", "GetOrCreateAsync" ],

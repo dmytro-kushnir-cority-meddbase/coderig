@@ -474,6 +474,72 @@ public static class FactHazardDeriver
     private static bool TryClassify(IReadOnlyDictionary<string, string> map, string provider, string operation, out string systemClass) =>
         map.TryGetValue($"{provider}:{operation}", out systemClass!) || map.TryGetValue(provider, out systemClass!);
 
+    // ---------------------------------------------------------------------------------------------------------
+    // sync_over_async — a well-agreed-upon anti-pattern with no legitimate exception (unlike blocking at a
+    // genuine sync/async boundary, e.g. a top-level `Main()`, which is sometimes intentional and is
+    // deliberately NOT what this flags): a call to Task(<T>).Wait() or the `.GetAwaiter().GetResult()` idiom
+    // (bare or `.ConfigureAwait(false)`) — mined as the `async_block` provider (builtin-rules.json) — from
+    // WITHIN a method that is itself declared `async`. It wastes a threadpool thread and risks deadlock when
+    // a captured SynchronizationContext is involved; the fix is always "just await, you're already async".
+    //
+    // Tier 1 — structural co-occurrence: no dataflow needed, both facts (the blocking call, the `async`
+    // modifier on the enclosing method) are already mined. Like DeriveDualWrites this is a CODED matcher,
+    // ANNOTATE-ONLY: it appends a sync_over_async observation to the qualifying effect and returns the list
+    // otherwise untouched — it suppresses nothing and changes no effect.
+    //
+    // KNOWN, DISCLOSED SCOPE GAP: Task<T>.Result is a PROPERTY access, not a method invocation, so it is not
+    // (and will not be) covered here — the effect-rule engine only matches method invocations by
+    // declaringTypes/methods (builtin-rules.json has no property-based rule precedent), and adding one would
+    // be an engine change, not a rules-only addition. See docs/hazards.md.
+    public const string SyncOverAsyncType = "sync_over_async";
+    private const string ReasonSyncOverAsync = "blocking_wait_inside_async_method";
+
+    // Returns `effects` with a sync_over_async observation appended to every `async_block` effect whose
+    // ENCLOSING method id is in `asyncMethodIds` (the caller-supplied set of methods declared `async` —
+    // Reads.LoadDeadCodeMethodsAsync's Modifiers, which carries "async" per FactExtractor.BuildModifiers).
+    // Null/empty `asyncMethodIds` = no-op (mirrors the threadStaticCells/volatileCells null-safety convention
+    // above — a store indexed before this detector existed, or a bounded closure that hasn't threaded the set
+    // through yet, yields no findings rather than a false negative masquerading as "checked and clean"). The
+    // input list is not mutated; effects without a new finding are returned by reference.
+    public static IReadOnlyList<DerivedEffect> DeriveSyncOverAsync(
+        IReadOnlyList<DerivedEffect> effects,
+        IReadOnlySet<string>? asyncMethodIds
+    )
+    {
+        if (asyncMethodIds is not { Count: > 0 })
+        {
+            return effects;
+        }
+
+        var result = new List<DerivedEffect>(effects.Count);
+        foreach (var e in effects)
+        {
+            if (
+                !string.Equals(e.Provider, "async_block", StringComparison.Ordinal)
+                || e.EnclosingSymbolId is null
+                || !asyncMethodIds.Contains(e.EnclosingSymbolId)
+            )
+            {
+                result.Add(e);
+                continue;
+            }
+
+            var observation = new EffectObservationInfo(
+                Type: SyncOverAsyncType,
+                Context: e.Operation,
+                Detail: $"{SimpleMemberName(e.EnclosingSymbolId)} blocks synchronously on a task while itself declared async",
+                Confidence: "high",
+                Basis: Basis,
+                Reason: ReasonSyncOverAsync
+            );
+
+            IReadOnlyList<EffectObservationInfo> observations = e.Observations is null ? [observation] : [.. e.Observations, observation];
+            result.Add(e with { Observations = observations });
+        }
+
+        return result;
+    }
+
     // DISCLOSED STRUCTURAL HEURISTIC for the lazy-init / do-once archetype. We do NOT have the if-condition
     // value (no new extraction), so we classify on shape only and flag it heuristic. Two arms:
     //

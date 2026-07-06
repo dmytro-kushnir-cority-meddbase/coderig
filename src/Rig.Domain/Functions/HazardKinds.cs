@@ -20,6 +20,10 @@ public static class HazardKinds
     public const string NPlusOne = "n_plus_1";
     public const string UnserializablePayload = "unserializable_payload";
 
+    // sync_over_async comes from FactHazardDeriver; reuse its constant so the catalog can never drift from
+    // the emitter (same convention as race_window/lazy_init_race/thread_local_context/dual_write above).
+    public const string SyncOverAsync = FactHazardDeriver.SyncOverAsyncType;
+
     // cache_coherence is the cache-specific INSTANCE of the generic effect-correlation deriver
     // (FactCorrelationDeriver): a bulk_write anchor whose forward closure lacks a same-key cache:invalidate
     // companion. It has no single owning deriver class anymore (it is wired in DeriveCommand), so the type
@@ -40,6 +44,7 @@ public static class HazardKinds
         FactHazardDeriver.LazyInitRaceType,
         FactHazardDeriver.ThreadLocalContextType,
         FactHazardDeriver.DualWriteType,
+        SyncOverAsync,
         FactCycleDeriver.EventCycleType,
         CacheCoherence,
         StaticInitCapture,

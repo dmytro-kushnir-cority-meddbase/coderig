@@ -158,6 +158,11 @@ internal static class ImpactEngine
         var (staticFieldWriteRefs, staticFieldReadRefs) = await Reads.LoadStaticFieldAccessRefsByKindAsync(context);
         var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
         var volatileCells = await Reads.LoadVolatileFieldIdsAsync(context);
+        // sync_over_async feed: `methods` (loaded above for IdBySite) already carries the `async` modifier bit.
+        var asyncMethodIds = methods
+            .Where(m => m.Modifiers.Split(' ').Contains("async"))
+            .Select(m => m.SymbolId)
+            .ToHashSet(StringComparer.Ordinal);
         var effects = DeriveEffects(
             rules.Effects,
             rules.Observations,
@@ -170,6 +175,7 @@ internal static class ImpactEngine
             deriveHazards: true,
             threadStaticCells: threadStaticCells,
             volatileCells: volatileCells,
+            asyncMethodIds: asyncMethodIds,
             gate: gate
         );
         // The branch's enclosing→field/property-access-targets lookup, built ONCE so ComputeReachSets can union
@@ -776,6 +782,11 @@ internal static class ImpactEngine
         var (staticFieldWriteRefs, staticFieldReadRefs) = await Reads.LoadStaticFieldAccessRefsByKindAsync(context);
         var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
         var volatileCells = await Reads.LoadVolatileFieldIdsAsync(context);
+        // sync_over_async feed: `methods` (loaded above for idBySite) already carries the `async` modifier bit.
+        var asyncMethodIds = methods
+            .Where(m => m.Modifiers.Split(' ').Contains("async"))
+            .Select(m => m.SymbolId)
+            .ToHashSet(StringComparer.Ordinal);
         var effects = DeriveEffects(
             rules.Effects,
             rules.Observations,
@@ -788,6 +799,7 @@ internal static class ImpactEngine
             deriveHazards: true,
             threadStaticCells: threadStaticCells,
             volatileCells: volatileCells,
+            asyncMethodIds: asyncMethodIds,
             gate: gate
         );
 
