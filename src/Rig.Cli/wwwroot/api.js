@@ -2,9 +2,10 @@
 // no URL). In a React port each function becomes a TanStack `useQuery`.
 //
 // Caching correctness: a commit-scoped store's FACTS are immutable, but derived output (tree/effects/hazards)
-// also depends on the rule set + the tool build. So the cache is keyed by a DERIVATION VERSION (from
-// /api/meta = hash(tool MVID ⊕ rules fingerprint)), not the store id alone. When that version changes (rules
-// edit / rig upgrade) the keys change AND the persisted store is purged — stale derived data is never served.
+// also depends on the rule set + the derivation logic/payload schema. So the cache is keyed by a DERIVATION
+// VERSION (from /api/meta = hash(derivation-schema token ⊕ rules fingerprint)), not the store id alone. When
+// that version changes (rules edit / a deliberate schema bump) the keys change AND the persisted store is
+// purged — stale derived data is never served.
 // IndexedDB (not localStorage) because trees are >1 MB; it degrades to memory-only if IDB is unavailable.
 
 const mem = new Map();

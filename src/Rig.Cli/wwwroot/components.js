@@ -429,11 +429,14 @@ function RunCard(r, active, onSelect) {
         (r.storeId === active ? " active" : ""),
       onClick: () => onSelect(r.storeId),
     },
-    h("div", { class: "id" }, r.storeId),
+    // Lead with the human label (branch); show the commit ONCE as a muted mono chip so runs sharing a
+    // branch (e.g. several "HEAD") stay distinguishable. Drops the old double-SHA / double-dirty repetition.
     h(
       "div",
-      { class: "meta" },
-      `${r.commit || ""}${r.branch ? " (" + r.branch + ")" : ""}${r.dirty ? " +dirty" : ""}`,
+      { class: "id" },
+      h("span", { class: "label" }, r.branch || r.commit || r.storeId),
+      r.branch ? h("span", { class: "sha" }, r.commit || r.storeId) : null,
+      r.dirty ? h("span", { class: "dirty" }, "dirty") : null,
     ),
     h(
       "div",
@@ -875,7 +878,7 @@ export function Shell(actions) {
         dataset: { k: key },
         onChange: (e) => actions.setFlag(key, e.target.checked),
       }),
-      " " + label,
+      label,
     );
   refs.async = toggle("async", "asyncWalk", "walk async handoffs (refetches)");
   refs.sig = toggle("sig", "signatures", "show parameter signatures");

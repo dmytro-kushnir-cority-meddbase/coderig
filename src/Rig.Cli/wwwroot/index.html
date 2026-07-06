@@ -82,6 +82,14 @@
       header .store {
         color: var(--muted);
         font-size: 12px;
+        /* A deep solution path shouldn't shove the toolbar buttons off-screen — cap it and ellipsis;
+           the full path is on the title (hover). inline-block so max-width/ellipsis actually clip. */
+        display: inline-block;
+        vertical-align: bottom;
+        max-width: 34vw;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
       .purge {
         margin-left: auto;
@@ -199,6 +207,28 @@
       .run.active .id::before {
         content: "● ";
         color: var(--accent);
+      }
+      .run .id .label {
+        font-weight: 600;
+      }
+      /* commit shown once, muted + mono, so branch-sharing runs stay distinguishable without repeating the SHA */
+      .run .id .sha {
+        font-weight: 400;
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size: 11px;
+        color: var(--muted);
+        margin-left: 6px;
+      }
+      .run .id .dirty {
+        font-weight: 400;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 0 4px;
+        margin-left: 6px;
       }
       .run .meta {
         color: var(--muted);

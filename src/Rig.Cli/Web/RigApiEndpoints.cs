@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Rig.Analysis.Rules;
+using Rig.Cli.Caching;
 using Rig.Cli.Rendering;
 using Rig.Cli.Services;
 
@@ -9,7 +10,7 @@ namespace Rig.Cli.Web;
 // The /api surface for `rig serve`. Thin: each endpoint delegates to a Service (the same engine the CLI runs)
 // and projects to a DTO. Errors surface as a 400 with the message (a bad pattern / missing store is user
 // error, not a 500). Responses are `no-store` (see RigWebHost) — the CLIENT caches, keyed by a DERIVATION
-// VERSION (store facts are immutable, but derived output also depends on the rules + tool build). /api/meta
+// VERSION (store facts are immutable, but derived output also depends on the rules + derivation schema). /api/meta
 // exposes that version so the client can key + purge its persistent cache correctly.
 internal static class RigApiEndpoints
 {
@@ -31,10 +32,11 @@ internal static class RigApiEndpoints
             }
         );
 
-        // The derivation version = hash(tool build ⊕ rules fingerprint). It changes when the tool is rebuilt
-        // (new MVID) or the rule set is edited — i.e. whenever the DERIVED output for a given store could
-        // differ. The client keys its cache by this and purges on change, so a rules edit / rig upgrade never
-        // serves stale derived data (the store id alone is not enough).
+        // The derivation version = hash(derivation-schema token ⊕ rules fingerprint). It changes when a
+        // cache-schema version is deliberately bumped (a derivation-logic/payload change) or the rule set is
+        // edited — i.e. whenever the DERIVED output for a given store could differ. The client keys its cache
+        // by this and purges on change, so a rules edit / logic bump never serves stale derived data (the
+        // store id alone is not enough). See QueryCacheKeys.DerivationSchemaToken.
         app.MapGet(
             "/api/meta",
             () =>
@@ -253,11 +255,7 @@ internal static class RigApiEndpoints
 
                 try
                 {
-                    var marks = await HazardsService.ForTreeAsync(
-                        workingDirectory,
-                        fromPattern: from,
-                        storeRef: NullIfBlank(store)
-                    );
+                    var marks = await HazardsService.ForTreeAsync(workingDirectory, fromPattern: from, storeRef: NullIfBlank(store));
                     return Results.Json(marks);
                 }
                 catch (Exception ex)
@@ -313,16 +311,20 @@ internal static class RigApiEndpoints
     private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
     // The cache-invalidation version for DERIVED output. A store's facts are immutable, but tree/effects/
-    // hazards also depend on (a) the tool's derivation LOGIC and (b) the rule set — so the client must key its
-    // cache by more than the store id. MVID changes on every tool rebuild; RulesFingerprint changes on any
-    // rule edit. Their hash is a compact token: same input ⇒ same output ⇒ cache is safe; either moves ⇒ the
-    // client's keys change and it purges. Loaded fresh per call so a mid-session rig.rules.json edit is caught.
+    // hazards/impact also depend on (a) the derivation LOGIC/payload schema and (b) the rule set — so the client
+    // must key its cache by more than the store id. The token folds the rule fingerprint (changes on any rule
+    // edit) with QueryCacheKeys.DerivationSchemaToken (every per-artifact schema version) — so a bump to ANY
+    // server-side cache schema also moves this, keeping the client in lockstep and never serving an artifact
+    // whose server schema advanced. Loaded fresh per call so a mid-session rig.rules.json edit is caught.
+    // (This deliberately does NOT hash the assembly MVID: the MVID moved on every recompile and purged the
+    // whole client cache — including >1 MB trees — on any unrelated edit. The schema token moves only on a
+    // deliberate logic/schema bump, matching how the server keys already invalidate.)
     private static string DerivationVersion(string workingDirectory)
     {
         RuleSetLoader.Load(workingDirectory, extraRules: [], loadedPaths: out var loadedPaths);
         var rulesHash = RulesFingerprint.ComputeFromPaths(loadedPaths);
-        var mvid = typeof(RigApiEndpoints).Module.ModuleVersionId.ToString("N");
-        var bytes = System.Text.Encoding.UTF8.GetBytes(mvid + "|" + rulesHash);
+        var schema = QueryCacheKeys.DerivationSchemaToken();
+        var bytes = System.Text.Encoding.UTF8.GetBytes(schema + "|" + rulesHash);
         return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes))[..16];
     }
 }

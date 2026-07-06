@@ -177,6 +177,33 @@ Resist adding *further* bespoke narrowing (context-family/type-arg are hand-roll
 CHA imprecision instead; the principled ceiling is a real type-flow pass, which still degrades to CHA at
 reflection boundaries.
 
+## Cache invalidation — bump the schema constant when you change a derivation (read before editing a detector/effect/impact)
+
+Derived output (tree / effects / hazards / impact) is cached on **two** layers: the server disk cache
+(`Rig.Cli/Caching/QueryCacheKeys.cs`) and the web client's IndexedDB (`wwwroot/api.js`, keyed by
+`/api/meta`'s `derivationVersion`). Both hedge on the SAME three axes — **store identity** (rig.db
+size+mtime; a reindex shifts it), **rules fingerprint** (a `rig.rules.json` edit shifts it; no reindex
+needed), and a **per-artifact schema version** — the `*Schema` int constants at the top of `QueryCacheKeys`
+(`EpSchema` / `TreeSchema` / `HazardEffectsSchema` / `GraphHazSchema` / `ImpactSchema`).
+
+**The rule: if you change the derivation LOGIC or the cached PAYLOAD SHAPE of an artifact — a detector's
+classification, an effect's fields, the impact diff computation — and neither the store facts nor the rules
+change, BUMP that artifact's `*Schema` constant.** That is the only signal that invalidates a warm cache;
+skip it and every warm store (disk + every user's browser) keeps serving the pre-change result forever.
+Reindex and rule edits are already covered by the store/rules axes — the bump is specifically for a
+*same-input, different-output* logic change.
+
+- Store, rules, and the schema constants are the WHOLE hedge. **Do NOT re-introduce the assembly MVID / a
+  build timestamp / an app-version string** into any cache key — that was removed 2026-07-06 precisely
+  because it changed on every recompile, so it destroyed the expensive impact diff (minutes; loads+derives
+  BOTH stores) and the >1 MB client trees on any unrelated `.cs` edit. The `*Schema` bump is the deliberate,
+  honest replacement.
+- The client stays in lockstep for free: `QueryCacheKeys.DerivationSchemaToken()` folds in **all** the
+  `*Schema` constants and feeds `/api/meta`, so bumping any one also moves the client's `derivationVersion`
+  (it can never keep serving an artifact whose server schema advanced). You only touch the one constant.
+- Leave a one-line `// vN->vM: <why>` trail on the constant (the existing ones do) — it's the audit of what
+  each bump flushed.
+
 ## MedDBase store (the main real-world target)
 
 - The indexed store + its config live in **`c:/git/meddbase-analysis`** (`.rig/` is ~2 GB, plus

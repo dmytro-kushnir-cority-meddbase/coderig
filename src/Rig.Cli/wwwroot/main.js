@@ -487,7 +487,9 @@ function setupWatches() {
       mount(refs.runs, RunsList(s, actions));
       populateImpactStores(s);
       const latest = s.runs.find((r) => r.isLatest) || s.runs[0];
-      refs.storeDir.textContent = latest ? latest.solutionPath || "" : "";
+      const solPath = latest ? latest.solutionPath || "" : "";
+      refs.storeDir.textContent = solPath;
+      refs.storeDir.title = solPath; // full path on hover — the span ellipsis-truncates when narrow
     },
   );
   watch(

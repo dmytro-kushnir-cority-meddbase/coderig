@@ -10,6 +10,26 @@ namespace Rig.Cli.Caching;
 // traversal parameters the cached artifact is a function of.
 internal static class QueryCacheKeys
 {
+    // Payload/derivation-LOGIC schema versions — the "vN" that gates each cached artifact on the derivation
+    // logic + payload shape, independently of the two data axes every key already carries (store identity =
+    // reindex tripwire; rulesHash = rule-edit tripwire). Bump the one whose logic/shape changed; the change
+    // then misses server-side AND (via DerivationSchemaToken below) flushes the client cache in lockstep.
+    // These REPLACE the old assembly-MVID hedge: the MVID moved on every recompile — busting the expensive
+    // impact diff and the >1 MB client trees on any unrelated `.cs` edit — whereas these move only on a
+    // deliberate logic/schema change, which is the honest signal. The cost is discipline: a derivation
+    // change with no matching bump serves stale (same tradeoff the tree/hazard keys have always carried).
+    internal const int EpSchema = 1;
+    internal const int TreeSchema = 2; // v1->v2: TraceNode gained TruncationCause (no stale conflated seen flags)
+    internal const int HazardEffectsSchema = 3; // v1->v2 EnclosingGuards; v2->v3 lazy_init_race lock-enclosed tier
+    internal const int GraphHazSchema = 1;
+    internal const int ImpactSchema = 3; // v2(+MVID) -> v3: one-time flush when the per-compile MVID hedge was dropped
+
+    // The composite token the CLIENT keys its cache by (hashed with the rules fingerprint in /api/meta). It
+    // folds in EVERY per-artifact schema version, so bumping ANY one above also moves the client's derivation
+    // version — the client can never keep serving an artifact whose server-side schema advanced. This is the
+    // desync guard that a single hand-bumped client constant would lack, and it needs no MVID.
+    internal static string DerivationSchemaToken() => $"{EpSchema}.{TreeSchema}.{HazardEffectsSchema}.{GraphHazSchema}.{ImpactSchema}";
+
     // Identity of the current store for cache keying + invalidation: rig.db size + last-write time.
     // `rig index` publishes a fresh db (atomic rename → new mtime/size) and `rig graph` rewrites the
     // derived edge tables in place (mtime changes), so any reindex shifts this — old cache entries no
@@ -31,7 +51,7 @@ internal static class QueryCacheKeys
     // pattern, no traversal params), so a single derivation serves every query against the store.
     internal static string EpCacheKey(string storeKey, string rulesHash)
     {
-        var material = $"ep|v1|{storeKey}|{rulesHash}";
+        var material = $"ep|v{EpSchema}|{storeKey}|{rulesHash}";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 
@@ -63,7 +83,7 @@ internal static class QueryCacheKeys
         // maxNodes is in the key because a forest built under one --limit must not serve another (a
         // budget-capped forest is a DIFFERENT tree, not a different rendering of the same tree). Adding
         // the field shifts every existing key once (one cache re-warm) — accepted in lieu of a bump.
-        var material = $"tree|v2|{storeKey}|{rulesHash}|{fromPattern}|{maxDepth}|{maxNodes}|{mode}|{raw}";
+        var material = $"tree|v{TreeSchema}|{storeKey}|{rulesHash}|{fromPattern}|{maxDepth}|{maxNodes}|{mode}|{raw}";
         return new ForestCacheKey(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material))));
     }
 
@@ -81,7 +101,7 @@ internal static class QueryCacheKeys
     // input changing, so a warm v2 entry would keep serving pre-tier reasons indefinitely.
     internal static string HazardEffectsCacheKey(string storeKey, string rulesHash)
     {
-        var material = $"hazardfx|v3|{storeKey}|{rulesHash}";
+        var material = $"hazardfx|v{HazardEffectsSchema}|{storeKey}|{rulesHash}";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 
@@ -94,7 +114,7 @@ internal static class QueryCacheKeys
     // so the effect-attached set and the graph-tier set never collide. `v1` is the payload-schema version.
     internal static string GraphHazardFindingsCacheKey(string storeKey, string rulesHash)
     {
-        var material = $"graphhaz|v1|{storeKey}|{rulesHash}";
+        var material = $"graphhaz|v{GraphHazSchema}|{storeKey}|{rulesHash}";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 
@@ -109,13 +129,12 @@ internal static class QueryCacheKeys
     // so the base side's identity lives only in this key — a stale base store can never serve a hit.
     internal static string ImpactCacheKey(string baseStoreKey, string headStoreKey, string rulesHash, FactPathFinder.TraversalMode mode)
     {
-        // Fold the TOOL BUILD (assembly MVID, regenerated every compile) into the key alongside the two store
-        // keys, rules, and mode. The diff is a function of the derivation LOGIC too, not just the stores +
-        // rules — so a `rig` upgrade that changes how effects/reachability are computed must miss (else the
-        // disk cache would serve a stale diff, and the client's derivation-version purge would refetch right
-        // into it). Recompute-on-upgrade is the correct default for a fact tool; the diff is idempotent.
-        var toolBuild = typeof(QueryCacheKeys).Assembly.ManifestModule.ModuleVersionId.ToString("N");
-        var material = $"impact|v2|{toolBuild}|{baseStoreKey}|{headStoreKey}|{rulesHash}|{mode}";
+        // Keyed like the other four artifacts: the two immutable store identities + the rule fingerprint + the
+        // traversal mode + the payload/logic schema version (ImpactSchema). A `rig` upgrade that CHANGES how the
+        // diff is derived must bump ImpactSchema to miss — the honest signal. (Previously this folded in the
+        // assembly MVID, which changed on EVERY recompile and so recomputed this — the most expensive artifact,
+        // minutes over both stores — on any unrelated edit; ImpactSchema was bumped once when that was removed.)
+        var material = $"impact|v{ImpactSchema}|{baseStoreKey}|{headStoreKey}|{rulesHash}|{mode}";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 

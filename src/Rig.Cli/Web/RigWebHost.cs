@@ -35,8 +35,8 @@ internal static class RigWebHost
         app.UseDefaultFiles(); // serve index.html at "/"
         app.UseStaticFiles();
         // API responses are `no-store`: derived output isn't frozen by store id alone (it also depends on the
-        // rules + tool build), so the browser HTTP cache must not hold it. The SPA does the caching itself,
-        // keyed by the derivation version (/api/meta) so it invalidates correctly on a rules edit / rig upgrade.
+        // rules + derivation schema), so the browser HTTP cache must not hold it. The SPA does the caching itself,
+        // keyed by the derivation version (/api/meta) so it invalidates correctly on a rules edit / schema bump.
         app.Use(
             async (ctx, next) =>
             {
