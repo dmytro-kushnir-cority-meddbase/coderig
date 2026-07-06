@@ -1562,21 +1562,21 @@
       "provider": "inproc_cache",
       "operation": "write",
       "methods": [ "Set", "SetAsync", "Add", "AddAsync", "AddOrGetExisting", "CreateEntry", "Insert", "GetOrCreate", "GetOrCreateAsync" ],
-      "declaringTypes": [ "System.Runtime.Caching.MemoryCache", "System.Runtime.Caching.ObjectCache", "Microsoft.Extensions.Caching.Memory.IMemoryCache", "Microsoft.Extensions.Caching.Memory.MemoryCache", "Microsoft.Extensions.Caching.Memory.MemoryCacheExtensions", "System.Web.Caching.Cache" ],
+      "declaringTypes": [ "System.Runtime.Caching.MemoryCache", "System.Runtime.Caching.ObjectCache", "Microsoft.Extensions.Caching.Memory.IMemoryCache", "Microsoft.Extensions.Caching.Memory.MemoryCache", "Microsoft.Extensions.Caching.Memory.CacheExtensions", "System.Web.Caching.Cache" ],
       "resource": "declaring_type",
       "confidence": "high",
       "basis": "compilation+profile",
-      "reason": "inproc_cache_write_stateless_hazard"
+      "reason": "inproc_cache_write_stateless_hazard: covers both the IMemoryCache instance methods and the BCL Microsoft.Extensions.Caching.Memory.CacheExtensions.Set/GetOrCreate[Async] extension methods called directly on an IMemoryCache (VS-G9) — fixed from a nonexistent 'MemoryCacheExtensions' typo, which never matched any real type."
     },
     {
       "provider": "inproc_cache",
       "operation": "read",
       "methods": [ "Get", "GetAsync", "TryGetValue", "Contains", "GetValues", "GetCacheItem" ],
-      "declaringTypes": [ "System.Runtime.Caching.MemoryCache", "System.Runtime.Caching.ObjectCache", "Microsoft.Extensions.Caching.Memory.IMemoryCache", "Microsoft.Extensions.Caching.Memory.MemoryCache", "System.Web.Caching.Cache" ],
+      "declaringTypes": [ "System.Runtime.Caching.MemoryCache", "System.Runtime.Caching.ObjectCache", "Microsoft.Extensions.Caching.Memory.IMemoryCache", "Microsoft.Extensions.Caching.Memory.MemoryCache", "Microsoft.Extensions.Caching.Memory.CacheExtensions", "System.Web.Caching.Cache" ],
       "resource": "declaring_type",
       "confidence": "high",
       "basis": "compilation+profile",
-      "reason": "inproc_cache_read"
+      "reason": "inproc_cache_read: also covers CacheExtensions.Get/Get<T>/TryGetValue<T> called directly on an IMemoryCache, not just via a first-party wrapper (VS-G9)."
     },
     {
       "provider": "inproc_cache",
