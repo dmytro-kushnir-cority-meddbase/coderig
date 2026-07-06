@@ -67,7 +67,10 @@ internal static class EffectsDiffCommand
                             Format: pr.GetValue(format),
                             Time: pr.GetValue(time)
                         ),
-                        new CommandIo(new TextOutput(output, error), new WorkspaceLocation(workingDirectory, pr.GetValue(store)))
+                        new CommandIo(
+                            new TextOutput(Output: output, Error: error),
+                            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
+                        )
                     )
             )
         );

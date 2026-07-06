@@ -35,7 +35,11 @@ internal static class TreeMapper
             Name: ShortName(node.SymbolId),
             Signature: ShortSignature(node.SymbolId),
             // Full (untruncated) predicate — the UI ellipsises on render, keeping full text in a tooltip.
-            Guards: Rig.Cli.Rendering.TreeRenderer.ShortGuards(node.EnclosingGuards, node.LoopDetail, maxLength: int.MaxValue),
+            Guards: Rig.Cli.Rendering.TreeRenderer.ShortGuards(
+                encoded: node.EnclosingGuards,
+                loopDetail: node.LoopDetail,
+                maxLength: int.MaxValue
+            ),
             EdgeKind: node.EdgeKind,
             Fanout: node.Fanout,
             CallSites: node.CallSites,

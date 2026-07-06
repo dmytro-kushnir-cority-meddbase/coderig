@@ -62,11 +62,11 @@ internal static class ServeCommand
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                Process.Start("open", url);
+                Process.Start(fileName: "open", arguments: url);
             }
             else
             {
-                Process.Start("xdg-open", url);
+                Process.Start(fileName: "xdg-open", arguments: url);
             }
         }
         catch (Exception ex)

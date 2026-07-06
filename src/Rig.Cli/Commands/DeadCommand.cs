@@ -60,7 +60,10 @@ internal static class DeadCommand
                             Limit: pr.GetValue(limit),
                             Format: pr.GetValue(format)
                         ),
-                        new CommandIo(new TextOutput(output, error), new WorkspaceLocation(workingDirectory, null))
+                        new CommandIo(
+                            new TextOutput(Output: output, Error: error),
+                            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: null)
+                        )
                     )
             )
         );

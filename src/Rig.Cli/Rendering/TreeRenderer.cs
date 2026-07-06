@@ -257,7 +257,8 @@ internal static class TreeRenderer
         // predicates gating whether the call runs in its parent. Empty (must-run) → no glyph; the ⎇
         // analog of 🔁. The reaching edge's LoopDetail lets ShortGuards drop a foreach's own MoveNext guard
         // (redundant with 🔁). Off unless --guards (keeps default golden trees stable).
-        var guardText = guards && node.EnclosingGuards is not null ? ShortGuards(node.EnclosingGuards, node.LoopDetail) : "";
+        var guardText =
+            guards && node.EnclosingGuards is not null ? ShortGuards(encoded: node.EnclosingGuards, loopDetail: node.LoopDetail) : "";
         // Space between ⎇ and [ : the ⎇ glyph (U+2387) renders narrow in some terminals and overlaps the
         // following bracket without it. (🔁 is a full-width emoji and doesn't need the gap.)
         var guardTag = guardText.Length == 0 ? "" : $" ⎇ [{guardText}]";

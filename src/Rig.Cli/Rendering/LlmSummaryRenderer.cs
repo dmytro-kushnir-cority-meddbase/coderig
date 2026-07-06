@@ -585,7 +585,7 @@ internal static class LlmSummaryRenderer
                     : new List<string> { depth.ToString(CultureInfo.InvariantCulture), name, arity, calls, effectsStr, flags };
             if (guards)
             {
-                row.Add(TreeRenderer.ShortGuards(node.EnclosingGuards, node.LoopDetail));
+                row.Add(TreeRenderer.ShortGuards(encoded: node.EnclosingGuards, loopDetail: node.LoopDetail));
             }
 
             EmitRow(output, row.ToArray());
@@ -818,7 +818,7 @@ internal static class LlmSummaryRenderer
             };
             if (guards)
             {
-                row.Add(TreeRenderer.ShortGuards(node.EnclosingGuards, node.LoopDetail));
+                row.Add(TreeRenderer.ShortGuards(encoded: node.EnclosingGuards, loopDetail: node.LoopDetail));
             }
 
             EmitRow(output, row.ToArray());

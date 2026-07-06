@@ -155,26 +155,26 @@ internal static class RigApiEndpoints
 
                 if (string.IsNullOrWhiteSpace(@base) || string.IsNullOrWhiteSpace(head))
                 {
-                    await Send("failed", "provide ?base=&head=");
+                    await Send(ev: "failed", data: "provide ?base=&head=");
                     return;
                 }
 
                 try
                 {
-                    await Send("phase", "starting…");
+                    await Send(ev: "phase", data: "starting…");
                     await ImpactQueryService.DiffAsync(
                         workingDirectory,
                         baseRef: @base,
                         headRef: head,
                         async: async ?? false,
-                        onPhase: (name, ms) => Send("phase", $"{name} · {ms} ms")
+                        onPhase: (name, ms) => Send(ev: "phase", data: $"{name} · {ms} ms")
                     );
-                    await Send("done", "ready");
+                    await Send(ev: "done", data: "ready");
                 }
                 catch (Exception ex)
                 {
                     // custom "failed" (not "error") so it doesn't collide with EventSource's built-in error.
-                    await Send("failed", ex.Message);
+                    await Send(ev: "failed", data: ex.Message);
                 }
             }
         );
@@ -195,11 +195,11 @@ internal static class RigApiEndpoints
                 {
                     var art = await ImpactQueryService.DiffAsync(workingDirectory, baseRef: @base, headRef: head, async: async ?? false);
                     var ep = art.Diff.AffectedEps.FirstOrDefault(e => e.Route == route && (string.IsNullOrEmpty(kind) || e.Kind == kind));
-                    ImpactReachNodeDto Node(string id) => new(id, SymbolNameFormatter.ShortName(id));
+                    ImpactReachNodeDto Node(string id) => new(Id: id, Name: SymbolNameFormatter.ShortName(id));
                     return Results.Json(
                         ep is null
-                            ? new ImpactReachDto([], [])
-                            : new ImpactReachDto(ep.Added.Select(Node).ToList(), ep.Removed.Select(Node).ToList())
+                            ? new ImpactReachDto(Added: [], Removed: [])
+                            : new ImpactReachDto(Added: ep.Added.Select(Node).ToList(), Removed: ep.Removed.Select(Node).ToList())
                     );
                 }
                 catch (Exception ex)
@@ -230,7 +230,7 @@ internal static class RigApiEndpoints
                         headRef: head,
                         async: async ?? false
                     );
-                    return Results.Text(csv, "text/csv");
+                    return Results.Text(content: csv, contentType: "text/csv");
                 }
                 catch (Exception ex)
                 {
@@ -253,7 +253,11 @@ internal static class RigApiEndpoints
 
                 try
                 {
-                    var marks = await HazardsService.ForTreeAsync(workingDirectory, from, storeRef: NullIfBlank(store));
+                    var marks = await HazardsService.ForTreeAsync(
+                        workingDirectory,
+                        fromPattern: from,
+                        storeRef: NullIfBlank(store)
+                    );
                     return Results.Json(marks);
                 }
                 catch (Exception ex)
@@ -315,7 +319,7 @@ internal static class RigApiEndpoints
     // client's keys change and it purges. Loaded fresh per call so a mid-session rig.rules.json edit is caught.
     private static string DerivationVersion(string workingDirectory)
     {
-        RuleSetLoader.Load(workingDirectory, [], out var loadedPaths);
+        RuleSetLoader.Load(workingDirectory, extraRules: [], loadedPaths: out var loadedPaths);
         var rulesHash = RulesFingerprint.ComputeFromPaths(loadedPaths);
         var mvid = typeof(RigApiEndpoints).Module.ModuleVersionId.ToString("N");
         var bytes = System.Text.Encoding.UTF8.GetBytes(mvid + "|" + rulesHash);

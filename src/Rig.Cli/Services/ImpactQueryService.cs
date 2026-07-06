@@ -25,7 +25,7 @@ internal static class ImpactQueryService
         Func<string, long, Task>? onPhase = null
     )
     {
-        var ws = new WorkspaceLocation(workingDirectory, headRef);
+        var ws = new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: headRef);
         await using var context = await OpenReadContextGatedAsync(ws with { StoreRef = headRef });
         var mode = CommonOptions.Mode(async: async, includeDelivery: includeDelivery);
         return await ImpactEngine.DiffAsync(
@@ -47,7 +47,7 @@ internal static class ImpactQueryService
     // than the plain diff (a full recompute), so it backs an explicit "load graphs" action, not the diff view.
     public static async Task<string> TelemetryCsvAsync(string workingDirectory, string baseRef, string headRef, bool async = false)
     {
-        var ws = new WorkspaceLocation(workingDirectory, headRef);
+        var ws = new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: headRef);
         await using var context = await OpenReadContextGatedAsync(ws with { StoreRef = headRef });
         var mode = CommonOptions.Mode(async: async, includeDelivery: false);
         var timings = new PhaseTimings();

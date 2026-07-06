@@ -343,7 +343,7 @@
         outline-offset: 2px;
       }
       input#collapse {
-        width: 92px;
+        width: 100px;
       }
       /* search dropdown */
       #results {
@@ -675,7 +675,9 @@
       .impact-toolbar .arrow {
         color: var(--muted);
       }
-      .impact-toolbar input {
+      /* Flex-fill the filter box only — NOT the async toggle's checkbox, whose 32px pill would
+         otherwise be stretched to 200px by min-width (min-width beats the .chk width). */
+      .impact-toolbar input:not([type="checkbox"]) {
         flex: 1;
         min-width: 200px;
       }

@@ -128,7 +128,10 @@ internal static class ImpactCommand
                             Structural: pr.GetValue(structural),
                             ExpectNoEffectChange: pr.GetValue(expectNoEffectChange)
                         ),
-                        new CommandIo(new TextOutput(output, error), new WorkspaceLocation(workingDirectory, null))
+                        new CommandIo(
+                            new TextOutput(Output: output, Error: error),
+                            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: null)
+                        )
                     )
             )
         );

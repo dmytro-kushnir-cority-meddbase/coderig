@@ -198,7 +198,10 @@ internal static class TreeCommand
                             Format: pr.GetValue(format),
                             Suppress: pr.GetValue(suppress)
                         ),
-                        new CommandIo(new TextOutput(output, error), new WorkspaceLocation(workingDirectory, pr.GetValue(store)))
+                        new CommandIo(
+                            new TextOutput(Output: output, Error: error),
+                            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
+                        )
                     )
             )
         );
@@ -822,7 +825,7 @@ internal static class TreeCommand
         // --guards: a trailing column with the reconstructed control-dependence condition gating this call
         // (empty for must-run). Same text as the human tree's ⎇ glyph (TreeRenderer.ShortGuards): the foreach
         // MoveNext guard is filtered and a short-circuit ||/&& renders as the whole source condition.
-        var guardCol = guards ? "\t" + ShortGuards(node.EnclosingGuards, node.LoopDetail) : "";
+        var guardCol = guards ? "\t" + ShortGuards(encoded: node.EnclosingGuards, loopDetail: node.LoopDetail) : "";
         output.WriteLine(
             $"{depth}\t{node.SymbolId}\t{node.EdgeKind}\t{node.HandoffVia}\t{node.Fanout}\t{effects}\t{file}\t{line}{guardCol}"
         );

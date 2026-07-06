@@ -21,7 +21,9 @@ public static class EntryPointService
     )
     {
         var rules = RuleSetLoader.Load(workingDirectory, extraRules ?? []);
-        await using var context = await OpenReadContextGatedAsync(new WorkspaceLocation(workingDirectory, storeRef));
+        await using var context = await OpenReadContextGatedAsync(
+            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeRef)
+        );
 
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
         var epSet = await DeriveEntryPointsAsync(context, epData, rules);

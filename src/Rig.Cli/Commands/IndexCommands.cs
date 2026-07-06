@@ -46,7 +46,9 @@ internal static class IndexCommands
                 error,
                 async () =>
                 {
-                    var dbPath = StoreLayout.DbPathForRef(new WorkspaceLocation(workingDirectory, pr.GetValue(store)));
+                    var dbPath = StoreLayout.DbPathForRef(
+                        new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
+                    );
                     if (!File.Exists(dbPath))
                     {
                         return CommandGuard.NoRunError(error);

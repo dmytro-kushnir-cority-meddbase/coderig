@@ -16,8 +16,8 @@ internal static class ImpactMapper
         return new ImpactResponseDto(
             Base: Prov(art.BaseProvenance),
             Head: Prov(art.HeadProvenance),
-            AddedEps: d.Ep?.Added.Select(a => new ImpactKindRouteDto(a.Kind, a.Route)).ToList() ?? [],
-            RemovedEps: d.Ep?.Removed.Select(a => new ImpactKindRouteDto(a.Kind, a.Route)).ToList() ?? [],
+            AddedEps: d.Ep?.Added.Select(a => new ImpactKindRouteDto(Kind: a.Kind, Route: a.Route)).ToList() ?? [],
+            RemovedEps: d.Ep?.Removed.Select(a => new ImpactKindRouteDto(Kind: a.Kind, Route: a.Route)).ToList() ?? [],
             AffectedEpCount: d.AffectedEps.Count,
             PerEp: d.PerEp.Select(p => new ImpactEpDeltaDto(
                     Kind: p.Kind,
@@ -27,11 +27,33 @@ internal static class ImpactMapper
                     Line: p.Line,
                     BaseEffects: p.BaseEffects,
                     BranchEffects: p.BranchEffects,
-                    Added: p.Added.Select(e => new ImpactEffectDto(e.Provider, e.Operation, e.Resource, e.Enclosing)).ToList(),
-                    Removed: p.Removed.Select(e => new ImpactEffectDto(e.Provider, e.Operation, e.Resource, e.Enclosing)).ToList(),
-                    HazardsAdded: p.HazardsAddedOrEmpty.Select(hz => new ImpactHazardDto(hz.Type, hz.Cell, hz.Enclosing, hz.Confidence))
+                    Added: p.Added.Select(e => new ImpactEffectDto(
+                            Provider: e.Provider,
+                            Operation: e.Operation,
+                            Resource: e.Resource,
+                            Enclosing: e.Enclosing
+                        ))
                         .ToList(),
-                    HazardsRemoved: p.HazardsRemovedOrEmpty.Select(hz => new ImpactHazardDto(hz.Type, hz.Cell, hz.Enclosing, hz.Confidence))
+                    Removed: p.Removed.Select(e => new ImpactEffectDto(
+                            Provider: e.Provider,
+                            Operation: e.Operation,
+                            Resource: e.Resource,
+                            Enclosing: e.Enclosing
+                        ))
+                        .ToList(),
+                    HazardsAdded: p.HazardsAddedOrEmpty.Select(hz => new ImpactHazardDto(
+                            Type: hz.Type,
+                            Cell: hz.Cell,
+                            Enclosing: hz.Enclosing,
+                            Confidence: hz.Confidence
+                        ))
+                        .ToList(),
+                    HazardsRemoved: p.HazardsRemovedOrEmpty.Select(hz => new ImpactHazardDto(
+                            Type: hz.Type,
+                            Cell: hz.Cell,
+                            Enclosing: hz.Enclosing,
+                            Confidence: hz.Confidence
+                        ))
                         .ToList(),
                     SharedMutationOnPath: p.SharedMutationOnPath
                 ))

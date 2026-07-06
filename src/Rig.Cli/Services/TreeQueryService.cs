@@ -59,7 +59,9 @@ public static class TreeQueryService
         // --raw parity: zero the graph-shaping rules so the tree is the exact unfiltered structure.
         var shaped = raw ? rules with { Factory = [], Cut = [], Context = [] } : rules;
 
-        await using var context = await OpenReadContextGatedAsync(new WorkspaceLocation(workingDirectory, storeRef));
+        await using var context = await OpenReadContextGatedAsync(
+            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeRef)
+        );
 
         var computation = await ComputeAsync(
             context: context,

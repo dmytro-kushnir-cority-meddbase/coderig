@@ -21,7 +21,9 @@ public static class SymbolSearchService
         string? storeRef = null
     )
     {
-        await using var context = await OpenReadContextGatedAsync(new WorkspaceLocation(workingDirectory, storeRef));
+        await using var context = await OpenReadContextGatedAsync(
+            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeRef)
+        );
         // Fetch unbounded then trim after the lambda filter, matching `rig symbols` (the display cap applies
         // post-filter). Compiler-generated lambdas (~λ) are dropped by default — they're noise in a picker.
         var hits = await Reads.SearchSymbolsAsync(context, pattern: query, kind: kind, limit: int.MaxValue);

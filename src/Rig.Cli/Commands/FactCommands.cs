@@ -89,7 +89,7 @@ internal static class FactCommands
                 async () =>
                 {
                     await using var context = await OpenReadContextGatedAsync(
-                        new WorkspaceLocation(workingDirectory, pr.GetValue(storeRef))
+                        new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(storeRef))
                     );
                     var registrations = await Reads.LoadDiRegistrationsAsync(context);
                     if (registrations is null)
@@ -147,7 +147,7 @@ internal static class FactCommands
                 async () =>
                 {
                     await using var context = await OpenReadContextGatedAsync(
-                        new WorkspaceLocation(workingDirectory, pr.GetValue(storeRef))
+                        new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(storeRef))
                     );
                     if (pr.GetValue(skipped))
                     {
@@ -220,7 +220,7 @@ internal static class FactCommands
                     var cap = pr.GetValue(limit);
                     var filterLambdas = pr.GetValue(noLambdas);
                     var sr = pr.GetValue(storeRef);
-                    var ws = new WorkspaceLocation(workingDirectory, sr);
+                    var ws = new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: sr);
                     await using var context = await OpenReadContextGatedAsync(ws);
                     // Fetch beyond the display cap so we can compute the true post-filter total: the LIKE
                     // fallback hard-caps at 5000 unique rows, and the FTS path returns all matches.
@@ -271,7 +271,7 @@ internal static class FactCommands
                     var fp = pr.GetValue(firstParty);
                     var refKind = pr.GetValue(kind);
                     await using var context = await OpenReadContextGatedAsync(
-                        new WorkspaceLocation(workingDirectory, pr.GetValue(storeRef))
+                        new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(storeRef))
                     );
                     var hits = await Reads.FindReferencesAsync(
                         context,

@@ -29,7 +29,7 @@ public static class HazardsService
     )
     {
         var rules = RuleSetLoader.Load(workingDirectory: workingDirectory, extraRules: extraRules ?? [], loadedPaths: out var loadedPaths);
-        var ws = new WorkspaceLocation(workingDirectory, storeRef);
+        var ws = new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeRef);
         await using var context = await OpenReadContextGatedAsync(ws);
 
         // Build the tree (sync, full) to get the set of reachable methods to filter hazards to.

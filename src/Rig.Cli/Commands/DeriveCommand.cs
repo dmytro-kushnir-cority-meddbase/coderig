@@ -62,7 +62,10 @@ internal static class DeriveCommand
                             Gate: !pr.GetValue(noGate),
                             ListProviders: pr.GetValue(listProviders)
                         ),
-                        new CommandIo(new TextOutput(output, error), new WorkspaceLocation(workingDirectory, pr.GetValue(store)))
+                        new CommandIo(
+                            new TextOutput(Output: output, Error: error),
+                            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
+                        )
                     )
             )
         );
