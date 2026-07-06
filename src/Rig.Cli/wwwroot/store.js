@@ -17,6 +17,7 @@ export const store = createStore({
   signatures: false, // render mode: show param signatures
   predicates: false, // render mode: show control-dependence guards
   hazards: false, // render mode: overlay hazard marks
+  callers: null, // reverse-nav drawer: null = closed; else { target, mode, matched, entryPoints?, roots? } from /api/callers
   // data
   runs: [],
   providers: { providers: [], providerOps: [] },

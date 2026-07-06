@@ -193,7 +193,16 @@ function TreeNode(node, depth, ctx) {
 
   const row = h(
     "div",
-    { class: "row" + (dcls ? " row-" + dcls : "") },
+    {
+      class: "row" + (dcls ? " row-" + dcls : ""),
+      // Right-click a node to pivot: re-root here / who reaches this / entry points reaching this.
+      onContextMenu: ctx.actions
+        ? (e) => {
+            e.preventDefault();
+            ctx.actions.nodeMenu(node, e);
+          }
+        : null,
+    },
     twist,
     dcls
       ? h(
@@ -392,6 +401,7 @@ function DiffBanner(s, actions) {
 export function TreeView(s, actions) {
   if (!s.tree) return h("div", {});
   const ctx = ctxOf(s);
+  ctx.actions = actions; // threaded so a node's context menu can pivot (re-root / who-reaches / EPs-reaching)
   const banner = DiffBanner(s, actions);
   if (s.view === "effects") {
     const out = flatEffectful(s.tree.roots, ctx);
@@ -758,6 +768,118 @@ export function ImpactView(s, actions) {
   );
 }
 
+// The reverse-navigation drawer: "who reaches this node". Opened from a tree node's context menu, backed by
+// /api/callers. entrypoints mode groups the rule-detected EPs by owning deployed service (the "which services
+// can trigger this" lens); roots mode lists no-predecessor origins. Any row re-roots the tree onto itself.
+export function CallersPanel(s, actions) {
+  const c = s.callers;
+  if (!c) return h("div", { class: "callers-drawer hidden" });
+  const header = h(
+    "div",
+    { class: "callers-head" },
+    h("span", { class: "callers-title" }, c.mode === "entrypoints" ? "entry points reaching" : "callers of"),
+    h("span", { class: "callers-target", title: c.target }, shortLabel(c.target)),
+    h(
+      "span",
+      { class: "callers-modes" },
+      h(
+        "button",
+        { class: "callers-mode" + (c.mode === "entrypoints" ? " on" : ""), onClick: () => actions.openCallers({ id: c.target }, "entrypoints", c.async) },
+        "entry points",
+      ),
+      h(
+        "button",
+        { class: "callers-mode" + (c.mode === "roots" ? " on" : ""), onClick: () => actions.openCallers({ id: c.target }, "roots", c.async) },
+        "roots",
+      ),
+      // async opt-in: also walk async-handoff edges (background workers / actor inboxes / events). Refetches.
+      h(
+        "button",
+        {
+          class: "callers-mode" + (c.async ? " on" : ""),
+          title: "also walk async/scheduled handoffs (background workers, actor inboxes, events)",
+          onClick: () => actions.openCallers({ id: c.target }, c.mode, !c.async),
+        },
+        "async",
+      ),
+    ),
+    h("button", { class: "callers-close", title: "close", onClick: () => actions.closeCallers() }, "✕"),
+  );
+
+  let body;
+  if (c.loading) {
+    body = h("div", { class: "callers-empty callers-loading" }, h("span", { class: "spinner" }), "querying…");
+  } else if (!c.matched) {
+    body = h("div", { class: "callers-empty" }, "nothing reaches this (synchronously)");
+  } else if (c.mode === "entrypoints") {
+    // group EPs by service (loaded-in). "—" bucket = no deployments.json / unattributed.
+    const groups = new Map();
+    for (const ep of c.entryPoints || []) {
+      const svc = ep.services && ep.services.length ? ep.services.map((x) => x.name).join(", ") : "—";
+      (groups.get(svc) || groups.set(svc, []).get(svc)).push(ep);
+    }
+    body = h(
+      "div",
+      { class: "callers-list" },
+      [...groups.entries()].map(([svc, eps]) =>
+        h(
+          "div",
+          { class: "callers-svc" },
+          h("div", { class: "callers-svc-head" }, h("span", { class: "svc-chip" }, svc), h("span", { class: "svc-count" }, `${eps.length}`)),
+          eps.map((ep) =>
+            h(
+              "div",
+              { class: "callers-ep", title: ep.fqn, onClick: () => actions.openTree(ep.fqn) },
+              h("span", { class: "ep-kind" }, ep.kind),
+              h("span", { class: "ep-route" }, ep.route),
+            ),
+          ),
+        ),
+      ),
+    );
+  } else {
+    body = h(
+      "div",
+      { class: "callers-list" },
+      (c.roots || []).map((r) =>
+        h(
+          "div",
+          { class: "callers-ep" + (r.forwardConfirmed ? "" : " reverse-only"), title: r.id, onClick: () => actions.openTree(r.id) },
+          h("span", { class: "ep-route" }, r.name),
+          r.forwardConfirmed ? null : h("span", { class: "ep-unconfirmed", title: "reverse-only: no confirmed forward path (dispatch over-approximation)" }, "~"),
+        ),
+      ),
+    );
+  }
+  // In-place text filter over the rendered rows — no state round-trip (keeps focus, matches the SPA's
+  // uncontrolled-input convention). Hides non-matching EP/root rows and any service group left empty.
+  const filter =
+    c.loading || !c.matched
+      ? null
+      : h("input", {
+          class: "callers-filter",
+          placeholder: "filter…",
+          onInput: (e) => {
+            const q = e.target.value.toLowerCase();
+            const drawer = e.target.closest(".callers-drawer");
+            drawer.querySelectorAll(".callers-ep").forEach((el) => {
+              el.classList.toggle("filtered-out", q.length > 0 && !el.textContent.toLowerCase().includes(q));
+            });
+            drawer.querySelectorAll(".callers-svc").forEach((g) => {
+              const anyVisible = [...g.querySelectorAll(".callers-ep")].some((el) => !el.classList.contains("filtered-out"));
+              g.classList.toggle("filtered-out", !anyVisible);
+            });
+          },
+        });
+  return h("div", { class: "callers-drawer" }, header, filter, body);
+}
+// last dotted segment or two of a DocID/FQN, for a compact drawer title.
+function shortLabel(id) {
+  const noParen = id.split("(")[0];
+  const parts = noParen.replace(/^[MFP]:/, "").split(".");
+  return parts.slice(-2).join(".");
+}
+
 // ---- the static Shell (built once) ----------------------------------------------------------------------
 // Returns { root, refs }. refs holds the containers the regions re-render into + the (uncontrolled) inputs.
 // Input events call `actions`; the shell never reads state after construction.
@@ -981,6 +1103,7 @@ export function Shell(actions) {
   refs.statusbar = h("div", { id: "statusbar" }, refs.spin, refs.status);
   refs.tree = h("div", { class: "tree" });
   refs.impact = h("div", { class: "tree impact-wrap hidden" });
+  refs.callers = h("div", { class: "callers-mount" }); // reverse-nav drawer mounts here (overlays the tree area)
   const section = h(
     "section",
     {},
@@ -989,6 +1112,7 @@ export function Shell(actions) {
     refs.statusbar,
     refs.tree,
     refs.impact,
+    refs.callers,
   );
 
   refs.root = h("main", {}, aside, refs.splitter, section);

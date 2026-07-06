@@ -115,6 +115,13 @@ export const api = {
     ),
   entrypoints: (storeId, explicitStore) =>
     cached(`eps|${storeId}`, "/api/entrypoints" + qs({ store: explicitStore })),
+  // reverse reachability — who reaches `from`. mode: "entrypoints" (rule-detected EPs, service-annotated) | "roots".
+  // async=true also walks async-handoff edges (background workers / actor inboxes / events) — changes the set.
+  callers: (storeId, explicitStore, from, mode, asyncWalk) =>
+    cached(
+      `callers|${storeId}|${from}|${mode}|${!!asyncWalk}`,
+      "/api/callers" + qs({ from, store: explicitStore, mode, async: asyncWalk ? true : undefined }),
+    ),
   hazards: (storeId, explicitStore, from) =>
     cached(
       `haz|${storeId}|${from}`,

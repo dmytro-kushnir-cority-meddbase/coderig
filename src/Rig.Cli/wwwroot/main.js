@@ -18,6 +18,7 @@ import {
   RunsList,
   EpList,
   TreeView,
+  CallersPanel,
   ImpactView,
   ImpactProgress,
   Chips,
@@ -49,6 +50,9 @@ async function openTree(pattern) {
     return;
   }
   hideResults();
+  // Keep the (uncontrolled) search box in sync with programmatic navigations — re-root, a drawer EP click,
+  // an impact cross-link — not just typed queries.
+  if (refs.from) refs.from.value = pattern;
   // drop a stale diff overlay when navigating to a DIFFERENT EP (openDiffTree sets it for the same pattern
   // right before calling here, so that case is preserved).
   if (get().diffOverlay && get().diffOverlay.from !== pattern)
@@ -156,8 +160,45 @@ function loadImpact() {
 }
 
 // ---- actions passed to components -----------------------------------------------------------------------
+// Positioned context menu for a tree node — the reverse-nav entry point. Built as a transient body-level div
+// (dismissed on click-away / Escape), so it escapes the tree's overflow clipping.
+function showNodeMenu(node, e) {
+  document.querySelectorAll(".node-menu").forEach((m) => m.remove());
+  const item = (label, fn) =>
+    h("button", { class: "node-menu-item", onClick: () => { menu.remove(); teardown(); fn(); } }, label);
+  const menu = h(
+    "div",
+    { class: "node-menu" },
+    item("Re-root here", () => openTree(node.id)),
+    item("Entry points reaching this →", () => actions.openCallers(node, "entrypoints")),
+    item("Who reaches this (roots)", () => actions.openCallers(node, "roots")),
+  );
+  menu.style.left = Math.min(e.clientX, window.innerWidth - 240) + "px";
+  menu.style.top = e.clientY + "px";
+  document.body.appendChild(menu);
+  const dismiss = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); teardown(); } };
+  const esc = (ev) => { if (ev.key === "Escape") { menu.remove(); teardown(); } };
+  const teardown = () => { document.removeEventListener("mousedown", dismiss); document.removeEventListener("keydown", esc); };
+  setTimeout(() => { document.addEventListener("mousedown", dismiss); document.addEventListener("keydown", esc); }, 0);
+}
+
 const actions = {
   setTheme: applyTheme,
+  nodeMenu: showNodeMenu,
+  async openCallers(node, mode, asyncWalk = false) {
+    const from = node.id;
+    set({ callers: { target: from, mode, async: asyncWalk, matched: false, loading: true } });
+    try {
+      const data = await api.callers(resolved(), explicit(), from, mode, asyncWalk);
+      set({ callers: { target: from, mode, async: asyncWalk, matched: data.matched, entryPoints: data.entryPoints, roots: data.roots } });
+    } catch (err) {
+      status("callers: " + err.message, true);
+      set({ callers: null });
+    }
+  },
+  closeCallers() {
+    set({ callers: null });
+  },
   setTab(id) {
     set({ tab: id });
     if (id === "eps" && !get().eps.length) loadEntrypoints();
@@ -541,6 +582,11 @@ function setupWatches() {
       mount(refs.tree, TreeView(s, actions));
       if (s.tree) status(treeStatus(s));
     },
+  );
+  watch(
+    store,
+    (s) => [s.callers],
+    (s) => mount(refs.callers, CallersPanel(s, actions)),
   );
   watch(
     store,
