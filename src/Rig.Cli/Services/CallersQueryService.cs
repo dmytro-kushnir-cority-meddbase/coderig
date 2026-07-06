@@ -120,7 +120,13 @@ public static class CallersQueryService
     // already-reviewed Predecessors semantics (dispatch fan-out, receiver narrowing, handoff cuts) that
     // ReachedBy/EntryRootsReaching already encode correctly. This mirrors ReachesQueryService's own
     // precedent — a FLAT result, because the underlying domain computation is flat.
-    private static CallersResult BuildRoots(FactGraphData graph, string toPattern, int maxDepth, FactPathFinder.TraversalMode mode, bool raw)
+    private static CallersResult BuildRoots(
+        FactGraphData graph,
+        string toPattern,
+        int maxDepth,
+        FactPathFinder.TraversalMode mode,
+        bool raw
+    )
     {
         var roots = FactPathFinder.EntryRootsReaching(graph, toPattern, maxDepth, mode: mode);
         if (roots.Count == 0)

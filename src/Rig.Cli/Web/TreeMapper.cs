@@ -38,9 +38,7 @@ internal static class TreeMapper
                 comparer: StringComparer.Ordinal
             );
 
-        var dtoRoots = roots
-            .Select(r => MapNode(r, effectsByMethod, rawByMethod, locations, emoji, renderRules, isRoot: true))
-            .ToList();
+        var dtoRoots = roots.Select(r => MapNode(r, effectsByMethod, rawByMethod, locations, emoji, renderRules, isRoot: true)).ToList();
         return new TreeResponseDto(From: from, Matched: dtoRoots.Count > 0, Roots: dtoRoots);
     }
 
@@ -95,8 +93,7 @@ internal static class TreeMapper
             node,
             loc,
             effects: ownEffects,
-            children: node
-                .Children.Select(c => MapNode(c, effectsByMethod, rawByMethod, locations, emoji, renderRules, isRoot: false))
+            children: node.Children.Select(c => MapNode(c, effectsByMethod, rawByMethod, locations, emoji, renderRules, isRoot: false))
                 .ToList(),
             foldKind: null,
             foldLabel: null,

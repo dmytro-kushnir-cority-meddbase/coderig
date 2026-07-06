@@ -26,11 +26,7 @@ public static class PathEndpoint
             {
                 if (string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(to))
                 {
-                    return Results.Problem(
-                        title: "Missing from/to",
-                        detail: "Provide ?from=<pattern>&to=<pattern>.",
-                        statusCode: 400
-                    );
+                    return Results.Problem(title: "Missing from/to", detail: "Provide ?from=<pattern>&to=<pattern>.", statusCode: 400);
                 }
 
                 try

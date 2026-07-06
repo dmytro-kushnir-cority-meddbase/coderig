@@ -12,8 +12,7 @@ namespace Rig.Tests.Cli;
 // this before, which is how it drifted.
 public sealed class TreeFoldTests
 {
-    private static TraceNode Node(string id, params TraceNode[] children) =>
-        new(id, "invocation", null, null, children);
+    private static TraceNode Node(string id, params TraceNode[] children) => new(id, "invocation", null, null, children);
 
     private static Dictionary<string, List<string>> RawEffects(params (string Sym, string[] Effects)[] entries)
     {
@@ -69,10 +68,7 @@ public sealed class TreeFoldTests
     [Test]
     public void Llm_collapse_rule_folds_subtree_and_rolls_up_the_hidden_effect_union()
     {
-        var root = Node(
-            "M:App.Svc.Do()",
-            Node("M:App.Pricing.GetData()", Node("M:App.Pricing.Step1()"), Node("M:App.Pricing.Step2()"))
-        );
+        var root = Node("M:App.Svc.Do()", Node("M:App.Pricing.GetData()", Node("M:App.Pricing.Step1()"), Node("M:App.Pricing.Step2()")));
         var rules = Rules(collapse: [new FactRenderRule("Pricing.GetData", "pricing engine")]);
         var effects = RawEffects(
             ("M:App.Pricing.Step1()", ["llblgen:fetch", "llblgen:fetch"]),
@@ -115,10 +111,7 @@ public sealed class TreeFoldTests
     [Test]
     public void Web_mapper_folds_collapse_seam_into_a_labelled_leaf_with_the_effect_union()
     {
-        var root = Node(
-            "M:App.Svc.Do()",
-            Node("M:App.Pricing.GetData()", Node("M:App.Pricing.Step1()"), Node("M:App.Pricing.Step2()"))
-        );
+        var root = Node("M:App.Svc.Do()", Node("M:App.Pricing.GetData()", Node("M:App.Pricing.Step1()"), Node("M:App.Pricing.Step2()")));
         var rules = Rules(collapse: [new FactRenderRule("Pricing.GetData", "pricing engine")]);
         var effects = new List<DerivedEffect>
         {

@@ -377,10 +377,10 @@ public sealed class TreeRenderRulesTests
             []
         );
 
-        rules.MatchCollapseSeam("M:MedDBase.DataAccessTier.EntityClasses.PersonCache.New(System.Int32)")!
+        rules
+            .MatchCollapseSeam("M:MedDBase.DataAccessTier.EntityClasses.PersonCache.New(System.Int32)")!
             .Label.ShouldBe("entity cache fetch");
-        rules.MatchCollapseSeam("M:MedDBase.DataAccessTier.EntityClasses.AccountCache.New(MedDBase.AccountId)")
-            .ShouldNotBeNull();
+        rules.MatchCollapseSeam("M:MedDBase.DataAccessTier.EntityClasses.AccountCache.New(MedDBase.AccountId)").ShouldNotBeNull();
         // subsumes the .NewEntity overloads (substring within the segment)...
         rules.MatchCollapseSeam("M:MedDBase.DataAccessTier.EntityClasses.ServiceCache.NewEntity()").ShouldNotBeNull();
         // ...but a business-logic cache in another namespace is NOT caught (the whole point of anchoring).

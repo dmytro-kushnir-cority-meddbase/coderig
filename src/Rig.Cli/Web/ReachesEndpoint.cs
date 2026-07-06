@@ -42,7 +42,12 @@ internal static class ReachesEndpoint
                         Matched: result.Matched,
                         ReachableCount: result.ReachableCount,
                         Effects: result
-                            .Effects.Select(e => new EffectDto(Provider: e.Provider, Operation: e.Operation, Glyph: e.Glyph, Sites: e.Sites))
+                            .Effects.Select(e => new EffectDto(
+                                Provider: e.Provider,
+                                Operation: e.Operation,
+                                Glyph: e.Glyph,
+                                Sites: e.Sites
+                            ))
                             .ToList()
                     );
                     return Results.Json(response);

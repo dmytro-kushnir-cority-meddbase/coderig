@@ -30,11 +30,7 @@ internal static class CallersEndpoint
             {
                 if (string.IsNullOrWhiteSpace(from))
                 {
-                    return Results.Problem(
-                        title: "Missing 'from'",
-                        detail: "Provide a ?from= target method pattern.",
-                        statusCode: 400
-                    );
+                    return Results.Problem(title: "Missing 'from'", detail: "Provide a ?from= target method pattern.", statusCode: 400);
                 }
 
                 var resolvedMode = string.Equals(mode, "entrypoints", StringComparison.OrdinalIgnoreCase)
@@ -74,7 +70,11 @@ internal static class CallersEndpoint
                         To: from,
                         Matched: result.Matched,
                         Roots: (result.Roots ?? [])
-                            .Select(r => new CallerRootDto(Id: r.SymbolId, Name: ShortName(r.SymbolId), ForwardConfirmed: r.ForwardConfirmed))
+                            .Select(r => new CallerRootDto(
+                                Id: r.SymbolId,
+                                Name: ShortName(r.SymbolId),
+                                ForwardConfirmed: r.ForwardConfirmed
+                            ))
                             .ToList()
                     );
                     return Results.Json(rootsResponse);
