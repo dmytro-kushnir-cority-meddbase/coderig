@@ -912,10 +912,34 @@ export function CallersPanel(s, actions) {
   return h("div", { class: "callers-drawer" }, header, filter, body);
 }
 // last dotted segment or two of a DocID/FQN, for a compact drawer title.
-function shortLabel(id) {
+export function shortLabel(id) {
   const noParen = id.split("(")[0];
   const parts = noParen.replace(/^[MFP]:/, "").split(".");
   return parts.slice(-2).join(".");
+}
+
+// ---- pivot-history breadcrumb trail (W1) -------------------------------------------------------------------
+// A thin, clickable trail of the pivots (re-root / drawer open / diff cross-link) made this session. Clicking
+// a crumb replays the browser's own back/forward to it (actions.jumpToCrumb in main.js) so the trail and the
+// real history stack never diverge. Empty trail renders nothing (hidden via the shared `.hidden` rule).
+export function BreadcrumbTrail(s, actions) {
+  if (!s.history.length) return h("div", { class: "crumbs hidden" });
+  return h(
+    "div",
+    { class: "crumbs" },
+    s.history.map((c, i) => [
+      i > 0 ? h("span", { class: "crumb-sep" }, "›") : null,
+      h(
+        "button",
+        {
+          class: "crumb" + (i === s.historyCursor ? " on" : ""),
+          title: c.label,
+          onClick: () => actions.jumpToCrumb(i),
+        },
+        c.label,
+      ),
+    ]),
+  );
 }
 
 // ---- the static Shell (built once) ----------------------------------------------------------------------
@@ -1142,9 +1166,11 @@ export function Shell(actions) {
   refs.tree = h("div", { class: "tree" });
   refs.impact = h("div", { class: "tree impact-wrap hidden" });
   refs.callers = h("div", { class: "callers-mount" }); // reverse-nav drawer mounts here (overlays the tree area)
+  refs.crumbs = h("div", { class: "crumbs-mount" }); // pivot-history breadcrumb trail mounts here (see BreadcrumbTrail)
   const section = h(
     "section",
     {},
+    refs.crumbs,
     refs.treeToolbar,
     refs.impactToolbar,
     refs.statusbar,

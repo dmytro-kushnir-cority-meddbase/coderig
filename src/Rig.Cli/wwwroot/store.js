@@ -35,6 +35,12 @@ export const store = createStore({
   // diff overlay on a tree: when you open a tree FROM an impact EP card, this carries that EP's changed
   // methods so the head tree can highlight what the diff touched. Session-only (not URL-synced). null = off.
   diffOverlay: null, // { from, base, head, added:[enclosingFqn], removed:[enclosingFqn], changedOnly:bool }
+  // pivot history: a breadcrumb trail of tree/drawer pivots (re-root, drawer open, diff cross-link) so an
+  // investigation is a navigable session, not a single query. Session-only (not URL-synced, same reasoning as
+  // `diffOverlay` above) — the CURRENT position is still fully expressed by the existing query params; this is
+  // a TRAIL on top, driven by the History API's own state object (see main.js's pushState/popstate wiring).
+  history: [], // [{ kind: "tree"|"callers"|"reaches"|"path", label, from, appMode, storeId, diffOverlay, callers }]
+  historyCursor: -1, // index into `history` of the crumb currently being viewed; -1 = no crumbs yet
   // ui
   tab: "runs", // runs | eps
   epFilter: "",
@@ -49,6 +55,14 @@ export function activeStoreId(s = get()) {
   return (
     s.storeId || (s.runs.find((r) => r.isLatest) || s.runs[0] || {}).storeId
   );
+}
+
+// Append a pivot crumb to the trail, discarding any forward entries past the current cursor (standard
+// back-then-navigate semantics — like a browser's own history). Returns a state patch; the caller `set()`s it
+// (mirrors the module's no-DOM/no-fetch invariant — this is pure state math, main.js owns the pushState side).
+export function pushCrumb(s, crumb) {
+  const trail = [...s.history.slice(0, s.historyCursor + 1), crumb];
+  return { history: trail, historyCursor: trail.length - 1 };
 }
 
 // The query slice, for a watch() that re-serializes the URL only when the query changes.
@@ -88,8 +102,13 @@ export function serializeUrl(s = get()) {
     if (s.impactHead) p.set("ihead", s.impactHead);
     if (s.impactAsync) p.set("iasync", "1");
   }
+  // Preserve whatever state is already attached to the CURRENT history entry (a pivot crumb — see main.js's
+  // pushState/popstate wiring) — this call's job is keeping the URL text in sync, not managing history state.
+  // Hardcoding `null` here would silently wipe a crumb off the active entry the moment any OTHER query field
+  // changes (e.g. a composite pivot's own `set()` firing before its `recordCrumb` gets to `pushState`),
+  // permanently breaking back/forward into that entry.
   history.replaceState(
-    null,
+    history.state,
     "",
     location.pathname + (p.toString() ? "?" + p : ""),
   );

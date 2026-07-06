@@ -535,6 +535,46 @@
           transform: rotate(360deg);
         }
       }
+      /* ---- pivot-history breadcrumb trail (W1) ---- */
+      .crumbs-mount {
+        display: contents;
+      }
+      .crumbs {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 2px;
+        padding: 8px 18px 0;
+      }
+      .crumb-sep {
+        color: var(--muted);
+        font-size: 11px;
+        margin: 0 1px;
+      }
+      .crumb {
+        background: var(--chip);
+        border: 1px solid var(--border);
+        color: var(--muted);
+        border-radius: 10px;
+        padding: 2px 9px;
+        font: inherit;
+        font-size: 11px;
+        cursor: pointer;
+        max-width: 220px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .crumb:hover {
+        color: var(--fg);
+        border-color: var(--accent);
+      }
+      .crumb.on {
+        color: var(--fg);
+        background: var(--sel);
+        border-color: var(--accent);
+        font-weight: 600;
+      }
       /* tree */
       .tree {
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

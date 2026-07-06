@@ -12,6 +12,7 @@ import {
   querySlice,
   serializeUrl,
   readUrl,
+  pushCrumb,
 } from "./store.js";
 import {
   Shell,
@@ -24,6 +25,8 @@ import {
   Chips,
   treeStatus,
   baseName,
+  BreadcrumbTrail,
+  shortLabel,
 } from "./components.js";
 
 const explicit = () => get().storeId; // the id to put on URLs (null => LATEST)
@@ -44,7 +47,9 @@ function setBusy(on) {
 }
 
 // ---- data actions ---------------------------------------------------------------------------------------
-async function openTree(pattern) {
+// `recordHistory=false` is the escape hatch used by restoreCrumb (popstate / a breadcrumb click) and by
+// openDiffTree (which records its OWN crumb before delegating here) — see the "pivot history" section below.
+async function openTree(pattern, { recordHistory = true } = {}) {
   if (!pattern) {
     status("enter a pattern", true);
     return;
@@ -57,6 +62,11 @@ async function openTree(pattern) {
   // right before calling here, so that case is preserved).
   if (get().diffOverlay && get().diffOverlay.from !== pattern)
     set({ diffOverlay: null });
+  // A crumb marks a genuine RE-root: going from an already-shown tree to a DIFFERENT pattern. The very first
+  // tree of a session (boot deep-link or the first search) has nothing to go "back" to, so it's not a pivot;
+  // re-fetches of the SAME pattern (toggling async/raw) aren't a pivot either.
+  const prevTreeFrom = get().treeFrom;
+  const isNewRoot = recordHistory && prevTreeFrom !== "" && pattern !== prevTreeFrom;
   set({ from: pattern });
   setBusy(true);
   status("querying…");
@@ -75,6 +85,12 @@ async function openTree(pattern) {
     }
     set({ tree: data, treeFrom: pattern, hazardMarks: null });
     if (get().hazards) loadHazards();
+    if (isNewRoot)
+      recordCrumb("tree", shortLabel(pattern), {
+        from: pattern,
+        diffOverlay: get().diffOverlay,
+        callers: null,
+      });
   } catch (e) {
     status(e.message, true);
   } finally {
@@ -159,6 +175,69 @@ function loadImpact() {
   es.onerror = () => finish(() => status("diff stream connection lost", true));
 }
 
+// ---- pivot history (breadcrumbs) -------------------------------------------------------------------------
+// Every pivot (re-root, drawer open, diff cross-link) pushes a crumb onto `history` AND mirrors it onto a
+// real `history.pushState` entry, so the breadcrumb trail (BreadcrumbTrail, mounted into refs.crumbs) and the
+// browser's own back/forward button are driven by the SAME mechanism — clicking a crumb just replays that
+// many real back/forward steps (see actions.jumpToCrumb), and the popstate handler below does the one true
+// restore. `diffOverlay`/`callers` default to what's already on the crumb; callers pass what they need.
+function recordCrumb(kind, label, extra = {}) {
+  const s = get();
+  const crumb = {
+    kind,
+    label,
+    from: s.treeFrom,
+    appMode: s.appMode,
+    storeId: s.storeId,
+    diffOverlay: null,
+    callers: null,
+    ...extra,
+  };
+  const patch = pushCrumb(s, crumb);
+  set(patch);
+  history.pushState(
+    { crumb, cursor: patch.historyCursor },
+    "",
+    location.pathname + location.search,
+  );
+}
+
+// Restore app state from a crumb (breadcrumb click or a real browser back/forward). Every pivot action below
+// takes a `{ recordHistory: false }` escape hatch specifically so THIS path never re-pushes a crumb.
+async function restoreCrumb(crumb) {
+  set({ appMode: crumb.appMode, storeId: crumb.storeId ?? null });
+  if (crumb.kind === "tree") {
+    set({ diffOverlay: crumb.diffOverlay || null, callers: null });
+    if (crumb.from) await openTree(crumb.from, { recordHistory: false });
+    return;
+  }
+  // drawer pivots (callers/reaches/path) don't change the tree — restore whatever tree was behind the drawer
+  // when the crumb was recorded, then reopen the drawer itself.
+  if (crumb.from && crumb.from !== get().treeFrom)
+    await openTree(crumb.from, { recordHistory: false });
+  if (crumb.kind === "callers")
+    await actions.openCallers(
+      { id: crumb.callers.target },
+      crumb.callers.mode,
+      crumb.callers.asyncWalk,
+      { recordHistory: false },
+    );
+  else if (crumb.kind === "reaches")
+    await actions.openReaches({ id: crumb.callers.target }, { recordHistory: false });
+  else if (crumb.kind === "path")
+    await actions.openPath(crumb.callers.from, crumb.callers.target, {
+      recordHistory: false,
+    });
+}
+
+// Real browser back/forward: pushState's attached state carries the crumb + its cursor position directly, so
+// there's no need to re-derive anything from the URL.
+window.addEventListener("popstate", (e) => {
+  if (!e.state || !e.state.crumb) return;
+  set({ historyCursor: e.state.cursor });
+  restoreCrumb(e.state.crumb);
+});
+
 // ---- actions passed to components -----------------------------------------------------------------------
 // Positioned context menu for a tree node — the reverse-nav entry point. Built as a transient body-level div
 // (dismissed on click-away / Escape), so it escapes the tree's overflow clipping.
@@ -186,12 +265,18 @@ function showNodeMenu(node, e) {
 const actions = {
   setTheme: applyTheme,
   nodeMenu: showNodeMenu,
-  async openCallers(node, mode, asyncWalk = false) {
+  async openCallers(node, mode, asyncWalk = false, { recordHistory = true } = {}) {
     const from = node.id;
     set({ callers: { target: from, mode, async: asyncWalk, matched: false, loading: true } });
     try {
       const data = await api.callers(resolved(), explicit(), from, mode, asyncWalk);
       set({ callers: { target: from, mode, async: asyncWalk, matched: data.matched, entryPoints: data.entryPoints, roots: data.roots } });
+      if (recordHistory)
+        recordCrumb(
+          "callers",
+          (mode === "entrypoints" ? "EPs: " : "callers: ") + shortLabel(from),
+          { callers: { target: from, mode, asyncWalk } },
+        );
     } catch (err) {
       status("callers: " + err.message, true);
       set({ callers: null });
@@ -200,22 +285,30 @@ const actions = {
   closeCallers() {
     set({ callers: null });
   },
-  async openReaches(node) {
+  async openReaches(node, { recordHistory = true } = {}) {
     const from = node.id;
     set({ callers: { target: from, mode: "reaches", loading: true } });
     try {
       const data = await api.reaches(resolved(), explicit(), from);
       set({ callers: { target: from, mode: "reaches", matched: data.matched, reachableCount: data.reachableCount, effects: data.effects } });
+      if (recordHistory)
+        recordCrumb("reaches", "reaches: " + shortLabel(from), {
+          callers: { target: from },
+        });
     } catch (err) {
       status("reaches: " + err.message, true);
       set({ callers: null });
     }
   },
-  async openPath(fromFqn, targetId) {
+  async openPath(fromFqn, targetId, { recordHistory = true } = {}) {
     set({ callers: { target: targetId, from: fromFqn, mode: "path", loading: true } });
     try {
       const data = await api.path(resolved(), explicit(), fromFqn, targetId);
       set({ callers: { target: targetId, from: fromFqn, mode: "path", matched: data.matched, nodes: data.nodes } });
+      if (recordHistory)
+        recordCrumb("path", "path → " + shortLabel(targetId), {
+          callers: { from: fromFqn, target: targetId },
+        });
     } catch (err) {
       status("path: " + err.message, true);
       set({ callers: null });
@@ -282,6 +375,16 @@ const actions = {
     const enc = (arr) => [...new Set(arr.map((e) => e.enclosing))];
     const base = get().impactData?.base?.label || "base";
     const head = get().impactData?.head?.label || "head";
+    const overlay = {
+      from: p.fqn,
+      base,
+      head,
+      effAdded: enc(p.added),
+      effRemoved: enc(p.removed),
+      addedReach: [],
+      removedReach: [],
+      changedOnly: true,
+    };
     // Set the overlay immediately (effect deltas — already loaded), open the head tree, then ENRICH with the
     // structural reach delta (added/removed reachable methods) fetched from /api/impact/reach (warm lookup).
     set({
@@ -289,20 +392,17 @@ const actions = {
       storeId: get().impactHead, // view the HEAD store's tree
       from: p.fqn,
       asyncWalk: get().impactAsync, // match the diff's traversal mode so the tree reaches what the diff diffed
-      diffOverlay: {
-        from: p.fqn,
-        base,
-        head,
-        effAdded: enc(p.added),
-        effRemoved: enc(p.removed),
-        addedReach: [],
-        removedReach: [],
-        changedOnly: true,
-      },
+      diffOverlay: overlay,
     });
     refs.from.value = p.fqn;
     refs.view.value = get().view;
-    openTree(p.fqn);
+    // This IS the pivot's crumb — the nested openTree below is told not to double-record it.
+    recordCrumb("tree", "diff: " + shortLabel(p.fqn), {
+      from: p.fqn,
+      diffOverlay: overlay,
+      callers: null,
+    });
+    openTree(p.fqn, { recordHistory: false });
     api
       .impactReach(
         get().impactBase,
@@ -338,6 +438,12 @@ const actions = {
   },
   clearDiff() {
     set({ diffOverlay: null });
+  },
+  // Breadcrumb click: replay the browser's OWN back/forward to that entry — popstate does the actual
+  // restore (restoreCrumb), so the trail and the real history stack never diverge.
+  jumpToCrumb(index) {
+    const delta = index - get().historyCursor;
+    if (delta !== 0) history.go(delta);
   },
 };
 
@@ -609,6 +715,11 @@ function setupWatches() {
     store,
     (s) => [s.callers],
     (s) => mount(refs.callers, CallersPanel(s, actions)),
+  );
+  watch(
+    store,
+    (s) => [s.history, s.historyCursor],
+    (s) => mount(refs.crumbs, BreadcrumbTrail(s, actions)),
   );
   watch(
     store,
