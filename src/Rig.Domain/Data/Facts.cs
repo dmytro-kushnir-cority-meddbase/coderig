@@ -598,14 +598,9 @@ public sealed record FactRenderRules(IReadOnlyList<FactRenderRule> CollapseSeams
             return null;
         }
 
-        // Match against the DocID with the parameter list stripped, so a namespace/type pattern (e.g.
-        // "Echo.") hits the DECLARING type only — never a parameter type in the signature (an app method
-        // `M:App.Foo.Bar(Echo.ProcessId)` must NOT match "Echo.").
-        var paren = symbolId.IndexOf('(');
-        var head = paren >= 0 ? symbolId.Substring(startIndex: 0, length: paren) : symbolId;
         foreach (var rule in rules)
         {
-            if (head.IndexOf(rule.Pattern, StringComparison.OrdinalIgnoreCase) >= 0)
+            if (rule.IsMatch(symbolId))
             {
                 return rule;
             }
@@ -615,9 +610,56 @@ public sealed record FactRenderRules(IReadOnlyList<FactRenderRule> CollapseSeams
     }
 }
 
-// One render rule: a DocID substring `Pattern` + a short `Label` shown in the rendered marker
-// (e.g. «opaque: ORM» / [seam: reflection service-locator]).
-public sealed record FactRenderRule(string Pattern, string Label);
+// One render rule: a DocID `Pattern` + a short `Label` shown in the rendered marker (e.g. «opaque: ORM» /
+// [seam: reflection service-locator]). Pattern is a case-insensitive substring by default; a `*` is a
+// wildcard so a pattern can ANCHOR a namespace while still spanning the type — e.g.
+// "M:MedDBase.DataAccessTier.EntityClasses.*Cache.New" matches PersonCache.New/AccountCache.New but NOT a
+// same-named cache in another namespace. See DocIdPattern for the exact semantics.
+public sealed record FactRenderRule(string Pattern, string Label)
+{
+    public bool IsMatch(string symbolId) => DocIdPattern.MatchesHead(symbolId, Pattern);
+}
+
+// Shared DocID pattern matcher for render rules + traversal cuts. Case-insensitive, matched against the DocID
+// HEAD (the parameter list stripped before the first '('), so a namespace/type pattern (e.g. "Echo.") hits the
+// DECLARING type only — never a parameter type in the signature (`M:App.Foo.Bar(Echo.ProcessId)` must NOT match
+// "Echo."). A pattern with NO '*' is a plain substring (exact back-compat). A '*' is a wildcard: the pattern is
+// split into '*'-separated literal segments that must all appear IN ORDER within the head — so
+// "A.Namespace.*Cache.New" requires "A.Namespace." then a later "Cache.New". Leading/trailing/empty segments
+// impose no constraint (a bare "*" matches everything).
+public static class DocIdPattern
+{
+    public static bool MatchesHead(string symbolId, string pattern)
+    {
+        var paren = symbolId.IndexOf('(');
+        var head = paren >= 0 ? symbolId.AsSpan(start: 0, length: paren) : symbolId.AsSpan();
+
+        if (!pattern.Contains('*'))
+        {
+            return head.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        // Wildcard: each '*'-separated literal segment must appear in order, left to right.
+        var pos = 0;
+        foreach (var segment in pattern.Split('*'))
+        {
+            if (segment.Length == 0)
+            {
+                continue; // leading/trailing/adjacent '*' — no constraint
+            }
+
+            var idx = head.Slice(pos).IndexOf(segment, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0)
+            {
+                return false;
+            }
+
+            pos += idx + segment.Length;
+        }
+
+        return true;
+    }
+}
 
 // A traversal-cut rule: a node whose DocID matches `Pattern` is emitted as-is but its successors
 // are NOT walked — it becomes a traversal leaf. This stops reflection service-locator seams (and
@@ -626,15 +668,10 @@ public sealed record FactRenderRule(string Pattern, string Label);
 // itself. `--raw` bypasses cuts so the exact plumbing is inspectable.
 public sealed record FactTraversalCutRule(string Pattern, string Label)
 {
-    // True when `symbolId` matches this cut rule. Matches against the DocID head (parameter list
-    // stripped before the first '('), so a namespace/type pattern never accidentally matches a
-    // parameter type in the signature. Case-insensitive, same convention as FactRenderRules.
-    public bool IsMatch(string symbolId)
-    {
-        var paren = symbolId.IndexOf('(');
-        var head = paren >= 0 ? symbolId.Substring(startIndex: 0, length: paren) : symbolId;
-        return head.IndexOf(Pattern, StringComparison.OrdinalIgnoreCase) >= 0;
-    }
+    // True when `symbolId` matches this cut rule. Same DocID-head, case-insensitive, wildcard-aware matching as
+    // FactRenderRule (see DocIdPattern): a namespace/type pattern never matches a parameter type in the
+    // signature, and a '*' anchors a namespace while spanning the type.
+    public bool IsMatch(string symbolId) => DocIdPattern.MatchesHead(symbolId, Pattern);
 }
 
 // A generic-FACTORY resolution rule (codebase-specific, data-driven). A call to `Method` with a

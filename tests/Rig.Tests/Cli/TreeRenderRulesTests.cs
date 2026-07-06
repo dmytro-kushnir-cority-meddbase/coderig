@@ -367,6 +367,29 @@ public sealed class TreeRenderRulesTests
     }
 
     [Test]
+    public void Wildcard_pattern_anchors_the_namespace_while_spanning_the_type()
+    {
+        // "*Cache.New" anchored to the DataAccessTier.EntityClasses namespace: the '*' spans the type name
+        // (Person/Account/…) so the whole entity-cache family folds — but a same-named cache in ANOTHER
+        // namespace does NOT (the fragile part of a plain "Cache.New" substring).
+        var rules = new FactRenderRules(
+            [new FactRenderRule("M:MedDBase.DataAccessTier.EntityClasses.*Cache.New", "entity cache fetch")],
+            []
+        );
+
+        rules.MatchCollapseSeam("M:MedDBase.DataAccessTier.EntityClasses.PersonCache.New(System.Int32)")!
+            .Label.ShouldBe("entity cache fetch");
+        rules.MatchCollapseSeam("M:MedDBase.DataAccessTier.EntityClasses.AccountCache.New(MedDBase.AccountId)")
+            .ShouldNotBeNull();
+        // subsumes the .NewEntity overloads (substring within the segment)...
+        rules.MatchCollapseSeam("M:MedDBase.DataAccessTier.EntityClasses.ServiceCache.NewEntity()").ShouldNotBeNull();
+        // ...but a business-logic cache in another namespace is NOT caught (the whole point of anchoring).
+        rules.MatchCollapseSeam("M:MedDBase.ServiceTier.ChargeBand.BillingRulesCache.New()").ShouldBeNull();
+        // and the segments must appear IN ORDER — a param-type match can't satisfy the anchor.
+        rules.MatchCollapseSeam("M:App.Foo.Bar(MedDBase.DataAccessTier.EntityClasses.PersonCache)").ShouldBeNull();
+    }
+
+    [Test]
     public void Collapse_seam_matches_the_hub_by_case_insensitive_substring()
     {
         var rules = new FactRenderRules([new FactRenderRule("IService.Startup", "service-locator")], []);
