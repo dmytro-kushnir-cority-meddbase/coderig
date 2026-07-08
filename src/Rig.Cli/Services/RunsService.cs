@@ -1,4 +1,5 @@
 using Rig.Cli.CommandLine;
+using Rig.Storage;
 using Rig.Storage.Queries;
 using Rig.Storage.Storage;
 using static Rig.Cli.Graph.TraversalGraphLoader;
@@ -40,10 +41,20 @@ public static class RunsService
         foreach (var storeId in storeIds)
         {
             var isLatest = string.Equals(storeId, latest, StringComparison.OrdinalIgnoreCase);
-            await using var context = await OpenReadContextGatedAsync(
-                new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeId)
-            );
-            await AppendRunsAsync(context, storeId, isLatest, views);
+            try
+            {
+                await using var context = await OpenReadContextGatedAsync(
+                    new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: storeId)
+                );
+                await AppendRunsAsync(context, storeId, isLatest, views);
+            }
+            catch (Exception ex) when (ex is RigStoreException or System.Data.Common.DbException)
+            {
+                // A stale (older-schema, fails the open-time gate) or corrupt store must NOT break the whole
+                // inventory — the picker still lists every READABLE store. Such a store is unusable by this
+                // rig anyway (re-index), so it is simply not a selectable option. Skipped, not fatal. (Before
+                // this, one pre-EnclosingGuards store in .rig/ aborted the entire runs list / store picker.)
+            }
         }
 
         // Order for the picker: LATEST (the read default) first, then most-recently-indexed — enumeration
