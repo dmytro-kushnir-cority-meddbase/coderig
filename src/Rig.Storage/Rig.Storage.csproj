@@ -16,4 +16,9 @@
   <ItemGroup>
     <ProjectReference Include="..\Rig.Domain\Rig.Domain.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Lets Rig.Tests unit-test internal storage probes (e.g. StorageProbes.ColumnExistsAsync) directly,
+         mirroring Rig.Cli. Read-only probes only — schema is never mutated from code (see the schema rule). -->
+    <InternalsVisibleTo Include="Rig.Tests" />
+  </ItemGroup>
 </Project>

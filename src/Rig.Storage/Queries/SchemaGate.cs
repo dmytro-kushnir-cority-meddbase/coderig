@@ -39,6 +39,20 @@ public static class SchemaGate
                 $"Store schema v{index}, this rig expects v{SchemaVersion.Index} — re-index (the .rig store is disposable; rebuild it with `rig index`)."
             );
         }
+
+        // Targeted drift tripwire: `reference_facts.EnclosingGuards` (control-dependence guards) was added
+        // WITHOUT bumping SchemaVersion.Index, so a store predating it shares the current version and passes
+        // the checks above — then fails MID-QUERY with a raw `no such column` DbException, which
+        // CommandGuard.StoreError mis-attributes to the DEFAULT/LATEST store path (not the one actually
+        // opened — the reported bug). Probe it at OPEN so the drift fails fast AND names the correct store
+        // (connection.DataSource). Add further column probes here for any future add-without-bump drift.
+        if (!await StorageProbes.ColumnExistsAsync(connection, table: "reference_facts", column: "EnclosingGuards", cancellationToken))
+        {
+            throw new RigStoreException(
+                $"The store at {connection.DataSource} was built by an older rig (missing reference_facts.EnclosingGuards) "
+                    + "— re-index (the .rig store is disposable; rebuild it with `rig index`)."
+            );
+        }
     }
 
     // True iff the store carries a CURRENT graph (graph_schema_version == SchemaVersion.Graph). The graph

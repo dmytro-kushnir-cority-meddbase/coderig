@@ -102,6 +102,34 @@ public sealed class SchemaGateTests(AnalyzedPlaygrounds playgrounds)
         );
     }
 
+    // (2d) The open-time drift probe: StorageProbes.ColumnExistsAsync reports a REAL column present and a
+    // bogus one absent. This is what SchemaGate.AssertReadableAsync uses to fail fast (store-correct) when a
+    // store predates reference_facts.EnclosingGuards — instead of the old raw mid-query `no such column`
+    // that CommandGuard.StoreError mis-attributed to the LATEST store path. Tested via the PROBE (read-only),
+    // NOT by mutating a store's schema in code (forbidden — ad-hoc surgery is sqlite3-CLI-only).
+    [Test]
+    public async Task ColumnExists_reports_present_and_absent_columns()
+    {
+        await WithStoreAsync(
+            buildGraph: false,
+            async dbPath =>
+            {
+                await using var read = new RigDbContext(dbPath, pooling: false, readOnly: true);
+                var connection = read.Database.GetDbConnection();
+                await connection.OpenAsync();
+
+                (await StorageProbes.ColumnExistsAsync(connection, "reference_facts", "EnclosingGuards", default)).ShouldBeTrue(
+                    "a current store carries the control-dependence-guards column"
+                );
+                (await StorageProbes.ColumnExistsAsync(connection, "reference_facts", "NoSuchColumn", default)).ShouldBeFalse();
+
+                // Composed behavior: the current store has the column, so the gate passes (the throw path
+                // fires only when the probe returns false — covered by the absent-column assertion above).
+                await Should.NotThrowAsync(async () => await SchemaGate.AssertReadableAsync(read));
+            }
+        );
+    }
+
     // (3a) GraphAvailableAsync is FALSE on an index-only store, TRUE after a graph version is written.
     [Test]
     public async Task GraphAvailable_false_index_only_true_after_graph()

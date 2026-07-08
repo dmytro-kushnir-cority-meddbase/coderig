@@ -105,4 +105,27 @@ internal static class StorageProbes
         command.Parameters.Add(p);
         return await command.ExecuteScalarAsync(cancellationToken) is not null;
     }
+
+    // True when `column` exists on `table`. SQLite has no "ADD COLUMN IF NOT EXISTS", so a column added
+    // WITHOUT a schema-version bump can't be caught by the version gate alone — probe PRAGMA table_info to
+    // catch that drift at open time (see SchemaGate.AssertReadableAsync).
+    public static async Task<bool> ColumnExistsAsync(
+        DbConnection connection,
+        string table,
+        string column,
+        CancellationToken cancellationToken
+    )
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM pragma_table_info($table) WHERE name = $column LIMIT 1;";
+        var t = command.CreateParameter();
+        t.ParameterName = "$table";
+        t.Value = table;
+        command.Parameters.Add(t);
+        var c = command.CreateParameter();
+        c.ParameterName = "$column";
+        c.Value = column;
+        command.Parameters.Add(c);
+        return await command.ExecuteScalarAsync(cancellationToken) is not null;
+    }
 }

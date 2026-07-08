@@ -1,5 +1,11 @@
 # Bug: schema-mismatch error reports the wrong store path
 
+**Status:** SHIPPED 2026-07-08 — fix option 1 (open-time column probe). `SchemaGate.AssertReadableAsync` now
+probes `reference_facts.EnclosingGuards` and throws a store-correct `RigStoreException` (path from
+`connection.DataSource`), so the drift fails fast at open naming the store actually opened — no more
+mid-query `no such column` mis-attributed to LATEST. New `StorageProbes.ColumnExistsAsync`;
+`InternalsVisibleTo Rig.Storage→Rig.Tests` to unit-test the probe read-only.
+
 **Found:** 2026-07-05 (during web `impact` bring-up), running `rig impact --base 72b89… --head 4061ec87c94b`
 and `rig tree … --store 4061ec87c94b --guards` against a store indexed by an older rig.
 
