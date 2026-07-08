@@ -2,7 +2,9 @@ using System.CommandLine;
 using Microsoft.EntityFrameworkCore;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
+using Rig.Cli.EntryPoints;
 using Rig.Cli.Rendering;
+using Rig.Cli.Services;
 using Rig.Storage.Queries;
 using Rig.Storage.Storage;
 using static Rig.Cli.Graph.TraversalGraphLoader;
@@ -255,27 +257,82 @@ internal static class FactCommands
 
     internal static Command BuildRefs(TextWriter output, TextWriter error, string workingDirectory)
     {
-        var pattern = CommonOptions.Pattern(name: "pattern", description: "Target symbol pattern to find references to.");
+        // pattern is OPTIONAL (ZeroOrOne): the default symbol-reference path still requires it (an explicit
+        // guard below mirrors the old required-argument error), but the --unused/--usage assembly modes take
+        // it as an optional substring FILTER on assembly names.
+        var pattern = CommonOptions.Pattern(
+            name: "pattern",
+            description: "Target symbol pattern; for --unused/--usage an optional substring filter on assembly names."
+        );
+        pattern.Arity = ArgumentArity.ZeroOrOne;
+        var unused = new Option<bool>("--unused")
+        {
+            Description =
+                "List declared <ProjectReference> edges with zero first-party symbol usage (candidate prunable references); pattern filters declaring assemblies.",
+        };
+        var usage = new Option<bool>("--usage")
+        {
+            Description = "Show inbound first-party reference count per assembly; pattern filters target assemblies.",
+        };
+        var tsv = new Option<bool>("--tsv")
+        {
+            Description = "With --unused/--usage: emit tab-separated rows instead of the grouped human render.",
+        };
         var firstParty = new Option<bool>("--first-party") { Description = "Only references from first-party code." };
         var kind = CommonOptions.Kind();
         var limit = CommonOptions.Limit(200);
         var storeRef = CommonOptions.Store();
-        var cmd = new Command(name: "refs", description: "Find references to a symbol.") { pattern, firstParty, kind, limit, storeRef };
+        var cmd = new Command(name: "refs", description: "Find references to a symbol; or analyze assembly references (--unused/--usage).")
+        {
+            pattern,
+            unused,
+            usage,
+            tsv,
+            firstParty,
+            kind,
+            limit,
+            storeRef,
+        };
         cmd.SetAction(pr =>
             CommandGuard.RunGuardedAsync(
                 workingDirectory,
                 error,
                 async () =>
                 {
-                    var p = pr.GetValue(pattern)!;
-                    var fp = pr.GetValue(firstParty);
-                    var refKind = pr.GetValue(kind);
+                    var p = pr.GetValue(pattern);
+                    var wantUnused = pr.GetValue(unused);
+                    var wantUsage = pr.GetValue(usage);
+                    var asTsv = pr.GetValue(tsv);
+
+                    // Default (symbol-reference) path requires a pattern — mirror the old required-argument
+                    // error, and BEFORE touching the store so the message is store-independent (as the parse
+                    // error was). The --unused/--usage modes take pattern as an optional filter instead.
+                    if (!wantUnused && !wantUsage && string.IsNullOrEmpty(p))
+                    {
+                        error.WriteLine("Required argument missing for command: 'refs'.");
+                        return 1;
+                    }
+
                     await using var context = await OpenReadContextGatedAsync(
                         new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(storeRef))
                     );
+
+                    if (wantUnused)
+                    {
+                        return await RunUnusedRefsAsync(context, workingDirectory, p, asTsv, output, error);
+                    }
+
+                    if (wantUsage)
+                    {
+                        return await RunUsageRefsAsync(context, p, asTsv, output);
+                    }
+
+                    var fp = pr.GetValue(firstParty);
+                    var refKind = pr.GetValue(kind);
+                    // p is non-null here: the guard above returned for the empty-pattern default case.
                     var hits = await Reads.FindReferencesAsync(
                         context,
-                        pattern: p,
+                        pattern: p!,
                         firstPartyOnly: fp,
                         refKind: refKind,
                         limit: pr.GetValue(limit)
@@ -299,5 +356,98 @@ internal static class FactCommands
             )
         );
         return cmd;
+    }
+
+    // `rig refs --unused [pattern]`: diff the declared <ProjectReference> graph (parsed from the solution's
+    // .csproj files, no MSBuild) against the observed first-party usage edges (mined from facts), rendering
+    // the declared assembly edges with zero usage — candidate prunable references. pattern (optional) filters
+    // DECLARING assemblies by case-insensitive substring. The pure diff lives in UnusedReferenceAnalyzer.
+    private static async Task<int> RunUnusedRefsAsync(
+        RigDbContext context,
+        string workingDirectory,
+        string? pattern,
+        bool tsv,
+        TextWriter output,
+        TextWriter error
+    )
+    {
+        var solutionPath = await EntryPointContext.PrimaryDeploymentSolutionPathAsync(context);
+        if (solutionPath is null || !File.Exists(solutionPath))
+        {
+            error.WriteLine(
+                "Cannot analyze project references: the indexed solution's .csproj files are unavailable (re-index, or run from the store's directory)."
+            );
+            return 2;
+        }
+
+        var declared = await Rig.Cli.DependencyGraph.BuildAsync(solutionPath);
+        var files = await Reads.LoadFileAssembliesAsync(context);
+        var usageRows = await Reads.LoadAssemblyUsageEdgesAsync(context);
+
+        var csprojToAsm = UnusedReferenceAnalyzer.BuildCsprojToAssembly(csprojPaths: declared.Keys.ToList(), files: files);
+        var usageEdges = new HashSet<(string, string)>(usageRows.Select(u => (u.UsingAsm, u.UsedAsm)));
+        var candidates = UnusedReferenceAnalyzer.FindUnused(
+            declaredCsprojGraph: declared,
+            csprojToAsm: csprojToAsm,
+            usageEdges: usageEdges
+        );
+
+        if (!string.IsNullOrEmpty(pattern))
+        {
+            candidates = candidates.Where(c => c.DeclaringAsm.Contains(pattern, StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+
+        if (tsv)
+        {
+            foreach (var c in candidates)
+            {
+                output.WriteLine($"{c.DeclaringAsm}\t{c.UnusedAsm}");
+            }
+
+            return 0;
+        }
+
+        output.WriteLine("Unused project references (statically unused — reflection/markup loads NOT accounted for; verify via AUT):");
+        var groups = candidates.GroupBy(c => c.DeclaringAsm, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal).ToList();
+        foreach (var group in groups)
+        {
+            output.WriteLine($"{Indent.L1}{group.Key}");
+            foreach (var c in group.OrderBy(x => x.UnusedAsm, StringComparer.Ordinal))
+            {
+                output.WriteLine($"{Indent.L2}-> {c.UnusedAsm}");
+            }
+        }
+
+        output.WriteLine($"{Indent.L1}({candidates.Count} candidate(s) across {groups.Count} project(s))");
+        return 0;
+    }
+
+    // `rig refs --usage [pattern]`: inbound first-party reference count per assembly, ascending (least-used
+    // first). pattern (optional) filters TARGET assemblies by case-insensitive substring.
+    private static async Task<int> RunUsageRefsAsync(RigDbContext context, string? pattern, bool tsv, TextWriter output)
+    {
+        var counts = await Reads.LoadAssemblyUsageCountsAsync(context);
+        if (!string.IsNullOrEmpty(pattern))
+        {
+            counts = counts.Where(c => c.Assembly.Contains(pattern, StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+
+        if (tsv)
+        {
+            foreach (var c in counts)
+            {
+                output.WriteLine($"{c.Assembly}\t{c.Refs}\t{c.FromMethods}");
+            }
+
+            return 0;
+        }
+
+        output.WriteLine("Assembly usage (inbound first-party references):");
+        foreach (var c in counts)
+        {
+            output.WriteLine($"{Indent.L1}{c.Refs, 6}  {c.FromMethods, 6}  {c.Assembly}");
+        }
+
+        return 0;
     }
 }

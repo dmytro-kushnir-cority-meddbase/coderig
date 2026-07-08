@@ -1364,4 +1364,81 @@ public static class Reads
             .ToListAsync(cancellationToken);
         return ids.ToHashSet(StringComparer.Ordinal);
     }
+
+    // --- assembly-level reference analysis (rig refs --unused / --usage), query-side, no re-index ---
+
+    // DISTINCT (source-file, owning assembly) pairs for every indexed symbol with a known DefiningAssembly —
+    // the raw input the csproj->assembly attribution (UnusedReferenceAnalyzer.BuildCsprojToAssembly) folds by
+    // owning directory. Raw ADO (a plain aggregate over symbol_facts; no FTS dependency), mirroring the
+    // FindReferencesAsync ADO style.
+    public static async Task<IReadOnlyList<(string FilePath, string Assembly)>> LoadFileAssembliesAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        var rows = new List<(string, string)>();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT DISTINCT FilePath, DefiningAssembly FROM symbol_facts WHERE DefiningAssembly <> '' AND FilePath <> '';";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            rows.Add((reader.GetString(0), reader.GetString(1)));
+        }
+
+        return rows;
+    }
+
+    // Observed first-party assembly usage EDGES: (usingAsm, usedAsm, refCount) where a symbol in usingAsm
+    // references a first-party (TargetInSource=1) symbol in a DIFFERENT usedAsm. The join keys the reference
+    // to its enclosing symbol's assembly. The count is informational (rendered, not used by the diff — the
+    // diff only tests edge existence), so multi-run duplication of symbol_facts rows does not affect
+    // correctness. GROUP BY the two assemblies.
+    public static async Task<IReadOnlyList<(string UsingAsm, string UsedAsm, int Count)>> LoadAssemblyUsageEdgesAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        var rows = new List<(string, string, int)>();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT s.DefiningAssembly AS usingAsm, r.TargetAssembly AS usedAsm, COUNT(*) AS refs "
+            + "FROM reference_facts r JOIN symbol_facts s ON s.SymbolId = r.EnclosingSymbolId "
+            + "WHERE r.TargetInSource = 1 AND r.TargetAssembly <> '' AND s.DefiningAssembly <> '' "
+            + "AND s.DefiningAssembly <> r.TargetAssembly "
+            + "GROUP BY s.DefiningAssembly, r.TargetAssembly;";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            rows.Add((reader.GetString(0), reader.GetString(1), reader.GetInt32(2)));
+        }
+
+        return rows;
+    }
+
+    // Inbound first-party usage COUNTS per target assembly: (assembly, refs, fromMethods) — total references
+    // and the number of DISTINCT enclosing methods that make them. Ascending by refs (least-used first) so
+    // `rig refs --usage` surfaces the thinly-referenced assemblies at the top. No join needed.
+    public static async Task<IReadOnlyList<(string Assembly, int Refs, int FromMethods)>> LoadAssemblyUsageCountsAsync(
+        RigDbContext context,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        var rows = new List<(string, int, int)>();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT TargetAssembly, COUNT(*) AS refs, COUNT(DISTINCT EnclosingSymbolId) AS fromMethods "
+            + "FROM reference_facts WHERE TargetInSource = 1 AND TargetAssembly <> '' "
+            + "GROUP BY TargetAssembly ORDER BY refs ASC;";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            rows.Add((reader.GetString(0), reader.GetInt32(1), reader.GetInt32(2)));
+        }
+
+        return rows;
+    }
 }
