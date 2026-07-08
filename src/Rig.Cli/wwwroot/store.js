@@ -26,12 +26,17 @@ export const store = createStore({
   eps: [], // entry points for the active store
   hazardMarks: null, // /api/hazards response (array of {methodId,type,confidence,sites}) for the current tree
   // impact mode (store-vs-store diff)
-  appMode: "tree", // tree | impact  (top-level view)
+  appMode: "tree", // tree | impact | refs  (top-level view)
   impactBase: "", // base store id
   impactHead: "", // head store id
   impactAsync: false, // --async for the diff: walk async/scheduled handoffs (changes the diff → refetch)
   impactData: null, // /api/impact response
   impactFilter: "", // filter over per-EP deltas (route / effect substring)
+  // refs mode (assembly-reference analysis — a GLOBAL report, no from-pattern; fetched like the EP inventory)
+  refsTab: "unused", // unused | usage  (which report)
+  refsFilter: "", // substring filter → the `filter` query param (unused: declaring; usage: target assemblies)
+  refsUnused: null, // /api/refs/unused response ({ solutionAvailable, groups, candidateCount, projectCount })
+  refsUsage: null, // /api/refs/usage response ({ rows: [{ assembly, refs, fromMethods }] })
   // diff overlay on a tree: when you open a tree FROM an impact EP card, this carries that EP's changed
   // methods so the head tree can highlight what the diff touched. Session-only (not URL-synced). null = off.
   diffOverlay: null, // { from, base, head, added:[enclosingFqn], removed:[enclosingFqn], changedOnly:bool }
@@ -101,6 +106,8 @@ export function serializeUrl(s = get()) {
     if (s.impactBase) p.set("ibase", s.impactBase);
     if (s.impactHead) p.set("ihead", s.impactHead);
     if (s.impactAsync) p.set("iasync", "1");
+  } else if (s.appMode === "refs") {
+    p.set("app", "refs");
   }
   // Preserve whatever state is already attached to the CURRENT history entry (a pivot crumb — see main.js's
   // pushState/popstate wiring) — this call's job is keeping the URL text in sync, not managing history state.
@@ -130,7 +137,8 @@ export function readUrl(runs, search = location.search) {
     signatures: p.get("sig") === "1",
     predicates: p.get("pred") === "1",
     hazards: p.get("haz") === "1",
-    appMode: p.get("app") === "impact" ? "impact" : "tree",
+    appMode:
+      p.get("app") === "impact" ? "impact" : p.get("app") === "refs" ? "refs" : "tree",
     impactBase: runs.some((r) => r.storeId === p.get("ibase"))
       ? p.get("ibase")
       : "",

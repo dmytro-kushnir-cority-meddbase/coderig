@@ -49,7 +49,11 @@ The three joins (this IS the implementation):
 - **Slice 2 — reflection/markup risk column.** Flag each candidate whose declaring project hits a reflection
   seam (`Activator.CreateInstance`/`Assembly.Load*`/Nucleus/object-store) or is a web (.aspx/.ascx) project →
   ranks the AUT-gated cut queue. Small, inline-able.
-- **Slice 3 — web view.** Expose in the web UI (`RigApiEndpoints` + `wwwroot`): per-project declared-vs-used
+- **Slice 3 — web view (SHIPPED 2026-07-08).** `rig serve` → "Refs" tab, Unused/Usage sub-tabs + filter,
+  candidates grouped by declaring assembly (validated live: 361 / 112 projects, PACS→ServiceLayer). Shared
+  `UnusedRefsQueryService` (CLI + `/api/refs/*` endpoints — one codepath, no drift); client fetch is UNcached
+  (csproj mtime isn't on the derivation-version axis). Remaining below.
+- **Slice 3 (orig) — web view.** Expose in the web UI (`RigApiEndpoints` + `wwwroot`): per-project declared-vs-used
   drill-down, the assembly→assembly usage graph with unused edges highlighted, the `--usage` ranking as a
   sortable table; risk column (slice 2) as color-coding; runtime-loaded overlay (follow-on) as a second layer.
   This is the shareable-report surface the platform team actually wants (Nick hand-built Claude artifacts for

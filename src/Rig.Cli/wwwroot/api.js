@@ -149,4 +149,12 @@ export const api = {
     ),
   search: (explicitStore, q) =>
     getJson("/api/search" + qs({ q, store: explicitStore, limit: 15 })), // high-churn, uncached
+  // Assembly-reference analysis (`rig refs --unused` / `--usage`). UNCACHED (getJson, not cached): this data
+  // depends on facts + the solution's .csproj files, whose mtime the derivation-version cache key does NOT
+  // capture — caching under that key could serve a stale result after a .csproj edit. `filter` is an optional
+  // substring (unused → declaring assemblies; usage → target assemblies), matching the CLI's optional pattern.
+  refsUnused: (explicitStore, filter) =>
+    getJson("/api/refs/unused" + qs({ store: explicitStore, filter })),
+  refsUsage: (explicitStore, filter) =>
+    getJson("/api/refs/usage" + qs({ store: explicitStore, filter })),
 };

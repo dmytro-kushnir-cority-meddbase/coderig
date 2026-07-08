@@ -768,6 +768,90 @@ export function ImpactView(s, actions) {
   );
 }
 
+// ---- refs (assembly-reference analysis) -----------------------------------------------------------------
+// The web view of `rig refs --unused` / `--usage`: a GLOBAL, whole-store report (no from-pattern). Two
+// sub-reports toggled by s.refsTab; the toolbar's sub-tab pills + filter box live in the Shell. Reuses the
+// Ep-inventory collapsible-group CSS (.kind/.khead/.klist) and the drawer row CSS (.callers-ep/.ep-kind/
+// .ep-route) so no new styling is invented.
+function RefsUnusedView(s) {
+  const d = s.refsUnused;
+  if (!d) return h("div", { class: "hint" }, "loading…");
+  if (!d.solutionAvailable)
+    return h(
+      "div",
+      { class: "impact-empty" },
+      "Cannot analyze project references: the indexed solution's .csproj files are unavailable (re-index, or run from the store's directory).",
+    );
+  const disclaimer = h(
+    "div",
+    { class: "hint" },
+    "Statically unused — reflection/markup loads NOT accounted for; verify via AUT",
+  );
+  const count = h(
+    "div",
+    { class: "impact-note" },
+    `${d.candidateCount.toLocaleString()} candidate(s) across ${d.projectCount.toLocaleString()} project(s)`,
+  );
+  if (!d.groups.length)
+    return h("div", {}, disclaimer, count, h("div", { class: "impact-empty" }, "(no unused references)"));
+  const groups = d.groups.map((g) => {
+    const klist = h(
+      "div",
+      { class: "klist" },
+      g.unusedAsms.map((u) => h("div", { class: "ep", title: u }, "→ " + u)),
+    );
+    const head = h(
+      "div",
+      { class: "khead" },
+      "▸ " + g.declaringAsm,
+      " ",
+      h("span", { class: "kcount" }, g.unusedAsms.length),
+    );
+    const group = h("div", { class: "kind" }, head, klist);
+    head.addEventListener("click", () => {
+      const open = group.classList.toggle("open");
+      head.firstChild.textContent = (open ? "▾ " : "▸ ") + g.declaringAsm;
+    });
+    return group;
+  });
+  return h("div", {}, disclaimer, count, groups);
+}
+function RefsUsageView(s) {
+  const d = s.refsUsage;
+  if (!d) return h("div", { class: "hint" }, "loading…");
+  if (!d.rows.length) return h("div", { class: "impact-empty" }, "(no assemblies)");
+  const hint = h(
+    "div",
+    { class: "hint" },
+    "Inbound first-party references per assembly — ascending (least-referenced first).",
+  );
+  const header = h(
+    "div",
+    { class: "callers-ep", style: "cursor:default" },
+    h("span", { class: "ep-kind" }, "refs"),
+    h("span", { class: "ep-kind" }, "methods"),
+    h("span", { class: "ep-route", style: "color:var(--muted)" }, "assembly"),
+  );
+  const rows = d.rows.map((r) =>
+    h(
+      "div",
+      { class: "callers-ep", style: "cursor:default", title: r.assembly },
+      h("span", { class: "ep-kind" }, r.refs.toLocaleString()),
+      h("span", { class: "ep-kind" }, r.fromMethods.toLocaleString()),
+      h("span", { class: "ep-route" }, r.assembly),
+    ),
+  );
+  return h(
+    "div",
+    {},
+    hint,
+    h("div", { class: "callers-list" }, header, rows),
+  );
+}
+export function RefsView(s) {
+  return s.refsTab === "usage" ? RefsUsageView(s) : RefsUnusedView(s);
+}
+
 // The reverse-navigation drawer: "who reaches this node". Opened from a tree node's context menu, backed by
 // /api/callers. entrypoints mode groups the rule-detected EPs by owning deployed service (the "which services
 // can trigger this" lens); roots mode lists no-predecessor origins. Any row re-roots the tree onto itself.
@@ -972,6 +1056,7 @@ export function Shell(actions) {
     { class: "appmode" },
     modeBtn("tree", "Tree"),
     modeBtn("impact", "Impact"),
+    modeBtn("refs", "Refs"),
   );
   refs.purge = h(
     "button",
@@ -1159,12 +1244,36 @@ export function Shell(actions) {
     refs.impactFilter,
   );
 
-  // status + content (tree OR impact, toggled by appMode)
+  // refs toolbar (unused/usage sub-tab pills + assembly filter) — hidden until appMode=refs. Reuses the
+  // .appmode pill style for the sub-tabs and .impact-toolbar for the flex-filling filter box.
+  const refsTabBtn = (id, label) =>
+    h(
+      "button",
+      { dataset: { rtab: id }, onClick: () => actions.setRefsTab(id) },
+      label,
+    );
+  refs.refsUnusedTab = refsTabBtn("unused", "Unused");
+  refs.refsUsageTab = refsTabBtn("usage", "Usage");
+  refs.refsTabs = h("div", { class: "appmode" }, refs.refsUnusedTab, refs.refsUsageTab);
+  refs.refsFilter = h("input", {
+    placeholder: "filter assemblies…",
+    autocomplete: "off",
+    onInput: (e) => actions.setRefsFilter(e.target.value),
+  });
+  refs.refsToolbar = h(
+    "div",
+    { class: "controls impact-toolbar hidden" },
+    refs.refsTabs,
+    refs.refsFilter,
+  );
+
+  // status + content (tree OR impact OR refs, toggled by appMode)
   refs.spin = h("span", { class: "spin" });
   refs.status = h("span", { id: "status" });
   refs.statusbar = h("div", { id: "statusbar" }, refs.spin, refs.status);
   refs.tree = h("div", { class: "tree" });
   refs.impact = h("div", { class: "tree impact-wrap hidden" });
+  refs.refs = h("div", { class: "tree impact-wrap hidden" }); // refs report content area (mirrors refs.impact)
   refs.callers = h("div", { class: "callers-mount" }); // reverse-nav drawer mounts here (overlays the tree area)
   refs.crumbs = h("div", { class: "crumbs-mount" }); // pivot-history breadcrumb trail mounts here (see BreadcrumbTrail)
   const section = h(
@@ -1173,9 +1282,11 @@ export function Shell(actions) {
     refs.crumbs,
     refs.treeToolbar,
     refs.impactToolbar,
+    refs.refsToolbar,
     refs.statusbar,
     refs.tree,
     refs.impact,
+    refs.refs,
     refs.callers,
   );
 

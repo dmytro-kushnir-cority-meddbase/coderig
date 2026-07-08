@@ -2,7 +2,6 @@ using System.CommandLine;
 using Microsoft.EntityFrameworkCore;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
-using Rig.Cli.EntryPoints;
 using Rig.Cli.Rendering;
 using Rig.Cli.Services;
 using Rig.Storage.Queries;
@@ -303,6 +302,7 @@ internal static class FactCommands
                     var wantUnused = pr.GetValue(unused);
                     var wantUsage = pr.GetValue(usage);
                     var asTsv = pr.GetValue(tsv);
+                    var sr = pr.GetValue(storeRef);
 
                     // Default (symbol-reference) path requires a pattern — mirror the old required-argument
                     // error, and BEFORE touching the store so the message is store-independent (as the parse
@@ -313,19 +313,22 @@ internal static class FactCommands
                         return 1;
                     }
 
-                    await using var context = await OpenReadContextGatedAsync(
-                        new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(storeRef))
-                    );
-
+                    // The --unused/--usage assembly modes route through UnusedRefsQueryService (the SAME
+                    // orchestration the web endpoint calls — no duplicated codepath), which opens its own read
+                    // context; only the default symbol-reference path needs the context opened here.
                     if (wantUnused)
                     {
-                        return await RunUnusedRefsAsync(context, workingDirectory, p, asTsv, output, error);
+                        return await RunUnusedRefsAsync(workingDirectory, sr, p, asTsv, output, error);
                     }
 
                     if (wantUsage)
                     {
-                        return await RunUsageRefsAsync(context, p, asTsv, output);
+                        return await RunUsageRefsAsync(workingDirectory, sr, p, asTsv, output);
                     }
+
+                    await using var context = await OpenReadContextGatedAsync(
+                        new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: sr)
+                    );
 
                     var fp = pr.GetValue(firstParty);
                     var refKind = pr.GetValue(kind);
@@ -361,18 +364,19 @@ internal static class FactCommands
     // `rig refs --unused [pattern]`: diff the declared <ProjectReference> graph (parsed from the solution's
     // .csproj files, no MSBuild) against the observed first-party usage edges (mined from facts), rendering
     // the declared assembly edges with zero usage — candidate prunable references. pattern (optional) filters
-    // DECLARING assemblies by case-insensitive substring. The pure diff lives in UnusedReferenceAnalyzer.
+    // DECLARING assemblies by case-insensitive substring. The data path lives in UnusedRefsQueryService (shared
+    // with the web endpoint); this method owns only the human + --tsv rendering and the filter.
     private static async Task<int> RunUnusedRefsAsync(
-        RigDbContext context,
         string workingDirectory,
+        string? storeRef,
         string? pattern,
         bool tsv,
         TextWriter output,
         TextWriter error
     )
     {
-        var solutionPath = await EntryPointContext.PrimaryDeploymentSolutionPathAsync(context);
-        if (solutionPath is null || !File.Exists(solutionPath))
+        var result = await UnusedRefsQueryService.UnusedAsync(workingDirectory, storeRef);
+        if (!result.SolutionAvailable)
         {
             error.WriteLine(
                 "Cannot analyze project references: the indexed solution's .csproj files are unavailable (re-index, or run from the store's directory)."
@@ -380,18 +384,7 @@ internal static class FactCommands
             return 2;
         }
 
-        var declared = await Rig.Cli.DependencyGraph.BuildAsync(solutionPath);
-        var files = await Reads.LoadFileAssembliesAsync(context);
-        var usageRows = await Reads.LoadAssemblyUsageEdgesAsync(context);
-
-        var csprojToAsm = UnusedReferenceAnalyzer.BuildCsprojToAssembly(csprojPaths: declared.Keys.ToList(), files: files);
-        var usageEdges = new HashSet<(string, string)>(usageRows.Select(u => (u.UsingAsm, u.UsedAsm)));
-        var candidates = UnusedReferenceAnalyzer.FindUnused(
-            declaredCsprojGraph: declared,
-            csprojToAsm: csprojToAsm,
-            usageEdges: usageEdges
-        );
-
+        var candidates = result.Candidates;
         if (!string.IsNullOrEmpty(pattern))
         {
             candidates = candidates.Where(c => c.DeclaringAsm.Contains(pattern, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -423,10 +416,17 @@ internal static class FactCommands
     }
 
     // `rig refs --usage [pattern]`: inbound first-party reference count per assembly, ascending (least-used
-    // first). pattern (optional) filters TARGET assemblies by case-insensitive substring.
-    private static async Task<int> RunUsageRefsAsync(RigDbContext context, string? pattern, bool tsv, TextWriter output)
+    // first). pattern (optional) filters TARGET assemblies by case-insensitive substring. Data path shared
+    // with the web endpoint via UnusedRefsQueryService.
+    private static async Task<int> RunUsageRefsAsync(
+        string workingDirectory,
+        string? storeRef,
+        string? pattern,
+        bool tsv,
+        TextWriter output
+    )
     {
-        var counts = await Reads.LoadAssemblyUsageCountsAsync(context);
+        var counts = await UnusedRefsQueryService.UsageAsync(workingDirectory, storeRef);
         if (!string.IsNullOrEmpty(pattern))
         {
             counts = counts.Where(c => c.Assembly.Contains(pattern, StringComparison.OrdinalIgnoreCase)).ToList();

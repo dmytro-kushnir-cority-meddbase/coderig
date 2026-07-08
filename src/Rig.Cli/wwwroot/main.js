@@ -22,6 +22,7 @@ import {
   CallersPanel,
   ImpactView,
   ImpactProgress,
+  RefsView,
   Chips,
   treeStatus,
   baseName,
@@ -121,6 +122,11 @@ function selectStore(id) {
   }); // a manual store switch invalidates any diff overlay
   if (get().tab === "eps") loadEntrypoints();
   if (get().treeFrom) openTree(get().treeFrom);
+  // a store switch invalidates the refs report (it's per-store) — reload if that view is showing.
+  if (get().appMode === "refs") {
+    set({ refsUnused: null, refsUsage: null });
+    loadRefs();
+  }
 }
 function loadImpact() {
   const { impactBase, impactHead, impactAsync } = get();
@@ -173,6 +179,29 @@ function loadImpact() {
     finish(() => status("diff failed: " + e.data, true)),
   );
   es.onerror = () => finish(() => status("diff stream connection lost", true));
+}
+
+// Refs (assembly-reference analysis) — a GLOBAL report fetched like the EP inventory (store + optional
+// filter, no from-pattern). Loads ONLY the active sub-tab's endpoint (unused rebuilds the .csproj dependency
+// graph, so it isn't free); a tab switch / filter change reloads the tab that's now shown.
+let refsFilterTimer = null; // debounce for the filter box (server-side filter → avoid a fetch per keystroke)
+async function loadRefs() {
+  const s = get();
+  const filter = s.refsFilter.trim() || undefined;
+  setBusy(true);
+  status("loading references…");
+  try {
+    if (s.refsTab === "usage") {
+      set({ refsUsage: await api.refsUsage(explicit(), filter) });
+    } else {
+      set({ refsUnused: await api.refsUnused(explicit(), filter) });
+    }
+    status("references loaded");
+  } catch (e) {
+    status("refs: " + e.message, true);
+  } finally {
+    setBusy(false);
+  }
 }
 
 // ---- pivot history (breadcrumbs) -------------------------------------------------------------------------
@@ -361,6 +390,20 @@ const actions = {
   // impact mode
   setAppMode(m) {
     set({ appMode: m });
+    // refs is a global report — load it on first entry (like the EP inventory loads on its tab).
+    if (m === "refs" && !get().refsUnused && !get().refsUsage) loadRefs();
+  },
+  setRefsTab(id) {
+    set({ refsTab: id });
+    // lazy: fetch the sub-tab's endpoint only when first shown (unused rebuilds the .csproj graph).
+    if (id === "usage" ? !get().refsUsage : !get().refsUnused) loadRefs();
+  },
+  setRefsFilter(v) {
+    // Wire the box to the server-side `filter` param (matches the CLI's optional pattern). Debounced, and
+    // both sub-tabs' data is invalidated so a tab switch re-applies the current filter.
+    set({ refsFilter: v, refsUnused: null, refsUsage: null });
+    clearTimeout(refsFilterTimer);
+    refsFilterTimer = setTimeout(loadRefs, 300);
   },
   setImpactStore(which, id) {
     set(which === "base" ? { impactBase: id } : { impactHead: id });
@@ -606,11 +649,12 @@ function setupSearch() {
 
 // ---- impact mode: toggle Tree/Impact UI + populate the base/head store pickers --------------------------
 function applyAppMode(m) {
-  const impact = m === "impact";
-  refs.treeToolbar.classList.toggle("hidden", impact);
-  refs.tree.classList.toggle("hidden", impact);
-  refs.impactToolbar.classList.toggle("hidden", !impact);
-  refs.impact.classList.toggle("hidden", !impact);
+  refs.treeToolbar.classList.toggle("hidden", m !== "tree");
+  refs.tree.classList.toggle("hidden", m !== "tree");
+  refs.impactToolbar.classList.toggle("hidden", m !== "impact");
+  refs.impact.classList.toggle("hidden", m !== "impact");
+  refs.refsToolbar.classList.toggle("hidden", m !== "refs");
+  refs.refs.classList.toggle("hidden", m !== "refs");
   for (const b of refs.appmode.children)
     b.classList.toggle("on", b.dataset.app === m);
 }
@@ -647,6 +691,7 @@ function syncControls(s) {
   refs.impactHead.value = s.impactHead;
   refs.impactAsync.querySelector("input").checked = s.impactAsync;
   refs.impactFilter.value = s.impactFilter;
+  refs.refsFilter.value = s.refsFilter;
   applyAppMode(s.appMode);
 }
 
@@ -733,6 +778,21 @@ function setupWatches() {
       if (s.appMode === "impact") mount(refs.impact, ImpactView(s, actions));
     },
   );
+  watch(
+    store,
+    (s) => [s.refsUnused, s.refsUsage, s.refsTab, s.appMode],
+    (s) => {
+      if (s.appMode === "refs") mount(refs.refs, RefsView(s));
+    },
+  );
+  watch(
+    store,
+    (s) => [s.refsTab],
+    (s) => {
+      for (const b of refs.refsTabs.children)
+        b.classList.toggle("on", b.dataset.rtab === s.refsTab);
+    },
+  );
   watch(store, querySlice, (s) => serializeUrl(s)); // URL stays in sync with the query
 }
 
@@ -767,6 +827,8 @@ function setupWatches() {
     syncControls(get());
     if (patch.appMode === "impact") {
       if (patch.impactBase && patch.impactHead) loadImpact();
+    } else if (patch.appMode === "refs") {
+      loadRefs();
     } else if (patch.from) {
       openTree(patch.from);
     }
