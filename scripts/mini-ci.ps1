@@ -45,10 +45,14 @@ try {
     dotnet tool restore
     # Native tools report failure via EXIT CODE, not a terminating error, so $ErrorActionPreference="Stop"
     # does NOT halt on them (same trap as the test gate below). Gate the CHEAP checks explicitly so a
-    # formatting drift or compile break fails in seconds — BEFORE the expensive build/test/pack/install —
-    # instead of sailing through to a buried failure at the end.
-    dotnet csharpier check .
-    if ($LASTEXITCODE -ne 0) { throw "csharpier check failed - run 'dotnet csharpier format .' then re-run." }
+    # compile break fails in seconds — BEFORE the expensive build/test/pack/install — instead of sailing
+    # through to a buried failure at the end.
+    #
+    # csharpier FORMATS in place (not `check`) — publish always formats everything so nobody has to format
+    # inline. The repo is kept format-clean, so this only rewrites files that drifted (the changed ones);
+    # it runs as a discrete step BEFORE build, so it never races an in-flight compile.
+    dotnet csharpier format .
+    if ($LASTEXITCODE -ne 0) { throw "csharpier format failed (exit $LASTEXITCODE)." }
     dotnet restore $solution
     if ($LASTEXITCODE -ne 0) { throw "Restore failed (exit $LASTEXITCODE)." }
     dotnet build $solution -c $Configuration /p:UseSharedCompilation=false

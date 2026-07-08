@@ -57,8 +57,9 @@ The rules that make this produce mergeable code, not plausible diffs:
   mirror (e.g. "mirror the existing X machinery"), the EXPLICIT owned-files list, hard constraints
   (annotate-only / full suite green / **do NOT commit** / don't touch docs), the explicit ACCEPTANCE test
   (as a RUNNABLE check), a STRUCTURED report (what changed / tests added / any existing test updated), and
-  the gotchas (TUnit filter syntax, csharpier-first, named-args, NEW test file not the shared one,
-  verify-assertions-against-real-`rig`-output, this list).
+  the gotchas (TUnit filter syntax, named-args, NEW test file not the shared one,
+  verify-assertions-against-real-`rig`-output, this list). **Do NOT ask agents to run csharpier / format
+  their files** — the ship step (`mini-ci`) formats everything on publish; inline formatting is wasted effort.
 - **One agent at a time on shared files** — `FactEffectDeriver`/`FactHazardDeriver`/`builtin-rules.json`/the
   derive+impact paths all contend; concurrent agents just merge-conflict. Parallel only on disjoint work.
 - **Run code agents in the MAIN checkout, NOT `isolation: worktree`** — worktree isolation branches from a
@@ -68,6 +69,14 @@ The rules that make this produce mergeable code, not plausible diffs:
   detector/feature with a bug/fix fixture; FP-calibrate a new signal on the real MedDBase store before it
   goes on-by-default (a structurally-true detector that fires 179× is still noise). Surface genuine forks
   to the user; autopilot the rest.
+- **Decide CLI-only vs CLI+web at design time.** rig has a web UI (`Rig.Cli/Web/RigApiEndpoints.cs` +
+  `wwwroot/`). Any feature whose output is a browsable/shareable **report, ranking, diff, or graph**
+  (inventories, project/assembly graphs, hazard/impact views) — as opposed to a one-shot fix or a
+  detector-internal change — should get a **web slice**, scoped as an explicit follow-on. CLI-first is still
+  right (the facts/logic are load-bearing; web is a view), but ASK the question at the design gate and
+  **capture the web slice in the backlog item** so it isn't forgotten. (Cache note: a query-side feature that
+  doesn't touch a `*Schema`/`derivationVersion` axis needs its own web cache-key thinking — see the cache
+  section.)
 - **Don't dispatch for small/exploratory work** — root-causing, calibration queries, one-file fixes, and
   doc edits are faster inline. Agents earn their keep only on self-contained builds with a clear acceptance test.
 - **Subagent verifies test assertions against REAL output, not its imagination.** Subagents can't build (bin/
@@ -88,9 +97,11 @@ The rules that make this produce mergeable code, not plausible diffs:
 
 ## Build / test / ship
 
-- **Ship flow is `scripts/mini-ci.ps1`** — csharpier check → `dotnet build` → all tests →
+- **Ship flow is `scripts/mini-ci.ps1`** — csharpier **format** (in place) → `dotnet build` → all tests →
   pack → reinstall the global `rig` tool. Run it after any source change you intend to use from the CLI.
-  Format first (`dotnet csharpier format <files>` or `scripts/format.ps1`) or the csharpier gate fails.
+  **No need to format first / inline** — mini-ci formats the whole repo on publish as its first step (the
+  repo is kept clean, so it only rewrites the files that drifted). `scripts/format.ps1 -Check` still gives a
+  verify-only pass if you want one.
 - **Tests are TUnit on Microsoft.Testing.Platform, not vstest.** `dotnet test --filter` does NOT work
   (prints help, "Zero tests ran"). Run a subset with:
   `dotnet run --project tests/Rig.Tests --no-build -- --treenode-filter "/*/*/<ClassName>/*"`
@@ -101,9 +112,10 @@ The rules that make this produce mergeable code, not plausible diffs:
   and there's no fix-it round-trip. Still worth following for readability where cheap (named args on new
   multi-arg first-party calls; `CultureInfo.InvariantCulture` on formatting), and `.editorconfig`
   `UseNamedArgs.exclude_methods` still suppresses the noisy stdlib ones — but none of it gates the build.
-  - **The csharpier auto-format still races an in-flight `dotnet build`** (format edits a file the compiler
-    is reading) → spurious "N Error(s)" with no diagnostic. Re-run the build once it settles; verify with
-    `--no-incremental`.
+  - **Don't run csharpier format CONCURRENTLY with a `dotnet build`** (format edits a file the compiler is
+    reading) → spurious "N Error(s)" with no diagnostic. mini-ci avoids this by formatting as a discrete
+    step BEFORE build; the trap only bites if you kick off a manual format mid-build. Re-run the build once
+    it settles; verify with `--no-incremental`.
 
 ## Effect ↔ reachability model (read before touching effects or `EnclosingSymbolId`)
 
