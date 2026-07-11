@@ -1,0 +1,360 @@
+using System.Text.RegularExpressions;
+using Rig.Domain.Data;
+using Rig.Domain.Functions;
+
+namespace Rig.Analysis.Rules;
+
+// The JSON authoring model for rig.rules.json (and builtin-rules.json): the shape a human writes, bound
+// directly by System.Text.Json. RuleSetLoader loads the cascade of these documents, folds them into one
+// merged document, and projects it to the immutable Rig.Domain RuleSet every receiver consumes. These
+// types are loader-internal — the merged, projected RuleSet is the only thing that crosses a boundary.
+
+// A type-shaped entry point: a type deriving one of BaseTypes within NamespacePrefix whose construction
+// (or DefaultMethod) is an entry point — as opposed to ClassInheritanceEntryPointRule, which keys off
+// named handler methods. Generic matching infra; the rule DATA lives in JSON (key `typeEntryPoints`,
+// with `pageModel` accepted as a deprecated alias — the original sole use case this generalised from).
+internal sealed record TypeEntryPointRule(
+    string Id,
+    string Kind,
+    IReadOnlyList<string> BaseTypes,
+    string NamespacePrefix,
+    string? DefaultMethod = null,
+    // When set, methods decorated with any of these attributes become the entry points rather than the
+    // constructor (entry route = <type>.<MethodName>(<params>)).
+    IReadOnlyList<string>? HandlerMethodAttributes = null,
+    // Capability tokens (JSON `requires`) a deployment must `provides` for EPs from this rule to be
+    // active-in it. Null/empty = ungated. Opaque tokens; see Deployments/DeploymentMap.
+    IReadOnlyList<string>? Requires = null
+);
+
+internal sealed record ClassInheritanceEntryPointRule(
+    string Id,
+    string Kind,
+    IReadOnlyList<string> BaseTypes,
+    IReadOnlyList<string> HandlerMethods,
+    bool RequireOverride,
+    string? DefaultMethod = null,
+    IReadOnlyList<string>? HandlerParameterTypes = null,
+    // When set, a matched method must additionally carry one of these attributes
+    // (e.g. WCF [OperationContract]).  Gates rules with baseTypes:["*"]+handlerMethods:["*"]
+    // so they don't match every method in the project.
+    IReadOnlyList<string>? HandlerMethodAttributes = null,
+    // Capability tokens (JSON `requires`) a deployment must `provides` for EPs from this rule to be
+    // active-in it. Null/empty = ungated. Opaque tokens; see Deployments/DeploymentMap.
+    IReadOnlyList<string>? Requires = null
+);
+
+internal sealed record EffectRule(
+    string Provider,
+    string Operation,
+    IReadOnlyList<string> Methods,
+    IReadOnlyList<string>? DeclaringTypes,
+    IReadOnlyList<string>? ReceiverTypes,
+    IReadOnlyList<string>? ContainingNamespaces,
+    IReadOnlyList<string>? ContainingTypes,
+    IReadOnlyList<string>? ContainingMethods,
+    string Resource,
+    string Confidence,
+    string Basis,
+    string Reason,
+    bool TreatAsDispatch = false,
+    // Optional suffix gate on the declaring type's simple name. Narrows a broad namespace-prefix
+    // gate: e.g. declaringTypeNameEndsWith:["Proxy"] + declaringTypes:["MedDBase.Pages"] matches
+    // XxxProxy.Show() but not MessageBox.Show().
+    IReadOnlyList<string>? DeclaringTypeNameEndsWith = null,
+    // Optional base-type gate: the declaring type must derive (BFS over base edges) one of these
+    // base types. The faithful gate for generated navigation proxies — a Show/ShowDialog/Redirect
+    // call is a clientpage_proxy effect iff its declaring type derives MedDBase.Pages.ProxyBase.
+    IReadOnlyList<string>? DeclaringTypeBaseTypes = null,
+    // When true, match CONSTRUCTOR refs (new XxxEntity(pk[, txn])) rather than invocations — the
+    // llblgen entity-ctor fetch (gap G5). Type gates apply to the constructed type; MinArguments
+    // separates the fetch ctor from the empty `new XxxEntity()`.
+    bool MatchConstructor = false,
+    int MinArguments = 0,
+    // When true, match THROW refs (`throw new XxxException(...)`) rather than invocations. The type
+    // gates (declaringTypes / declaringTypeNameEndsWith / declaringTypeBaseTypes) apply to the THROWN
+    // exception type, and the effect resource is that exception type. Surfaces guard/permission exits
+    // (e.g. AccessDeniedException) as effects so a read path that drops its check is visible.
+    bool MatchThrow = false,
+    // When true, match WRITE refs whose TARGET is a STATIC field/auto-property (`StaticType.Field = v`,
+    // FR-1(b)) rather than invocations. The type gates apply to the target slot's declaring type; the
+    // resource is the declaring type (resource:"declaring_type") or the slot DocID. Static-ness is what
+    // makes this rule-expressible (a shared mutation regardless of receiver). See FactEffectRule.MatchFieldWrite.
+    bool MatchFieldWrite = false,
+    // When true, match READ refs whose TARGET is a STATIC field/auto-property (a read of `StaticType.Field`,
+    // the FR-1 read arm — symmetric twin of MatchFieldWrite). The type gates apply to the target slot's
+    // declaring type; the resource is the declaring type (resource:"declaring_type") or the slot DocID.
+    // Static-ness is what makes this rule-expressible (a shared read regardless of receiver). See
+    // FactEffectRule.MatchFieldRead.
+    bool MatchFieldRead = false,
+    // FR-1(g): mark this rule's matched calls as atomic read-modify-write (`"atomic": true`). Carried onto
+    // the derived effect for the FR-1d guard-subtraction triage. See FactEffectRule.Atomic.
+    bool Atomic = false,
+    // Wrapper gate: match an invocation whose TARGET method itself calls one of these patterns (e.g.
+    // "Echo.Process.ask") — recognizes request/response wrappers from data, no per-type curation. The
+    // effect emits at the wrapper's call sites; resource:type_argument yields the caller's concrete
+    // type-arg combo. See FactEffectRule.TargetCallsMethods.
+    IReadOnlyList<string>? TargetCallsMethods = null,
+    // Selects ONE top-level position (0-based) of the comma-joined type_argument resource instead of
+    // the whole combo. Null = whole combo. See FactEffectRule.TypeArgumentIndex.
+    int? TypeArgumentIndex = null,
+    // Selects a positional argument (0-based) for the string_argument/argument_name resource instead
+    // of the first. Null = argument 0. See FactEffectRule.ArgumentIndex.
+    int? ArgumentIndex = null
+);
+
+// A curated async-handoff dispatcher: when its consuming ctor/method is handed a method-group, the
+// graph layer reclassifies that edge as a handoff. `consumerPatterns` are substrings matched against
+// the (arity-stripped) consuming invocation/ctor target DocID (e.g.
+// "RepeatingBackgroundProcessSchedule.#ctor", "Echo.Process.spawn", "IAsyncEvent.Add"); `kind` is the
+// execution-origin kind the callback gets (background|timer|actor|event); `repeating` flags a
+// re-firing schedule. Projected to FactHandoffRule for the Domain classifier.
+internal sealed record HandoffDispatcherRule(
+    string Id,
+    string Kind,
+    IReadOnlyList<string> ConsumerPatterns,
+    bool Repeating = false,
+    // Capability tokens (JSON `requires`) a deployment must `provides` for the handoffs this dispatcher
+    // produces to be active-in it. Null/empty = ungated. Opaque tokens; see Deployments/DeploymentMap.
+    IReadOnlyList<string>? Requires = null
+);
+
+// A redirect rule for the external-virtual-override orphan (docs/backlog.md). A call binding to an EXTERNAL
+// convenience overload — matched by the signature-stripped DocID `method` (e.g.
+// "M:SD.LLBLGen.Pro.ORMSupportClasses.EntityBase.Save", which covers Save()/Save(bool)/Save(IPredicate)) — is
+// rewritten to the external VIRTUAL hatch it trampolines into (`redirectTo`, the full DocID, e.g.
+// "...EntityBase.Save(SD.LLBLGen.Pro.ORMSupportClasses.IPredicate,System.Boolean)") and KEPT past the
+// TargetInSource graph filter, so receiver-narrowed dispatch resolves it to the first-party override. The
+// virtual target itself is never self-redirected. Authored from decompiled trampoline bodies; projected to
+// FactRedirectRule for the Domain RedirectClassifier.
+internal sealed record RedirectRule(string Method, string RedirectTo);
+
+// FR-7 (cache coherence), now a cache-specific INSTANCE of the generic effect-correlation deriver. The
+// bulk-write + invalidation method names moved out to ordinary effect rules (llblgen:bulk_write /
+// cache:invalidate); the single `cacheCoherence` section now carries only the POLICY: `cachedEntities` (the
+// DECLARED contract — high-certainty in-scope keys) and an optional `excludeEnclosingNamespaceSuffix`
+// (generated-ORM-noise filter, overriding the wiring default). Projected to FactCacheCoherenceRule. One
+// object, not a list (last-writer-wins).
+internal sealed record CacheCoherenceRule(
+    IReadOnlyList<string> CachedEntities,
+    IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null
+);
+
+// static_init_capture POLICY (JSON authoring shape of the `staticInitCapture` section): `mutableSources` is
+// the project-specific list of resource substrings (e.g. "MedDBase.Configuration.Settings.") whose READ
+// into a static field initializer is flagged as frozen-at-type-init config. Projected to
+// FactStaticInitCaptureRule. One object, not a list (last-writer-wins).
+internal sealed record StaticInitCaptureRule(IReadOnlyList<string> MutableSources);
+
+// A `rig tree` render rule: a DocID substring `Pattern` + a human `Label`/`Reason` shown in the
+// rendered marker. Used for both collapse-seams (fold a fan-out hub's children) and opaque-types
+// (draw a node as a leaf). Codebase-specific presentation data; projected to FactRenderRule.
+internal sealed record RenderRule(string Pattern, string? Label = null, string? Reason = null, string? Id = null);
+
+// A traversal-cut rule: a node whose DocID matches `Pattern` is a traversal leaf — emitted but
+// successors are not walked. Only pattern + label are required; id/reason are documentation.
+// Projected to FactTraversalCutRule by FactTraversalCutRuleProvider.
+internal sealed record TraversalCutRule(string Pattern, string? Label = null, string? Reason = null, string? Id = null);
+
+// A generic-factory monomorphization rule: rewrite a call to `Method` (matched as "<declType>.<name>")
+// to its constructed type's `TargetMethod`, where the construct is type-arg `ConstructArgIndex`.
+// Codebase-specific; projected to FactGenericFactoryRule. `Reason`/`Id` are documentation only.
+internal sealed record GenericFactoryRule(
+    string Method,
+    int ConstructArgIndex = 0,
+    string TargetMethod = "New",
+    string? Reason = null,
+    string? Id = null
+);
+
+// A context-bound interface-dispatch rule: impls of `Interface` are each bound to a context type via a
+// generic `BindingBase<C>` base, so the interface's dispatch narrows to the enclosing context's family.
+// Codebase-specific; projected to FactContextDispatchRule. `Reason`/`Id` are documentation only.
+internal sealed record ContextDispatchRule(string Interface, string BindingBase, string? Reason = null, string? Id = null);
+
+// A publish→consumer DELIVERY rule (JSON authoring shape of `deliveryRules`): declares one delivery
+// mechanism (C# events / Echo actors) by composing the identity primitives, so the loader is generic over
+// it rather than inferring the actor case from the actor:* effect rules. Projected to FactPathFinder's
+// DeliveryRule. `confidence` (exact|heuristic) is disclosure carried onto the emitted handoff.
+internal sealed record DeliveryRuleDocument(
+    string Id,
+    string Tag,
+    string Confidence,
+    DeliveryEndpointDocument Producer,
+    DeliveryEndpointDocument Registration
+);
+
+// One side of a delivery rule. `source` selects which facts the loader scans ("event-symbol" | "arg") and
+// `resolve` how the channel identity is found ("symbol" | "path"); `methods`/`declaringTypes` gate the
+// invocation target for "arg" sources; `argumentIndex` selects which argument carries the identity.
+// `handlerDispatcher` (registration endpoints) names the HandoffDispatcher id of the co-located handoff
+// edge(s) that are the handler — spawn delegates reclassified into handoff edges (e.g. "meddbase.echo.spawn");
+// null ⇒ the handler is the co-located methodGroup edge (an event `+= H`).
+internal sealed record DeliveryEndpointDocument(
+    string Source,
+    string Resolve,
+    int ArgumentIndex = 0,
+    IReadOnlyList<string>? Methods = null,
+    IReadOnlyList<string>? DeclaringTypes = null,
+    string? HandlerDispatcher = null
+);
+
+internal sealed record ReadBeforeCommitObservationRule(
+    IReadOnlyList<string> CommitMethods,
+    IReadOnlyList<string> ReadMethods,
+    IReadOnlyList<string> ReadReceiverTypePatterns
+);
+
+internal sealed record ConcurrencyHandledObservationRule(IReadOnlyList<string> CommitMethods, IReadOnlyList<string> CatchTypePatterns);
+
+internal sealed record ResilienceRetryObservationRule(IReadOnlyList<string> WrapperMethods, IReadOnlyList<string> ReceiverTypePatterns);
+
+internal sealed record ResourceSpanObservationRule(
+    string ScopeKind,
+    IReadOnlyList<string> ScopeTypePatterns,
+    IReadOnlyList<string> ExcludeProviders,
+    string ObservationType,
+    string Context
+);
+
+// FR-6 (RCA #1646): flag a store/serialize effect whose payload type argument is a serializer-
+// unsupported type (LanguageExt.Option / Either). `providers` gates which effect providers count as a
+// serialize boundary (empty = any); `unsupportedTypePatterns` are substrings matched against the call's
+// generic type arguments. Projected to FactSerializationHazardRule. Annotate-only.
+internal sealed record SerializationHazardObservationRule(IReadOnlyList<string>? Providers, IReadOnlyList<string> UnsupportedTypePatterns);
+
+// FR-3 (RCA #2892): flag a READ-category effect inside a loop whose key argument VARIES per iteration (an
+// n+1 / read amplification). `providers` + `operations` gate which effects count as a read (empty list =
+// any for that dimension); the loop iteration variable appearing in the read's key argument is the
+// discriminator over plain looped_effect. Projected to FactNPlusOneRule. Annotate-only.
+internal sealed record NPlusOneObservationRule(IReadOnlyList<string>? Providers, IReadOnlyList<string>? Operations);
+
+internal sealed class AnalysisRulesDocument
+{
+    public EntryPointRulesDocument? EntryPoints { get; set; }
+
+    public List<EffectRule>? Effects { get; set; }
+
+    public List<DiRegistrationRule>? DiRegistrations { get; set; }
+
+    public List<HandoffDispatcherRule>? HandoffDispatchers { get; set; }
+
+    // Top-level key "redirectRules": external-convenience-overload → virtual-hatch redirects (see RedirectRule).
+    public List<RedirectRule>? RedirectRules { get; set; }
+
+    // Top-level key "cacheCoherence": a SINGLE object (not a list) declaring the cached entities + bulk-write +
+    // invalidation method names for the FR-7 cache-coherence graph hazard (see CacheCoherenceRule).
+    public CacheCoherenceRule? CacheCoherence { get; set; }
+
+    // Top-level key "staticInitCapture": a SINGLE object declaring the mutable-source resource patterns for
+    // the static_init_capture hazard (see StaticInitCaptureRule).
+    public StaticInitCaptureRule? StaticInitCapture { get; set; }
+
+    // Top-level key "deliveryRules": list of publish→consumer delivery mechanisms (events, actors).
+    public List<DeliveryRuleDocument>? DeliveryRules { get; set; }
+
+    public List<StaticDiMapping>? StaticDiMappings { get; set; }
+
+    // Paths to directories (or individual files) containing XML service descriptors.
+    // Each <Service type="Impl"><Implements type="IFace"/></Service> becomes a
+    // DiRegistrationInfo entry fed into SingleImplIndex at callgraph build time.
+    public List<string>? XmlDiFiles { get; set; }
+
+    public FileRulesSection? Files { get; set; }
+
+    public ProjectsSection? Projects { get; set; }
+
+    public ObservationsSection? Observations { get; set; }
+
+    public RenderRulesSection? Render { get; set; }
+
+    public List<GenericFactoryRule>? GenericFactories { get; set; }
+
+    // Top-level key "traversalCuts": list of {pattern, label, id?, reason?} cut rules.
+    public List<TraversalCutRule>? TraversalCuts { get; set; }
+
+    // Top-level key "contextDispatch": list of {interface, bindingBase, id?, reason?} rules.
+    public List<ContextDispatchRule>? ContextDispatch { get; set; }
+
+    // Top-level key "effectEmoji": flat { "provider:operation": "emoji", "provider": "emoji" } map.
+    // Later-loaded files override earlier entries; builtin-rules.json carries the defaults.
+    public Dictionary<string, string>? EffectEmoji { get; set; }
+}
+
+// `render` rule section — codebase-specific `rig tree` presentation rules (collapse fan-out hubs,
+// draw infra types as opaque leaves). Pure presentation; never affects reach. See FactRenderRules.
+internal sealed class RenderRulesSection
+{
+    public List<RenderRule>? CollapseSeams { get; set; }
+
+    public List<RenderRule>? OpaqueTypes { get; set; }
+}
+
+internal sealed class ObservationsSection
+{
+    public List<ReadBeforeCommitObservationRule>? ReadBeforeCommit { get; set; }
+
+    public List<ConcurrencyHandledObservationRule>? ConcurrencyHandled { get; set; }
+
+    public List<ResilienceRetryObservationRule>? ResilienceRetry { get; set; }
+
+    public List<ResourceSpanObservationRule>? ResourceSpan { get; set; }
+
+    public List<SerializationHazardObservationRule>? SerializationHazard { get; set; }
+
+    public List<NPlusOneObservationRule>? NPlusOne { get; set; }
+}
+
+internal sealed class ProjectsSection
+{
+    public List<string>? Exclude { get; set; }
+}
+
+internal sealed class EntryPointRulesDocument
+{
+    public List<ClassInheritanceEntryPointRule>? ClassInheritance { get; set; }
+
+    public List<TypeEntryPointRule>? TypeEntryPoints { get; set; }
+
+    // Deprecated alias for TypeEntryPoints — the original framework-specific key this rule kind
+    // generalised from. Still bound and merged so existing rig.rules.json files keep working.
+    public List<TypeEntryPointRule>? PageModel { get; set; }
+}
+
+internal sealed class FileRulesSection
+{
+    public List<FileRuleDocument>? Include { get; set; }
+
+    public List<FileRuleDocument>? Exclude { get; set; }
+
+    public List<string>? TestProjectPatterns { get; set; }
+}
+
+internal sealed class FileRuleDocument
+{
+    public string? Id { get; set; }
+
+    public string? Glob { get; set; }
+
+    public string? Reason { get; set; }
+
+    public FileRule ToFileRule(string direction)
+    {
+        if (string.IsNullOrWhiteSpace(Id))
+        {
+            throw new InvalidOperationException($"File rule in `{direction}` is missing `id`.");
+        }
+
+        if (string.IsNullOrWhiteSpace(Glob))
+        {
+            throw new InvalidOperationException($"File rule `{Id}` is missing `glob`.");
+        }
+
+        return new FileRule(
+            Id: Id,
+            Glob: Glob,
+            Reason: string.IsNullOrWhiteSpace(Reason) ? $"{direction}_file_rule" : Reason,
+            Regex: new Regex(GlobMatcher.ToRegex(Glob), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+        );
+    }
+}

@@ -1,7 +1,9 @@
 using System.CommandLine;
+using System.Diagnostics;
 using Rig.Analysis.Rules;
 using Rig.Cli.CommandLine;
 using Rig.Cli.Rendering;
+using Rig.Cli.Telemetry;
 using Rig.Domain.Functions;
 using Rig.Storage.Queries;
 using static Rig.Cli.Effects.EffectDerivation;
@@ -21,6 +23,7 @@ internal static class ReachesCommand
     {
         var from = CommonOptions.Pattern(name: "from", description: "Entry-point method pattern.");
         var async = CommonOptions.Async();
+        var includeDelivery = CommonOptions.IncludeDelivery();
         var raw = CommonOptions.Raw();
         var rules = CommonOptions.Rules();
         var depth = CommonOptions.Depth();
@@ -28,11 +31,13 @@ internal static class ReachesCommand
         var only = CommonOptions.Only();
         var exclude = CommonOptions.Exclude();
         var limit = CommonOptions.Limit();
+        var time = CommonOptions.Time();
         var store = CommonOptions.Store();
         var cmd = new Command(name: "reaches", description: "Effects reachable from an entry point, by depth.")
         {
             from,
             async,
+            includeDelivery,
             raw,
             rules,
             depth,
@@ -40,6 +45,7 @@ internal static class ReachesCommand
             only,
             exclude,
             limit,
+            time,
             store,
         };
         cmd.SetAction(pr =>
@@ -48,59 +54,80 @@ internal static class ReachesCommand
                 error,
                 () =>
                     RunAsync(
-                        fromPattern: pr.GetValue(from)!,
-                        async: pr.GetValue(async),
-                        raw: pr.GetValue(raw),
-                        extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
-                        depth: pr.GetValue(depth),
-                        format: pr.GetValue(format),
-                        only: CommonOptions.FilterSet(pr.GetValue(only)),
-                        exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
-                        limit: pr.GetValue(limit),
-                        output: output,
-                        workingDirectory: workingDirectory,
-                        storeRef: pr.GetValue(store)
+                        new Options(
+                            FromPattern: pr.GetValue(from)!,
+                            Async: pr.GetValue(async),
+                            IncludeDelivery: pr.GetValue(includeDelivery),
+                            Raw: pr.GetValue(raw),
+                            ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                            Depth: pr.GetValue(depth),
+                            Format: pr.GetValue(format),
+                            Only: CommonOptions.FilterSet(pr.GetValue(only)),
+                            Exclude: CommonOptions.FilterSet(pr.GetValue(exclude)),
+                            Limit: pr.GetValue(limit),
+                            Time: pr.GetValue(time)
+                        ),
+                        new CommandIo(
+                            new TextOutput(Output: output, Error: error),
+                            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: pr.GetValue(store))
+                        )
                     )
             )
         );
         return cmd;
     }
 
-    private static async Task<int> RunAsync(
-        string fromPattern,
-        bool async,
-        bool raw,
-        IReadOnlyList<string> extraRules,
-        int? depth,
-        string? format,
-        HashSet<string> only,
-        HashSet<string> exclude,
-        int? limit,
-        TextWriter output,
-        string workingDirectory,
-        string? storeRef
-    )
-    {
-        var maxDepth = CommonOptions.DepthOrUnbounded(depth);
-        var max = limit ?? int.MaxValue; // --limit absent => unbounded
-        var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
-        var mode = CommonOptions.Mode(async);
+    // Bound option values for `rig reaches`. Raw user inputs (Format kept as the parsed string);
+    // the flag derivations (format -> tsv, depth -> maxDepth, etc.) live at the top of RunAsync.
+    private sealed record Options(
+        string FromPattern,
+        bool Async,
+        bool IncludeDelivery,
+        bool Raw,
+        IReadOnlyList<string> ExtraRules,
+        int? Depth,
+        string? Format,
+        HashSet<string> Only,
+        HashSet<string> Exclude,
+        int? Limit,
+        bool Time
+    );
 
-        var rules = RuleSet.Load(workingDirectory, extraRules);
+    private static async Task<int> RunAsync(Options opts, CommandIo io)
+    {
+        var maxDepth = CommonOptions.DepthOrUnbounded(opts.Depth);
+        var max = opts.Limit ?? int.MaxValue; // --limit absent => unbounded
+        var tsv = CommonOptions.IsTsv(opts.Format);
+        var mode = CommonOptions.Mode(async: opts.Async, includeDelivery: opts.IncludeDelivery);
+
+        using var timing = QueryTiming.Start(opts.Time, io.TextOutput.Error);
+
+        var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules);
+        WarnUnknownFilterTokens(only: opts.Only, exclude: opts.Exclude, rules: rules, errorWriter: io.TextOutput.Error);
         // --raw zeroes cut/context; reaches keeps Factory (it monomorphizes generic factories even under
         // --raw, a long-standing asymmetry vs path/tree/callers).
-        var shaped = raw ? rules with { Cut = [], Context = [] } : rules;
+        var shaped = opts.Raw ? rules with { Cut = [], Context = [] } : rules;
 
-        await using var context = OpenReadContext(workingDirectory, storeRef);
+        await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation);
 
-        var inputs = await LoadEffectReachInputsAsync(context, fromPattern, SqlReachability.Direction.Forward, shaped);
+        var graphWatch = Stopwatch.StartNew();
+        var inputs = await LoadEffectReachInputsAsync(context, opts.FromPattern, SqlReachability.Direction.Forward, shaped);
         var graph = inputs.Graph;
-        if (!raw)
+        if (!opts.Raw)
         {
             graph = FactPathFinder.MarkEventSubscriptionHandoffs(graph, await Reads.EventSubscriptionSitesAsync(context));
         }
 
-        var reachable = FactPathFinder.ReachesWithFanout(graph, fromPattern, maxDepth, mode: mode);
+        graphWatch.Stop();
+        timing.Record("graph load", graphWatch.Elapsed);
+
+        // Ambiguity disclosure: a multi-target pattern reports the UNION of every target's reach.
+        AmbiguityNotice.WarnIfAmbiguous(io.TextOutput.Error, opts.FromPattern, graph);
+
+        var traversalWatch = Stopwatch.StartNew();
+        var reachable = MonomorphCollapse.CollapseReachInfo(
+            FactPathFinder.ReachesWithFanout(graph, opts.FromPattern, maxDepth, mode: mode)
+        );
 
         var effects = DeriveEffects(
             rules.Effects,
@@ -110,7 +137,9 @@ internal static class ReachesCommand
             ctorRefs: inputs.CtorRefs,
             throwRefs: inputs.ThrowRefs
         );
-        effects = ApplyEffectFilters(effects, only, exclude); // --only / --exclude (e.g. --exclude throw)
+        effects = ApplyEffectFilters(effects, only: opts.Only, exclude: opts.Exclude); // --only / --exclude (e.g. --exclude throw)
+        traversalWatch.Stop();
+        timing.Record("traversal", traversalWatch.Elapsed);
 
         // Effects whose enclosing method is reachable from the entry point. Fanout = looped call
         // edges on the path to the enclosing method (ReachInfo.LoopNesting) + 1 if the effect's OWN
@@ -139,6 +168,7 @@ internal static class ReachesCommand
             .OrderBy(h => h.Depth)
             .ToList();
 
+        var renderWatch = Stopwatch.StartNew();
         if (tsv)
         {
             // dispatchVia/dispatchDegree flag effects whose ONLY reach is a base-virtual/interface
@@ -148,10 +178,13 @@ internal static class ReachesCommand
             // ("roslyn" when all dispatch hops are exact mined facts; empty when no dispatch hop).
             foreach (var h in hits.Take(max))
             {
-                output.WriteLine(
+                io.TextOutput.Output.WriteLine(
                     $"{h.Depth}\t{h.Effect.Provider}\t{h.Effect.Operation}\t{h.Effect.ResourceType}\t{h.Effect.EnclosingSymbolId}\t{ShortenPath(h.Effect.FilePath)}:{h.Effect.Line}\t{h.Fanout}\t{ShortLoop(h.Loop)}\t{h.Via}\t{(h.Via is null ? 0 : h.ViaDegree)}\t{h.HandoffVia}\t{h.Basis}"
                 );
             }
+
+            renderWatch.Stop();
+            timing.Record("render", renderWatch.Elapsed);
 
             return 0;
         }
@@ -166,26 +199,44 @@ internal static class ReachesCommand
 
         // Deployment/EP chip on the From line: which service(s) host this entry point (opt-in via
         // deployments.json; no-op otherwise). The from-root is the depth-0 reachable symbol.
-        var reachDeployments = await LoadDeploymentsAsync(context, workingDirectory);
-        var reachEpContext = await BuildEpContextAsync(context, graph, workingDirectory, extraRules, rules, reachDeployments);
+        // F2: thread the EpData the EF-fallback load already carried (null on the SQL path) so
+        // BuildEpContextAsync→DeriveEpSiteKindAsync can skip the redundant LoadFactEntryPointDataAsync.
+        var reachDeployments = await LoadDeploymentsAsync(context, io.WorkspaceLocation.WorkingDirectory);
+        var reachEpContext = await BuildEpContextAsync(
+            context: context,
+            graph: graph,
+            workingDirectory: io.WorkspaceLocation.WorkingDirectory,
+            extraRules: opts.ExtraRules,
+            rules: rules,
+            deployments: reachDeployments,
+            epData: inputs.EpData
+        );
         var reachFromRoot = reachable.Where(kv => kv.Value.Depth == 0).Select(kv => kv.Key).FirstOrDefault();
-        output.WriteLine(
-            $"From: {fromPattern}{(mode == FactPathFinder.TraversalMode.AsyncInclude ? "  (--async: handoffs included)" : "")}"
+        io.TextOutput.Output.WriteLine(
+            $"From: {opts.FromPattern}"
+                + mode switch
+                {
+                    FactPathFinder.TraversalMode.AsyncExact => "  (--async: handoffs included; delivery fan-out excluded)",
+                    FactPathFinder.TraversalMode.AsyncInclude => "  (--async --include-delivery: delivery fan-out included)",
+                    _ => "",
+                }
                 + (reachFromRoot is null ? "" : HeaderSuffix(reachEpContext, reachFromRoot))
         );
-        output.WriteLine($"Reachable methods (<= depth {maxDepth}): {reachable.Count}");
-        output.WriteLine($"Direct effects (real call paths): {direct.Count}  (fanned out under a loop: {direct.Count(h => h.Fanout > 0)})");
+        io.TextOutput.Output.WriteLine($"Reachable methods (<= depth {maxDepth}): {reachable.Count}");
+        io.TextOutput.Output.WriteLine(
+            $"Direct effects (real call paths): {direct.Count}  (fanned out under a loop: {direct.Count(h => h.Fanout > 0)})"
+        );
         foreach (var g in direct.GroupBy(h => (h.Effect.Provider, h.Effect.Operation)).OrderByDescending(g => g.Count()))
         {
-            output.WriteLine($"{Indent.L1}{g.Count(), 4}  {g.Key.Provider} {g.Key.Operation}");
+            io.TextOutput.Output.WriteLine($"{Indent.L1}{g.Count(), 4}  {g.Key.Provider} {g.Key.Operation}");
         }
 
-        output.WriteLine("--- nearest direct effects (depth  provider op  resource  <- method  [loop]) ---");
+        io.TextOutput.Output.WriteLine("--- nearest direct effects (depth  provider op  resource  <- method  [loop]) ---");
         foreach (var h in direct.Take(max))
         {
             var fan = h.Fanout > 0 ? $"  🔁x{h.Fanout} [loop: {ShortLoop(h.Loop)}]" : "";
             var heuristic = h.Basis == "heuristic" ? "  ~heuristic" : "";
-            output.WriteLine(
+            io.TextOutput.Output.WriteLine(
                 $"{Indent.L1}d{h.Depth}  {h.Effect.Provider} {h.Effect.Operation}  {ShortName(h.Effect.ResourceType)}  <- {ShortName(h.Effect.EnclosingSymbolId)}{fan}{SpanTag(h.Effect)}{heuristic}"
             );
         }
@@ -193,19 +244,21 @@ internal static class ReachesCommand
         // this listing isn't a silent false negative.
         if (direct.Count > max)
         {
-            output.WriteLine($"{Indent.L1}… +{direct.Count - max} more direct effect(s) (raise --limit, or --format tsv for all)");
+            io.TextOutput.Output.WriteLine(
+                $"{Indent.L1}… +{direct.Count - max} more direct effect(s) (raise --limit, or --format tsv for all)"
+            );
         }
 
         if (scheduled.Count > 0)
         {
-            output.WriteLine(
+            io.TextOutput.Output.WriteLine(
                 $"--- async (scheduled) effects ({scheduled.Count}; reached across a handoff boundary — ⚡cross_thread, NOT synchronous) ---"
             );
             foreach (
                 var g in scheduled.GroupBy(h => (h.HandoffVia!, h.Effect.Provider, h.Effect.Operation)).OrderByDescending(g => g.Count())
             )
             {
-                output.WriteLine(
+                io.TextOutput.Output.WriteLine(
                     $"{Indent.L1}⚡x{g.Count(), -4} {g.Key.Provider} {g.Key.Operation}  ⤳ via {ShortName(g.Key.Item1)} [cross_thread]"
                 );
             }
@@ -213,18 +266,22 @@ internal static class ReachesCommand
 
         if (fanned.Count > 0)
         {
-            output.WriteLine(
+            io.TextOutput.Output.WriteLine(
                 $"--- dispatch fan-out ({fanned.Count} effects; reach is base-virtual/interface dispatch, NOT a real call — see A1) ---"
             );
             foreach (var g in fanned.GroupBy(h => (h.Via!, h.Effect.Provider, h.Effect.Operation)).OrderByDescending(g => g.Count()))
             {
                 var degree = g.Max(h => h.ViaDegree);
                 var heuristic = g.Any(h => h.Basis == "heuristic") ? "  ~heuristic" : "";
-                output.WriteLine(
+                io.TextOutput.Output.WriteLine(
                     $"{Indent.L1}x{g.Count(), -5} {g.Key.Provider} {g.Key.Operation}  via {ShortName(g.Key.Item1)} dispatch [fan-out of {degree}]{heuristic}"
                 );
             }
         }
+
+        renderWatch.Stop();
+        timing.Record("render", renderWatch.Elapsed);
+
         return 0;
     }
 }

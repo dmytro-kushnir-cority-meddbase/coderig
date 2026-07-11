@@ -1,22 +1,40 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Rig.Analysis.Rules;
 using Rig.Domain.Data;
+using RuleSet = Rig.Domain.Data.RuleSet;
 
 namespace Rig.Analysis.Extraction;
 
 internal static class DiRegistrationExtractor
 {
-    public static IEnumerable<DiRegistrationInfo> FindDiRegistrations(SourceModel source, AnalysisRuleSet rules)
+    // The exact set of method names any DI rule can match (DiRegistrationRule.Matches is an Ordinal
+    // Contains over its Methods list). Built once per run so the per-file pass can reject a non-DI
+    // invocation by its SYNTACTIC name — before the expensive ResolveMethodSymbol bind — and only
+    // resolve the handful that could actually be registrations.
+    public static HashSet<string> BuildMethodNameSet(RuleSet rules) =>
+        rules.DiRegistrations.SelectMany(rule => rule.Methods).ToHashSet(StringComparer.Ordinal);
+
+    public static IEnumerable<DiRegistrationInfo> FindDiRegistrations(SourceModel source, RuleSet rules, IReadOnlySet<string> diMethodNames)
     {
+        if (diMethodNames.Count == 0)
+        {
+            yield break; // no DI rules — nothing this pass can ever emit; skip the whole tree walk
+        }
+
         foreach (var invocation in source.Root.DescendantNodes().OfType<InvocationExpressionSyntax>())
         {
-            var methodSymbol = RoslynSymbolHelpers.ResolveMethodSymbol(invocation, source.SemanticModel);
-            var methodName = methodSymbol?.Name ?? RoslynSymbolHelpers.TryGetMemberName(invocation);
-            if (methodName is null)
+            // Cheap syntactic reject FIRST: the invoked method's source name equals its bound name, and
+            // a rule can only match a name in diMethodNames — so an invocation whose call-site name isn't
+            // in the set can never be a registration. This skips the per-invocation GetSymbolInfo bind
+            // (ResolveMethodSymbol) for the overwhelming majority of calls, which are not DI methods.
+            var syntacticName = SyntacticName(invocation);
+            if (syntacticName is null || !diMethodNames.Contains(syntacticName))
             {
                 continue;
             }
+
+            var methodSymbol = RoslynSymbolHelpers.ResolveMethodSymbol(invocation, source.SemanticModel);
+            var methodName = methodSymbol?.Name ?? syntacticName;
 
             var rule = rules.DiRegistrations.FirstOrDefault(rule => rule.Matches(methodName));
             if (rule is null)
@@ -67,6 +85,18 @@ internal static class DiRegistrationExtractor
             );
         }
     }
+
+    // The call-site method name across every invocation shape — `x.Foo()`, `x?.Foo()`, `Foo()`,
+    // `Foo<T>()` (SimpleNameSyntax covers IdentifierName + GenericName). Equals the bound method's name
+    // for any direct call, so it is a sound pre-bind filter key. Null for shapes with no name token.
+    private static string? SyntacticName(InvocationExpressionSyntax invocation) =>
+        invocation.Expression switch
+        {
+            MemberAccessExpressionSyntax member => member.Name.Identifier.ValueText,
+            MemberBindingExpressionSyntax binding => binding.Name.Identifier.ValueText,
+            SimpleNameSyntax name => name.Identifier.ValueText,
+            _ => null,
+        };
 
     private static string? TryGetFactoryForwardedImplementation(InvocationExpressionSyntax registration, SemanticModel semanticModel)
     {

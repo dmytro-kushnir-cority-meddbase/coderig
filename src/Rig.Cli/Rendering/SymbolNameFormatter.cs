@@ -40,6 +40,23 @@ internal static class SymbolNameFormatter
         return prevDot >= 0 ? s.Substring(prevDot + 1) : s;
     }
 
+    // A DocID reduced to its queryable, fully-qualified dotted name: the leading `M:` kind prefix and the
+    // parameter list are stripped, leaving `Namespace.Type.Member`. This is the exact suffix `rig tree` /
+    // `reaches` / `callers` match on, so a rendered FQN round-trips straight back into a query — unlike the
+    // slash-form EP `Route`, which matches nothing. Empty in, empty out. (Same reduction as
+    // ImpactEngine.StripParams, which now delegates here so the EP card and the EP listings agree.)
+    internal static string FqnFromDocId(string? docId)
+    {
+        if (string.IsNullOrEmpty(docId))
+        {
+            return "";
+        }
+
+        var body = docId.StartsWith("M:", StringComparison.Ordinal) ? docId[2..] : docId;
+        var paren = body.IndexOf('(', StringComparison.Ordinal);
+        return paren >= 0 ? body[..paren] : body;
+    }
+
     // The index of the last '.' at bracket-depth 0 strictly before `end` (scanning backward), or -1.
     // Dots inside generic-arg braces/angles/parens/brackets are skipped so a namespaced type ARGUMENT
     // (e.g. `System.Int32` in `Foo{System.Int32}`) never mis-splits the enclosing name.

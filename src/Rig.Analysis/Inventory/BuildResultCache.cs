@@ -15,32 +15,19 @@ internal sealed class BuildResultCache(string cacheDirectory)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
-    private sealed record Entry(string Fingerprint, ProjectBuildInfo Info);
-
-    // True (and sets info) only when a sidecar exists AND its stored fingerprint matches the current one.
-    public bool TryLoad(string projectFilePath, string fingerprint, out ProjectBuildInfo info)
+    // IO PORT: the sidecar's stored payload (fingerprint + build output) if one exists and parses, else null
+    // (absent or garbled → treated as a miss). Deliberately does NOT compare fingerprints — whether it still
+    // matches is the pure BuildCacheDecision.Decide, kept out of the IO so it can be tested in isolation.
+    public StoredBuild? Load(string projectFilePath)
     {
-        info = null!;
         try
         {
             var path = SidecarPath(projectFilePath);
-            if (!File.Exists(path))
-            {
-                return false;
-            }
-
-            var entry = JsonSerializer.Deserialize<Entry>(File.ReadAllText(path), JsonOptions);
-            if (entry is null || !string.Equals(entry.Fingerprint, fingerprint, StringComparison.Ordinal))
-            {
-                return false;
-            }
-
-            info = entry.Info;
-            return true;
+            return File.Exists(path) ? JsonSerializer.Deserialize<StoredBuild>(File.ReadAllText(path), JsonOptions) : null;
         }
         catch
         {
-            return false; // unreadable/garbled sidecar → treat as miss, rebuild
+            return null; // unreadable/garbled sidecar → treat as miss, rebuild
         }
     }
 
@@ -49,7 +36,10 @@ internal sealed class BuildResultCache(string cacheDirectory)
         try
         {
             Directory.CreateDirectory(cacheDirectory);
-            File.WriteAllText(SidecarPath(projectFilePath), JsonSerializer.Serialize(new Entry(fingerprint, info), JsonOptions));
+            File.WriteAllText(
+                SidecarPath(projectFilePath),
+                JsonSerializer.Serialize(new StoredBuild(Fingerprint: fingerprint, Info: info), JsonOptions)
+            );
         }
         catch
         {

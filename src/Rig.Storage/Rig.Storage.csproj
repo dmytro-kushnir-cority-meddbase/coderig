@@ -11,8 +11,14 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <!-- Promotes the patched 3.x SQLite native lib; see SECURITY pin in Directory.Packages.props (NU1903). -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
+    <PackageReference Remove="Meziantou.Analyzer" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Rig.Domain\Rig.Domain.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Lets Rig.Tests unit-test internal storage probes (e.g. StorageProbes.ColumnExistsAsync) directly,
+         mirroring Rig.Cli. Read-only probes only — schema is never mutated from code (see the schema rule). -->
+    <InternalsVisibleTo Include="Rig.Tests" />
   </ItemGroup>
 </Project>

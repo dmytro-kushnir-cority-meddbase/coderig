@@ -25,52 +25,39 @@ public static class Writes
         return await StorageProbes.TableExistsAsync(connection, "assemblies", cancellationToken);
     }
 
+    // BEFORE an in-place APPEND (`--merge` / mine's `--identity`) into an EXISTING store: reject a store
+    // whose stamped index schema doesn't match the version this rig writes. Appending current-shaped facts
+    // into an old-shaped store would silently mix shapes; the store is disposable, so the fix is a re-index,
+    // not an append. A store with NO meta row (predates schema stamping) is left alone here — the existing
+    // assembly-registry guard already requires such a store to be re-mined for `--merge`, and SaveAsync will
+    // stamp the current version on the way out. Throws RigStoreException on a genuine version mismatch.
+    public static async Task AssertAppendableAsync(RigDbContext context, CancellationToken cancellationToken = default)
+    {
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        var (index, _) = await SchemaMeta.ReadAsync(connection, cancellationToken);
+        if (index is not null && index != SchemaVersion.Index)
+        {
+            throw new RigStoreException(
+                $"Store schema v{index}, this rig writes v{SchemaVersion.Index} — re-index, don't append (the .rig store is disposable; rebuild it with `rig index`)."
+            );
+        }
+    }
+
     public static async Task<string> SaveAsync(
         RigDbContext context,
         AnalysisResult result,
         CancellationToken cancellationToken = default,
-        bool fastBulkWrite = true,
         Action<string>? progress = null,
         GitProvenance? provenance = null
     )
     {
         var runId = Guid.NewGuid().ToString("n");
-
         await context.Database.EnsureCreatedAsync(cancellationToken);
-
-        // Hold the connection open for the whole save. The fast-path PRAGMAs below are PER-CONNECTION
-        // (synchronous / cache_size / locking_mode / journal_mode) and are lost the moment EF closes and
-        // reopens the connection between commands — so we open it once here and keep it open through the
-        // header write, the raw-ADO bulk insert (which reuses this same connection), and the registry
-        // upsert. No MigrateAsync: a store is immutable. EnsureCreated builds the full current schema on a
-        // fresh DB (the standalone atomic-publish path always writes a fresh temp); an old store is
-        // re-indexed/re-mined, never altered in place (declare + require — see the --merge guard and
-        // docs/multi-solution-storage.md).
-        var connection = context.Database.GetDbConnection();
-        if (connection.State != ConnectionState.Open)
-        {
-            await connection.OpenAsync(cancellationToken);
-        }
-
-        if (fastBulkWrite)
-        {
-            // No rollback journal, no fsync, in-memory temp, 64 MB page cache, single-writer lock.
-            // A crash mid-write corrupts this file — acceptable because the caller publishes via
-            // atomic rename, so the live store is never the one being written.
-            foreach (
-                var pragma in new[]
-                {
-                    "PRAGMA journal_mode=OFF;",
-                    "PRAGMA synchronous=OFF;",
-                    "PRAGMA temp_store=MEMORY;",
-                    "PRAGMA cache_size=-65536;",
-                    "PRAGMA locking_mode=EXCLUSIVE;",
-                }
-            )
-            {
-                await context.Database.ExecuteSqlRawAsync(pragma, cancellationToken);
-            }
-        }
+        // EnsureCreatedAsync above already opened the connection, so OpenConnectionAsync's first-open tuning
+        // won't fire here — apply the bulk-write profile explicitly (the named home of what used to be an
+        // inline PRAGMA block). All connection tuning now routes through StorageProbes' profile registry.
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        await StorageProbes.ApplyProfileAsync(connection, StorageProbes.Profile.BulkWrite, cancellationToken);
 
         // Bulk insert: skip per-Add change detection (we never mutate tracked entities) and flush in
         // batches, clearing the tracker each time so memory stays flat over millions of fact rows.
@@ -99,7 +86,7 @@ public static class Writes
         await context.SaveChangesAsync(cancellationToken);
         context.ChangeTracker.Clear();
 
-        await SaveFactsBatchedAsync(context, runId, result, fastBulkWrite, progress, cancellationToken);
+        await SaveFactsBatchedAsync(context, runId, result, progress, cancellationToken);
         try
         {
             await WriteAssemblyRegistryAsync(context, result, progress, cancellationToken);
@@ -110,6 +97,12 @@ public static class Writes
             // completed fact write — degrade to a warning and leave the facts intact.
             progress?.Invoke($"WARN: assembly registry skipped ({exception.GetType().Name}: {exception.Message})");
         }
+
+        // Stamp the DB-file schema version now the facts are written: index=current, graph=NULL. A fresh
+        // index (or an append) invalidates any prior graph, so the graph stage resets to "absent" until
+        // GraphMaterializer re-stamps it. This is the row the read-time SchemaGate checks; SchemaMeta is
+        // raw SQL on the same connection EF holds open. NOT a migration — a tripwire (see SchemaGate).
+        await SchemaMeta.WriteIndexVersionAsync(connection, cancellationToken);
         return runId;
     }
 
@@ -296,7 +289,6 @@ public static class Writes
         RigDbContext context,
         string runId,
         AnalysisResult result,
-        bool fastBulkWrite,
         Action<string>? progress,
         CancellationToken cancellationToken
     )
@@ -308,13 +300,9 @@ public static class Writes
         long total = symbols.Count + references.Count + relations.Count + dispatch.Count;
         long saved = 0;
 
-        var connection = (DbConnection)context.Database.GetDbConnection();
-        if (connection.State != ConnectionState.Open)
-        {
-            await connection.OpenAsync(cancellationToken);
-        }
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
 
-        var deferredIndexes = fastBulkWrite ? await DropSecondaryIndexesAsync(connection, FactTableNames, cancellationToken) : [];
+        var deferredIndexes = await DropSecondaryIndexesAsync(connection, FactTableNames, cancellationToken);
 
         await using (var transaction = await connection.BeginTransactionAsync(cancellationToken))
         {
@@ -374,9 +362,10 @@ public static class Writes
                 "INSERT INTO reference_facts (RunId, ReferenceFactIndex, TargetSymbolId, RefKind, EnclosingSymbolId, TargetAssembly, "
                     + "TargetInSource, FilePath, Line, ReceiverType, FirstArgumentTemplate, FirstArgumentType, EnclosingLoopKind, "
                     + "EnclosingLoopDetail, EnclosingInvocations, EnclosingCatchTypes, TypeArguments, FirstArgumentName, DelegateConsumer, "
-                    + "EnclosingScopes, ArgumentTemplates, ArgumentNames, DeclaringTypeArgBinding, MethodTypeArgBinding) "
+                    + "EnclosingScopes, ArgumentTemplates, ArgumentNames, DeclaringTypeArgBinding, MethodTypeArgBinding, NonVirtual, "
+                    + "EnclosingGuards) "
                     + "VALUES ($run,$idx,$target,$kind,$enc,$tasm,$insrc,$file,$line,$recv,$fat,$fatype,$elk,$eld,$einv,$ect,$ta,$fan,$dc,"
-                    + "$es,$at,$an,$dtab,$mtab);",
+                    + "$es,$at,$an,$dtab,$mtab,$nonvirtual,$eg);",
                 [
                     "$run",
                     "$idx",
@@ -402,6 +391,8 @@ public static class Writes
                     "$an",
                     "$dtab",
                     "$mtab",
+                    "$nonvirtual",
+                    "$eg",
                 ],
                 references,
                 (p, r, i) =>
@@ -430,6 +421,8 @@ public static class Writes
                     p[21].Value = (object?)r.ArgumentNames ?? DBNull.Value;
                     p[22].Value = (object?)r.DeclaringTypeArgBinding ?? DBNull.Value;
                     p[23].Value = (object?)r.MethodTypeArgBinding ?? DBNull.Value;
+                    p[24].Value = r.NonVirtual ? 1 : 0;
+                    p[25].Value = (object?)r.EnclosingGuards ?? DBNull.Value;
                 },
                 alreadySaved: saved,
                 total: total,

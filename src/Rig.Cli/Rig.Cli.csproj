@@ -11,10 +11,23 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/dv00d00/coderig</RepositoryUrl>
     <PackageProjectUrl>https://github.com/dv00d00/coderig</PackageProjectUrl>
-    <Features>runtime-async=on</Features>
+    <!--    <Features>runtime-async=on</Features>-->
+    <!-- Server GC: the index is a 32-way parallel, allocation-heavy (~1 GB/s) batch job. Measured on
+         MedDBase, Workstation GC spent ~50% of the compile+read/extract wall PAUSED for GC (cpu:self
+         15-34%); Server GC's per-core heaps + parallel collection cut that to ~3% and the whole index
+         from 4m42 to 2m22. Concurrent GC stays on (default). Higher peak working set is the accepted trade. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.CommandLine" />
+    <PackageReference Remove="Meziantou.Analyzer" />
+  </ItemGroup>
+  <!-- `rig serve` hosts an in-process minimal-API + static React SPA (see Web/). The FrameworkReference
+       makes this console tool ASP.NET-capable (Kestrel); the trade is that the packed tool now requires the
+       ASP.NET Core shared runtime installed (virtually every .NET dev has it). The web host is deliberately
+       self-contained under Web/ so it can be lifted to a standalone Rig.Web project later without a rewrite. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Rig.Tests" />
@@ -25,6 +38,13 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="builtin-rules.json" Pack="true" PackagePath="tools/net10.0/any/builtin-rules.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <!-- The built React SPA (committed under wwwroot/). Copied next to the assembly for local runs and packed
+       into the tool layout so the globally-installed `rig serve` serves the same assets. -->
+  <ItemGroup>
+    <None Include="wwwroot\**\*" Pack="true" PackagePath="tools/net10.0/any/wwwroot/">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

@@ -1,4 +1,5 @@
 using System.Data.Common;
+using Rig.Storage;
 
 namespace Rig.Cli.CommandLine;
 
@@ -24,6 +25,15 @@ internal static class CommandGuard
             );
             return 2;
         }
+        catch (RigStoreException storeException)
+        {
+            // The open-time schema gate (SchemaGate.AssertReadableAsync) rejected the store: uninitialized,
+            // or an index-schema-version mismatch. Its Message is already actionable ("run `rig index`" /
+            // "re-index"), so render it directly at exit 2 — this is the fail-fast that replaces the
+            // scattered mid-query schema probes.
+            error.WriteLine(storeException.Message);
+            return 2;
+        }
         catch (DbException exception)
         {
             // A SQLite error escaping a command almost always means the store is missing (wrong cwd) or
@@ -41,8 +51,8 @@ internal static class CommandGuard
         var dbPath = StoreLayout.DbPath(workingDirectory);
         if (!File.Exists(dbPath))
         {
-            error.WriteLine($"No indexed store at {dbPath}.");
-            error.WriteLine("Run `rig index <solution>` here first, or cd to the directory that owns the .rig store.");
+            error.WriteLine($"No .rig store found in '{workingDirectory}'.");
+            error.WriteLine("Run `rig index <solution>` to create one, or cd to the directory that contains .rig/.");
         }
         else if (
             exception.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase)

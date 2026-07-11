@@ -20,7 +20,7 @@ public sealed class FactExtractorCaptureTests
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
         );
         var model = compilation.GetSemanticModel(tree);
-        return FactExtractor.Extract(new SourceModel("Snippet", "Snippet.cs", tree, tree.GetRoot(), model));
+        return FactExtractor.Extract(new SourceModel("Snippet", "Snippet.cs", tree, tree.GetRoot(), model), new SymbolStringCache());
     }
 
     [Test]
@@ -65,6 +65,171 @@ public sealed class FactExtractorCaptureTests
         var tell = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Bus.Tell"));
         tell.TypeArguments.ShouldBeNull();
         tell.FirstArgumentName.ShouldBe("PaymentGatewayProcessDns.AccountService");
+    }
+
+    [Test]
+    public void Captures_control_dependence_guard_set_on_call_sites()
+    {
+        // branch-aware-effects M3: the extractor builds a CFG per method and freezes each call-site's
+        // intra-method guard set onto the ReferenceFact. Unconditional call -> null (must-run); guarded
+        // call -> the predicate + polarity.
+        var source = """
+            namespace App
+            {
+                public sealed class Svc
+                {
+                    public void Handle(bool flag)
+                    {
+                        Always();
+                        if (flag) Guarded();
+                    }
+
+                    private void Always() {}
+                    private void Guarded() {}
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        var always = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Always"));
+        var guarded = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Guarded"));
+
+        always.EnclosingGuards.ShouldBeNull(); // unconditional -> must-run -> no guards
+
+        guarded.EnclosingGuards.ShouldNotBeNull();
+        var decoded = FactStructuralContext.DecodeGuards(guarded.EnclosingGuards);
+        decoded.Count.ShouldBe(1);
+        decoded[0].Predicate.ShouldContain("flag");
+        decoded[0].WhenTrue.ShouldBeTrue(); // Guarded() runs when `flag` is true
+    }
+
+    [Test]
+    public void Captures_guards_for_calls_inside_lambda_bodies()
+    {
+        // The transaction-body case: effects inside `Run(() => { … })` must be guarded relative to their
+        // OWN lambda's CFG (nested-CFG resolution), not treated as unguarded.
+        var source = """
+            namespace App
+            {
+                public sealed class Svc
+                {
+                    public void Handle(bool flag)
+                    {
+                        Run(() =>
+                        {
+                            Always();
+                            if (flag) Guarded();
+                        });
+                    }
+
+                    private void Run(System.Action a) => a();
+                    private void Always() {}
+                    private void Guarded() {}
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        var always = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Always"));
+        var guarded = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Guarded"));
+
+        always.EnclosingGuards.ShouldBeNull(); // unconditional within the lambda
+        guarded.EnclosingGuards.ShouldNotBeNull(); // behind if(flag) within the lambda
+        FactStructuralContext.DecodeGuards(guarded.EnclosingGuards)[0].Predicate.ShouldContain("flag");
+    }
+
+    [Test]
+    public void Guard_predicate_is_the_full_source_condition_not_the_lowered_branch_operands()
+    {
+        // Faithful capture (branch-aware-effects): Roslyn lowers a short-circuit `a || b` / `a && b` into
+        // SEPARATE CFG branch blocks whose BranchValue is only the sub-expression `a` / `b`. So the raw FOW
+        // control-dependence of a call directly under `if (a || b)` is the flat set {a=T, b=T} — which a renderer
+        // would AND-join into the contradiction `a && b`. EncodedGuardsFor reconstructs each guard's FULL
+        // enclosing source condition (walking the branch syntax up the &&/||/!/parens chain) and dedups, so ONE
+        // source condition becomes ONE guard carrying the whole condition — `||` and `&&` now distinguished, and
+        // the De Morgan else-arm collapses to a single negated guard instead of a flat contradictory set.
+        string Guards(string body)
+        {
+            var src = "namespace App { class Svc { void H(bool a, bool b, bool c) { " + body + " } void Foo(){} } }";
+            var r = Extract(src);
+            var foo = r.References.Single(x => x.RefKind == "invocation" && x.TargetSymbolId.Contains("Foo"));
+            return string.Join(
+                ",",
+                FactStructuralContext.DecodeGuards(foo.EnclosingGuards).Select(x => $"{x.Predicate}={(x.WhenTrue ? "T" : "F")}")
+            );
+        }
+
+        Guards("if (a || b) Foo();").ShouldBe("a || b=T"); // the RemoveConfirm shape: one disjunctive guard
+        Guards("if (a && b) Foo();").ShouldBe("a && b=T"); // distinct from || (was indistinguishable raw)
+        Guards("if ((a || b) && c) Foo();").ShouldBe("(a || b) && c=T"); // whole compound condition, one guard
+        Guards("if (a || b) {} else Foo();").ShouldBe("a || b=F"); // De Morgan else-arm -> one negated guard
+        Guards("if (a) { if (b) Foo(); }").ShouldBe("b=T"); // nesting: innermost condition only (unchanged)
+    }
+
+    [Test]
+    public void A_guarded_throw_carries_its_gating_predicate_an_unconditional_one_does_not()
+    {
+        // branch-aware-effects (abnormal-exit pass): a guarded `throw` is a conditional effect
+        // (`throw … WHEN cond`). ComputeGuards routes a method-escaping throw to a virtual Exit so the throw
+        // block picks up its gating branch; an unconditional throw stays on the must-run spine (null guards).
+        var src = """
+            namespace App { class Svc {
+                void Guarded(object a) { if (a == null) throw new System.InvalidOperationException(); Use(a); }
+                void Unconditional() { throw new System.NotSupportedException(); }
+                void Use(object a) {}
+            } }
+            """;
+        var r = Extract(src);
+        var guardedThrow = r.References.Single(x => x.RefKind == "throw" && x.TargetSymbolId.Contains("InvalidOperation"));
+        var unconditionalThrow = r.References.Single(x => x.RefKind == "throw" && x.TargetSymbolId.Contains("NotSupported"));
+
+        guardedThrow.EnclosingGuards.ShouldNotBeNull();
+        var g = FactStructuralContext.DecodeGuards(guardedThrow.EnclosingGuards)[0];
+        g.Predicate.ShouldContain("== null");
+        g.WhenTrue.ShouldBeTrue(); // the throw fires when (a == null) is TRUE
+
+        unconditionalThrow.EnclosingGuards.ShouldBeNull(); // must-run throw
+    }
+
+    [Test]
+    public void Bare_instance_call_records_the_enclosing_type_as_the_implicit_this_receiver()
+    {
+        // Per C# spec a bare `Foo()` instance call runs on the implicit `this`, so its receiver type is the
+        // enclosing type — same as an explicit `this.Foo()`. Recording it lets dispatch narrow the call to the
+        // enclosing type's family instead of CHA-fanning to every override. A bare STATIC call has no receiver.
+        var source = """
+            namespace App
+            {
+                public class Widget
+                {
+                    public virtual void Save() { }
+                    public static void StaticHelper() { }
+
+                    public void Cancel()
+                    {
+                        Save();          // bare instance call -> receiver is `this` (App.Widget)
+                        this.Save();     // explicit this  -> receiver App.Widget
+                        StaticHelper();  // bare STATIC call -> no `this` receiver
+                    }
+
+                    public static void FromStatic() => StaticHelper(); // static context -> no receiver
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        var saveCalls = result.References.Where(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Widget.Save")).ToList();
+        saveCalls.Count.ShouldBe(2); // bare + explicit this
+        saveCalls.ShouldAllBe(r => r.ReceiverType == "App.Widget");
+
+        var staticCalls = result
+            .References.Where(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Widget.StaticHelper"))
+            .ToList();
+        staticCalls.Count.ShouldBe(2);
+        staticCalls.ShouldAllBe(r => r.ReceiverType == null);
     }
 
     [Test]
@@ -255,8 +420,7 @@ public sealed class FactExtractorCaptureTests
 
         var call = result.References.Single(r => r.RefKind == "invocation" && r.TargetSymbolId.Contains("Db.GetConnectionString"));
         // The call site only NAMES the constant; the templates list resolves it to its value...
-        JsonSerializer.Deserialize<string?[]>(call.ArgumentTemplates!)![0]
-            .ShouldBe("MedDBase.DataAccessTier.ConnectionString");
+        JsonSerializer.Deserialize<string?[]>(call.ArgumentTemplates!)![0].ShouldBe("MedDBase.DataAccessTier.ConnectionString");
         // ...while the names list keeps the const reference path.
         JsonSerializer.Deserialize<string?[]>(call.ArgumentNames!)![0].ShouldBe("Keys.Conn");
     }
@@ -696,5 +860,45 @@ public sealed class FactExtractorCaptureTests
 
         var fetchRefs = result.References.Where(r => r.TargetSymbolId.Contains("Repo.Fetch")).ToList();
         fetchRefs.ShouldAllBe(r => r.RefKind == "nameof");
+    }
+
+    [Test]
+    public void Class_fields_are_emitted_as_symbols_with_modifiers_one_per_declarator()
+    {
+        // Regression: a field DECLARATION has no single declared symbol (GetDeclaredSymbol(decl) is null
+        // for `int a, b;`), so the OnDeclaration null gate used to swallow EVERY class field before the
+        // per-variable branch ran — leaving only enum members in the store and orphaning all `F:` write
+        // refs from any symbol (so the static-field-write shared_state rule could never gate on `static`).
+        var source = """
+            namespace App
+            {
+                public sealed class Cache
+                {
+                    public static int Shared;
+                    private readonly int _instance = 1;
+                    public const int Max = 5;
+                    private static int _a, _b;
+                    public event System.Action OnChange;
+                }
+            }
+            """;
+
+        var result = Extract(source);
+
+        var fields = result.Symbols.Where(s => s.SymbolId.StartsWith("F:App.Cache.", System.StringComparison.Ordinal)).ToList();
+
+        // Shared (static), _instance, Max (const => static), _a, _b — all five, one symbol per declarator.
+        fields.Select(f => f.Name).ShouldBe(["Shared", "_instance", "Max", "_a", "_b"], ignoreOrder: true);
+        fields.ShouldAllBe(f => f.Kind == "field");
+
+        var shared = fields.Single(f => f.Name == "Shared");
+        shared.Modifiers.ShouldContain("static");
+
+        var instance = fields.Single(f => f.Name == "_instance");
+        instance.Modifiers.ShouldNotContain("static");
+
+        // A field-style event (EventFieldDeclarationSyntax is a BaseFieldDeclarationSyntax) is now emitted too.
+        var onChange = result.Symbols.Single(s => s.SymbolId == "E:App.Cache.OnChange");
+        onChange.Kind.ShouldBe("event");
     }
 }

@@ -123,33 +123,46 @@ public sealed class QueryCacheTests
         back[("Bar.cs", 20)].Requires.ShouldBeNull();
     }
 
+    // Render data is split into two filter-keyed cache entries (see TreeCommand): SeamCodec (seam summaries,
+    // filter-dependent) and LocationsCodec (file:line, filter-independent). Each round-trips independently.
     [Test]
-    public void RenderSidecar_codec_round_trips_seam_effects_and_locations()
+    public void Seam_codec_round_trips_seam_effects()
     {
         var seam = new Dictionary<string, List<string>>(StringComparer.Ordinal)
         {
             ["M:App.Hub"] = ["💾 db:read ×3", "🌐 http:get ×1"],
             ["M:App.Hub2"] = [],
         };
+
+        var back = SeamCodec.Decode(SeamCodec.Encode(seam));
+
+        back.ShouldNotBeNull();
+        back!["M:App.Hub"].ShouldBe(["💾 db:read ×3", "🌐 http:get ×1"]);
+        back["M:App.Hub2"].ShouldBeEmpty();
+    }
+
+    [Test]
+    public void Locations_codec_round_trips_file_and_line()
+    {
         var locations = new Dictionary<string, (string? File, int Line)>(StringComparer.Ordinal)
         {
             ["M:App.Run"] = ("App/Run.cs", 12),
             ["M:App.Missing"] = (null, 0),
         };
 
-        var back = RenderSidecarCodec.Decode(RenderSidecarCodec.Encode(seam, locations));
+        var back = LocationsCodec.Decode(LocationsCodec.Encode(locations));
 
         back.ShouldNotBeNull();
-        back.Value.SeamEffects["M:App.Hub"].ShouldBe(["💾 db:read ×3", "🌐 http:get ×1"]);
-        back.Value.SeamEffects["M:App.Hub2"].ShouldBeEmpty();
-        back.Value.Locations["M:App.Run"].ShouldBe(("App/Run.cs", 12));
-        back.Value.Locations["M:App.Missing"].ShouldBe(((string?)null, 0));
+        back!["M:App.Run"].ShouldBe(("App/Run.cs", 12));
+        back["M:App.Missing"].ShouldBe(((string?)null, 0));
     }
 
     [Test]
-    public void RenderSidecar_decode_returns_null_for_garbage()
+    public void Render_codecs_return_null_for_garbage()
     {
-        RenderSidecarCodec.Decode([9, 9, 9]).ShouldBeNull();
+        SeamCodec.Decode([9, 9, 9]).ShouldBeNull();
+        LocationsCodec.Decode([9, 9, 9]).ShouldBeNull();
+        LibCallsCodec.Decode([9, 9, 9]).ShouldBeNull();
     }
 
     [Test]

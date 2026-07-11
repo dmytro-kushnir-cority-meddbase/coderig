@@ -113,9 +113,11 @@ public sealed class FactPathFinderFanoutTests
 
         var reached = FactPathFinder.ReachedBy(graph, "Leaf.Do");
 
-        reached.Keys.ShouldContain("M:T.M");
-        reached.Keys.ShouldContain("M:I.M");
-        reached.Keys.ShouldContain("M:EP.Run");
+        reached.Keys.ShouldContain("M:T.M"); // the concrete impl (direct caller of the leaf)
+        reached.Keys.ShouldContain("M:EP.Run"); // the transitive caller, reached ACROSS the interface dispatch
+        // The interface DECLARATION is a dispatch waypoint, not a caller-origin — the narrowed reverse
+        // attributes through to the real caller (EP.Run) instead of surfacing it (reconciled 2026-06-25).
+        reached.Keys.ShouldNotContain("M:I.M");
 
         var roots = FactPathFinder.EntryRootsReaching(graph, "Leaf.Do");
         roots.ShouldContain("M:EP.Run");
@@ -406,8 +408,9 @@ public sealed class FactPathFinderFanoutTests
         fwd.Keys.ShouldNotContain("M:N.SiteEntity.Save");
 
         var reachedByCompany = FactPathFinder.ReachedBy(graph, "M:N.CompanyEntity.Save");
-        reachedByCompany.Keys.ShouldContain("M:N.EntityBase.Save");
-        reachedByCompany.Keys.ShouldContain("M:N.CompanyCaller.Go");
+        reachedByCompany.Keys.ShouldContain("M:N.CompanyCaller.Go"); // the real caller, via the narrowed dispatch
+        // The base virtual DECLARATION is a dispatch waypoint, not a caller-origin (reconciled 2026-06-25).
+        reachedByCompany.Keys.ShouldNotContain("M:N.EntityBase.Save");
 
         var reachedBySite = FactPathFinder.ReachedBy(graph, "M:N.SiteEntity.Save");
         reachedBySite.Keys.ShouldNotContain("M:N.EntityBase.Save");

@@ -5,26 +5,117 @@ effect observations, and deployment attribution live in [README.md](README.md). 
 [docs/ubiquitous-language.md](docs/ubiquitous-language.md). Handover notes: [docs/handover.md](docs/handover.md).
 This file is only the things that aren't obvious from those and that you'd otherwise re-derive.
 
+## The `rig` skill — source of truth is THIS REPO
+
+The canonical `rig` skill lives in-repo at **`.claude/skills/rig/`** (`SKILL.md` + `REFERENCE.md`) — version
+it here, update it here when CLI surface/flags change. The globally-INSTALLED copy at
+`~/.claude/skills/rig/` is **read-only and DISPOSABLE**: never hand-edit it (edits get clobbered on reinstall
+and drift from the repo). Edit the repo copy, then **install via a CLI copy**:
+
+```pwsh
+# pwsh — REMOVE the dest first, then copy. Copying onto an EXISTING dir NESTS (creates
+# ~/.claude/skills/rig/rig/ and leaves the top-level SKILL.md/REFERENCE.md STALE) — silent footgun.
+$d = "$env:USERPROFILE/.claude/skills/rig"; Remove-Item -Recurse -Force $d -ErrorAction SilentlyContinue; Copy-Item -Recurse -Force .claude/skills/rig $d
+# or bash:  rm -rf ~/.claude/skills/rig && cp -rf .claude/skills/rig ~/.claude/skills/
+```
+
+(There's no native `claude skill install`; the copy IS the install. `--plugin-dir`/`--plugin-url` load a
+plugin for one session only.) **Always delete the dest dir before copying** — `Copy-Item`/`cp -r` onto an
+existing `~/.claude/skills/rig/` nests a `rig/` subdir inside it and the top-level files go stale; verify
+after with e.g. `Get-ChildItem ~/.claude/skills/rig` (should list ONLY `SKILL.md` + `REFERENCE.md`, no
+nested `rig/`). If the installed skill ever looks stale, reinstall — don't patch it in place.
+
+## Orchestration — director → orchestrator → coding agents
+
+> **Role check — read FIRST.** This section describes the **orchestrator** (the top-level session the user
+> talks to). **If you are a DISPATCHED CODING SUBAGENT** (you received a single scoped task prompt, not a
+> conversation with the user), this loop is your CALLER's job, NOT yours: you are a **leaf worker** —
+> implement your one task directly and do **NOT** dispatch further subagents, gather "context", or re-run the
+> orchestration loop. Ignore the rest of this section; follow your task prompt.
+
+The effective workflow here for multi-step work is a LOOP. The USER directs (goals, the load-bearing
+calls, course-correction); YOU are the **orchestrator**; SUBAGENTS do the coding. The loop:
+
+1. **Orchestrator gathers + HOLDS the context** — reads the code, maps the design, runs the calibration
+   queries. The context lives in the orchestrator so dispatching a build doesn't lose it and the review can
+   happen without re-reading.
+2. **Define the task + propose the architecture** — surface genuine forks; recommend, don't survey.
+3. **GATE — coding does not start until either:** the user **approves the architecture in principle** (a
+   fork chosen, a scope OK'd, a "go"), **OR `auto` mode is on** (approval bypass — proceed on your own
+   judgement, still surfacing a fork only if it risks a false negative or is hard to reverse).
+4. **Dispatch the coding to a SUBAGENT** — one scoped build, tightly prompted (below).
+5. **Orchestrator REVIEWS + VALIDATES + COMMITS** — read the diff, confirm the full suite green, run the
+   real-data check (the MedDBase re-graph/derive) yourself; then commit. The subagent never commits.
+
+The rules that make this produce mergeable code, not plausible diffs:
+
+- **Subagents NEVER commit — you review their diff and commit it.** This is the quality gate: treat an
+  agent's "done, nothing else changed" as a CLAIM to verify (a real `--expect-no-effect-change` gate
+  regression was caught *only* in review). Independently confirm the suite is green AND do the real-data
+  validation (the agent can't touch the MedDBase store) before committing.
+- **Prompt tightly or get the wrong thing.** Each agent task states: the exact problem, a PRECEDENT to
+  mirror (e.g. "mirror the existing X machinery"), the EXPLICIT owned-files list, hard constraints
+  (annotate-only / full suite green / **do NOT commit** / don't touch docs), the explicit ACCEPTANCE test
+  (as a RUNNABLE check), a STRUCTURED report (what changed / tests added / any existing test updated), and
+  the gotchas (TUnit filter syntax, named-args, NEW test file not the shared one,
+  verify-assertions-against-real-`rig`-output, this list). **Do NOT ask agents to run csharpier / format
+  their files** — the ship step (`mini-ci`) formats everything on publish; inline formatting is wasted effort.
+- **One agent at a time on shared files** — `FactEffectDeriver`/`FactHazardDeriver`/`builtin-rules.json`/the
+  derive+impact paths all contend; concurrent agents just merge-conflict. Parallel only on disjoint work.
+- **Run code agents in the MAIN checkout, NOT `isolation: worktree`** — worktree isolation branches from a
+  STALE base in this repo (an old `main` merge), so prerequisite files are missing. Bit us twice.
+- **Green + committed before the next unit** — never let agent output stack up uncommitted.
+- **Design first, dispatch second, calibrate after.** Argue the architecture before building; ship each
+  detector/feature with a bug/fix fixture; FP-calibrate a new signal on the real MedDBase store before it
+  goes on-by-default (a structurally-true detector that fires 179× is still noise). Surface genuine forks
+  to the user; autopilot the rest.
+- **Decide CLI-only vs CLI+web at design time.** rig has a web UI (`Rig.Cli/Web/RigApiEndpoints.cs` +
+  `wwwroot/`). Any feature whose output is a browsable/shareable **report, ranking, diff, or graph**
+  (inventories, project/assembly graphs, hazard/impact views) — as opposed to a one-shot fix or a
+  detector-internal change — should get a **web slice**, scoped as an explicit follow-on. CLI-first is still
+  right (the facts/logic are load-bearing; web is a view), but ASK the question at the design gate and
+  **capture the web slice in the backlog item** so it isn't forgotten. (Cache note: a query-side feature that
+  doesn't touch a `*Schema`/`derivationVersion` axis needs its own web cache-key thinking — see the cache
+  section.)
+- **Don't dispatch for small/exploratory work** — root-causing, calibration queries, one-file fixes, and
+  doc edits are faster inline. Agents earn their keep only on self-contained builds with a clear acceptance test.
+- **Subagent verifies test assertions against REAL output, not its imagination.** Subagents can't build (bin/
+  clobber) but CAN run the installed global `rig` (read-only). Any rendering/output change → the prompt MUST
+  say: "run `rig <cmd>` on a real input, paste the ACTUAL output, write assertions against THAT paste." The
+  recurring review failure was agents asserting (e.g.) namespace-qualified names against `ShortName` output —
+  3 dead tests in one dispatch, caught only in review. One prompt line turns a round-trip into zero.
+- **Agent-authored tests go in a NEW `<Feature>Tests.cs`, NEVER the shared `CliApplicationTests.cs`** —
+  concurrent agents editing the shared file clobber each other. If an EXISTING test pins old behavior the
+  change breaks, have the agent FLAG it (not edit the shared file) and fix it yourself at review.
+- **Capture the real-store baseline BEFORE you dispatch.** Snapshot the relevant MedDBase counts/tsv (e.g.
+  `rig derive --format tsv | awk …`) while the agent works — a clean before/after A/B for recalibration, on
+  the orchestrator's otherwise-idle time. (The FR-1 hazard recalibration AND the parallelise-loads revert
+  both turned on a pre-captured baseline.)
+- **Independent verify for trust-critical work** — for a risky detector / large diff, a SECOND fresh-context
+  agent adversarially verifies the diff against the acceptance check + the real store BEFORE you commit; the
+  builder rationalizes its own false positives. (The 6-agent UX panel worked because the agents were independent.)
+
 ## Build / test / ship
 
-- **Ship flow is `scripts/mini-ci.ps1`** — csharpier check → `dotnet build -warnaserror` → all tests →
+- **Ship flow is `scripts/mini-ci.ps1`** — csharpier **format** (in place) → `dotnet build` → all tests →
   pack → reinstall the global `rig` tool. Run it after any source change you intend to use from the CLI.
-  Format first (`dotnet csharpier format <files>` or `scripts/format.ps1`) or the csharpier gate fails.
+  **No need to format first / inline** — mini-ci formats the whole repo on publish as its first step (the
+  repo is kept clean, so it only rewrites the files that drifted). `scripts/format.ps1 -Check` still gives a
+  verify-only pass if you want one.
 - **Tests are TUnit on Microsoft.Testing.Platform, not vstest.** `dotnet test --filter` does NOT work
   (prints help, "Zero tests ran"). Run a subset with:
   `dotnet run --project tests/Rig.Tests --no-build -- --treenode-filter "/*/*/<ClassName>/*"`
   (path is `/Assembly/Namespace/Class/Test`; `*` wildcards each segment). `dotnet test` with no filter is fine.
-- **Analyzer errors are `-warnaserror` and mechanical to fix — just do it, don't ask:**
-  - `error UseNamedArgs: Consider invoking <Method> with named arguments` → name the args at that call
-    site (`Foo(x: a, y: b)`). The forked analyzer (`use-named-args-fs`) fires on EVERY multi-arg
-    first-party call, so **write new multi-arg calls with named args up front** to avoid the round-trip.
-    Genuinely-noisy stdlib methods are exempt via `.editorconfig` `UseNamedArgs.exclude_methods`
-    (`|`-separated; e.g. `String.Equals`, `Path.Combine`, `Dictionary.TryGetValue`) — add to that list
-    rather than naming args for a framework call that reads fine positionally.
-  - `MA0011` (format-provider) → pass `System.Globalization.CultureInfo.InvariantCulture`.
-  - **The csharpier auto-format races an in-flight `dotnet build`** (format edits a file the compiler is
-    reading) → spurious "N Error(s)" with no diagnostic. Re-run the build once it settles; verify green
-    with `--no-incremental`.
+- **`-warnaserror` is OFF** (removed from mini-ci 2026-06-22). Analyzer diagnostics — the forked
+  `UseNamedArgs` (`use-named-args-fs`, fires on every multi-arg first-party call), `MA0011`
+  (format-provider) — are now **non-fatal warnings**, not build errors: the build no longer fails on them
+  and there's no fix-it round-trip. Still worth following for readability where cheap (named args on new
+  multi-arg first-party calls; `CultureInfo.InvariantCulture` on formatting), and `.editorconfig`
+  `UseNamedArgs.exclude_methods` still suppresses the noisy stdlib ones — but none of it gates the build.
+  - **Don't run csharpier format CONCURRENTLY with a `dotnet build`** (format edits a file the compiler is
+    reading) → spurious "N Error(s)" with no diagnostic. mini-ci avoids this by formatting as a discrete
+    step BEFORE build; the trap only bites if you kick off a manual format mid-build. Re-run the build once
+    it settles; verify with `--no-incremental`.
 
 ## Effect ↔ reachability model (read before touching effects or `EnclosingSymbolId`)
 
@@ -98,13 +189,48 @@ Resist adding *further* bespoke narrowing (context-family/type-arg are hand-roll
 CHA imprecision instead; the principled ceiling is a real type-flow pass, which still degrades to CHA at
 reflection boundaries.
 
+## Cache invalidation — bump the schema constant when you change a derivation (read before editing a detector/effect/impact)
+
+Derived output (tree / effects / hazards / impact) is cached on **two** layers: the server disk cache
+(`Rig.Cli/Caching/QueryCacheKeys.cs`) and the web client's IndexedDB (`wwwroot/api.js`, keyed by
+`/api/meta`'s `derivationVersion`). Both hedge on the SAME three axes — **store identity** (rig.db
+size+mtime; a reindex shifts it), **rules fingerprint** (a `rig.rules.json` edit shifts it; no reindex
+needed), and a **per-artifact schema version** — the `*Schema` int constants at the top of `QueryCacheKeys`
+(`EpSchema` / `TreeSchema` / `HazardEffectsSchema` / `GraphHazSchema` / `ImpactSchema`).
+
+**The rule: if you change the derivation LOGIC or the cached PAYLOAD SHAPE of an artifact — a detector's
+classification, an effect's fields, the impact diff computation — and neither the store facts nor the rules
+change, BUMP that artifact's `*Schema` constant.** That is the only signal that invalidates a warm cache;
+skip it and every warm store (disk + every user's browser) keeps serving the pre-change result forever.
+Reindex and rule edits are already covered by the store/rules axes — the bump is specifically for a
+*same-input, different-output* logic change.
+
+- Store, rules, and the schema constants are the WHOLE hedge. **Do NOT re-introduce the assembly MVID / a
+  build timestamp / an app-version string** into any cache key — that was removed 2026-07-06 precisely
+  because it changed on every recompile, so it destroyed the expensive impact diff (minutes; loads+derives
+  BOTH stores) and the >1 MB client trees on any unrelated `.cs` edit. The `*Schema` bump is the deliberate,
+  honest replacement.
+- The client stays in lockstep for free: `QueryCacheKeys.DerivationSchemaToken()` folds in **all** the
+  `*Schema` constants and feeds `/api/meta`, so bumping any one also moves the client's `derivationVersion`
+  (it can never keep serving an artifact whose server schema advanced). You only touch the one constant.
+- Leave a one-line `// vN->vM: <why>` trail on the constant (the existing ones do) — it's the audit of what
+  each bump flushed.
+
 ## MedDBase store (the main real-world target)
 
 - The indexed store + its config live in **`c:/git/meddbase-analysis`** (`.rig/` is ~2 GB, plus
   `rig.rules.json`, `deployments.json`). **Run every `rig` query command from that directory** — it picks
   up the rules + store + deployment map from cwd. The source it indexes is `c:/git/meddbase-main-application`.
 - Re-index after any **extraction** change (effects/EPs are query-side and need no re-index, but
-  `FactExtractor` changes do): from `c:/git/meddbase-analysis`, run `pwsh -File build-if-due.ps1 -ThenIndex`.
-  It builds the app in Debug if the tree changed (MSBuild.exe, for the legacy net48 web + .sqlproj projects
-  that `dotnet build` can't), then runs `rig index <MedDBase.slnx> --from …/MedDBase.Site/MedDBase/MedDBase.csproj --rules rig.rules.json`.
-  Full re-index is slow (whole monorepo). `-ScanOnly` reports whether a build is due; `-Force` rebuilds anyway.
+  `FactExtractor` changes do): build the app (MSBuild.exe — the legacy net48 web + `.sqlproj` projects that
+  `dotnet build` can't), then from `c:/git/meddbase-analysis` run
+  `rig index <MedDBase.slnx> --from …/MedDBase.Site/MedDBase/MedDBase.csproj --rules rig.rules.json`. A full
+  re-index is slow (whole monorepo build + extract).
+- **Index efficiently — the slow part is the monorepo BUILD, so don't repeat it:** (1) before indexing a
+  commit, check `rig runs` / `.rig/<short-sha>/` — stores are commit-scoped, so if that commit is already
+  indexed, **skip the build+index entirely**. (2) Index in the **primary checkout** (or a persistent
+  build location) so rig's design-time-build cache (`.rig/dtb-cache`, on by default) is reused across indexes
+  — a **fresh `git worktree` per index loses the cache and forces a from-scratch build of the whole monorepo**.
+  Only use a throwaway worktree when the working tree genuinely must stay on another branch, and expect the
+  full-build cost. (3) Building per branch-switch on a tree-change heuristic is NOT commit-store-aware — it
+  rebuilds even for an already-indexed commit; gate on the store's existence, not the tree state.

@@ -51,47 +51,51 @@ internal static class DeadCommand
                 error,
                 () =>
                     RunAsync(
-                        extraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
-                        rootPatterns: pr.GetValue(root) ?? [],
-                        libMode: pr.GetValue(lib),
-                        includeDispatch: pr.GetValue(includeDispatch),
-                        showAll: pr.GetValue(all),
-                        limit: pr.GetValue(limit),
-                        format: pr.GetValue(format),
-                        output: output,
-                        workingDirectory: workingDirectory
+                        new Options(
+                            ExtraRules: CommonOptions.RulesOf(pr.GetValue(rules)),
+                            RootPatterns: pr.GetValue(root) ?? [],
+                            LibMode: pr.GetValue(lib),
+                            IncludeDispatch: pr.GetValue(includeDispatch),
+                            ShowAll: pr.GetValue(all),
+                            Limit: pr.GetValue(limit),
+                            Format: pr.GetValue(format)
+                        ),
+                        new CommandIo(
+                            new TextOutput(Output: output, Error: error),
+                            new WorkspaceLocation(WorkingDirectory: workingDirectory, StoreRef: null)
+                        )
                     )
             )
         );
         return cmd;
     }
 
-    private static async Task<int> RunAsync(
-        IReadOnlyList<string> extraRules,
-        IReadOnlyList<string> rootPatterns,
-        bool libMode,
-        bool includeDispatch,
-        bool showAll,
-        int limit,
-        string? format,
-        TextWriter output,
-        string workingDirectory
-    )
-    {
-        var tsv = string.Equals(format, "tsv", StringComparison.OrdinalIgnoreCase);
+    private sealed record Options(
+        IReadOnlyList<string> ExtraRules,
+        IReadOnlyList<string> RootPatterns,
+        bool LibMode,
+        bool IncludeDispatch,
+        bool ShowAll,
+        int Limit,
+        string? Format
+    );
 
-        await using var context = OpenReadContext(workingDirectory);
+    private static async Task<int> RunAsync(Options opts, CommandIo io)
+    {
+        var tsv = CommonOptions.IsTsv(opts.Format);
+
+        await using var context = await OpenReadContextGatedAsync(io.WorkspaceLocation);
 
         // TODO(perf): `dead` still loads the full ~1.4M-row call graph into memory (LoadFactGraphAsync) and
         // runs ReachableFromAll(roots) in process. This is the last read command doing a full-graph load. It
         // maps directly onto the SQL primitive (SqlReachability.ReachableSetAsync); left as-is intentionally —
         // `dead` is a cold/occasional audit path, not a hot query, so the in-memory load is acceptable for now.
-        var rules = RuleSet.Load(workingDirectory, extraRules);
+        var rules = RuleSetLoader.Load(io.WorkspaceLocation.WorkingDirectory, opts.ExtraRules);
         var graph = await Reads.LoadFactGraphAsync(context, rules.Handoff);
         var methods = await Reads.LoadDeadCodeMethodsAsync(context);
         if (methods.Count == 0)
         {
-            output.WriteLine("No method symbols in the index — run `rig index`/`rig mine` first.");
+            io.TextOutput.Output.WriteLine("No method symbols in the index — run `rig index`/`rig mine` first.");
             return 1;
         }
 
@@ -135,11 +139,11 @@ internal static class DeadCommand
         }
 
         // User-supplied roots (--root <pattern>): every method whose SymbolId contains the pattern.
-        if (rootPatterns.Count > 0)
+        if (opts.RootPatterns.Count > 0)
         {
             foreach (var m in methods)
             {
-                if (rootPatterns.Any(p => m.SymbolId.Contains(p, StringComparison.OrdinalIgnoreCase)))
+                if (opts.RootPatterns.Any(p => m.SymbolId.Contains(p, StringComparison.OrdinalIgnoreCase)))
                 {
                     roots.Add(m.SymbolId);
                 }
@@ -150,46 +154,48 @@ internal static class DeadCommand
             graph,
             roots,
             methods,
-            treatExternallyVisibleAsRoots: libMode,
-            includeDispatchMembers: includeDispatch
+            treatExternallyVisibleAsRoots: opts.LibMode,
+            includeDispatchMembers: opts.IncludeDispatch
         );
-        var shown = candidates.Where(c => showAll || c.Tier != DeadCodeFinder.Tier.Low).ToList();
+        var shown = candidates.Where(c => opts.ShowAll || c.Tier != DeadCodeFinder.Tier.Low).ToList();
 
         if (tsv)
         {
             foreach (var c in shown)
             {
-                output.WriteLine($"{c.Tier}\t{c.Reason}\t{c.DirectCallers}\t{c.SymbolId}\t{c.FilePath}:{c.Line}");
+                io.TextOutput.Output.WriteLine($"{c.Tier}\t{c.Reason}\t{c.DirectCallers}\t{c.SymbolId}\t{c.FilePath}:{c.Line}");
             }
 
             return 0;
         }
 
-        output.WriteLine($"Roots (entry points + handoffs + Main + tests): {roots.Count}");
-        output.WriteLine($"First-party methods examined: {methods.Count}");
-        output.WriteLine(
+        io.TextOutput.Output.WriteLine($"Roots (entry points + handoffs + Main + tests): {roots.Count}");
+        io.TextOutput.Output.WriteLine($"First-party methods examined: {methods.Count}");
+        io.TextOutput.Output.WriteLine(
             $"Dead-code candidates: {candidates.Count}  (High {candidates.Count(c => c.Tier == DeadCodeFinder.Tier.High)}, "
                 + $"Medium {candidates.Count(c => c.Tier == DeadCodeFinder.Tier.Medium)}, Low {candidates.Count(c => c.Tier == DeadCodeFinder.Tier.Low)})"
         );
-        output.WriteLine(libMode ? "Mode: library (public/protected = roots)" : "Mode: application (public methods are flaggable)");
-        output.WriteLine("REPORT ONLY — confirm each against the C# compiler (IDE0051/CS0169) before removing.");
-        if (!showAll && candidates.Any(c => c.Tier == DeadCodeFinder.Tier.Low))
+        io.TextOutput.Output.WriteLine(
+            opts.LibMode ? "Mode: library (public/protected = roots)" : "Mode: application (public methods are flaggable)"
+        );
+        io.TextOutput.Output.WriteLine("REPORT ONLY — confirm each against the C# compiler (IDE0051/CS0169) before removing.");
+        if (!opts.ShowAll && candidates.Any(c => c.Tier == DeadCodeFinder.Tier.Low))
         {
-            output.WriteLine("(Low-confidence public/protected candidates hidden; pass --all to include them.)");
+            io.TextOutput.Output.WriteLine("(Low-confidence public/protected candidates hidden; pass --all to include them.)");
         }
 
-        output.WriteLine();
+        io.TextOutput.Output.WriteLine();
         foreach (var tierGroup in shown.GroupBy(c => c.Tier).OrderBy(g => g.Key))
         {
-            output.WriteLine($"=== {tierGroup.Key} confidence ({tierGroup.Count()}) ===");
-            foreach (var c in tierGroup.Take(limit))
+            io.TextOutput.Output.WriteLine($"=== {tierGroup.Key} confidence ({tierGroup.Count()}) ===");
+            foreach (var c in tierGroup.Take(opts.Limit))
             {
                 var note = c.DirectCallers == 0 ? "" : $"  [reached only by {c.DirectCallers} dead caller(s)]";
-                output.WriteLine($"{Indent.L1}{ShortName(c.SymbolId)}  {ShortenPath(c.FilePath)}:{c.Line}{note}");
+                io.TextOutput.Output.WriteLine($"{Indent.L1}{ShortName(c.SymbolId)}  {ShortenPath(c.FilePath)}:{c.Line}{note}");
             }
-            if (tierGroup.Count() > limit)
+            if (tierGroup.Count() > opts.Limit)
             {
-                output.WriteLine($"{Indent.L1}… and {tierGroup.Count() - limit} more (raise --limit)");
+                io.TextOutput.Output.WriteLine($"{Indent.L1}… and {tierGroup.Count() - opts.Limit} more (raise --limit)");
             }
         }
         return 0;

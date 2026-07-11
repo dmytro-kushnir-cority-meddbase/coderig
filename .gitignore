@@ -1,6 +1,8 @@
 bin/
 obj/
 TestResults/
+*.cobertura.xml
+rig-index-telemetry.csv
 .rig/
 .rig-bin/
 .rig-nupkg/
@@ -30,3 +32,4 @@ BenchmarkDotNet.Artifacts/
 # rig index artifacts (generated)
 relevant-projects.json
 trace-*.txt
+*.pyc

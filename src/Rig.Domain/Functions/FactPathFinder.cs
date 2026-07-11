@@ -29,9 +29,42 @@ public static partial class FactPathFinder
     // machinery) so `--async` can show the scheduled reach distinctly. sync ⊆ async by construction.
     public enum TraversalMode
     {
+        // No handoff edge is crossed: a scheduled/deferred callback is not a synchronous call, so the
+        // registrar does not reach the callback. The default for every traversal command.
         SyncCut,
+
+        // The default for `--async`: cross handoff edges EXCEPT symbol-blind delivery FAN-OUT
+        // (DeliveryPrecisions.Fanout). Sound handoffs are walked — event `+= H` registrant→handler,
+        // scheduler/timer/spawn dispatch, and single-subscriber (Exact) delivery — but a producer→handler
+        // fan-out that joined a raise to every same-symbol subscriber is NOT, because it crosses caller/
+        // instance boundaries it cannot prove (see CutsHandoff + docs/FIX-event-raise-overapproximation.md).
+        AsyncExact,
+
+        // `--async --include-delivery`: cross EVERY handoff edge, including the imprecise delivery fan-out.
+        // The historical `--async` behavior, kept as an explicit opt-in for the over-approximate superset.
         AsyncInclude,
     }
+
+    // The SINGLE handoff-gate predicate, shared by the forward (Dispatch) and reverse (GraphIndex) walks so
+    // they cut identically. Returns true when `edge` must NOT be crossed in `mode`:
+    //   * SyncCut       — cut ALL handoff edges (a deferred callback is not a synchronous call).
+    //   * AsyncExact    — cut ONLY delivery fan-out edges (Kind=handoff, DeliveryPrecision=Fanout). These
+    //                     join a publish to every same-symbol subscriber with no instance/call-site
+    //                     identity, so they connect unrelated callers to unrelated handlers — empirically
+    //                     false (22/22 sampled on MedDBase). The sound registrant→handler `event` edge,
+    //                     scheduler/spawn handoffs, and single-subscriber `exact` delivery are all kept, so
+    //                     real deferred reach is preserved; only the manufactured cross-product is dropped.
+    //   * AsyncInclude  — cut nothing (walk every handoff, incl. the fan-out superset).
+    // Non-handoff edges are never cut here. NOT a blanket "disable handoff search": it is precision-targeted
+    // — see docs/FIX-event-raise-overapproximation.md for why fan-out delivery is the only class removed.
+    public static bool CutsHandoff(TraversalMode mode, CallEdge edge) =>
+        edge.Kind == EdgeKinds.Handoff
+        && mode switch
+        {
+            TraversalMode.SyncCut => true,
+            TraversalMode.AsyncExact => string.Equals(edge.DeliveryPrecision, DeliveryPrecisions.Fanout, StringComparison.Ordinal),
+            _ => false,
+        };
 
     public static IReadOnlyList<PathStep>? Find(
         FactGraphData graph,
@@ -65,7 +98,11 @@ public static partial class FactPathFinder
         var queue = new Queue<(string Node, int Depth)>();
         // Receiver of the edge that reached each node — narrows that node's dispatch when expanded.
         var receiverOf = new Dictionary<string, string?>(StringComparer.Ordinal);
-        foreach (var start in index.Nodes.Where(n => Contains(value: n, pattern: fromPattern)))
+        // Whether the (first) edge that reached each node was a NON-VIRTUAL `base.M()` call — if so the
+        // node is not re-dispatched into sibling overrides (suppressed via `fromDispatch`, one-hop). Mirrors
+        // the dispatch-edge `fromDispatch` tracking; a parallel map, since the `parent` tuple is path-shape.
+        var viaNonVirtualOf = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var start in MatchNodes(index.Nodes, fromPattern))
         {
             if (parent.ContainsKey(start))
             {
@@ -77,11 +114,15 @@ public static partial class FactPathFinder
             queue.Enqueue((start, 0));
         }
 
+        // Resolve the target the same exact-match-wins way as the seeds, once, so a fully-qualified `to`
+        // hits exactly its member rather than every member it is a prefix of (Proceed vs ProceedTo…).
+        var targets = MatchNodes(index.Nodes, toPattern).ToHashSet(StringComparer.Ordinal);
+
         while (queue.Count > 0)
         {
             var (current, depth) = queue.Dequeue();
 
-            if (parent[current] is not null && Contains(value: current, pattern: toPattern))
+            if (parent[current] is not null && targets.Contains(current))
             {
                 return Reconstruct(parent, current);
             }
@@ -98,13 +139,15 @@ public static partial class FactPathFinder
                     incomingReceiver: receiverOf.TryGetValue(key: current, value: out var rc) ? rc : null,
                     incomingBinding: null,
                     mode: mode,
-                    fromDispatch: parent.TryGetValue(current, out var pe) && pe is { } p && IsDispatchEdgeKind(p.Kind)
+                    fromDispatch: (parent.TryGetValue(current, out var pe) && pe is { } p && IsDispatchEdgeKind(p.Kind))
+                        || (viaNonVirtualOf.TryGetValue(current, out var nv) && nv)
                 )
             )
             {
                 if (!parent.ContainsKey(s.Node))
                 {
                     receiverOf[s.Node] = s.OutReceiver;
+                    viaNonVirtualOf[s.Node] = s.OutNonVirtual;
                 }
 
                 Enqueue(
@@ -199,7 +242,7 @@ public static partial class FactPathFinder
     )
     {
         var index = BuildIndex(graph, narrowDispatch);
-        return ReachesWithFanoutCore(index, index.Nodes.Where(n => Contains(value: n, pattern: fromPattern)), maxDepth, maxNodes, mode);
+        return ReachesWithFanoutCore(index, MatchNodes(index.Nodes, fromPattern), maxDepth, maxNodes, mode);
     }
 
     // Exact-id, one-hop forward reach from EACH seed independently, returning one reachable-node set per
@@ -231,6 +274,63 @@ public static partial class FactPathFinder
             }
         );
         return results;
+    }
+
+    // Forward-VERIFY a set of candidate seed GROUPS against a target id set: for each group, true iff ANY
+    // seed in that group forward-reaches ANY id in `targetIds` (one-hop narrowed dispatch, same engine as
+    // `rig impact`). Backs `rig callers --entrypoints` forward-confirmation: reverse reachability is set-
+    // based BFS, so a shared base/interface virtual node pulls in ALL its callers — including callers whose
+    // FORWARD (receiver-narrowed) dispatch resolves to a DIFFERENT sibling override, never the target's.
+    // This pass re-checks each emitted EP's handler methods FORWARD (where narrowDispatch prunes the sibling
+    // override) and partitions confirmed vs reverse-only — recall-safe, since narrowing never drops a real
+    // target. Implemented by flattening the groups to DISTINCT seeds, reusing ReachesFromEachSeed (one shared
+    // index, parallel per-seed), then OR-reducing each group's seeds' reach sets against targetIds. The
+    // returned bool[] is aligned to `seedGroups` order.
+    public static bool[] SeedsReachTarget(
+        FactGraphData graph,
+        IReadOnlyList<IReadOnlyList<string>> seedGroups,
+        IReadOnlyCollection<string> targetIds,
+        int maxDepth,
+        TraversalMode mode
+    )
+    {
+        var targets = targetIds as HashSet<string> ?? new HashSet<string>(targetIds, StringComparer.Ordinal);
+        // Distinct seed ids across all groups — reach each once, then index back per group.
+        var distinct = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var group in seedGroups)
+        foreach (var seed in group)
+        {
+            if (seen.Add(seed))
+            {
+                distinct.Add(seed);
+            }
+        }
+
+        var reachSets = ReachesFromEachSeed(graph, distinct, maxDepth, maxNodes: 20000, narrowDispatch: true, mode: mode);
+        var reachOf = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        for (var i = 0; i < distinct.Count; i++)
+        {
+            reachOf[distinct[i]] = reachSets[i];
+        }
+
+        var result = new bool[seedGroups.Count];
+        for (var g = 0; g < seedGroups.Count; g++)
+        {
+            var confirmed = false;
+            foreach (var seed in seedGroups[g])
+            {
+                if (reachOf.TryGetValue(seed, out var reach) && reach.Overlaps(targets))
+                {
+                    confirmed = true;
+                    break;
+                }
+            }
+
+            result[g] = confirmed;
+        }
+
+        return result;
     }
 
     // Exact-id forward reach from EACH seed independently, returning the FULL per-node ReachInfo per seed
@@ -367,7 +467,9 @@ public static partial class FactPathFinder
                     DispatchBasis: basis
                 );
                 receiverOf[s.Node] = s.OutReceiver;
-                viaDispatchOf[s.Node] = IsDispatchEdgeKind(s.Kind);
+                // Suppress re-dispatch of a node reached via a dispatch edge OR a non-virtual `base.M()`
+                // call — both resolve to exactly one concrete method whose own override fan-out is spurious.
+                viaDispatchOf[s.Node] = IsDispatchEdgeKind(s.Kind) || s.OutNonVirtual;
                 queue.Enqueue(s.Node);
             }
         }
@@ -428,7 +530,7 @@ public static partial class FactPathFinder
     // as Reaches/Find (direct calls + interface->impl + base->override dispatch, with loop context),
     // but materialized as a tree for rendering. Each method is EXPANDED ONCE globally: the first time
     // it's reached (shallowest depth, source order among same-depth peers) its children are built;
-    // later encounters become a Truncated leaf ("seen"), so a cycle or a heavily-shared callee can't
+    // later encounters become a Truncated leaf ("⋯elided"), so a cycle or a heavily-shared callee can't
     // blow the tree up. maxDepth bounds depth; maxNodes bounds total emitted nodes (a Truncated leaf
     // is emitted at the cap). Returns one TraceNode per root.
     //
@@ -437,11 +539,14 @@ public static partial class FactPathFinder
     // among same-depth peers it preserves source order (Successors yields children in line order).
     // Cut + context shaping is carried on `graph` (set by ShapeGraph at load) and applied via BuildIndex:
     // a cut node is expanded as a leaf — its own effects are visible but its subtree is not walked.
+    // Default node budget for BuildTree — the safety cap `tree` runs under when --limit is absent.
+    public const int DefaultTreeNodeBudget = 50000;
+
     public static IReadOnlyList<TraceNode> BuildTree(
         FactGraphData graph,
         string fromPattern,
-        int maxDepth = 20,
-        int maxNodes = 20000,
+        int maxDepth = 50,
+        int maxNodes = DefaultTreeNodeBudget,
         TraversalMode mode = TraversalMode.SyncCut
     )
     {
@@ -456,13 +561,13 @@ public static partial class FactPathFinder
         var mutableRoots = new List<MutableNode>();
         // DEPTH-FIRST, PRE-ORDER traversal (a stack, children pushed in reverse so they pop in render
         // order). This makes `expanded` fill in exactly top-to-bottom reading order, so the FIRST visual
-        // occurrence of a shared symbol is the one expanded and every LATER occurrence is the "↺seen"
+        // occurrence of a shared symbol is the one expanded and every LATER occurrence is the "⋯elided"
         // leaf — the marker always refers to a subtree already shown ABOVE it. (A breadth-first walk
         // expanded whichever occurrence was shallowest, which could render BELOW a deeper twin, leaving
-        // the "↺seen" reading before its expansion.)
+        // the "⋯elided" reading before its expansion.)
         var stack = new Stack<MutableNode>();
 
-        var matched = index.Nodes.Where(n => Contains(value: n, pattern: fromPattern)).ToHashSet(StringComparer.Ordinal);
+        var matched = MatchNodes(index.Nodes, fromPattern).ToHashSet(StringComparer.Ordinal);
         foreach (var root in matched.Where(n => !IsContainedLambdaOfMatched(n, matched)).OrderBy(n => n, StringComparer.Ordinal))
         {
             var node = new MutableNode(
@@ -470,6 +575,7 @@ public static partial class FactPathFinder
                 edgeKind: "entry",
                 loopKind: null,
                 loopDetail: null,
+                enclosingGuards: null,
                 depth: 0,
                 handoffVia: null,
                 dispatchBasis: null,
@@ -496,9 +602,24 @@ public static partial class FactPathFinder
 
             // Already expanded elsewhere (cycle / shared callee), at depth cap, or out of budget:
             // mark as truncated and do NOT expand. budget check is re-checked after decrement.
-            if (expanded.Contains(n.Symbol) || n.Depth >= maxDepth || budget <= 0)
+            // Cause is attributed by PRECEDENCE: AlreadyExpanded wins when multiple conditions apply
+            // (it is the meaningful redundancy signal); DepthCapped next; BudgetCapped last.
+            if (expanded.Contains(n.Symbol))
             {
                 n.Truncated = true;
+                n.TruncationCause = TruncationCause.AlreadyExpanded;
+                continue;
+            }
+            else if (n.Depth >= maxDepth)
+            {
+                n.Truncated = true;
+                n.TruncationCause = TruncationCause.DepthCapped;
+                continue;
+            }
+            else if (budget <= 0)
+            {
+                n.Truncated = true;
+                n.TruncationCause = TruncationCause.BudgetCapped;
                 continue;
             }
 
@@ -519,13 +640,13 @@ public static partial class FactPathFinder
                     incomingReceiver: n.Receiver,
                     incomingBinding: n.Binding,
                     mode: mode,
-                    fromDispatch: IsDispatchEdgeKind(n.EdgeKind)
+                    fromDispatch: IsDispatchEdgeKind(n.EdgeKind) || n.ViaNonVirtual
                 )
             )
             {
                 // Collapse identical sibling edges: a generic method or bodied accessor called N times
                 // under one parent resolves to one symbol → N edges that would render byte-identically
-                // (1 expansion + N-1 "↺seen"). Fold them into a single kid carrying a call-site count.
+                // (1 expansion + N-1 "⋯elided"). Fold them into a single kid carrying a call-site count.
                 // Keyed on every field that affects the rendered line so only true duplicates merge.
                 // Manual scan rather than Kids.FirstOrDefault(k => ...): the lambda captures `s`, so the
                 // LINQ form heap-allocated a closure + delegate on every successor edge of every node.
@@ -540,6 +661,9 @@ public static partial class FactPathFinder
                         && k.HandoffVia == s.HandoffVia
                         && k.Fanout == s.Fanout
                         && k.DispatchBasis == s.Basis
+                        // Two sites calling the same callee under DIFFERENT guards (e.g. `Save(x); if(d) Save(x);`)
+                        // are distinct conditionalities — keep them separate so each renders its own ⎇.
+                        && k.EnclosingGuards == s.EnclosingGuards
                     )
                     {
                         dup = k;
@@ -557,6 +681,7 @@ public static partial class FactPathFinder
                     edgeKind: s.Kind,
                     loopKind: s.LoopKind,
                     loopDetail: s.LoopDetail,
+                    enclosingGuards: s.EnclosingGuards,
                     depth: n.Depth + 1,
                     handoffVia: s.HandoffVia,
                     dispatchBasis: s.Basis,
@@ -566,7 +691,8 @@ public static partial class FactPathFinder
                     declaringTypeArgBinding: s.OutDeclaringBinding,
                     methodTypeArgBinding: s.OutMethodBinding,
                     callFile: s.File,
-                    callLine: s.Line
+                    callLine: s.Line,
+                    viaNonVirtual: s.OutNonVirtual
                 );
                 n.Kids.Add(kid);
             }
@@ -589,10 +715,19 @@ public static partial class FactPathFinder
         public readonly string EdgeKind;
         public readonly string? LoopKind;
         public readonly string? LoopDetail;
+
+        // CFG control-dependence guards of the edge that reached this node (CallEdge.EnclosingGuards):
+        // the branch predicates gating the call within the parent. Null == must-run. RENDERING only
+        // (-> TraceNode.EnclosingGuards), surfaced by `tree --guards` as the ⎇ analog of 🔁.
+        public readonly string? EnclosingGuards;
         public readonly int Depth;
         public readonly string? HandoffVia;
         public readonly string? DispatchBasis;
         public readonly int Fanout;
+
+        // True when the reaching edge was a NON-VIRTUAL `base.M()` call — suppresses this node's own
+        // override-dispatch fan when expanded (one-hop, like a node reached via a dispatch edge).
+        public readonly bool ViaNonVirtual;
 
         // Narrowing contexts carried to Successors when this node is expanded:
         public readonly string? Receiver;
@@ -606,6 +741,7 @@ public static partial class FactPathFinder
         public readonly string? CallFile;
         public readonly int CallLine;
         public bool Truncated;
+        public TruncationCause TruncationCause;
 
         // Distinct call sites under this node's parent that produced an identical edge (collapsed
         // siblings). Bumped instead of adding a duplicate kid; rendered as "×N calls".
@@ -617,6 +753,7 @@ public static partial class FactPathFinder
             string edgeKind,
             string? loopKind,
             string? loopDetail,
+            string? enclosingGuards,
             int depth,
             string? handoffVia,
             string? dispatchBasis,
@@ -626,13 +763,16 @@ public static partial class FactPathFinder
             string? declaringTypeArgBinding,
             string? methodTypeArgBinding,
             string? callFile,
-            int callLine
+            int callLine,
+            bool viaNonVirtual = false
         )
         {
             Symbol = symbol;
             EdgeKind = edgeKind;
+            ViaNonVirtual = viaNonVirtual;
             LoopKind = loopKind;
             LoopDetail = loopDetail;
+            EnclosingGuards = enclosingGuards;
             Depth = depth;
             HandoffVia = handoffVia;
             DispatchBasis = dispatchBasis;
@@ -657,6 +797,7 @@ public static partial class FactPathFinder
                 LoopDetail: n.LoopDetail,
                 Children: EmptyNodes,
                 Truncated: true,
+                TruncationCause: n.TruncationCause,
                 Fanout: n.Fanout,
                 HandoffVia: n.HandoffVia,
                 DispatchBasis: n.DispatchBasis,
@@ -664,7 +805,8 @@ public static partial class FactPathFinder
                 DeclaringTypeArgBinding: n.DeclaringTypeArgBinding,
                 MethodTypeArgBinding: n.MethodTypeArgBinding,
                 CallFile: n.CallFile,
-                CallLine: n.CallLine
+                CallLine: n.CallLine,
+                EnclosingGuards: n.EnclosingGuards
             );
         }
 
@@ -683,7 +825,8 @@ public static partial class FactPathFinder
             DeclaringTypeArgBinding: n.DeclaringTypeArgBinding,
             MethodTypeArgBinding: n.MethodTypeArgBinding,
             CallFile: n.CallFile,
-            CallLine: n.CallLine
+            CallLine: n.CallLine,
+            EnclosingGuards: n.EnclosingGuards
         );
     }
 
@@ -754,11 +897,26 @@ public static partial class FactPathFinder
     )
     {
         var index = BuildIndex(graph, narrowDispatch);
-        var rev = BuildReverseMaps(graph, narrowDispatch, mode);
+        var rev = BuildReverseMaps(graph, narrowDispatch, mode, descendantsFrom: index);
+        return ReachedByCore(index, rev, toPattern, maxDepth, maxNodes);
+    }
 
+    // The reverse-BFS core, factored out so a caller that ALREADY holds the index + reverse maps can reuse
+    // them instead of rebuilding. EntryRootsReaching builds both for its own no-predecessor root check and
+    // then needs this same closure — calling ReachedBy() rebuilt index + reverse maps a second time, and
+    // BuildReverseMaps does a whole-graph receiver-blind dispatch scan, so that was the dominant cost of
+    // `callers --roots`. Passing the prebuilt pair here halves it.
+    private static IReadOnlyDictionary<string, int> ReachedByCore(
+        GraphIndex index,
+        ReverseMaps rev,
+        string toPattern,
+        int maxDepth,
+        int maxNodes
+    )
+    {
         var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
         var queue = new Queue<string>();
-        foreach (var start in index.Nodes.Where(n => Contains(value: n, pattern: toPattern)))
+        foreach (var start in MatchNodes(index.Nodes, toPattern))
         {
             if (depthOf.ContainsKey(start))
             {
@@ -778,7 +936,7 @@ public static partial class FactPathFinder
                 continue;
             }
 
-            foreach (var pred in Predecessors(current, index, rev))
+            foreach (var (pred, _) in Predecessors(current, index, rev))
             {
                 if (depthOf.ContainsKey(pred))
                 {
@@ -810,7 +968,7 @@ public static partial class FactPathFinder
     )
     {
         var index = BuildIndex(graph, narrowDispatch);
-        var rev = BuildReverseMaps(graph, narrowDispatch, mode);
+        var rev = BuildReverseMaps(graph, narrowDispatch, mode, descendantsFrom: index);
 
         var depthOf = new Dictionary<string, int>(StringComparer.Ordinal);
         var queue = new Queue<string>();
@@ -834,7 +992,7 @@ public static partial class FactPathFinder
                 continue;
             }
 
-            foreach (var pred in Predecessors(current, index, rev))
+            foreach (var (pred, _) in Predecessors(current, index, rev))
             {
                 if (depthOf.ContainsKey(pred))
                 {
@@ -862,8 +1020,10 @@ public static partial class FactPathFinder
     )
     {
         var index = BuildIndex(graph);
-        var rev = BuildReverseMaps(graph, narrowDispatch: true, mode);
-        var reachable = ReachedBy(graph, toPattern, maxDepth, maxNodes, narrowDispatch: true, mode);
+        var rev = BuildReverseMaps(graph, narrowDispatch: true, mode, descendantsFrom: index);
+        // Reuse the index + reverse maps just built (for the Predecessors root check below) — ReachedByCore
+        // takes them prebuilt, so the closure shares this one build instead of ReachedBy rebuilding both.
+        var reachable = ReachedByCore(index, rev, toPattern, maxDepth, maxNodes);
         var roots = new List<string>();
         foreach (var m in reachable.Keys)
         {
@@ -908,7 +1068,12 @@ public static partial class FactPathFinder
         string? LoopKind,
         string? LoopDetail,
         string? ReceiverType,
-        string? HandoffDispatcher
+        string? HandoffDispatcher,
+        string? DeliveryPrecision,
+        bool NonVirtual,
+        // CFG control-dependence guard set of the call SITE (CallEdge.EnclosingGuards) — materialized into
+        // the derived call_edges view so the SQL-bounded graph load round-trips it (the tree --guards glyph).
+        string? EnclosingGuards
     )> AllCallEdges(FactGraphData graph)
     {
         foreach (var edge in graph.CallEdges)
@@ -922,7 +1087,10 @@ public static partial class FactPathFinder
                 edge.LoopKind,
                 edge.LoopDetail,
                 edge.ReceiverType,
-                edge.HandoffDispatcher
+                edge.HandoffDispatcher,
+                edge.DeliveryPrecision,
+                edge.NonVirtual,
+                edge.EnclosingGuards
             );
         }
     }
@@ -1110,10 +1278,52 @@ public static partial class FactPathFinder
 
     private static bool Contains(string value, string pattern) => value.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0;
 
+    // Resolve a from/to PATTERN to the set of node ids it selects, with EXACT MATCH WINS: if the pattern
+    // exactly names one or more nodes — by full DocID, or by the `M:`-stripped, param-free FQN (the form
+    // `rig` renders and a user pastes back) — only those are returned; otherwise the pattern is the usual
+    // case-insensitive SUBSTRING (the partial-name convenience). This stops a fully-qualified name from also
+    // dragging in every member it is a prefix of: `…Search.Proceed` resolves to exactly `Proceed`, not also
+    // `Proceed`'s prefix-twin `ProceedToConfirmationScreen`. A partial/short pattern never equals a full
+    // namespaced FQN, so substring behaviour is preserved for it. One pass collects both buckets; the exact
+    // bucket wins when non-empty. Shared by every seed site (tree/reaches/callers/path roots + path target).
+    internal static IReadOnlyList<string> MatchNodes(IEnumerable<string> nodes, string pattern)
+    {
+        var exact = new List<string>();
+        var substring = new List<string>();
+        foreach (var n in nodes)
+        {
+            if (IsExactNodeMatch(n, pattern))
+            {
+                exact.Add(n);
+            }
+            else if (Contains(value: n, pattern: pattern))
+            {
+                substring.Add(n);
+            }
+        }
+
+        return exact.Count > 0 ? exact : substring;
+    }
+
+    // A node matches a pattern EXACTLY when the pattern is its full DocID, or its param-free FQN (DocID with
+    // the leading two-char `X:` kind prefix and any `(…)` parameter list stripped, namespace + generic arity
+    // kept). Case-insensitive, to match Contains. ParamFreeFqn mirrors SymbolNameFormatter.FqnFromDocId; it is
+    // re-derived here because FactPathFinder (Domain) cannot reference the Cli renderer.
+    private static bool IsExactNodeMatch(string node, string pattern) =>
+        string.Equals(node, pattern, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(ParamFreeFqn(node), pattern, StringComparison.OrdinalIgnoreCase);
+
+    private static string ParamFreeFqn(string node)
+    {
+        var body = node.Length >= 2 && node[1] == ':' ? node[2..] : node;
+        var paren = body.IndexOf('(', StringComparison.Ordinal);
+        return paren >= 0 ? body[..paren] : body;
+    }
+
     // A synthetic lambda node id is `{containerMemberId}~λ{ordinal}` (FactExtractor). When the root pattern
     // matches a method AND its inline lambdas (e.g. `tree "Foo"` matches Foo, Foo~λ0, Foo~λ1), the lambdas
     // are NOT independent roots: each already renders inline under its container, so re-rooting it would
-    // emit a spurious top-level `↺seen` (the container's expansion already marked it seen). Drop a matched
+    // emit a spurious top-level `⋯elided` (the container's expansion already marked it seen). Drop a matched
     // lambda only when its container ALSO matched; a lambda whose container did not match (e.g. a promoted
     // async-handoff entry point targeted on its own) stays a legitimate root.
     private static bool IsContainedLambdaOfMatched(string nodeId, HashSet<string> matched)
@@ -1121,4 +1331,22 @@ public static partial class FactPathFinder
         var marker = nodeId.IndexOf("~λ", StringComparison.Ordinal);
         return marker > 0 && matched.Contains(nodeId.Substring(0, marker));
     }
+
+    // The DISTINCT conceptual targets a pattern resolves to — the ambiguity-disclosure set behind the
+    // CLI's "pattern matched N distinct symbols" notice. Distinctness is by param-free FQN, so a method's
+    // OVERLOADS collapse to one target (a pattern naming a method is not ambiguous because it has two
+    // signatures), while same-named methods on different types stay distinct (`FactPathFinder.BuildIndex`
+    // vs `IndexCommands.BuildIndex` — the silent wrong-tree case). Contained lambdas of a matched
+    // container are dropped exactly like BuildTree root selection: they render inline under the
+    // container, so they are not an independent answer the user could be surprised by.
+    public static IReadOnlyList<string> DistinctMatchTargets(IEnumerable<string> nodes, string pattern)
+    {
+        var matched = MatchNodes(nodes, pattern).ToHashSet(StringComparer.Ordinal);
+        return DistinctTargetFqns(matched.Where(n => !IsContainedLambdaOfMatched(n, matched)));
+    }
+
+    // The distinct param-free FQNs of an already-resolved id set (tree derives disclosure from its BUILT
+    // roots so it works on the cached-forest path too, where the graph is never loaded).
+    public static IReadOnlyList<string> DistinctTargetFqns(IEnumerable<string> ids) =>
+        ids.Select(ParamFreeFqn).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(f => f, StringComparer.Ordinal).ToList();
 }

@@ -216,6 +216,9 @@ front. Build them switchable; do not hardcode a winner.
   from-scratch index of B, or the diff layer inherits skew. Likely lands as a `rig index --from-store <A>`
   fast path. Big potential win (turns the per-commit model from minutes to seconds); non-trivial because of
   the ripple/invalidation correctness. Sequence AFTER steps 3–4 prove the diff is worth optimizing for.
+  Sibling: `docs/build-cache.md` "TODO(investigate) — per-project compilation/fact cache across branches
+  (approach C)" — the PROJECT/ABI-attributed, cross-branch cousin of this file-attributed idea; both need
+  the same cross-unit ripple-invalidation discipline, so whichever lands first should establish it.
 - **LIMITATION(verified) — the change-level diff is enclosing-keyed and PATH-INSENSITIVE, so removing one
   caller's path to a still-reachable shared effect-sink is invisible.** Found on MR !10645 ("move healthcode
   off object store"): the diff showed **no** removed object_store reads/writes even though the MR removed

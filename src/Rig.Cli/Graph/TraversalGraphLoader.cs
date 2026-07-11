@@ -13,11 +13,65 @@ namespace Rig.Cli.Graph;
 // thus walk the identical shaped graph.
 internal static class TraversalGraphLoader
 {
+    // SQL FAST PATH RE-ENABLED (2026-06-25): the bounded loader (SqlReachability.LoadGraphFromReachSetAsync)
+    // now re-attaches the reference_facts type-arg bindings (DeclaringTypeArgBinding/MethodTypeArgBinding)
+    // onto the bounded CallEdges, so the ShapeGraph monomorphization seam fires on the SQL path too. The CTE
+    // only BOUNDS the loaded subgraph (sized to the result, not the 1.6GB store); the same in-memory
+    // FactPathFinder + ShapeGraph then runs over it — and because reach_set is the receiver-blind CHA
+    // SUPERSET, the bounded graph contains every edge materialization needs, so it reproduces the full-EF
+    // (narrowed) reach (the Bounded_graph_reproduces_full_graph_reach equivalence test). Falls back to the
+    // full EF graph when `rig graph` hasn't run (HasGraphAsync false).
+    // (static readonly, not const, so a future flip doesn't trip unreachable-code warnings.)
+    private static readonly bool SqlFastPathEnabled = true;
+
     // Every query command opens the store READ-ONLY (see RigDbContext.readOnly): the engine rejects any
     // write to the main DB, so a read command can never mutate the index. Writers (index/mine/graph) use
     // the default read-write constructor.
-    internal static RigDbContext OpenReadContext(string workingDirectory, string? storeRef = null) =>
-        new(StoreLayout.DbPathForRef(workingDirectory, storeRef), readOnly: true);
+    internal static RigDbContext OpenReadContext(WorkspaceLocation workspaceLocation) =>
+        new RigDbContext(StoreLayout.DbPathForRef(workspaceLocation), readOnly: true);
+
+    // F7: overload that also surfaces the resolved store DIRECTORY so the caller can reuse it for a
+    // cache-key computation (StoreKey), avoiding a second ResolveReadStoreDir call. The caller receives
+    // the dir as an `out` parameter; the existing no-out-param overload is unchanged for all other callers.
+    internal static RigDbContext OpenReadContext(WorkspaceLocation workspaceLocation, out string storeDir)
+    {
+        storeDir = StoreLayout.ResolveReadStoreDir(workspaceLocation);
+        return new RigDbContext(Path.Combine(storeDir, StoreLayout.DbFileName), readOnly: true);
+    }
+
+    // The SINGLE schema-gate chokepoint for read/query commands. Opens the read context exactly as
+    // OpenReadContext does, then runs SchemaGate.AssertReadableAsync ONCE — the hard fail-fast that
+    // replaces the scattered per-table TableExistsAsync schema probes. Every query command opens through
+    // here so an uninitialized / schema-drifted store fails at open with a clear "re-index" message rather
+    // than a cryptic mid-query `no such column`. Writers (index/mine/graph) use the raw constructor — they
+    // CREATE the store and must not be gated. On a gate failure the context is disposed before rethrow.
+    internal static async Task<RigDbContext> OpenReadContextGatedAsync(WorkspaceLocation workspaceLocation)
+    {
+        var context = OpenReadContext(workspaceLocation);
+        await AssertReadableAsync(context);
+        return context;
+    }
+
+    // Gated counterpart of the F7 out-param overload (storeDir surfaced for StoreKey reuse).
+    internal static async Task<(RigDbContext Context, string StoreDir)> OpenReadContextGatedAsync(WorkspaceLocation ws, bool withStoreDir)
+    {
+        var context = OpenReadContext(ws, storeDir: out var storeDir);
+        await AssertReadableAsync(context);
+        return (context, storeDir);
+    }
+
+    private static async Task AssertReadableAsync(RigDbContext context)
+    {
+        try
+        {
+            await SchemaGate.AssertReadableAsync(context);
+        }
+        catch
+        {
+            await context.DisposeAsync();
+            throw;
+        }
+    }
 
     // The call graph for a traversal command (reaches/tree/path/callers). When the derived edge views
     // exist (`rig graph` has been run) it returns the BOUNDED subgraph for `pattern` in the given
@@ -28,18 +82,19 @@ internal static class TraversalGraphLoader
         RigDbContext context,
         string pattern,
         SqlReachability.Direction direction,
-        IReadOnlyList<FactHandoffRule> handoffRules
+        IReadOnlyList<FactHandoffRule> handoffRules,
+        IReadOnlyList<FactRedirectRule> redirectRules
     )
     {
         // SQL path: call_edges already carry the persisted handoff classification (from `rig graph`),
         // so the bounded graph is classified by construction. EF fallback: classify the loaded graph
         // with the rules so the in-memory traversal sees the same handoff edges.
-        if (await SqlReachability.HasGraphAsync(context))
+        if (SqlFastPathEnabled && await SqlReachability.HasGraphAsync(context))
         {
             return await SqlReachability.LoadBoundedGraphAsync(context, pattern, direction);
         }
 
-        return await Reads.LoadFactGraphAsync(context, handoffRules);
+        return await Reads.LoadFactGraphAsync(context, handoffRules, redirectRules);
     }
 
     // The SHAPED traversal graph: LoadTraversalGraphAsync + the single FactPathFinder.ShapeGraph pass
@@ -57,8 +112,9 @@ internal static class TraversalGraphLoader
         RuleSet rules
     )
     {
-        var graph = await LoadTraversalGraphAsync(context, pattern, direction, rules.Handoff);
-        return FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context);
+        var graph = await LoadTraversalGraphAsync(context, pattern, direction, rules.Handoff, rules.Redirect);
+        var monoSigs = await Reads.LoadMonomorphizationSignaturesAsync(context);
+        return FactPathFinder.ShapeGraph(graph, rules.Factory, rules.Cut, rules.Context, monomorphizeSignatures: monoSigs);
     }
 
     // Like LoadTraversalGraphAsync, but also returns the effect-derivation inputs (invocations / ctor
@@ -72,30 +128,35 @@ internal static class TraversalGraphLoader
         RuleSet rules
     )
     {
-        var inputs = await SqlReachability.HasGraphAsync(context)
-            ? await SqlReachability.LoadReachInputsAsync(context, pattern, direction)
-            : await LoadReachInputsFromRowsAsync(context, rules.Handoff);
+        var inputs =
+            SqlFastPathEnabled && await SqlReachability.HasGraphAsync(context)
+                ? await SqlReachability.LoadReachInputsAsync(context, pattern, direction)
+                : await LoadReachInputsFromRowsAsync(context, rules.Handoff, rules.Redirect);
 
         // The single shaping pass (monomorphize generic factories + carry cut/context rules on the graph)
         // so reaches/tree walk the same shaped graph as path/callers. Edges with no concrete construct
         // keep their plumbing (the in-memory generic-dispatch narrowing covers those).
+        var monoSigs = await Reads.LoadMonomorphizationSignaturesAsync(context);
         inputs = inputs with
         {
-            Graph = FactPathFinder.ShapeGraph(inputs.Graph, rules.Factory, rules.Cut, rules.Context),
+            Graph = FactPathFinder.ShapeGraph(inputs.Graph, rules.Factory, rules.Cut, rules.Context, monomorphizeSignatures: monoSigs),
         };
         return inputs;
     }
 
     internal static async Task<SqlReachability.ReachInputs> LoadReachInputsFromRowsAsync(
         RigDbContext context,
-        IReadOnlyList<FactHandoffRule> handoffRules
+        IReadOnlyList<FactHandoffRule> handoffRules,
+        IReadOnlyList<FactRedirectRule> redirectRules
     )
     {
-        var graph = await Reads.LoadFactGraphAsync(context, handoffRules);
+        var graph = await Reads.LoadFactGraphAsync(context, handoffRules, redirectRules);
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
-        return new SqlReachability.ReachInputs(graph, invocations, CtorRefs: epData.CtorRefs, ThrowRefs: throwRefs);
+        // F2: surface epData so callers that also need the EP site map (DeriveEpSiteKindAsync) can
+        // reuse it instead of issuing a second LoadFactEntryPointDataAsync on the EF-fallback path.
+        return new SqlReachability.ReachInputs(graph, invocations, CtorRefs: epData.CtorRefs, ThrowRefs: throwRefs, EpData: epData);
     }
 
     // Base edges in the (TypeId, BaseId) shape FactEffectDeriver.Derive expects, from a graph's edges.

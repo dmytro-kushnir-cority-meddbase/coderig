@@ -49,6 +49,155 @@ public static partial class FactPathFinder
         return changed ? graph with { CallEdges = rewritten } : graph;
     }
 
+    // PUBLISH→CONSUMER DELIVERY EDGES — the SINGLE, framework-BLIND join. Resolves, by CHANNEL identity
+    // (Tag, IdentityToken), which handler(s) run when a channel is PUBLISHED to, and ADDS those as handoff
+    // edges producer→handler — the edge a publish (a `someEvent?.Invoke(..)` raise / an Echo
+    // `Process.tell(name, msg)`) implies but that no syntactic call records. This is EDGE-CREATING, so it
+    // MUST be baked into call_edges at graph-build (alongside RewriteGenericFactories) or the SQL bounding
+    // walk never pulls a handler's closure into a bounded reach — see GraphMaterializer.
+    //
+    // Modeled as HANDOFF edges (HandoffDispatcher = the site's Tag, e.g. "event_raise" / "actor_tell"):
+    // delivery is DEFERRED, exactly like a background/timer/event-subscription dispatch — sync-cut by
+    // default, walked under --async, and visible to whole-program cycle detection (the FR-10 prerequisite).
+    // The binding is only as precise as the channel identity the loader supplied: an event symbol (`E:`
+    // DocID) is EXACT (a raise of E reaches precisely E's subscribers); a process-name string is ~heuristic
+    // (a tell of "P" reaches every handler spawned under "P" — over-approximate on a shared name). Tag
+    // namespaces the channel so an event raise never joins an actor tell even if their tokens collide.
+    //
+    // Scope line (deliberate): this is DELIVERY (the runtime causes the handler to run), NOT resource
+    // COUPLING. A db/io/cache write→read on the same cell is correlated but NOT a delivery — folding those in
+    // would make `reaches` claim every writer "reaches" every reader and destroy the graph's meaning. Those
+    // stay out; they belong to the separate same-cell/consistency hazard layer (FR-1/dual_write).
+    //
+    // Producer vs registration is decided by DeliveryRole: a Producer always publishes; a Registration
+    // contributes its co-located handler edge(s) to the channel; a ByColocation site is a registration IFF a
+    // handler edge co-locates at its (Caller,FilePath,Line) (a C# event read is a subscription iff co-located,
+    // else a raise) — so the loader need not know which a given event read is. The handler edge kind is
+    // DATA-DRIVEN by the registration's HandlerDispatcher: when set (e.g. an Echo spawn), the co-located
+    // HANDOFF edge(s) tagged with that dispatcher — the spawn's handler delegate(s), which the async-handoff
+    // machinery reclassified from methodGroup to handoff BEFORE this join runs; when null (e.g. a C# event
+    // subscription), the co-located `methodGroup` CallEdge (the subscription's `+= Handler`). A registration
+    // that locates no handler edge contributes nothing.
+    public static FactGraphData AddDeliveryEdges(FactGraphData graph, IReadOnlyList<DeliverySite> sites)
+    {
+        if (sites.Count == 0)
+        {
+            return graph;
+        }
+
+        // Co-located edges per call site — a registration's handler edge(s). An event subscription's handler is
+        // the `+= H` METHODGROUP edge; a spawn's handler delegate(s) were reclassified by the async-handoff
+        // machinery into HANDOFF edges tagged with the spawn dispatcher (e.g. meddbase.echo.spawn), so the
+        // registration's HandlerDispatcher names which co-located handoff edges are its handlers. Index both
+        // kinds once, on the co-location key (Caller, File, Line).
+        var edgesBySite = new Dictionary<(string Caller, string File, int Line), List<(string Kind, string? Dispatcher, string Callee)>>();
+        foreach (var e in graph.CallEdges)
+        {
+            if (e.Kind != EdgeKinds.MethodGroup && e.Kind != EdgeKinds.Handoff)
+            {
+                continue;
+            }
+
+            var key = (e.Caller, e.FilePath, e.Line);
+            if (!edgesBySite.TryGetValue(key, out var list))
+            {
+                edgesBySite[key] = list = [];
+            }
+            list.Add((e.Kind, e.HandoffDispatcher, e.Callee));
+        }
+
+        // The handler(s) a registration site binds: its co-located HandlerDispatcher handoff edges when the rule
+        // names one (spawn delegates), else its co-located methodGroup edges (event `+= H`).
+        IReadOnlyList<string> HandlersAt(DeliverySite site)
+        {
+            if (!edgesBySite.TryGetValue((site.Caller, site.FilePath, site.Line), out var edges))
+            {
+                return [];
+            }
+
+            return site.HandlerDispatcher is { } dispatcher
+                ? edges
+                    .Where(x => x.Kind == EdgeKinds.Handoff && string.Equals(x.Dispatcher, dispatcher, StringComparison.Ordinal))
+                    .Select(x => x.Callee)
+                    .ToList()
+                : edges.Where(x => x.Kind == EdgeKinds.MethodGroup).Select(x => x.Callee).ToList();
+        }
+
+        // Split sites into channel handlers ((Tag, IdentityToken) → handlers) and producers. A ByColocation
+        // site is a registration iff it locates a handler; a Registration with no co-located handler edge
+        // contributes nothing (the handler isn't a node we can resolve — a lambda subgraph / unresolved
+        // target); a ByColocation site with no co-located handler is a raise → producer.
+        var handlersByChannel = new Dictionary<(string Tag, string Token), HashSet<string>>();
+        var producers = new List<DeliverySite>();
+        foreach (var site in sites)
+        {
+            IReadOnlyList<string> handlers = site.Role == DeliveryRole.Producer ? [] : HandlersAt(site);
+            var isRegistration = site.Role == DeliveryRole.Registration || (site.Role == DeliveryRole.ByColocation && handlers.Count > 0);
+
+            if (isRegistration)
+            {
+                if (handlers.Count > 0)
+                {
+                    var channel = (site.Tag, site.IdentityToken);
+                    if (!handlersByChannel.TryGetValue(channel, out var set))
+                    {
+                        handlersByChannel[channel] = set = new HashSet<string>(StringComparer.Ordinal);
+                    }
+                    set.UnionWith(handlers);
+                }
+            }
+            else
+            {
+                producers.Add(site);
+            }
+        }
+
+        if (handlersByChannel.Count == 0 || producers.Count == 0)
+        {
+            return graph; // nothing to connect (no handlers, or no producers)
+        }
+
+        // One handoff edge per (producer, handler), at the publish site, tagged with the producer's Tag.
+        // Dedup on (Caller, Callee, Tag) so a method that publishes the same channel on several lines doesn't
+        // multiply identical edges.
+        var added = new List<CallEdge>();
+        var seen = new HashSet<(string, string, string)>();
+        foreach (var producer in producers)
+        {
+            if (!handlersByChannel.TryGetValue((producer.Tag, producer.IdentityToken), out var channelHandlers))
+            {
+                continue;
+            }
+
+            // Precision marks whether this producer→handler binding is trustworthy. A channel with a SINGLE
+            // handler is unambiguous (the raise can only reach that one handler) — Exact. A channel with
+            // MANY handlers means the join (by event symbol / process-name token, with no instance or
+            // call-site identity) fanned the producer out to every same-symbol subscriber regardless of
+            // which caller wired which handler — Fanout, the imprecise binding the default --async walk
+            // quarantines (see docs/FIX-event-raise-overapproximation.md).
+            var precision = channelHandlers.Count == 1 ? DeliveryPrecisions.Exact : DeliveryPrecisions.Fanout;
+            foreach (var handler in channelHandlers)
+            {
+                if (seen.Add((producer.Caller, handler, producer.Tag)))
+                {
+                    added.Add(
+                        new CallEdge(
+                            Caller: producer.Caller,
+                            Callee: handler,
+                            Kind: EdgeKinds.Handoff,
+                            FilePath: producer.FilePath,
+                            Line: producer.Line,
+                            HandoffDispatcher: producer.Tag,
+                            DeliveryPrecision: precision
+                        )
+                    );
+                }
+            }
+        }
+
+        return added.Count == 0 ? graph : graph with { CallEdges = [.. graph.CallEdges, .. added] };
+    }
+
     // The SINGLE shaping pass for the attribution/traversal commands (reaches/tree/path/callers). Applied
     // once at graph load, direction-agnostic: (1) monomorphize generic-factory edges into the CallEdges,
     // then (2) carry the cut + context-dispatch rules ON the graph so BuildIndex picks them up and BOTH
@@ -56,14 +205,33 @@ public static partial class FactPathFinder
     // what makes `callers` agree with `path`/`reaches` — they all walk the same shaped graph rather than
     // each command shaping (or not) on its own. Empty rule sets => the unshaped graph (the `--raw` path,
     // and what `dead` uses — it needs the sound CHA superset, so it never calls this).
+    //
+    // STATIC-MONOMORPHIZATION SEAM (Phase 4, docs/design-dispatch-precision.md): when
+    // `monomorphizeSignatures` is NON-NULL, after the factory rewrite and BEFORE the cut/context attach, the
+    // reachable generic instantiations are materialized into distinct `~mono` nodes (Phase 1 inventory +
+    // Phase 2 Materialize) so the dispatch narrowing resolves the concrete override instead of CHA-fanning.
+    // The type-param NAMES come from `symbol_facts.Signature` (an `id -> Signature` map the loader supplies),
+    // since MethodRef/TypeSymbol carry no Signature on the graph. When `monomorphizeSignatures` is NULL (the
+    // default — every existing caller/test, and any run with the `RIG_MONOMORPHIZE` flag unset) NO inventory
+    // is built and NO materialization happens: the result is byte-identical to the pre-Phase-4 shaping.
     public static FactGraphData ShapeGraph(
         FactGraphData graph,
         IReadOnlyList<FactGenericFactoryRule> factoryRules,
         IReadOnlyList<FactTraversalCutRule> cutRules,
-        IReadOnlyList<FactContextDispatchRule> contextRules
+        IReadOnlyList<FactContextDispatchRule> contextRules,
+        IReadOnlyDictionary<string, string>? monomorphizeSignatures = null
     )
     {
         var shaped = RewriteGenericFactories(graph, factoryRules);
+
+        if (monomorphizeSignatures is not null)
+        {
+            var inventory = GenericInstantiationInventory.Build(shaped);
+            var typeParamNamesFor = (string id) =>
+                GenericSubstitution.ParseTypeParameterNames(monomorphizeSignatures.TryGetValue(id, out var sig) ? sig : null);
+            shaped = GenericMonomorphizer.Materialize(graph: shaped, inventory: inventory, typeParamNamesFor: typeParamNamesFor);
+        }
+
         if (cutRules.Count == 0 && contextRules.Count == 0)
         {
             return shaped;

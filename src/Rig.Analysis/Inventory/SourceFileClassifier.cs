@@ -1,16 +1,17 @@
 using Microsoft.CodeAnalysis;
-using Rig.Analysis.Rules;
+using Rig.Domain.Data;
+using RuleSet = Rig.Domain.Data.RuleSet;
 
 namespace Rig.Analysis.Inventory;
 
 internal static class SourceFileClassifier
 {
-    public static SourceFileClassification Classify(string solutionPath, Project project, string filePath, AnalysisRuleSet rules)
+    public static SourceFileClassification Classify(string solutionPath, Project project, string filePath, RuleSet rules)
     {
         return Classify(solutionPath: solutionPath, projectName: project.Name, filePath: filePath, rules: rules);
     }
 
-    public static SourceFileClassification Classify(string solutionPath, string projectName, string filePath, AnalysisRuleSet rules)
+    public static SourceFileClassification Classify(string solutionPath, string projectName, string filePath, RuleSet rules)
     {
         var relativePath = GetRelativePath(solutionPath, filePath);
         var excludedByRule = rules.FindExcludedFile(relativePath);

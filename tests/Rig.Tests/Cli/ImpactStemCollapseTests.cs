@@ -1,4 +1,5 @@
 using Rig.Cli.Commands;
+using Rig.Cli.Impact;
 using Shouldly;
 
 namespace Rig.Tests.Cli;
@@ -19,7 +20,7 @@ public sealed class ImpactStemCollapseTests
         var added = new[] { "M:Ns.Type.#ctor(System.Int32,System.String)" };
         var removed = new[] { "M:Ns.Type.#ctor(System.Int32)" };
 
-        var b = ImpactCommand.BucketStems(added, removed);
+        var b = ImpactEngine.BucketStems(added, removed);
 
         b.ChangedStems.ShouldBe(new[] { "Ns.Type.#ctor" });
         b.AddedStems.ShouldBeEmpty();
@@ -35,7 +36,7 @@ public sealed class ImpactStemCollapseTests
         var added = new[] { "M:Ns.Type.NewMethod(System.Int32)" };
         var removed = new[] { "M:Ns.Type.GoneMethod()" };
 
-        var b = ImpactCommand.BucketStems(added, removed);
+        var b = ImpactEngine.BucketStems(added, removed);
 
         b.AddedStems.ShouldBe(new[] { "Ns.Type.NewMethod" });
         b.RemovedStems.ShouldBe(new[] { "Ns.Type.GoneMethod" });
@@ -58,7 +59,7 @@ public sealed class ImpactStemCollapseTests
         };
         var removed = new[] { "M:Ns.Type.#ctor(System.Int32)", "M:Ns.Drop()" };
 
-        var b = ImpactCommand.BucketStems(added, removed);
+        var b = ImpactEngine.BucketStems(added, removed);
 
         b.ChangedStems.ShouldBe(new[] { "Ns.Type.#ctor" });
         b.AddedStems.ShouldBe(new[] { "Ns.Add" });
@@ -70,7 +71,7 @@ public sealed class ImpactStemCollapseTests
 
     // --- DiffReachSets ranking by distinct stem (Task 2) ----------------------------------------------
 
-    private static ImpactCommand.EntryPointRef Ep(string kind, string route) => new(kind, route, $"/{route}.cs", 1, null);
+    private static EntryPointRef Ep(string kind, string route) => new(kind, route, $"/{route}.cs", 1, null);
 
     [Test]
     public void Ordering_ranks_by_distinct_stem_so_an_overload_swap_loses_to_two_real_changes()
@@ -92,13 +93,13 @@ public sealed class ImpactStemCollapseTests
             [("http", "big")] = bigBase,
             [("http", "small")] = smallBase,
         };
-        var epByKey = new Dictionary<(string Kind, string Route), ImpactCommand.EntryPointRef>
+        var epByKey = new Dictionary<(string Kind, string Route), EntryPointRef>
         {
             [("http", "big")] = Ep("http", "big"),
             [("http", "small")] = Ep("http", "small"),
         };
 
-        var deltas = ImpactCommand.DiffReachSets(branch, baseStore, epByKey);
+        var deltas = ImpactEngine.DiffReachSets(branch, baseStore, epByKey);
 
         deltas.Count.ShouldBe(2);
         deltas[0].Route.ShouldBe("small"); // 2 distinct stems
@@ -123,14 +124,14 @@ public sealed class ImpactStemCollapseTests
             [("http", "a")] = new(StringComparer.Ordinal),
             [("action", "m")] = new(StringComparer.Ordinal),
         };
-        var epByKey = new Dictionary<(string Kind, string Route), ImpactCommand.EntryPointRef>
+        var epByKey = new Dictionary<(string Kind, string Route), EntryPointRef>
         {
             [("http", "z")] = Ep("http", "z"),
             [("http", "a")] = Ep("http", "a"),
             [("action", "m")] = Ep("action", "m"),
         };
 
-        var deltas = ImpactCommand.DiffReachSets(branch, baseStore, epByKey);
+        var deltas = ImpactEngine.DiffReachSets(branch, baseStore, epByKey);
 
         // All have delta 1 → ordered by Kind (action < http) then Route (a < z), ordinal.
         deltas.Select(d => (d.Kind, d.Route)).ShouldBe(new[] { ("action", "m"), ("http", "a"), ("http", "z") });
@@ -148,9 +149,9 @@ public sealed class ImpactStemCollapseTests
         {
             [("http", "x")] = new(StringComparer.Ordinal) { "M:N.C.#ctor()" },
         };
-        var epByKey = new Dictionary<(string Kind, string Route), ImpactCommand.EntryPointRef> { [("http", "x")] = Ep("http", "x") };
+        var epByKey = new Dictionary<(string Kind, string Route), EntryPointRef> { [("http", "x")] = Ep("http", "x") };
 
-        var deltas = ImpactCommand.DiffReachSets(branch, baseStore, epByKey);
+        var deltas = ImpactEngine.DiffReachSets(branch, baseStore, epByKey);
 
         deltas.Count.ShouldBe(1);
         deltas[0].ChangedStems.ShouldBe(new[] { "N.C.#ctor" });

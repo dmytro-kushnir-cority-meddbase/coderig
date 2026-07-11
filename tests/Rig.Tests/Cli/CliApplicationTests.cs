@@ -86,20 +86,35 @@ public sealed class CliApplicationTests
         error.ToString().ShouldContain($"Unrecognized command or argument '{flag}'");
     }
 
-    // Mutually-exclusive projection modes are rejected up front (validation runs before any store access,
-    // so these fail cleanly without a store).
+    // Unknown --view values are rejected up front (AcceptOnlyFromAmong validation runs before any store
+    // access, so these fail cleanly without a store).
     [Test]
-    public async Task Tree_rejects_conflicting_projection_modes()
+    public async Task Tree_rejects_unknown_view_value()
     {
         var output = new StringWriter();
         var error = new StringWriter();
 
-        var exitCode = await CliApplication.RunAsync(["tree", "X", "--full", "--summary"], output, error);
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--view", "bogus"], output, error);
 
         exitCode.ShouldBe(1);
-        error.ToString().ShouldContain("can't be combined");
-        error.ToString().ShouldContain("--full");
-        error.ToString().ShouldContain("--summary");
+        error.ToString().ShouldContain("bogus");
+        error.ToString().ShouldContain("not recognized");
+    }
+
+    // Regression: an invalid --format value must be a CLEAN validation error, not an unhandled
+    // InvalidOperationException — the cross-flag validator must read --format via raw token (GetValue
+    // throws once AcceptOnlyFromAmong has flagged the value).
+    [Test]
+    public async Task Tree_rejects_unknown_format_value()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(["tree", "X", "--format", "xml"], output, error);
+
+        exitCode.ShouldBe(1);
+        error.ToString().ShouldContain("xml");
+        error.ToString().ShouldContain("not recognized");
     }
 
     [Test]
@@ -129,7 +144,7 @@ public sealed class CliApplicationTests
             var exitCode = await CliApplication.RunAsync(["tree", "Whatever"], output, error, emptyDir);
 
             exitCode.ShouldBe(2);
-            error.ToString().ShouldContain("No indexed store");
+            error.ToString().ShouldContain("No .rig store found in");
             error.ToString().ShouldNotContain("SqliteException");
         }
         finally
@@ -139,17 +154,18 @@ public sealed class CliApplicationTests
     }
 
     [Test]
-    public async Task Files_requires_skipped_flag()
+    public async Task Files_without_skipped_is_no_longer_rejected_by_a_validator()
     {
         var output = new StringWriter();
         var error = new StringWriter();
 
-        var exitCode = await CliApplication.RunAsync(["files"], output, error);
+        _ = await CliApplication.RunAsync(["files"], output, error);
 
-        // The required-flag validator fails up front (exit 1); its message goes to stderr, framework help to
-        // stdout.
-        exitCode.ShouldBe(1);
-        error.ToString().ShouldContain("Usage: rig files --skipped");
+        // The bare-`files` dead-end validator was removed: it used to fail up front (exit 1) with
+        // "Usage: rig files --skipped". Bare `files` now proceeds to the command and prints an indexed-file
+        // count summary (or, with no store in the test cwd, fails cleanly on the missing store) — never the
+        // usage validator. Pin that the validator is gone.
+        error.ToString().ShouldNotContain("Usage: rig files --skipped");
     }
 
     [Test]
@@ -316,24 +332,13 @@ public sealed class CliApplicationTests
 
     // Materialize an analysis result into an indexed per-commit store (.rig/<storeId>/rig.db), stamped with the
     // given commit + branch so the impact header can render provenance. storeId is what --base/--head resolve.
-    private static async Task<string> MaterializeStoreAsync(
-        string workingDirectory,
-        AnalysisResult result,
-        string commit,
-        string branch
-    )
+    private static async Task<string> MaterializeStoreAsync(string workingDirectory, AnalysisResult result, string commit, string branch)
     {
-        var storeId = StoreLayout.NewStoreId(
-            new GitProvenance(Commit: commit, Branch: branch, Dirty: false)
-        );
+        var storeId = StoreLayout.NewStoreId(new GitProvenance(Commit: commit, Branch: branch, Dirty: false));
         var dir = StoreLayout.NewStoreDir(workingDirectory, storeId);
         var db = Path.Combine(dir, StoreLayout.DbFileName);
         await using var ctx = new RigDbContext(db, pooling: false);
-        await Writes.SaveAsync(
-            ctx,
-            result,
-            provenance: new GitProvenance(Commit: commit, Branch: branch, Dirty: false)
-        );
+        await Writes.SaveAsync(ctx, result, provenance: new GitProvenance(Commit: commit, Branch: branch, Dirty: false));
         return storeId;
     }
 
@@ -400,10 +405,56 @@ public sealed class CliApplicationTests
         ).ShouldBe(0);
         output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Length.ShouldBe(1);
 
+        // (Text-mode `--limit` truncation-note coverage was dropped here: `callers` now forward-verifies and
+        // its listing/headline key off the CONFIRMED-caller count, and `PaymentGatewayProcess.Tell` has a
+        // single confirmed caller — the dispatcher — so it is not truncatable. The `--limit` cap itself is
+        // verified by the tsv row-count check above; the truncation/footer behaviour over a forward-verified
+        // listing is exercised by CallersForwardVerifiedClosureTests.)
+    }
+
+    // `tree --hazards` — the third hazard SURFACE (after `derive`'s whole-store view + `impact`'s per-EP
+    // delta): the drill-in that renders one entry point's reachable tree with its pattern findings inline.
+    // It re-derives the EP's bounded closure with the static-field refs + the hazard post-pass, marks each
+    // hazard-bearing node with ⚠, and prints the Hazards summary section. CreateTeamAsync writes the DB
+    // (SaveChangesAsync -> efcore:commit) AND the cache (StringSetAsync -> redis:write) in one method — a
+    // db+cache dual_write — so it is the end-to-end fixture for the surface over a REAL index → derive.
+    [Test]
+    public async Task Tree_hazards_marks_a_dual_write_inline_and_in_the_summary_section()
+    {
+        using var playground = await TempPlayground.CreateEntryPointEffectsAsync();
+        var workingDirectory = Path.Combine(playground.RootDirectory, "workspace");
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        (await CliApplication.RunAsync(["index", playground.SolutionPath], output, error, workingDirectory)).ShouldBe(0);
+
+        // Text mode: the dual_write is marked inline on the CreateTeamAsync node AND named in the section.
         output.GetStringBuilder().Clear();
         (
-            await CliApplication.RunAsync(["callers", "PaymentGatewayProcess.Tell", "--limit", "1"], output, error, workingDirectory)
+            await CliApplication.RunAsync(["tree", "TeamWorkflow.CreateTeamAsync", "--view", "hazards"], output, error, workingDirectory)
         ).ShouldBe(0);
-        output.ToString().ShouldContain("raise --limit");
+        var text = output.ToString();
+        text.ShouldContain("⚠");
+        text.ShouldContain("dual_write(medium)");
+        text.ShouldContain("Hazards (pattern findings):");
+
+        // The surface is OPT-IN: a plain `tree` of the same method shows no hazard marker. Run AFTER the
+        // --hazards query to also prove the augmented effects/seam never polluted the (hazard-free) cache.
+        output.GetStringBuilder().Clear();
+        (await CliApplication.RunAsync(["tree", "TeamWorkflow.CreateTeamAsync"], output, error, workingDirectory)).ShouldBe(0);
+        output.ToString().ShouldNotContain("dual_write");
+
+        // tsv: a `hazard` row carries the finding (same column contract as `derive --format tsv`), trailing
+        // the node rows so a consumer reads the tree and its findings from one stream.
+        output.GetStringBuilder().Clear();
+        (
+            await CliApplication.RunAsync(
+                ["tree", "TeamWorkflow.CreateTeamAsync", "--view", "hazards", "--format", "tsv"],
+                output,
+                error,
+                workingDirectory
+            )
+        ).ShouldBe(0);
+        output.ToString().ShouldContain("hazard\tdual_write\t");
     }
 }

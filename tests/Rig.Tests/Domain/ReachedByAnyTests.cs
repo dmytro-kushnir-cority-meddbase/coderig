@@ -131,7 +131,9 @@ public sealed class ReachedByAnyTests
 
         var reached = FactPathFinder.ReachedByAny(graph, new[] { "M:N.Impl.V" });
 
-        reached.Keys.ShouldContain("M:N.Base.V"); // the base virtual reaches the override forward
-        reached.Keys.ShouldContain("M:N.Caller.Go"); // ...and its caller, transitively
+        reached.Keys.ShouldContain("M:N.Caller.Go"); // the polymorphic caller — the blast radius impact reports
+        // The base virtual DECLARATION is a dispatch waypoint, not a caller-origin — the narrowed reverse
+        // attributes through to the real caller (Caller.Go) instead of surfacing it (reconciled 2026-06-25).
+        reached.Keys.ShouldNotContain("M:N.Base.V");
     }
 }

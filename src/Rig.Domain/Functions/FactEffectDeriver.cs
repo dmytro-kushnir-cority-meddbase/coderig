@@ -30,7 +30,19 @@ public static class FactEffectDeriver
         IReadOnlyList<(string TypeId, string BaseId)>? baseEdges = null,
         IReadOnlyList<SymbolRef>? ctorRefs = null,
         FactObservationRules? observationRules = null,
-        IReadOnlyList<SymbolRef>? throwRefs = null
+        IReadOnlyList<SymbolRef>? throwRefs = null,
+        // FR-1(b): write refs whose TARGET is a STATIC field/auto-property, pre-filtered by the caller
+        // (the static-ness gate lives in the loader's symbol_facts join — the fact layer's only source
+        // of the target's modifiers). Each Target is the written slot's DocID ("F:Ns.Type.field" /
+        // "P:Ns.Type.Prop"); MatchFieldWrite rules consume these. The FactFieldAccess carrier also brings
+        // the write's structural context (enclosing loop / fan-out / lock / try-catch) so the field-write
+        // effect derives the SAME observations as an invocation. Null/empty when not supplied.
+        IReadOnlyList<FactFieldAccess>? staticFieldWriteRefs = null,
+        // FR-1 read arm: READ refs whose TARGET is a STATIC field/auto-property — the symmetric twin of
+        // staticFieldWriteRefs, pre-filtered identically (RefKind=read instead of write). MatchFieldRead
+        // rules consume these and emit a shared_state:read effect, carrying the read's structural context
+        // exactly like the write arm. Null/empty when not supplied.
+        IReadOnlyList<FactFieldAccess>? staticFieldReadRefs = null
     )
     {
         // Precompute a base-type closure per distinct DeclaringTypeBaseTypes set (e.g. ProxyBase).
@@ -68,7 +80,14 @@ public static class FactEffectDeriver
         // List<string> enumerator for rule.Methods.Contains(name, comparer) — IReadOnlyList has no IList
         // fast path — and string.Join("|", roots) to key the closure cache inside ClosureFor.
         var invocationRules = rules
-            .Where(r => !r.MatchConstructor && !r.MatchThrow && !r.TreatAsDispatch && r.TargetCallsMethods is not { Count: > 0 })
+            .Where(r =>
+                !r.MatchConstructor
+                && !r.MatchThrow
+                && !r.MatchFieldWrite
+                && !r.MatchFieldRead
+                && !r.TreatAsDispatch
+                && r.TargetCallsMethods is not { Count: > 0 }
+            )
             .Select(r => (Rule: r, Methods: new HashSet<string>(r.Methods, StringComparer.Ordinal), Closure: ClosureFor(r)))
             .ToArray();
         // Union of every invocation rule's method names — lets the per-invocation loop reject a target
@@ -82,6 +101,8 @@ public static class FactEffectDeriver
 
         var constructorRules = rules.Where(r => r.MatchConstructor && !r.TreatAsDispatch).ToArray();
         var throwRules = rules.Where(r => r.MatchThrow && !r.TreatAsDispatch).ToArray();
+        var fieldWriteRules = rules.Where(r => r.MatchFieldWrite && !r.TreatAsDispatch).ToArray();
+        var fieldReadRules = rules.Where(r => r.MatchFieldRead && !r.TreatAsDispatch).ToArray();
 
         var results = new List<DerivedEffect>();
         foreach (var inv in invocations)
@@ -176,7 +197,13 @@ public static class FactEffectDeriver
                         catchTypes: FactStructuralContext.DecodeList(inv.CatchTypes),
                         rules: observationRules,
                         provider: rule.Provider,
-                        enclosingScopes: FactStructuralContext.DecodeScopes(inv.EnclosingScopes)
+                        enclosingScopes: FactStructuralContext.DecodeScopes(inv.EnclosingScopes),
+                        typeArguments: inv.TypeArguments,
+                        operation: rule.Operation,
+                        firstArgName: inv.FirstArgName,
+                        firstArgTemplate: inv.FirstArgTemplate,
+                        argumentNames: inv.ArgumentNames,
+                        argumentTemplates: inv.ArgumentTemplates
                     );
 
                 results.Add(
@@ -187,7 +214,9 @@ public static class FactEffectDeriver
                         EnclosingSymbolId: inv.Enclosing,
                         FilePath: inv.FilePath,
                         Line: inv.Line,
-                        Observations: observations
+                        Observations: observations,
+                        Atomic: rule.Atomic,
+                        EnclosingGuards: inv.EnclosingGuards
                     )
                 );
                 break; // first matching rule wins
@@ -201,26 +230,25 @@ public static class FactEffectDeriver
         // Wrappers are identified from data — no per-type curation.
         if (wrapperRules.Length > 0)
         {
-            // Per rule: the set of methods that call any of its target patterns (the wrappers).
-            var wrapperSets = wrapperRules.ToDictionary(
-                rule => rule,
-                rule =>
+            // Per rule: the set of methods that call any of its target patterns (the wrappers). Built in
+            // ONE pass over invocations — the previous per-rule projection re-scanned the whole invocation
+            // list once per wrapper rule. Same membership, R passes collapsed to one.
+            var wrapperSets = wrapperRules.ToDictionary(rule => rule, _ => new HashSet<string>(StringComparer.Ordinal));
+            foreach (var inv in invocations)
+            {
+                if (inv.Enclosing is null)
                 {
-                    var set = new HashSet<string>(StringComparer.Ordinal);
-                    foreach (var inv in invocations)
-                    {
-                        if (
-                            inv.Enclosing is not null
-                            && rule.TargetCallsMethods!.Any(p => inv.Target.IndexOf(p, StringComparison.Ordinal) >= 0)
-                        )
-                        {
-                            set.Add(inv.Enclosing);
-                        }
-                    }
-
-                    return set;
+                    continue;
                 }
-            );
+
+                foreach (var rule in wrapperRules)
+                {
+                    if (rule.TargetCallsMethods!.Any(p => inv.Target.IndexOf(p, StringComparison.Ordinal) >= 0))
+                    {
+                        wrapperSets[rule].Add(inv.Enclosing);
+                    }
+                }
+            }
 
             foreach (var inv in invocations)
             {
@@ -262,7 +290,9 @@ public static class FactEffectDeriver
                             ResourceType: resource!,
                             EnclosingSymbolId: inv.Enclosing,
                             FilePath: inv.FilePath,
-                            Line: inv.Line
+                            Line: inv.Line,
+                            Atomic: rule.Atomic,
+                            EnclosingGuards: inv.EnclosingGuards
                         )
                     );
                     break;
@@ -309,7 +339,8 @@ public static class FactEffectDeriver
                             ResourceType: constructedType,
                             EnclosingSymbolId: ctor.Enclosing,
                             FilePath: ctor.FilePath,
-                            Line: ctor.Line
+                            Line: ctor.Line,
+                            Atomic: rule.Atomic
                         )
                     );
                     break;
@@ -350,7 +381,9 @@ public static class FactEffectDeriver
                             ResourceType: exceptionType,
                             EnclosingSymbolId: thrown.Enclosing,
                             FilePath: thrown.FilePath,
-                            Line: thrown.Line
+                            Line: thrown.Line,
+                            Atomic: rule.Atomic,
+                            EnclosingGuards: thrown.EnclosingGuards
                         )
                     );
                     break;
@@ -358,7 +391,120 @@ public static class FactEffectDeriver
             }
         }
 
+        // Static-field-write effects (FR-1(b)): a `StaticType.SharedField = v` assignment. The target's
+        // static-ness is gated UPSTREAM (the loader's symbol_facts join) — a static slot is shared
+        // mutable state independent of any receiver, which is what makes this a sound rule (an instance
+        // field write would be local-vs-shared-ambiguous and is deliberately NOT matched). The target
+        // field/property DocID's declaring TYPE is gated like a declaring type, so a rule can scope to a
+        // namespace/type or fire on every static-slot write; the resource is the declaring type
+        // (resource:"declaring_type", recommended) or the field DocID itself (any other strategy). Keyed
+        // to the write's EnclosingSymbolId — a call-graph node — so it surfaces in reaches/tree.
+        EmitFieldAccessEffects(staticFieldWriteRefs, fieldWriteRules);
+
+        // FR-1 read arm — the symmetric twin of the field-write arm above. A READ of a STATIC field/auto-
+        // property (the "check" of a shared cell) emits a shared_state:read effect keyed to the reading
+        // method, identical resource resolution + structural-context observations to the write arm. Static-
+        // ness is gated upstream (the read loader's symbol_facts join). MatchFieldRead rules carry Atomic
+        // false (a read is never an atomic RMW). This is the raw material the read-before-write TOCTOU
+        // detector pairs with a same-cell write effect.
+        EmitFieldAccessEffects(staticFieldReadRefs, fieldReadRules);
+
         return results;
+
+        // Shared emitter for both static-field-access arms (read + write differ only by their ref/rule
+        // collections). For each access ref, resolve its slot, then for the first matching rule emit a
+        // DerivedEffect keyed to the access's enclosing call-graph node, with resource resolution and
+        // structural-context observations identical between the arms.
+        void EmitFieldAccessEffects(IReadOnlyList<FactFieldAccess>? accessRefs, FactEffectRule[] accessRules)
+        {
+            if (accessRules.Length == 0 || accessRefs is null)
+            {
+                return;
+            }
+
+            foreach (var access in accessRefs)
+            {
+                var slot = ParseFieldSlot(access.Target);
+                if (slot is null)
+                {
+                    continue;
+                }
+
+                var (declaringType, _) = slot.Value;
+
+                foreach (var rule in accessRules)
+                {
+                    if (providerFilter is not null && !string.Equals(rule.Provider, providerFilter, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (!TypeGateMatches(rule, declaringType, receiverType: null, ClosureFor(rule)))
+                    {
+                        continue;
+                    }
+
+                    // resource:"declaring_type" -> the slot's declaring type; anything else -> the slot
+                    // DocID (the precise field), so the resource is never empty for a matched access.
+                    var resource = string.Equals(rule.Resource, "declaring_type", StringComparison.Ordinal) ? declaringType : access.Target;
+
+                    // Observations from the access's structural context — MIRRORS the invocation arm exactly
+                    // (same observation rules, same decode helpers, same provider). A static-field access
+                    // under Parallel.ForEach / a loop / a lock carries parallel_fanout / looped_effect /
+                    // lock_held_across_effect. The slot's MEMBER name is the methodName analogue (the
+                    // concurrency_handled commit-method gate keys on it); a plain field access matches no
+                    // commit method, so it is inert there.
+                    var member = slot.Value.Member;
+                    var observations = observationRules is null
+                        ? null
+                        : FactObservationDeriver.Derive(
+                            methodName: member,
+                            loopKind: access.LoopKind,
+                            loopDetail: access.LoopDetail,
+                            enclosingInvocations: FactStructuralContext.DecodeInvocations(access.EnclosingInvocations),
+                            catchTypes: FactStructuralContext.DecodeList(access.CatchTypes),
+                            rules: observationRules,
+                            provider: rule.Provider,
+                            enclosingScopes: FactStructuralContext.DecodeScopes(access.EnclosingScopes)
+                        );
+
+                    results.Add(
+                        new DerivedEffect(
+                            Provider: rule.Provider,
+                            Operation: rule.Operation,
+                            ResourceType: resource,
+                            EnclosingSymbolId: access.Enclosing,
+                            FilePath: access.FilePath,
+                            Line: access.Line,
+                            Observations: observations,
+                            Atomic: rule.Atomic
+                        )
+                    );
+                    break;
+                }
+            }
+        }
+    }
+
+    // "F:Ns.Type.field" / "P:Ns.Type.Prop" -> ("Ns.Type", "field"). Generic arity markers on the
+    // declaring type are stripped (mirrors ParseMethod) so a rule can gate the open-generic form. Null
+    // when the DocID is not a field/property slot or has no dot before the member name.
+    private static (string DeclaringType, string Member)? ParseFieldSlot(string docId)
+    {
+        if (!docId.StartsWith("F:", StringComparison.Ordinal) && !docId.StartsWith("P:", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var lastDot = docId.LastIndexOf('.');
+        if (lastDot < 2)
+        {
+            return null;
+        }
+
+        var declaring = StripTypeArityMarkers(docId.Substring(startIndex: 2, length: lastDot - 2));
+        var member = docId.Substring(lastDot + 1);
+        return (declaring, member);
     }
 
     // A rule with no type gate matches any receiver. Otherwise the declaring type must match a
@@ -552,6 +698,16 @@ public static class FactEffectDeriver
             // The first argument's string template (literal/interpolated). With argumentIndex set, the
             // nth argument's template instead (e.g. a Flurl path segment past position 0).
             "string_argument" => argumentIndex is null ? firstArgTemplate : NthJsonString(argumentTemplates, argumentIndex.Value),
+            // The argument's string template when the call site has one, else the receiver/declaring
+            // type so the effect is NEVER dropped — same recall stance as http_argument. For a
+            // path-taking overload set like XmlDocument.Save(path)/Save(Stream)/Save(XmlWriter), a
+            // literal path names the actual file resource, while variable paths and non-string
+            // overloads keep the receiver-typed effect instead of vanishing (VS-C4).
+            "string_argument_or_receiver" => FirstNonBlank(
+                argumentIndex is null ? firstArgTemplate : NthJsonString(argumentTemplates, argumentIndex.Value),
+                receiver,
+                declaringType
+            ),
             // Prefer the literal URL host/path when the first argument is a string template; otherwise
             // fall back to the receiver type (the HttpClient/SocketsHttpHandler instance) so the effect
             // is NEVER dropped. URLs are built dynamically far more often than not, so the prior

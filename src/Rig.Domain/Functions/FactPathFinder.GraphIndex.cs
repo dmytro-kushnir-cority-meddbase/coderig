@@ -9,42 +9,88 @@ public static partial class FactPathFinder
     {
         public Dictionary<string, List<string>> Callers = new(StringComparer.Ordinal);
 
-        // target method -> the dispatch SOURCE methods that resolve to it. Built as the exact REVERSE
-        // of the forward DispatchTargets (CHA, receiver-blind) over every node, so reverse traversal
-        // sees precisely the edges the materialised dispatch_edges table carries (SQL == oracle by
-        // construction) — mined-first resolution, error-type recovery and the heuristic fallback all
-        // included, instead of a parallel name-matching reimplementation that could drift.
+        // The reverse-dispatch map. Its MEANING differs by mode:
+        //
+        //   * NARROWED (NarrowDispatch=true): concrete dispatch TARGET O -> the set of CALLER methods that
+        //     dispatch to O, already RECEIVER-NARROWED per call edge. Built by INVERTING forward's own
+        //     per-edge output: for each real call edge `caller -(R)-> B`, the targets `DispatchTargets(B, R)`
+        //     are exactly the concrete methods that edge can reach, so `caller` reverse-reaches each via that
+        //     one dispatch hop. This is the precise mirror of Successors' forward narrowing — the god-seam
+        //     over-approximation (a hub's 3,000 unrelated callers riding the fan to every override) is gone
+        //     because each caller is only ever attributed to the override ITS receiver resolves to. A
+        //     `base.M()` (NonVirtual) edge contributes NO entry (it reaches only the base BODY via Callers,
+        //     never a sibling override). Predecessors yields these caller methods DIRECTLY — no further
+        //     receiver gate is needed (the narrowing already happened at build time).
+        //
+        //   * RECEIVER-BLIND (NarrowDispatch=false): the sound superset — concrete TARGET O -> the dispatch
+        //     SOURCE (base/interface/hub) methods that resolve to it, the exact reverse of the receiver-blind
+        //     forward DispatchTargets(node, null) over every node. Predecessors yields the full hub-fan
+        //     (every caller of the hub rides up), matching the SQL/dispatch_edges oracle. Unchanged.
         public Dictionary<string, List<string>> ReverseDispatch = new(StringComparer.Ordinal);
 
-        // Per virtual/base/interface method node: the receiver-type "profile" of all direct call edges
-        // that target it. Used to narrow reverse dispatch — a base method only reverse-reaches an
-        // override whose declaring type is in scope of SOME caller's receiver. AnyUnreliable=true when
-        // at least one caller had a null/unresolved/base-typed receiver (forces the CHA fallback so
-        // recall is preserved). Strict-typed receiver DocIDs collected in StrippedReceivers.
-        public Dictionary<string, ReceiverProfile> ReceiverProfileByCallee = new(StringComparer.Ordinal);
         public bool NarrowDispatch = true;
     }
 
-    private sealed class ReceiverProfile
-    {
-        public bool AnyUnreliable;
-        public HashSet<string> StrippedReceivers = new(StringComparer.Ordinal);
-    }
-
-    private static ReverseMaps BuildReverseMaps(FactGraphData graph, bool narrowDispatch = true, TraversalMode mode = TraversalMode.SyncCut)
+    // descendantsFrom: when the caller already holds an index built from the SAME graph, its
+    // DescendantsCache is shared into the internal index below — the strict-descendant closure is a pure
+    // function of graph.BaseEdges (identical across every index from this graph), so a set cached via one
+    // index is valid for the other. Lets each type's descendants be computed ONCE per command (the dispatch
+    // scan here + the caller's later Predecessors hops) instead of once per index.
+    private static ReverseMaps BuildReverseMaps(
+        FactGraphData graph,
+        bool narrowDispatch = true,
+        TraversalMode mode = TraversalMode.SyncCut,
+        GraphIndex? descendantsFrom = null
+    )
     {
         var rev = new ReverseMaps { NarrowDispatch = narrowDispatch };
+
+        // The internal index used for dispatch resolution. Receiver narrowing in DispatchTargets is driven by
+        // the receiverType ARGUMENT, not by index.NarrowDispatch, so a narrowDispatch:false index serves both
+        // the per-edge narrowed inversion (true mode, passing the real receiver) and the per-node blind
+        // inversion (false mode, passing null) — exactly mirroring the forward walk.
+        var index = BuildIndex(graph, narrowDispatch: false);
+        // Share the caller's descendant-closure cache (see descendantsFrom note) so the dispatch resolution
+        // here and the caller's later Descendants() hops compute each type's strict descendants once.
+        if (descendantsFrom is not null)
+        {
+            index.DescendantsCache = descendantsFrom.DescendantsCache;
+        }
+
+        // Memoise DispatchTargets per (hub B, stripped receiver R) — the god-seam has ~49 distinct receivers
+        // across ~3,000 call edges into the same hub, so this collapses ~3,000 resolutions to ~49. A distinct
+        // sentinel keys the null/unstripped-receiver case (full CHA, DispatchTargets(B, null)).
+        const string nullReceiverSentinel = "\0null";
+        var dispatchMemo = new Dictionary<(string Hub, string ReceiverKey), List<(string Node, string Kind, string Basis)>>();
+
+        List<(string Node, string Kind, string Basis)> DispatchTargetsMemo(string hub, string? receiver)
+        {
+            var stripped = string.IsNullOrEmpty(receiver) ? null : ReceiverToStrippedTypeId(receiver!);
+            var key = (hub, stripped ?? nullReceiverSentinel);
+            if (!dispatchMemo.TryGetValue(key, out var targets))
+            {
+                // Pass the ORIGINAL receiver string (not the stripped key) so DispatchTargets does its own
+                // ResolveNarrowRoot exactly as the forward walk does; a null/unstripped receiver -> full CHA.
+                dispatchMemo[key] = targets = DispatchTargets(method: hub, index: index, receiverType: stripped is null ? null : receiver);
+            }
+
+            return targets;
+        }
+
         foreach (var edge in graph.CallEdges)
         {
-            // Sync-cut: an async handoff edge is NOT a synchronous caller->callee link, so it must not
-            // make the registrar a predecessor of the callback (else `callers` would claim the
-            // registrar reaches the callback synchronously, and the callback wouldn't surface as a
-            // background origin via `--roots`). --async keeps the link.
-            if (mode == TraversalMode.SyncCut && edge.Kind == EdgeKinds.Handoff)
+            // A handoff edge is NOT a synchronous caller->callee link, so under SyncCut it must not make
+            // the registrar a predecessor of the callback (else `callers` would claim the registrar reaches
+            // the callback synchronously, and the callback wouldn't surface as a background origin via
+            // `--roots`). Under AsyncExact the link is kept EXCEPT for delivery fan-out; AsyncInclude keeps
+            // all. CutsHandoff centralizes the policy so this reverse walk and the forward Dispatch walk agree.
+            if (CutsHandoff(mode, edge))
             {
                 continue;
             }
 
+            // Direct callers (every mode): the real caller of the callee BODY. Includes base.M() callers —
+            // a base call IS a direct caller of the base body, so `callers(base)` still lists it.
             if (!rev.Callers.TryGetValue(edge.Callee, out var list))
             {
                 rev.Callers[edge.Callee] = list = new List<string>();
@@ -52,39 +98,53 @@ public static partial class FactPathFinder
 
             list.Add(edge.Caller);
 
-            if (!rev.ReceiverProfileByCallee.TryGetValue(edge.Callee, out var profile))
+            if (!narrowDispatch)
             {
-                rev.ReceiverProfileByCallee[edge.Callee] = profile = new ReceiverProfile();
+                continue; // false mode builds ReverseDispatch per-NODE below (receiver-blind hub-fan)
             }
 
-            var stripped = string.IsNullOrEmpty(edge.ReceiverType) ? null : ReceiverToStrippedTypeId(edge.ReceiverType!);
-            if (stripped is null)
+            // NARROWED per-edge reverse dispatch (true mode): invert forward's own output. A base.M() edge
+            // binds to exactly the base body and never a sibling override, so it contributes no dispatch fan
+            // (it is already a direct caller above). For an ordinary edge `caller -(R)-> B`, every concrete
+            // target O of DispatchTargets(B, R) is a method `caller` reverse-reaches via this one dispatch
+            // hop — so `caller` is a (already receiver-narrowed) reverse-dispatch caller of O.
+            if (edge.NonVirtual)
             {
-                profile.AnyUnreliable = true; // null/unresolved receiver — can dispatch anywhere (CHA)
+                continue;
             }
-            else
+
+            foreach (var target in DispatchTargetsMemo(hub: edge.Callee, receiver: edge.ReceiverType))
             {
-                profile.StrippedReceivers.Add(stripped);
+                if (!rev.ReverseDispatch.TryGetValue(target.Node, out var sources))
+                {
+                    rev.ReverseDispatch[target.Node] = sources = new List<string>();
+                }
+
+                sources.Add(edge.Caller);
             }
         }
 
-        // Reverse dispatch = the forward CHA dispatch edges, inverted. (The receiver-blind superset;
-        // ReverseDispatchReaches narrows per hop when narrowing is on.)
-        var index = BuildIndex(graph, narrowDispatch: false);
-        foreach (var node in index.Nodes)
-        foreach (var target in DispatchTargets(node, index, receiverType: null))
+        if (!narrowDispatch)
         {
-            if (!rev.ReverseDispatch.TryGetValue(target.Node, out var sources))
+            // RECEIVER-BLIND superset: ReverseDispatch = the forward CHA dispatch edges inverted, per node.
+            // O -> [hub methods that resolve to O]. Predecessors yields the full hub-fan (every caller of the
+            // hub rides up). The SQL/dispatch_edges oracle equivalence is by construction. Unchanged behaviour.
+            foreach (var node in index.Nodes)
+            foreach (var target in DispatchTargets(method: node, index: index, receiverType: null))
             {
-                rev.ReverseDispatch[target.Node] = sources = new List<string>();
-            }
+                if (!rev.ReverseDispatch.TryGetValue(target.Node, out var sources))
+                {
+                    rev.ReverseDispatch[target.Node] = sources = new List<string>();
+                }
 
-            sources.Add(node);
+                sources.Add(node);
+            }
         }
+
         return rev;
     }
 
-    private static IEnumerable<string> Predecessors(string current, GraphIndex index, ReverseMaps rev)
+    private static IEnumerable<(string Pred, bool ViaReverseDispatch)> Predecessors(string current, GraphIndex index, ReverseMaps rev)
     {
         // Cut symmetry: a cut node yields NO successors forward (Successors `yield break`s on it), so it
         // can never be the runtime caller/dispatcher of `current` — it must not surface as a predecessor
@@ -99,91 +159,28 @@ public static partial class FactPathFinder
             {
                 if (!cutting || !index.IsTraversalCut(c))
                 {
-                    yield return c;
+                    yield return (c, false);
                 }
             }
         }
 
-        // Reverse dispatch: every source method whose (forward) dispatch resolves to `current` —
-        // its interface declaration, base virtual, or transitive base of the override chain. Narrowed:
-        // only yield a source when SOME caller of it could dispatch to current's declaring type (its
-        // receiver is unreliable or in scope of it). Else current can't be the runtime target of any
-        // of that source's call sites — drop it.
+        // Reverse dispatch.
+        //   * NARROWED mode: `sources` are the CALLER methods that dispatch to `current`, already
+        //     receiver-narrowed at build time (BuildReverseMaps inverted forward's per-edge DispatchTargets).
+        //     Yield them directly — no per-method receiver gate is needed; the wrong-receiver callers were
+        //     never added. The base.M() exclusion falls out for free (NonVirtual edges contributed nothing).
+        //   * RECEIVER-BLIND mode: `sources` are the hub/base/interface methods that resolve to `current` —
+        //     the full hub-fan rides up, as before.
         if (rev.ReverseDispatch.TryGetValue(current, out var sources))
         {
-            var parsed = ParseMethod(current);
-            var typeId = parsed?.TypeId;
             foreach (var s in sources)
             {
-                if (
-                    (!cutting || !index.IsTraversalCut(s))
-                    && (typeId is null || ReverseDispatchReaches(baseMethod: s, overrideTypeId: typeId, index: index, rev: rev))
-                )
+                if (!cutting || !index.IsTraversalCut(s))
                 {
-                    yield return s;
+                    yield return (s, true);
                 }
             }
         }
-    }
-
-    // True when the virtual/base/interface method `baseMethod` can dispatch to an override/impl whose
-    // declaring type is `overrideTypeId` (a stripped or DocID type) — i.e. when SOME direct caller of
-    // `baseMethod` has a receiver in scope of `overrideTypeId`. CHA fallback (always true) when
-    // narrowing is off, when any caller's receiver is unreliable, or when `baseMethod` has no recorded
-    // callers (e.g. an entry-point virtual reached only by the framework — keep recall).
-    private static bool ReverseDispatchReaches(string baseMethod, string overrideTypeId, GraphIndex index, ReverseMaps rev)
-    {
-        if (!rev.NarrowDispatch)
-        {
-            return true;
-        }
-
-        if (!rev.ReceiverProfileByCallee.TryGetValue(baseMethod, out var profile))
-        {
-            return true; // no call edges target it (framework-invoked) — don't narrow it away
-        }
-
-        if (profile.AnyUnreliable || profile.StrippedReceivers.Count == 0)
-        {
-            return true;
-        }
-
-        var overrideStripped = TypeClosure.StripGeneric(overrideTypeId);
-        foreach (var r in profile.StrippedReceivers)
-        {
-            // A receiver R reaches this override type when R == overrideType, or overrideType is a
-            // descendant of R (R is a base typing of the runtime object), or R is a descendant of
-            // overrideType (the override lives on a supertype of R's static type — the CLR walks up).
-            if (string.Equals(r, overrideStripped, StringComparison.Ordinal))
-            {
-                return true;
-            }
-
-            if (
-                Descendants(r, index).Contains(overrideTypeId)
-                || DescendantsContainStripped(declaringTypeId: r, strippedReceiver: overrideStripped, index: index)
-            )
-            {
-                return true;
-            }
-
-            if (
-                Descendants(overrideTypeId, index).Contains(r)
-                || DescendantsContainStripped(declaringTypeId: overrideTypeId, strippedReceiver: r, index: index)
-            )
-            {
-                return true;
-            }
-
-            // Interface arm: receiver r is an interface that the override's declaring type implements.
-            // Mirror of InReceiverScope (forward) — without it, a cleanly-typed interface receiver
-            // can't narrow to its impl and the legitimate reverse-dispatch edge is pruned.
-            if (ImplementsInterface(strippedType: overrideStripped, interfaceTypeId: r, index: index))
-            {
-                return true;
-            }
-        }
-        return false;
     }
 
     private sealed class GraphIndex
@@ -283,6 +280,12 @@ public static partial class FactPathFinder
     private static GraphIndex BuildIndex(FactGraphData graph, bool narrowDispatch = true)
     {
         var index = new GraphIndex { NarrowDispatch = narrowDispatch };
+        // Pre-size the two collections that fill to the full graph size, so they don't resize/rehash ~log2(N)
+        // times from empty as edges/nodes are added (each resize reallocates the backing arrays — pure churn,
+        // and BuildIndex runs on EVERY traversal). Capacities are safe upper bounds (distinct callers <=
+        // edges; distinct nodes <= methods + edge endpoints).
+        index.Adjacency.EnsureCapacity(graph.CallEdges.Count);
+        index.Nodes.EnsureCapacity(graph.Methods.Count + graph.CallEdges.Count);
         foreach (var edge in graph.CallEdges)
         {
             if (!index.Adjacency.TryGetValue(edge.Caller, out var list))
@@ -295,20 +298,58 @@ public static partial class FactPathFinder
             index.Nodes.Add(edge.Callee);
         }
 
+        // Sort each adjacency list ONCE here — total order: call-site line (primary, preserves source
+        // order for distinct-line children), then callee SymbolId (first tie-break, ordinal), then edge
+        // Kind (second tie-break), then ReceiverType (final tie-break) — so Successors iterates it
+        // directly instead of re-running OrderBy().ThenBy() on every node expansion. The four-key total
+        // order is store-independent: same-line edges that share even the callee id are distinguished by
+        // Kind/ReceiverType, so a re-index (which reshuffles SQLite rowids) or a parallel-load (which
+        // does not preserve insertion order) cannot change child ordering. Line stays primary, so
+        // distinct-line children are unaffected. Adjacency is immutable after this build, and BuildIndex
+        // finishes single-threaded before any (possibly parallel, e.g. ReachesFromEachSeed) traversal
+        // reads the shared index, so the in-place sort is race-free.
+        foreach (var list in index.Adjacency.Values)
+        {
+            list.Sort(
+                static (a, b) =>
+                {
+                    var byLine = a.Line.CompareTo(b.Line);
+                    if (byLine != 0)
+                    {
+                        return byLine;
+                    }
+
+                    var byCallee = string.CompareOrdinal(a.Callee, b.Callee);
+                    if (byCallee != 0)
+                    {
+                        return byCallee;
+                    }
+
+                    var byKind = string.CompareOrdinal(a.Kind, b.Kind);
+                    if (byKind != 0)
+                    {
+                        return byKind;
+                    }
+
+                    return string.CompareOrdinal(a.ReceiverType, b.ReceiverType);
+                }
+            );
+        }
+
         index.MethodsByStrippedType = graph
             .Methods.Where(m => m.ContainingTypeId is not null)
             .GroupBy(m => TypeClosure.StripGeneric(m.ContainingTypeId!), StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
-        
+
         index.ImplsByInterface = graph
             .ImplementsEdges.GroupBy(e => e.InterfaceType, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.Select(e => e.ImplType).Distinct(StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
-        
+
         index.ImplsByErrorInterfaceName = graph
             .ImplementsEdges.Where(e => e.InterfaceType.StartsWith("!:", StringComparison.Ordinal))
             .GroupBy(e => SimpleTypeName(e.InterfaceType), StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.Select(e => e.ImplType).Distinct(StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
-        
+
         index.StrippedBaseEdges = TypeClosure.BuildBaseEdgeLookup(
             (graph.BaseEdges ?? new List<BaseEdge>()).Select(e => (e.SubType, e.BaseType))
         );

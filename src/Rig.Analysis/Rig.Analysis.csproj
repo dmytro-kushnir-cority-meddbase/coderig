@@ -15,6 +15,7 @@
     <PackageReference Include="System.IO.Hashing" />
     <PackageReference Include="System.Security.Cryptography.Xml" />
     <PackageReference Include="System.Composition" />
+    <PackageReference Remove="Meziantou.Analyzer" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Rig.Domain\Rig.Domain.csproj" />

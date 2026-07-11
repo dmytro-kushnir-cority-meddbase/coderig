@@ -2,41 +2,18 @@ using Rig.Domain.Data;
 
 namespace Rig.Analysis.Rules;
 
-// Bridges the internal AnalysisRuleSet to Rig.Domain's fact-layer entry-point deriver.
-// Projects the JSON typeEntryPoints rules (TypeEntryPointRule; `pageModel` is the deprecated alias) to
-// the fact-matchable subset (FactEntryPointRule).  Rule data stays in JSON; only generic matching infra
-// is in C#.  See the "detectors are data" agreement and docs/fact-layer-refactor.md.
-public static class FactEntryPointRuleProvider
+// Projects the merged entry-point rule sections to Rig.Domain's fact-layer entry-point deriver. The
+// JSON `typeEntryPoints` rules (with `pageModel` as the deprecated alias) become FactEntryPointRule; the
+// `classInheritance` rules (Pattern C: background/service/WCF/HTTP/actor handlers) become
+// FactClassInheritanceRule. Rule data stays in JSON; only generic matching infra is in C#. See the
+// "detectors are data" agreement and docs/fact-layer-refactor.md.
+internal static class FactEntryPointRuleProvider
 {
-    // Loads entry-point rules projected for the fact deriver, rooted at <workingDirectory>.
-    // Uses the same rule-cascade as FactEffectRuleProvider (built-in + global ~/.rig + local
-    // rig.rules.json + extraRulesPaths).
-    public static IReadOnlyList<FactEntryPointRule> LoadForWorkingDirectory(
-        string workingDirectory,
-        IReadOnlyList<string>? extraRulesPaths = null
-    )
-    {
-        var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
-        return ProjectTypeEntryPoints(AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths));
-    }
+    internal static IReadOnlyList<FactEntryPointRule> ProjectTypeEntryPoints(AnalysisRulesDocument doc) =>
+        [.. (doc.EntryPoints?.TypeEntryPoints ?? []).Select(Project), .. (doc.EntryPoints?.PageModel ?? []).Select(Project)];
 
-    // Loads the classInheritance entry-point rules projected for the fact deriver (Pattern C:
-    // background/service/WCF/HTTP/actor handlers). Same rule-cascade as LoadForWorkingDirectory.
-    public static IReadOnlyList<FactClassInheritanceRule> LoadClassInheritanceForWorkingDirectory(
-        string workingDirectory,
-        IReadOnlyList<string>? extraRulesPaths = null
-    )
-    {
-        var anchor = Path.Combine(workingDirectory, "_factrules_.slnx");
-        return ProjectClassInheritance(AnalysisRuleSet.LoadForSolution(anchor, extraRulesPaths));
-    }
-
-    // Project off an already-merged rule set, so RuleSet.Load can project these slices without a second load.
-    internal static IReadOnlyList<FactEntryPointRule> ProjectTypeEntryPoints(AnalysisRuleSet ruleSet) =>
-        ruleSet.TypeEntryPoints.Select(Project).ToArray();
-
-    internal static IReadOnlyList<FactClassInheritanceRule> ProjectClassInheritance(AnalysisRuleSet ruleSet) =>
-        ruleSet.ClassInheritanceEntryPoints.Select(Project).ToArray();
+    internal static IReadOnlyList<FactClassInheritanceRule> ProjectClassInheritance(AnalysisRulesDocument doc) =>
+        (doc.EntryPoints?.ClassInheritance ?? []).Select(Project).ToArray();
 
     private static FactClassInheritanceRule Project(ClassInheritanceEntryPointRule rule)
     {

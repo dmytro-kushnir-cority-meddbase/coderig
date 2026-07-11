@@ -1,5 +1,4 @@
 using System.Xml.Linq;
-using Rig.Analysis.Rules;
 using Rig.Domain.Data;
 
 namespace Rig.Analysis.Extraction;
@@ -15,7 +14,7 @@ namespace Rig.Analysis.Extraction;
 /// </summary>
 internal static class XmlDiMiner
 {
-    public static IReadOnlyList<DiRegistrationInfo> Mine(AnalysisRuleSet rules)
+    public static IReadOnlyList<DiRegistrationInfo> Mine(RuleSet rules)
     {
         if (rules.XmlDiFiles.Count == 0)
         {

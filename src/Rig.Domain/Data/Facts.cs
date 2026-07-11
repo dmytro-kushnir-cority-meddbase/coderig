@@ -115,7 +115,20 @@ public sealed record ReferenceFact(
     string? DeclaringTypeArgBinding = null,
     // The callee's own METHOD type arguments at the call site (from the constructed method's TypeArguments;
     // explicit or inferred). Null for non-generic methods.
-    string? MethodTypeArgBinding = null
+    string? MethodTypeArgBinding = null,
+    // True when this reference is a NON-VIRTUAL call — specifically a `base.M(...)` invocation, whose
+    // instance receiver is the `base` keyword. By C# spec such a call emits CIL `call` (not `callvirt`):
+    // it binds to exactly the base implementation and can NEVER dispatch to a sibling override. The
+    // stage-2 traversal therefore resolves it to its static callee only and excludes it from the
+    // override-dispatch fan (forward AND reverse). False for ordinary virtual/interface/direct calls and
+    // on stores indexed before this flag existed (so old stores read as all-virtual = prior behavior).
+    bool NonVirtual = false,
+    // The control-dependence GUARD SET of this call-site WITHIN its own method (CFG-derived, frozen at
+    // index): the branch predicates that gate whether this effect runs, each encoded as predicate-text/
+    // polarity and joined. Null/empty == MUST-RUN — unconditional within the method (the spine). INTRA-
+    // method only; the cumulative cross-method guard chain is a DERIVE-side composition. Decode with
+    // FactStructuralContext.DecodeGuards. Null on stores indexed before this existed (read as no guards).
+    string? EnclosingGuards = null
 );
 
 /// <summary>A base-type or implemented-interface edge between two types.</summary>
@@ -200,7 +213,27 @@ public sealed record CallEdge(
     // forwarded T:/M: positions against the parent node's instantiation and substitute the label's
     // declaring + method arity placeholders. Do NOT affect dispatch (that uses the open `ReceiverType`).
     string? DeclaringTypeArgBinding = null,
-    string? MethodTypeArgBinding = null
+    string? MethodTypeArgBinding = null,
+    // Precision of a publish→consumer DELIVERY handoff edge (FactPathFinder.AddDeliveryEdges):
+    // DeliveryPrecisions.Exact when the channel resolved to a single handler, DeliveryPrecisions.Fanout
+    // when it fanned a producer out to many same-symbol subscribers (the imprecise, instance-blind join).
+    // Null on every non-delivery edge (ordinary calls, methodGroup, event `+= H` registrant→handler
+    // handoffs, scheduler/spawn handoffs). The traversal cuts Fanout edges from the default --async walk
+    // (TraversalMode.AsyncExact) and only crosses them under --include-delivery (AsyncInclude); the cycle
+    // deriver, which reads CallEdges directly, ignores this and keeps every delivery edge.
+    string? DeliveryPrecision = null,
+    // True when this edge is a NON-VIRTUAL `base.M(...)` call (ReferenceFact.NonVirtual). A `base.M()`
+    // call binds to exactly the base implementation (CIL `call`, not `callvirt`) and can never dispatch
+    // to a sibling override. The traversal resolves it to its static callee only and excludes it from
+    // the override-dispatch fan — FORWARD (no sibling-override successors) and REVERSE (the call's
+    // source is a direct caller of the base BODY, but not a reverse-reacher of sibling overrides). False
+    // on ordinary edges, synthesized dispatch hops, and pre-flag stores (read as all-virtual).
+    bool NonVirtual = false,
+    // CFG-derived control-dependence guard set of this call SITE within the caller (from
+    // ReferenceFact.EnclosingGuards): the branch predicates gating whether this call runs. Null == must-run
+    // (unconditional in the caller). Carried onto the reached node so the renderer can mark a guarded
+    // subtree (the ⎇ analog of 🔁). Intra-method only; null on synthesized dispatch hops and pre-flag stores.
+    string? EnclosingGuards = null
 );
 
 // An "implType implements ifaceType" edge (from a type-relation fact).
@@ -228,7 +261,30 @@ public sealed record MethodRef(
 // both feed the effect/entry-point derivers keyed by this identical (Target, Enclosing, FilePath, Line)
 // shape, and were previously two structurally-identical 4-tuples. Enclosing is null when the ref has no
 // resolved enclosing method (most callers filter those out at the query).
-public sealed record SymbolRef(string Target, string? Enclosing, string FilePath, int Line);
+// EnclosingGuards: the CFG control-dependence guard set of this reference's call-site (branch-aware-effects),
+// carried through for `tree --view full --guards` to mark a guarded library-call / throw leaf. Null = must-run.
+public sealed record SymbolRef(string Target, string? Enclosing, string FilePath, int Line, string? EnclosingGuards = null);
+
+// A static-field/auto-property ACCESS ref — a WRITE (FR-1(b)) or a READ (FR-1 read arm) — carrying the
+// structural context the SymbolRef shape drops, so the field-access effect arms can derive the SAME
+// observations the invocation arm does. One carrier serves both reads and writes (the kind is determined by
+// the loader: LoadStaticFieldWriteRefsAsync filters RefKind=write, LoadStaticFieldReadRefsAsync RefKind=read).
+// Target is the accessed slot DocID ("F:Ns.Type.field" / "P:Ns.Type.Prop"); Enclosing keys the effect to a
+// call-graph node. The Enclosing* fields mirror FactInvocation's (decode with FactStructuralContext) and feed
+// FactObservationDeriver — a static-field access under a loop / Parallel.ForEach / lock / try-catch then
+// carries looped_effect / parallel_fanout / lock_held_across_effect / concurrency_handled. All structural
+// fields default to null, so an access with no enclosing structure (the common case) carries no observation.
+public sealed record FactFieldAccess(
+    string Target,
+    string? Enclosing,
+    string FilePath,
+    int Line,
+    string? LoopKind = null,
+    string? LoopDetail = null,
+    string? EnclosingInvocations = null,
+    string? CatchTypes = null,
+    string? EnclosingScopes = null
+);
 
 // A declared method symbol (symbol_facts kind="method") with the metadata the entry-point deriver needs:
 // page EPs use the .ctor rows; class-inheritance EPs use the named-handler rows (IsOverride gates
@@ -253,6 +309,75 @@ public sealed record TypeSymbol(string SymbolId, string Namespace, string FilePa
 // FactPathFinder.MarkEventSubscriptionHandoffs so the handler subtree is treated as a deferred handoff
 // rather than a synchronous call. Lives in Domain because the shaping consumer is a Domain function.
 public sealed record EventSubscriptionSite(string Caller, string FilePath, int Line);
+
+// How a DeliverySite participates in the publish→consumer join (FactPathFinder.AddDeliveryEdges):
+//   Producer     — the publish (an event raise / an actor tell). Always contributes a delivery edge to
+//                  every handler registered on its (Tag, IdentityToken) channel.
+//   Registration — the subscribe/spawn whose CO-LOCATED methodGroup edge IS the handler. Contributes its
+//                  co-located handler(s) to the channel; a Registration with no co-located methodGroup
+//                  contributes nothing (the actor behaviour: an unresolved spawn handler is skipped).
+//   ByColocation — role decided at join time by whether a methodGroup edge co-locates at the site: a C#
+//                  event read is a SUBSCRIPTION iff a handler co-locates (`someEvent += H`), else a RAISE
+//                  (`someEvent?.Invoke()`). Lets the framework-blind join discriminate the two without the
+//                  loader knowing which a given event read is.
+public enum DeliveryRole
+{
+    Producer,
+    Registration,
+    ByColocation,
+}
+
+// A publish→consumer DELIVERY site, framework-BLIND — the uniform input to the single join
+// FactPathFinder.AddDeliveryEdges (baked into call_edges at graph build, so a bounded SQL walk pulls a
+// handler's closure into reach and cycle detection sees the deferred hop). Replaces the former per-framework
+// EventReadSite / ActorDeliverySite pair.
+//
+// IdentityToken is the resolved CHANNEL identity on which a producer is matched to its handlers: an event
+// symbol DocID (`E:`) for C# events — an EXACT binding; a process-name string for Echo actors — `~heuristic`
+// (two unrelated processes sharing a name string over-approximate). Tag is the channel namespace AND the
+// emitted edge's HandoffDispatcher ("event_raise" / "actor_tell"), so an event raise never joins an actor
+// tell even if their tokens collide. Role (above) decides producer vs registration. Caller is the enclosing
+// method; (Caller, FilePath, Line) is the co-location key the join uses to find a registration's handler.
+// Loaded by Reads.LoadDeliverySitesAsync (rule-driven over RuleSet.Delivery).
+//
+// HandlerDispatcher (carried for registration sites): selects which co-located edge kind in
+// AddDeliveryEdges is this registration's handler — when set, the co-located HANDOFF edge(s) tagged with
+// this dispatcher id (a spawn delegate reclassified by the async-handoff machinery); when null, the
+// co-located methodGroup edge (an event `+= H`). Always null for producers.
+public sealed record DeliverySite(
+    string Caller,
+    string FilePath,
+    int Line,
+    string IdentityToken,
+    string Tag,
+    DeliveryRole Role,
+    string? HandlerDispatcher = null
+);
+
+// A publish→consumer DELIVERY rule — declares one mechanism (C# events, Echo actors, …) by composing the
+// engine's identity primitives, so a codebase marks its use case in DATA rather than a coded resolver.
+// Projected from the `deliveryRules` JSON section; consumed by Reads.LoadDeliverySitesAsync, which emits the
+// uniform DeliverySite the framework-blind FactPathFinder.AddDeliveryEdges joins. Tag becomes the emitted
+// handoff's HandoffDispatcher; Confidence (exact|heuristic) is disclosure that feeds the FR-10 cycle tier.
+public sealed record DeliveryRule(string Id, string Tag, string Confidence, DeliveryEndpoint Producer, DeliveryEndpoint Registration);
+
+// One side of a delivery rule. Source selects which facts the loader scans + how the channel identity is
+// found: "event-symbol" = C# event reads (target E:), identity is the event DocID, Role=ByColocation (the
+// join decides subscribe-vs-raise, so an event rule's two endpoints are identical). "arg" = invocation refs
+// whose (declaringType, method) match Methods×DeclaringTypes; identity is arg[ArgumentIndex] resolved per
+// Resolve ("path" = the member-path argument name, gated to a member path; "symbol" = the target symbol).
+// HandlerDispatcher is the HandoffDispatcher id of the co-located handoff edge(s) that ARE this
+// (registration) endpoint's handler — spawn delegates reclassified by the async-handoff machinery into
+// handoff edges (e.g. "meddbase.echo.spawn"). Null ⇒ the registration's handler is its co-located
+// methodGroup edge instead (an event `+= H`). Selects the handler edge kind in AddDeliveryEdges.
+public sealed record DeliveryEndpoint(
+    string Source,
+    string Resolve,
+    int ArgumentIndex = 0,
+    IReadOnlyList<string>? Methods = null,
+    IReadOnlyList<string>? DeclaringTypes = null,
+    string? HandlerDispatcher = null
+);
 
 // The fact-derived call graph loaded for cross-project path finding (stage 2 over facts).
 public sealed record FactGraphData(
@@ -306,11 +431,30 @@ public sealed record PathStep(
     string? DispatchBasis = null
 );
 
+// Why a TraceNode's subtree was not expanded (Truncated=true). None = not truncated.
+// Precedence when multiple conditions apply simultaneously: AlreadyExpanded wins over DepthCapped
+// wins over BudgetCapped — the first matching condition in BuildTree sets the cause.
+public enum TruncationCause
+{
+    None,
+
+    // The symbol was already expanded earlier in the DFS walk (cycle / shared callee). This is
+    // the genuine redundancy signal — the subtree is shown in full elsewhere in the tree.
+    AlreadyExpanded,
+
+    // The node's depth reached the maxDepth cap; the subtree was not walked.
+    DepthCapped,
+
+    // The node-budget counter reached zero; the subtree was not walked.
+    BudgetCapped,
+}
+
 // A node in a call TREE rooted at an entry point (rig tree). EdgeKind/LoopKind describe the call
 // that reached this node from its parent (EdgeKind="entry" for a root; "invocation"/"impl-dispatch"/
 // "override-dispatch"; LoopKind set when that call sits inside a loop). Truncated=true marks a node
 // whose subtree was NOT expanded because the method was already expanded elsewhere (cycle / shared
-// callee — shown as "seen") or a depth/budget cap was hit.
+// callee) or a depth/budget cap was hit — rendered as "⋯elided". TruncationCause records WHICH
+// condition triggered the truncation (None when Truncated=false).
 public sealed record TraceNode(
     string SymbolId,
     string EdgeKind,
@@ -318,6 +462,7 @@ public sealed record TraceNode(
     string? LoopDetail,
     IReadOnlyList<TraceNode> Children,
     bool Truncated = false,
+    TruncationCause TruncationCause = TruncationCause.None,
     // Dispatch fan-out degree of the edge that reached this node from its parent: N(>1) when that
     // edge is an impl-/override-dispatch that fanned its source method out to N targets (this node
     // is one of N siblings — D3 edge provenance), else 0. Lets the renderer mark a fan-out hop
@@ -334,7 +479,7 @@ public sealed record TraceNode(
     // Number of distinct call sites under the SAME parent that resolve to this identical edge (same
     // callee + edge kind + loop + handoff + fan-out + basis). A generic method or bodied accessor
     // invoked N times from one parent collapses to a single child carrying N, instead of 1 expansion
-    // + N-1 "↺seen" duplicate leaves. 1 for an ordinary single-call edge.
+    // + N-1 "⋯elided" duplicate leaves. 1 for an ordinary single-call edge.
     int CallSites = 1,
     // Set by the render-time single-impl fold: when an interface/base method dispatched to EXACTLY one
     // target, that lone interface hop is collapsed into its impl, and this carries the folded-away
@@ -350,7 +495,14 @@ public sealed record TraceNode(
     // line for a ctor, the inline-lambda decl line, the call line for a method. Surfaced by `tree --full`
     // (deduped in print order) — gives ctors/lambdas and every node a source line. Null/0 at a root.
     string? CallFile = null,
-    int CallLine = 0
+    int CallLine = 0,
+    // CFG-derived control-dependence guards of the call edge that reached this node from its parent
+    // (carried from CallEdge.EnclosingGuards, encoded by FactStructuralContext.EncodeGuards): the branch
+    // predicates gating whether the call runs within the PARENT method. Null == must-run (unconditional in
+    // the parent) — the spine. The tree renderer marks a guarded edge with ⎇ [predicate] under `--guards`
+    // (the control-dependence analog of 🔁), decoded via FactStructuralContext.DecodeGuards. Intra-method
+    // only; null on synthesized dispatch hops, roots, and pre-flag stores.
+    string? EnclosingGuards = null
 );
 
 // A method handed off as a delegate (method-group) — a deferred/background entry point the
@@ -378,6 +530,35 @@ public sealed record HandoffEntryPoint(
 // is the execution-origin kind the promoted callback gets (background|timer|actor|event); Repeating
 // flags a re-firing schedule (vs one-shot). Rule data, not code — see the "detectors are data"
 // agreement; the generic matcher lives in HandoffClassifier.
+// Redirect rule data for the external-virtual-override orphan (see docs/backlog.md). A call that statically
+// binds to an EXTERNAL convenience overload (e.g. `EntityBase.Save()`) is dropped by the TargetInSource graph
+// filter, orphaning the first-party override the convenience method trampolines into INSIDE the external DLL.
+// `Method` is the signature-stripped DocID of the convenience family (e.g. "M:…EntityBase.Save"); every
+// overload matching it — EXCEPT `RedirectTo` itself (no self-redirect) — is rewritten to `RedirectTo` (the
+// virtual hatch, e.g. "M:…EntityBase.Save(…IPredicate,System.Boolean)") and KEPT past the filter, so existing
+// receiver-narrowed dispatch resolves it to the first-party override. Rule data, not code; matcher in
+// RedirectClassifier. The mapping is authored from the decompiled trampoline bodies (offline aid).
+public sealed record FactRedirectRule(string Method, string RedirectTo);
+
+// FR-7 (cache coherence), reframed as a cache-specific INSTANCE of the generic effect-correlation deriver
+// (FactCorrelationDeriver). The bulk-write/invalidation METHOD names moved out to ordinary effect rules
+// (llblgen:bulk_write / cache:invalidate); this section now only carries the cache-coherence POLICY: the
+// DECLARED-contract cached entities (high-certainty in-scope keys) and an optional generated-ORM-noise
+// namespace-suffix filter (overriding the wiring default). Rule data, not code; projected from the
+// `cacheCoherence` section by FactCacheCoherenceRuleProvider. A single object (not a list).
+public sealed record FactCacheCoherenceRule(
+    IReadOnlyList<string> CachedEntities,
+    IReadOnlyList<string>? ExcludeEnclosingNamespaceSuffix = null
+);
+
+// static_init_capture POLICY: the project-specific mutable-source resource patterns whose READ into a
+// STATIC field initializer is the hazard (config / Settings.* / feature flag — frozen at CLR type-init,
+// "wrong until app restart"). Patterns are matched as substrings of the effect's ResourceType (like
+// cacheCoherence's cachedEntities are project-specific). Opt-in: the detector fires ONLY when this section
+// is present with a non-empty mutableSources list. Rule data, not code; projected from the
+// `staticInitCapture` section by FactStaticInitCaptureRuleProvider. A single object (not a list).
+public sealed record FactStaticInitCaptureRule(IReadOnlyList<string> MutableSources);
+
 public sealed record FactHandoffRule(
     string Id,
     string Kind,
@@ -417,14 +598,9 @@ public sealed record FactRenderRules(IReadOnlyList<FactRenderRule> CollapseSeams
             return null;
         }
 
-        // Match against the DocID with the parameter list stripped, so a namespace/type pattern (e.g.
-        // "Echo.") hits the DECLARING type only — never a parameter type in the signature (an app method
-        // `M:App.Foo.Bar(Echo.ProcessId)` must NOT match "Echo.").
-        var paren = symbolId.IndexOf('(');
-        var head = paren >= 0 ? symbolId.Substring(startIndex: 0, length: paren) : symbolId;
         foreach (var rule in rules)
         {
-            if (head.IndexOf(rule.Pattern, StringComparison.OrdinalIgnoreCase) >= 0)
+            if (rule.IsMatch(symbolId))
             {
                 return rule;
             }
@@ -434,9 +610,56 @@ public sealed record FactRenderRules(IReadOnlyList<FactRenderRule> CollapseSeams
     }
 }
 
-// One render rule: a DocID substring `Pattern` + a short `Label` shown in the rendered marker
-// (e.g. «opaque: ORM» / [seam: reflection service-locator]).
-public sealed record FactRenderRule(string Pattern, string Label);
+// One render rule: a DocID `Pattern` + a short `Label` shown in the rendered marker (e.g. «opaque: ORM» /
+// [seam: reflection service-locator]). Pattern is a case-insensitive substring by default; a `*` is a
+// wildcard so a pattern can ANCHOR a namespace while still spanning the type — e.g.
+// "M:MedDBase.DataAccessTier.EntityClasses.*Cache.New" matches PersonCache.New/AccountCache.New but NOT a
+// same-named cache in another namespace. See DocIdPattern for the exact semantics.
+public sealed record FactRenderRule(string Pattern, string Label)
+{
+    public bool IsMatch(string symbolId) => DocIdPattern.MatchesHead(symbolId, Pattern);
+}
+
+// Shared DocID pattern matcher for render rules + traversal cuts. Case-insensitive, matched against the DocID
+// HEAD (the parameter list stripped before the first '('), so a namespace/type pattern (e.g. "Echo.") hits the
+// DECLARING type only — never a parameter type in the signature (`M:App.Foo.Bar(Echo.ProcessId)` must NOT match
+// "Echo."). A pattern with NO '*' is a plain substring (exact back-compat). A '*' is a wildcard: the pattern is
+// split into '*'-separated literal segments that must all appear IN ORDER within the head — so
+// "A.Namespace.*Cache.New" requires "A.Namespace." then a later "Cache.New". Leading/trailing/empty segments
+// impose no constraint (a bare "*" matches everything).
+public static class DocIdPattern
+{
+    public static bool MatchesHead(string symbolId, string pattern)
+    {
+        var paren = symbolId.IndexOf('(');
+        var head = paren >= 0 ? symbolId.AsSpan(start: 0, length: paren) : symbolId.AsSpan();
+
+        if (!pattern.Contains('*'))
+        {
+            return head.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        // Wildcard: each '*'-separated literal segment must appear in order, left to right.
+        var pos = 0;
+        foreach (var segment in pattern.Split('*'))
+        {
+            if (segment.Length == 0)
+            {
+                continue; // leading/trailing/adjacent '*' — no constraint
+            }
+
+            var idx = head.Slice(pos).IndexOf(segment, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0)
+            {
+                return false;
+            }
+
+            pos += idx + segment.Length;
+        }
+
+        return true;
+    }
+}
 
 // A traversal-cut rule: a node whose DocID matches `Pattern` is emitted as-is but its successors
 // are NOT walked — it becomes a traversal leaf. This stops reflection service-locator seams (and
@@ -445,15 +668,10 @@ public sealed record FactRenderRule(string Pattern, string Label);
 // itself. `--raw` bypasses cuts so the exact plumbing is inspectable.
 public sealed record FactTraversalCutRule(string Pattern, string Label)
 {
-    // True when `symbolId` matches this cut rule. Matches against the DocID head (parameter list
-    // stripped before the first '('), so a namespace/type pattern never accidentally matches a
-    // parameter type in the signature. Case-insensitive, same convention as FactRenderRules.
-    public bool IsMatch(string symbolId)
-    {
-        var paren = symbolId.IndexOf('(');
-        var head = paren >= 0 ? symbolId.Substring(startIndex: 0, length: paren) : symbolId;
-        return head.IndexOf(Pattern, StringComparison.OrdinalIgnoreCase) >= 0;
-    }
+    // True when `symbolId` matches this cut rule. Same DocID-head, case-insensitive, wildcard-aware matching as
+    // FactRenderRule (see DocIdPattern): a namespace/type pattern never matches a parameter type in the
+    // signature, and a '*' anchors a namespace while spanning the type.
+    public bool IsMatch(string symbolId) => DocIdPattern.MatchesHead(symbolId, Pattern);
 }
 
 // A generic-FACTORY resolution rule (codebase-specific, data-driven). A call to `Method` with a
@@ -508,7 +726,10 @@ public sealed record FactInvocation(
     // ALL arguments' string templates / member-identifier names as JSON string?[] (see
     // ReferenceFact.ArgumentTemplates/ArgumentNames). Feed nth-argument resource resolution.
     string? ArgumentTemplates = null,
-    string? ArgumentNames = null
+    string? ArgumentNames = null,
+    // CFG control-dependence guard set of this invocation's call-site (branch-aware-effects); carried onto
+    // the DerivedEffect so `tree --view full --guards` can mark a guarded effect leaf. Null = must-run.
+    string? EnclosingGuards = null
 );
 
 // An effect re-derived from the reference index by matching an invocation target against the
@@ -522,7 +743,16 @@ public sealed record DerivedEffect(
     string? EnclosingSymbolId,
     string FilePath,
     int Line,
-    IReadOnlyList<EffectObservationInfo>? Observations = null
+    IReadOnlyList<EffectObservationInfo>? Observations = null,
+    // FR-1(g): the matched rule declares this an ATOMIC read-modify-write API (Atom.Swap, Interlocked*,
+    // Concurrent* per-call mutators, ImmutableInterlocked). Used by the FR-1d guard-subtraction triage to
+    // drop already-safe shared_state mutations from the unguarded-candidate set (a single atomic call is
+    // not the race — a non-atomic read-then-write PAIR is, which rig cannot yet couple). Default false.
+    bool Atomic = false,
+    // CFG control-dependence guard set of the producing call-site (branch-aware-effects), copied from the
+    // originating reference fact. Lets `tree --view full --guards` mark a guarded effect leaf with ⎇. Null
+    // = must-run. Query-side only; carried through the hazard-effects cache (see HazardEffectsCacheKey).
+    string? EnclosingGuards = null
 );
 
 // Fact-side projections of the observation rules (the same AnalysisRuleSet.*Observations data the
@@ -535,9 +765,11 @@ public sealed record FactResilienceRetryRule(IReadOnlyList<string> WrapperMethod
 
 public sealed record FactConcurrencyHandledRule(IReadOnlyList<string> CommitMethods, IReadOnlyList<string> CatchTypePatterns);
 
-// One fanout wrapper: receiver source text (e.g. "Task"/"Parallel") + the wrapping methods
-// (e.g. "WhenAll" / "ForEach"/"ForEachAsync"). Context = "{Receiver}.{method}".
-public sealed record FactParallelFanoutRule(string Receiver, IReadOnlyList<string> Methods);
+// One fanout wrapper. Receiver = the short display name (e.g. "Task"/"Parallel") used only for the
+// observation Context ("{Receiver}.{method}"); ReceiverType = the FULLY-QUALIFIED type matched against the
+// enclosing invocation's resolved receiver type (e.g. "System.Threading.Tasks.Parallel"), so a fully-qualified
+// call matches as readily as the using-imported short form. Methods = the wrapping methods (e.g. "WhenAll").
+public sealed record FactParallelFanoutRule(string Receiver, string ReceiverType, IReadOnlyList<string> Methods);
 
 // A resource-span observation rule (P2b, ordering/nesting): an effect that occurs LEXICALLY INSIDE a
 // held-resource scope yields an observation proving the resource is held across that effect. The
@@ -557,11 +789,44 @@ public sealed record FactResourceSpanRule(
     string Context // observation context label, e.g. "transaction" / "lock"
 );
 
+// A serialization-hazard observation rule (FR-6, RCA #1646): an effect that stores/serializes a payload
+// whose generic TYPE ARGUMENT is a serializer-unsupported type yields a `unserializable_payload`
+// observation on that effect. Unlike the other observation rules (which key off STRUCTURAL context —
+// the loop / fan-out / scope around the call), this keys off the effect's OWN payload type at the
+// store/serialize boundary. Providers gates which effect providers count as such a boundary (e.g.
+// "object_store"); empty = any provider. UnsupportedTypePatterns are substrings matched against the
+// call-site generic type arguments (FactInvocation.TypeArguments) — e.g. "LanguageExt.Option" flags a
+// `Store.Save<Option<T>>(value)` whose serializer cannot round-trip Option. Data-driven: the patterns
+// live in the rules JSON, never hardcoded. The classic case is LanguageExt.Option<T> stored into the
+// object store: the serializer writes it but cannot read it back (None must be null), a latent defect
+// invisible until the object is read.
+public sealed record FactSerializationHazardRule(
+    IReadOnlyList<string> Providers, // effect providers this applies to (e.g. "object_store"); empty = any
+    IReadOnlyList<string> UnsupportedTypePatterns // substrings matched against the call's type arguments
+);
+
+// An n+1 / read-amplification observation rule (FR-3, RCA #2892): a READ-category effect inside a loop
+// whose KEY ARGUMENT VARIES per iteration yields an `n_plus_1` observation on that effect. This refines
+// the structural `looped_effect` — a read in a loop with a CONSTANT key is hoistable and is NOT an n+1;
+// the discriminator is whether the loop's iteration variable appears in the read's key argument. Like
+// unserializable_payload, this keys off the effect's OWN call (its loop identifier + argument names/
+// templates), not the surrounding structure beyond the loop. Providers/Operations gate which effects
+// count as a READ (e.g. http GET, cache/db/repository/llblgen reads) — only reads should fire, a looped
+// WRITE being a different concern. An empty Providers OR Operations list means "any" for that dimension;
+// both empty = any effect (not recommended — would fire on writes). Data-driven: the read set + gating
+// live in the rules JSON, never hardcoded. Annotate-only: it adds a note; the effect is never removed.
+public sealed record FactNPlusOneRule(
+    IReadOnlyList<string> Providers, // effect providers that count as a read boundary (e.g. "http"); empty = any
+    IReadOnlyList<string> Operations // effect operations that count as a read (e.g. "GET", "read"); empty = any
+);
+
 public sealed record FactObservationRules(
     IReadOnlyList<FactResilienceRetryRule> ResilienceRetry,
     IReadOnlyList<FactConcurrencyHandledRule> ConcurrencyHandled,
     IReadOnlyList<FactParallelFanoutRule> ParallelFanout,
-    IReadOnlyList<FactResourceSpanRule> ResourceSpan
+    IReadOnlyList<FactResourceSpanRule> ResourceSpan,
+    IReadOnlyList<FactSerializationHazardRule> SerializationHazard,
+    IReadOnlyList<FactNPlusOneRule> NPlusOne
 );
 
 // An entry point re-derived from facts (type_relation_facts BFS + symbol_facts + reference_facts).
@@ -659,6 +924,31 @@ public sealed record FactEffectRule(
     // target type DocID); the resource is that exception type. Surfaces guard/permission exits (e.g.
     // AccessDeniedException) as effects — a read path that drops its check is then visibly missing it.
     bool MatchThrow = false,
+    // When true, match WRITE refs (RefKind="write") whose TARGET is a STATIC field/auto-property — a
+    // `StaticType.SharedField = v` assignment (FR-1(b)). Unlike the invocation/throw arms these are NOT
+    // method calls; the field-write FACT already exists (FactExtractor classifies the assignment LHS as
+    // RefKinds.Write) but no arm consumed it. Static-ness is the gate that makes this expressible as a
+    // rule: a write to a STATIC slot is inherently a shared-state mutation regardless of receiver, so it
+    // does not suffer the local-vs-shared ambiguity that bars a bare instance `.Add`/field-write rule.
+    // The type gates (declaringTypes / declaringTypeNameEndsWith) apply to the TARGET field's declaring
+    // type; the resource is the declaring type (resource:"declaring_type") or the field DocID. The
+    // deriver is handed the pre-filtered static-target write refs by the caller (no method-name gate).
+    bool MatchFieldWrite = false,
+    // When true, match READ refs (RefKind="read") whose TARGET is a STATIC field/auto-property — a read of
+    // `StaticType.SharedField` (the FR-1 read arm, symmetric twin of MatchFieldWrite). This is the "check" of
+    // a shared cell modeled as a queryable effect, so the read-before-write TOCTOU/lost-update detector has
+    // the read to pair with the write. Same expressibility argument: a read of a STATIC slot is unambiguously
+    // a read of shared state regardless of receiver (an instance/local read is local-vs-shared-ambiguous and
+    // is NOT matched). The type gates apply to the TARGET field's declaring type; the resource is the
+    // declaring type (resource:"declaring_type") or the field DocID. The deriver is handed the pre-filtered
+    // static-target read refs by the caller (no method-name gate). A read is never atomic (Atomic stays false).
+    bool MatchFieldRead = false,
+    // FR-1(g): this rule's matched calls are ATOMIC read-modify-write operations (a single Atom.Swap /
+    // Interlocked / Concurrent* mutator / ImmutableInterlocked call). Propagated onto the DerivedEffect so
+    // the FR-1d guard-subtraction triage can exclude already-safe mutations. Purely descriptive — it does
+    // not change matching. The static-field-write arm is NOT atomic (a plain `=` assignment), so it leaves
+    // this false.
+    bool Atomic = false,
     // Enclosing-method gates (P2a) — mirror the Roslyn MatchesContainingNamespace/Type/Method. The
     // effect counts only when the enclosing method's namespace / declaring type / name matches.
     // Parsed from the reference's EnclosingSymbolId DocID; type/namespace matching is equality +
@@ -670,7 +960,8 @@ public sealed record FactEffectRule(
     // Resource-resolution strategy (P2a), mirroring the Roslyn EffectExtractor.TryCreateEffect
     // switch, resolved from facts: "receiver_type" -> the receiver's static type (P1a);
     // "argument_type" -> the first argument's static type (P1b); "string_argument" -> the first
-    // argument's string template (P1b); "http_argument" -> that template, scheme/slash-normalized.
+    // argument's string template (P1b); "string_argument_or_receiver" -> that template, else the
+    // receiver/declaring type (never drops); "http_argument" -> that template, scheme/slash-normalized.
     // The "ef_*" strategies are EF-specific and not resolvable from current facts (deferred — they
     // resolve to null). When the strategy resolves to null/empty the effect is DROPPED, exactly as
     // the Roslyn path drops a null resource — this is what aligns fact effects with index effects.

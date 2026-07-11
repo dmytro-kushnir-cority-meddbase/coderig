@@ -78,6 +78,13 @@ public static class EntryPointSiteStore
     )
     {
         var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        // KEPT probe (the lone read-side TableExistsAsync survivor besides SchemaMeta's bootstrap): the
+        // EP-site table is a RULES-HASH-stamped cache, a concern ORTHOGONAL to the schema gate. It can be
+        // present-but-stale (built under different --rules) — a state the schema version cannot express —
+        // and PersistAsync writes it independently of the graph-version stamp, so its presence is NOT the
+        // graph's presence. Routing it through GraphAvailableAsync would also make a standalone Persist→Load
+        // (EntryPointSiteStoreTests) read back null. Absence here just means "not materialized → derive
+        // live"; the rules-hash check below handles the present-but-different-rules case.
         if (!await StorageProbes.TableExistsAsync(connection, "entry_point_sites_meta", cancellationToken))
         {
             return null;

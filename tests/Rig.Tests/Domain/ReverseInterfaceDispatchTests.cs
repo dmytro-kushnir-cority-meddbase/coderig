@@ -43,14 +43,16 @@ public sealed class ReverseInterfaceDispatchTests
     public void Reverse_reach_crosses_a_cleanly_typed_interface_call_to_find_the_entry_point()
     {
         // Receiver is the interface IService (a clean, resolved type — not unreliable), so the reverse walk
-        // takes the NARROWING path, not the CHA fallback. From the leaf, the reverse closure must climb
-        // through Master.Add -> IService.Add (reverse dispatch, gated by ReverseDispatchReaches) -> the
-        // entry point Entry.Handle. This is the edge the missing interface arm used to prune.
+        // takes the NARROWING path, not the CHA fallback. From the leaf, the reverse closure climbs through
+        // Master.Add (the impl) -> reverse dispatch -> the entry point Entry.Handle. This is the edge the
+        // missing interface arm used to prune. (Reconciled 2026-06-25.)
         var reached = FactPathFinder.ReachedBy(InterfaceDispatchShape("N.IService"), "M:N.Effect.Leaf", narrowDispatch: true);
 
         reached.Keys.ShouldContain("M:N.Master.Add"); // direct caller of the leaf
-        reached.Keys.ShouldContain("M:N.IService.Add"); // reverse dispatch: impl reaches its interface decl
-        reached.Keys.ShouldContain("M:N.Entry.Handle"); // ...and the entry point above the interface call
+        reached.Keys.ShouldContain("M:N.Entry.Handle"); // the entry point, reached ACROSS the interface call
+        // The interface DECLARATION is a dispatch waypoint, not a caller-origin — the narrowed reverse
+        // attributes through to the real entry point (Entry.Handle) instead of surfacing it.
+        reached.Keys.ShouldNotContain("M:N.IService.Add");
     }
 
     [Test]

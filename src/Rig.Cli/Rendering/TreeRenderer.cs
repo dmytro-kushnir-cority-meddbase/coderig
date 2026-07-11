@@ -58,6 +58,74 @@ internal static class TreeRenderer
         return ShortName(lastDot >= 0 ? head.Substring(startIndex: 0, length: lastDot) : head);
     }
 
+    // --guards: render a frozen control-dependence guard set (FactStructuralContext-encoded on the reaching
+    // edge) as a compact AND-chain of branch predicates — every guard must hold for the call to run, so they
+    // join with " && ". Polarity: `pred` for the if-arm (WhenTrue), `!pred` for the else-arm. A compound
+    // predicate is parenthesised when negated (`!(a == null)`) so the `!` binds unambiguously; a single token
+    // (`!flag`, `!invoice.IsHealthcode`) stays bare. Each predicate's whitespace is collapsed (a condition can
+    // span lines) and the joined string is length-capped for single-line trace output.
+    //
+    // Redundant-with-loop filter: a call DIRECTLY in `foreach (x in COLL)` is control-dependent on the
+    // enumerator MoveNext, whose predicate Roslyn surfaces as COLL — but 🔁[x in COLL] already conveys exactly
+    // that, so a guard whose predicate IS the loop's iterated collection is dropped as noise (`loopDetail` is
+    // the reaching edge's LoopDetail). A genuine inner condition (`File.Exists(x)`, an `if`) has a different
+    // predicate and is kept. while/for carry no " in " collection marker, so they are never filtered (and
+    // empirically don't emit the redundant condition-guard). Returns "" when nothing remains (all guards were
+    // loop-redundant, or the set decoded empty) — the caller then omits the ⎇ glyph entirely.
+    // maxLength caps the rendered predicate (default 60, the terminal-friendly cap the CLI uses). Callers that
+    // present their own truncation — e.g. the web UI, which sends full text and ellipsises in CSS — pass a
+    // large value to get the UNtruncated predicate. The semantic formatting (foreach-guard filtering, else-arm
+    // negation, short-circuit join) is unaffected; only the trailing length clamp honours maxLength.
+    internal static string ShortGuards(string? encoded, string? loopDetail = null, int maxLength = 60)
+    {
+        var guards = FactStructuralContext.DecodeGuards(encoded);
+        if (guards.Count == 0)
+        {
+            return "";
+        }
+
+        var loopCollection = ForeachCollection(loopDetail);
+        var parts = new List<string>();
+        foreach (var g in guards)
+        {
+            var pred = CollapseWhitespace(g.Predicate);
+            if (loopCollection is not null && string.Equals(pred, loopCollection, StringComparison.Ordinal))
+            {
+                continue; // the foreach MoveNext guard — redundant with the 🔁[x in COLL] marker
+            }
+
+            parts.Add(
+                g.WhenTrue ? pred
+                : pred.Contains(' ', StringComparison.Ordinal) ? $"!({pred})"
+                : $"!{pred}"
+            );
+        }
+
+        if (parts.Count == 0)
+        {
+            return "";
+        }
+
+        var s = string.Join(" && ", parts);
+        return s.Length <= maxLength ? s : s.Substring(startIndex: 0, length: maxLength - 3) + "...";
+    }
+
+    // The COLL of a `foreach (ident in COLL)` loop detail (StructuralContext's "{ident} in {expr}" form),
+    // whitespace-collapsed for comparison; null when the detail is a while/for/null (no " in " marker).
+    private static string? ForeachCollection(string? loopDetail)
+    {
+        if (string.IsNullOrEmpty(loopDetail))
+        {
+            return null;
+        }
+
+        var inAt = loopDetail!.IndexOf(" in ", StringComparison.Ordinal);
+        return inAt < 0 ? null : CollapseWhitespace(loopDetail.Substring(inAt + 4));
+    }
+
+    private static string CollapseWhitespace(string s) =>
+        string.Join(' ', s.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
+
     // Collects effect-bearing methods in DFS (source) order, deduped — the backing of `tree --effects`.
     internal static void CollectEffectful(
         TraceNode node,
@@ -86,7 +154,7 @@ internal static class TreeRenderer
         }
     }
 
-    // True when this node directly has an effect or any descendant does. A "↺seen" (Truncated) node
+    // True when this node directly has an effect or any descendant does. A "⋯elided" (Truncated) node
     // has no children here, so only its own effect counts — that's sound: the effects under the
     // method's real subtree are printed under its first (expanded) occurrence, so nothing is lost.
     internal static bool SubtreeHasEffect(TraceNode node, IReadOnlyDictionary<string, List<string>> effectsByMethod)
@@ -147,7 +215,15 @@ internal static class TreeRenderer
         // declaring-type args and its own-method args. A child resolves its forwarded T:/M: binding tokens
         // against these, so a chain of static factories / generic methods renders concretely. Null at roots.
         IReadOnlyList<string?>? parentDeclaringConcrete = null,
-        IReadOnlyList<string?>? parentMethodConcrete = null
+        IReadOnlyList<string?>? parentMethodConcrete = null,
+        // `--hazards`: a precomputed compact hazard marker per enclosing method (SymbolId -> e.g.
+        // "  ⚠ dual_write(medium), race_window(high)"), appended to the node label so the pattern findings
+        // sit inline on the EP's reachable tree. Null/absent leaves nodes unmarked (the default tree).
+        IReadOnlyDictionary<string, string>? hazardsByMethod = null,
+        // `--guards`: mark a control-dependence-GUARDED call edge with ⎇ [predicate] (the analog of 🔁[loop]),
+        // decoded from the reaching edge's frozen guard set (TraceNode.EnclosingGuards). Off by default so
+        // golden tree tests don't churn; a must-run edge (empty guard set) carries no glyph.
+        bool guards = false
     )
     {
         // Compute visible children first — the fan-out label must reflect how many branches are
@@ -177,10 +253,22 @@ internal static class TreeRenderer
         // An async handoff hop (only present under --async): mark the cross-thread boundary.
         var handoff = node.EdgeKind == EdgeKinds.Handoff ? $" ⤳handoff via {ShortName(node.HandoffVia)} [cross_thread]" : "";
         var loop = node.LoopKind is null ? "" : $" 🔁[{ShortLoop(node.LoopDetail)}]";
+        // --guards: the control-dependence guard set of the edge that reached this node — the branch
+        // predicates gating whether the call runs in its parent. Empty (must-run) → no glyph; the ⎇
+        // analog of 🔁. The reaching edge's LoopDetail lets ShortGuards drop a foreach's own MoveNext guard
+        // (redundant with 🔁). Off unless --guards (keeps default golden trees stable).
+        var guardText =
+            guards && node.EnclosingGuards is not null ? ShortGuards(encoded: node.EnclosingGuards, loopDetail: node.LoopDetail) : "";
+        // Space between ⎇ and [ : the ⎇ glyph (U+2387) renders narrow in some terminals and overlaps the
+        // following bracket without it. (🔁 is a full-width emoji and doesn't need the gap.)
+        var guardTag = guardText.Length == 0 ? "" : $" ⎇ [{guardText}]";
         // Identical sibling edges collapsed under one parent (e.g. a generic method called once per
-        // type-arg): show the call-site count rather than N repeated "↺seen" lines.
+        // type-arg): show the call-site count rather than N repeated "⋯elided" lines.
         var calls = node.CallSites > 1 ? $" ×{node.CallSites} calls" : "";
-        var seen = node.Truncated ? " ↺seen" : "";
+        // Subtree not drawn here: this method was already expanded elsewhere (cycle / shared callee), or
+        // a depth/budget cap was hit. "elided" states the consequence without implying a cycle (the
+        // marker fires for all three), and reads unambiguously to a model parsing the tree.
+        var elided = node.Truncated ? " ⋯elided" : "";
         // Opaque-type render rule: a matching non-root node is drawn as a leaf — its own effects still
         // print, but its subtree is suppressed (the type's internals aren't worth expanding).
         var opaque = isRoot ? null : renderRules.MatchOpaque(node.SymbolId);
@@ -272,7 +360,11 @@ internal static class TreeRenderer
         // a source line, not just the effect/library leaves. Trailing so SourceLocDedupWriter dedups it in
         // print order; the root has no reaching edge (CallFile null).
         var callLoc = full && !string.IsNullOrEmpty(node.CallFile) ? $"  {ShortenPath(node.CallFile)}:{node.CallLine}" : "";
-        var label = $"{epPrefix}{name}{dispatch}{handoff}{loop}{calls}{seen}{opaqueTag}{cutTag}{fx}{loc}{epSuffix}{callLoc}";
+        // `--hazards`: the inline pattern-finding marker for this method (empty when unmarked). Placed before
+        // the source-loc suffixes so SourceLocDedupWriter's trailing-loc regex still matches the line.
+        var hazard = hazardsByMethod is not null && hazardsByMethod.TryGetValue(node.SymbolId, out var hz) ? hz : "";
+        var label =
+            $"{epPrefix}{name}{dispatch}{handoff}{loop}{guardTag}{calls}{elided}{opaqueTag}{cutTag}{fx}{hazard}{loc}{epSuffix}{callLoc}";
         output.WriteLine(isRoot ? label : $"{prefix}{Connector(isLast)}{label}");
 
         // Collapse-seam render rule: this node is a fan-out hub (e.g. a reflection service-locator or
@@ -344,7 +436,9 @@ internal static class TreeRenderer
                 full: full,
                 effectLeavesByMethod: effectLeavesByMethod,
                 parentDeclaringConcrete: declaringConcrete,
-                parentMethodConcrete: methodConcrete
+                parentMethodConcrete: methodConcrete,
+                hazardsByMethod: hazardsByMethod,
+                guards: guards
             );
         }
     }
@@ -521,13 +615,17 @@ internal static class TreeRenderer
     {
         var loc = string.IsNullOrEmpty(e.FilePath) ? "" : $"  {ShortenPath(e.FilePath)}:{e.Line}";
         var glyph = EmojiLookup.For(emoji, provider: e.Provider, operation: e.Operation);
-        return $"{glyph} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}{loc}";
+        // A guarded effect (e.g. a db:write under `if`, a guarded `throw`) carries its control-dependence
+        // condition; mark it with ⎇ like a resolved call edge. Empty (must-run) → no glyph.
+        var guardText = ShortGuards(e.EnclosingGuards);
+        var guardTag = guardText.Length == 0 ? "" : $" ⎇ [{guardText}]";
+        return $"{glyph} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}{guardTag}{loc}";
     }
 
     // `tree --full`: a library call that produced NO effect (resolved to a referenced-assembly target, but
     // no rule matched it). Rendered as a dim leaf (· marker) so the call is visible without implying an
     // effect — distinct from the glyph-prefixed effect leaves above.
-    internal static string FormatUnresolvedLeaf(string target, string? filePath, int line)
+    internal static string FormatUnresolvedLeaf(string target, string? filePath, int line, string? encodedGuards = null)
     {
         var loc = string.IsNullOrEmpty(filePath) ? "" : $"  {ShortenPath(filePath)}:{line}";
         var name = ShortName(target);
@@ -537,9 +635,14 @@ internal static class TreeRenderer
             name = name[2..];
         }
 
+        // A guarded library call (e.g. a switch-arm or if-gated BCL call) carries its control-dependence
+        // condition; mark it with the ⎇ glyph, same as a resolved call edge. Empty (must-run) → no glyph.
+        var guardText = ShortGuards(encodedGuards);
+        var guardTag = guardText.Length == 0 ? "" : $" ⎇ [{guardText}]";
+
         // Render generic arity the same way resolved tree nodes do (`Seq`1.Iter` -> `Seq<T>.Iter`) so the
         // library leaves don't show raw backtick arity next to the `<T,U>` of resolved siblings.
-        return $"· {PrettyGenericName(name)}{loc}";
+        return $"· {PrettyGenericName(name)}{guardTag}{loc}";
     }
 }
 

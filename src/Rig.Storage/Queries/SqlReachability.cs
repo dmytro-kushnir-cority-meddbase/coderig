@@ -1,7 +1,7 @@
 using System.Data.Common;
-using System.Globalization;
 using System.Text;
 using Rig.Domain.Data;
+using Rig.Domain.Functions;
 using Rig.Storage.Storage;
 
 namespace Rig.Storage.Queries;
@@ -23,20 +23,15 @@ public static class SqlReachability
         Reverse,
     }
 
-    // True when the derived edge views exist and are non-empty — i.e. `rig graph` has been run over
-    // this store. Callers fall back to the EF path (or prompt to run `rig graph`) when false.
+    // True when the store carries a CURRENT graph — i.e. `rig graph` (GraphMaterializer) has stamped the
+    // graph schema version into `meta`. Routed through SchemaGate.GraphAvailableAsync (the single source
+    // of graph-presence truth) rather than probing call_edges directly: the graph is built as a UNIT, so
+    // its presence is a property of the db file, not of any one table. Callers fall back to the EF path
+    // (or prompt to run `rig graph`) when false.
     public static async Task<bool> HasGraphAsync(RigDbContext context, CancellationToken cancellationToken = default)
     {
-        var connection = await OpenAsync(context, cancellationToken);
-        if (!await StorageProbes.TableExistsAsync(connection, "call_edges", cancellationToken))
-        {
-            return false;
-        }
-
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT EXISTS(SELECT 1 FROM call_edges LIMIT 1);";
-        var result = await command.ExecuteScalarAsync(cancellationToken);
-        return Convert.ToInt64(result, CultureInfo.InvariantCulture) != 0;
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        return await SchemaGate.GraphAvailableAsync(connection, cancellationToken);
     }
 
     // The transitive set reachable from (Forward) / reaching (Reverse) the given seed symbols, over
@@ -57,7 +52,7 @@ public static class SqlReachability
             return result;
         }
 
-        var connection = await OpenAsync(context, cancellationToken);
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = BuildSetCte(command, seeds, direction, includeHandoff);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -94,55 +89,8 @@ public static class SqlReachability
     )
     {
         var result = new Dictionary<string, int>(StringComparer.Ordinal);
-        var connection = await OpenAsync(context, cancellationToken);
-        var hasNodes = await StorageProbes.TableExistsAsync(connection, "nodes", cancellationToken);
-        var (frontier, next) = direction == Direction.Forward ? ("FromSym", "ToSym") : ("ToSym", "FromSym");
-
-        // Iterative level-BFS in a temp table rather than one min-depth recursive CTE. A single CTE that
-        // carries depth must dedup on (sym, depth), so a node reachable by many routes expands at up to
-        // maxDepth distinct depths before a final GROUP BY min — a ~10× blow-up. Here each level expands
-        // ONLY the current frontier (depth = d) and INSERT OR IGNORE keeps the first (shortest) depth per
-        // sym, so total work is O(closure edges) — the same as the depth-less set walk, but with exact
-        // depth. Two inserts per level (one per edge table) so each uses its FromSym/ToSym index.
-        await ExecNonQueryAsync(connection, "DROP TABLE IF EXISTS reach_depth;", null, cancellationToken);
-        await ExecNonQueryAsync(
-            connection,
-            "CREATE TEMP TABLE reach_depth(sym TEXT PRIMARY KEY, depth INTEGER NOT NULL);",
-            null,
-            cancellationToken
-        );
-        await ExecNonQueryAsync(connection, "CREATE INDEX temp.ix_reach_depth_depth ON reach_depth(depth);", null, cancellationToken);
-
-        await ExecNonQueryAsync(
-            connection,
-            $"INSERT OR IGNORE INTO reach_depth(sym, depth) SELECT sym, 0 FROM ({SeedSql(hasNodes)});",
-            command => AddLikeParam(command, pattern),
-            cancellationToken
-        );
-
-        var handoffFilter = includeHandoff ? "" : " AND ce.Kind <> 'handoff'";
-        for (var d = 0; d < maxDepth; d++)
-        {
-            var added = 0;
-            added += await ExecNonQueryAsync(
-                connection,
-                $"INSERT OR IGNORE INTO reach_depth(sym, depth) "
-                    + $"SELECT ce.{next}, {d + 1} FROM call_edges ce JOIN reach_depth r ON ce.{frontier} = r.sym WHERE r.depth = {d}{handoffFilter};",
-                null,
-                cancellationToken
-            );
-            added += await ExecNonQueryAsync(
-                connection,
-                $"INSERT OR IGNORE INTO reach_depth(sym, depth) "
-                    + $"SELECT de.{next}, {d + 1} FROM dispatch_edges de JOIN reach_depth r ON de.{frontier} = r.sym WHERE r.depth = {d};",
-                null,
-                cancellationToken
-            );
-            if (added == 0)
-            {
-                break; // frontier exhausted before the depth cap — the whole closure is enumerated
-            }
-        }
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
+        await BuildReachDepthAsync(connection, pattern, direction, maxDepth, includeHandoff, cancellationToken);
 
         await ReadAsync(
             connection,
@@ -171,21 +119,14 @@ public static class SqlReachability
             return [];
         }
 
-        var connection = await OpenAsync(context, cancellationToken);
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         await ExecNonQueryAsync(connection, "DROP TABLE IF EXISTS reach_set;", null, cancellationToken);
         await ExecNonQueryAsync(connection, "CREATE TEMP TABLE reach_set(sym TEXT PRIMARY KEY);", null, cancellationToken);
-        await using (var insert = connection.CreateCommand())
-        {
-            insert.CommandText = "INSERT OR IGNORE INTO reach_set(sym) VALUES ($s);";
-            var p = insert.CreateParameter();
-            p.ParameterName = "$s";
-            insert.Parameters.Add(p);
-            foreach (var sym in reachable.Keys)
-            {
-                p.Value = sym;
-                await insert.ExecuteNonQueryAsync(cancellationToken);
-            }
-        }
+        // The reverse closure already lives in `reach_depth` — built by ReachedWithDepthAsync above on this
+        // SAME shared connection (temp tables are connection-scoped, and it isn't dropped until the next
+        // ReachedWithDepthAsync). Copy it in ONE set-based statement instead of marshalling every key back to
+        // C# and re-inserting it row-by-row (a synchronous round-trip per closure member — thousands).
+        await ExecNonQueryAsync(connection, "INSERT OR IGNORE INTO reach_set(sym) SELECT sym FROM reach_depth;", null, cancellationToken);
 
         // A no-predecessor root has no incoming SYNCHRONOUS call edge (handoff edges don't count under
         // sync-cut — that's exactly what makes a scheduled callback a background ORIGIN) and no incoming
@@ -294,7 +235,7 @@ public static class SqlReachability
         CancellationToken cancellationToken = default
     )
     {
-        var connection = await OpenAsync(context, cancellationToken);
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         await BuildReachSetAsync(connection, pattern, direction, cancellationToken);
         return await LoadGraphFromReachSetAsync(connection, direction, cancellationToken);
     }
@@ -305,11 +246,15 @@ public static class SqlReachability
     // (the part that dominated reaches/tree latency) is replaced by a bounded, indexed join. Base edges
     // come from the graph (all base edges), so LoadFactEntryPointDataAsync — heavy and otherwise only
     // used for its base edges + ctor refs here — is skipped entirely.
+    // F2: EpData carries the FactEntryPointData the EF-fallback path (LoadReachInputsFromRowsAsync)
+    // already loaded, so a caller that also needs the EP site map (DeriveEpSiteKindAsync) can reuse it
+    // instead of issuing a second LoadFactEntryPointDataAsync. Null on the SQL path (not loaded there).
     public sealed record ReachInputs(
         FactGraphData Graph,
         IReadOnlyList<FactInvocation> Invocations,
         IReadOnlyList<SymbolRef> CtorRefs,
-        IReadOnlyList<SymbolRef> ThrowRefs
+        IReadOnlyList<SymbolRef> ThrowRefs,
+        FactEntryPointDeriver.FactEntryPointData? EpData = null
     );
 
     public static async Task<ReachInputs> LoadReachInputsAsync(
@@ -319,7 +264,7 @@ public static class SqlReachability
         CancellationToken cancellationToken = default
     )
     {
-        var connection = await OpenAsync(context, cancellationToken);
+        var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         await BuildReachSetAsync(connection, pattern, direction, cancellationToken);
         var graph = await LoadGraphFromReachSetAsync(connection, direction, cancellationToken);
 
@@ -330,7 +275,7 @@ public static class SqlReachability
             SELECT r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.ReceiverType,
                    r.FirstArgumentTemplate, r.FirstArgumentType, r.EnclosingLoopKind, r.EnclosingLoopDetail,
                    r.EnclosingInvocations, r.EnclosingCatchTypes, r.TypeArguments, r.FirstArgumentName,
-                   r.ArgumentTemplates, r.ArgumentNames
+                   r.ArgumentTemplates, r.ArgumentNames, r.EnclosingGuards
             FROM reference_facts r JOIN reach_set s ON r.EnclosingSymbolId = s.sym
             WHERE r.RefKind = 'invocation';
             """,
@@ -353,7 +298,8 @@ public static class SqlReachability
                         TypeArguments: reader.IsDBNull(11) ? null : reader.GetString(11),
                         FirstArgName: reader.IsDBNull(12) ? null : reader.GetString(12),
                         ArgumentTemplates: reader.IsDBNull(13) ? null : reader.GetString(13),
-                        ArgumentNames: reader.IsDBNull(14) ? null : reader.GetString(14)
+                        ArgumentNames: reader.IsDBNull(14) ? null : reader.GetString(14),
+                        EnclosingGuards: reader.IsDBNull(15) ? null : reader.GetString(15)
                     )
                 ),
             cancellationToken
@@ -390,7 +336,7 @@ public static class SqlReachability
         await ReadAsync(
             connection,
             """
-            SELECT r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line
+            SELECT r.TargetSymbolId, r.EnclosingSymbolId, r.FilePath, r.Line, r.EnclosingGuards
             FROM reference_facts r JOIN reach_set s ON r.EnclosingSymbolId = s.sym
             WHERE r.RefKind = 'throw';
             """,
@@ -401,7 +347,13 @@ public static class SqlReachability
                 var line = reader.IsDBNull(3) ? 0 : reader.GetInt32(3);
                 throwByKey.TryAdd(
                     (file, line, target),
-                    new SymbolRef(Target: target, Enclosing: reader.IsDBNull(1) ? null : reader.GetString(1), FilePath: file, Line: line)
+                    new SymbolRef(
+                        Target: target,
+                        Enclosing: reader.IsDBNull(1) ? null : reader.GetString(1),
+                        FilePath: file,
+                        Line: line,
+                        EnclosingGuards: reader.IsDBNull(4) ? null : reader.GetString(4)
+                    )
                 );
             },
             cancellationToken
@@ -420,66 +372,49 @@ public static class SqlReachability
     {
         var edgeJoinCol = direction == Direction.Forward ? "FromSym" : "ToSym";
 
-        // ReceiverType drives the in-memory edge-aware dispatch narrowing. Old stores (built before the
-        // column existed and never re-`rig graph`-ed) lack it — probe so the SELECT degrades to a null
-        // receiver (full CHA) instead of throwing.
-        var hasReceiver = await StorageProbes.ColumnExistsAsync(
-            connection,
-            table: "call_edges",
-            column: "ReceiverType",
-            cancellationToken: cancellationToken
-        );
-        var receiverSelect = hasReceiver ? "c.ReceiverType" : "NULL";
-        // HandoffDispatcher rides along so the bounded in-memory graph carries the async-handoff
-        // classification — the in-memory FactPathFinder applies the sync-cut / --async filter over the
-        // (superset) bounded graph, so this column is what lets it tell handoff edges apart. Null on a
-        // store built before classification (degrades to no handoffs = the pre-async behavior).
-        var hasHandoff = await StorageProbes.ColumnExistsAsync(
-            connection,
-            table: "call_edges",
-            column: "HandoffDispatcher",
-            cancellationToken: cancellationToken
-        );
-        var handoffSelect = hasHandoff ? "c.HandoffDispatcher" : "NULL";
-
-        // Call-site generic type arguments aren't stored on call_edges; they live on reference_facts
-        // (B1 capture) and drive generic-dispatch narrowing in the in-memory FactPathFinder. Load them in
-        // ONE bulk pass keyed by (caller, callee, line) and attach in memory — NOT a per-edge correlated
-        // subquery, which is pathological here: reach_set is the receiver-BLIND CHA superset, so even a
-        // tiny query's bounded graph carries every fanned-out edge, and a per-edge subquery then runs
-        // thousands of times. The bulk query is bounded to reach_set on the caller-side index and returns
-        // only the (few) generic call sites. Probed so a store predating the column degrades to no
-        // narrowing (full CHA). Non-generic / synthesized dispatch edges have no entry -> null.
-        var hasTypeArgs = await StorageProbes.ColumnExistsAsync(
-            connection,
-            table: "reference_facts",
-            column: "TypeArguments",
-            cancellationToken: cancellationToken
-        );
+        // The call-site generic type-args AND the monomorphization bindings (DeclaringTypeArgBinding /
+        // MethodTypeArgBinding) live on reference_facts, NOT on the persisted call_edges view — so the bounded
+        // graph must re-attach them keyed by (caller, callee, line). Without the bindings the ShapeGraph
+        // monomorphization seam sees nothing and the bounded path can't reproduce the full-graph (narrowed)
+        // reach. One bulk pass over reach_set; non-generic edges have no entry -> null. (The columns are
+        // guaranteed by the open-time index-schema gate, so no per-column probe.)
         var typeArgsByEdge = new Dictionary<(string, string, int), string>();
-        if (hasTypeArgs)
-        {
-            await ReadAsync(
-                connection,
-                """
-                SELECT rf.EnclosingSymbolId, rf.TargetSymbolId, rf.Line, rf.TypeArguments
-                FROM reference_facts rf JOIN reach_set r ON rf.EnclosingSymbolId = r.sym
-                WHERE rf.TypeArguments IS NOT NULL;
-                """,
-                reader =>
+        var declBindingByEdge = new Dictionary<(string, string, int), string>();
+        var methBindingByEdge = new Dictionary<(string, string, int), string>();
+        await ReadAsync(
+            connection,
+            """
+            SELECT rf.EnclosingSymbolId, rf.TargetSymbolId, rf.Line, rf.TypeArguments, rf.DeclaringTypeArgBinding, rf.MethodTypeArgBinding
+            FROM reference_facts rf JOIN reach_set r ON rf.EnclosingSymbolId = r.sym
+            WHERE rf.TypeArguments IS NOT NULL OR rf.DeclaringTypeArgBinding IS NOT NULL OR rf.MethodTypeArgBinding IS NOT NULL;
+            """,
+            reader =>
+            {
+                // first wins; a dup (caller, callee, line) is vanishingly rare
+                var key = (reader.GetString(0), reader.GetString(1), reader.IsDBNull(2) ? 0 : reader.GetInt32(2));
+                if (!reader.IsDBNull(3))
                 {
-                    var key = (reader.GetString(0), reader.GetString(1), reader.IsDBNull(2) ? 0 : reader.GetInt32(2));
-                    typeArgsByEdge[key] = reader.GetString(3); // first wins; dup (caller,callee,line) is vanishingly rare
-                },
-                cancellationToken
-            );
-        }
+                    typeArgsByEdge.TryAdd(key, reader.GetString(3));
+                }
+
+                if (!reader.IsDBNull(4))
+                {
+                    declBindingByEdge.TryAdd(key, reader.GetString(4));
+                }
+
+                if (!reader.IsDBNull(5))
+                {
+                    methBindingByEdge.TryAdd(key, reader.GetString(5));
+                }
+            },
+            cancellationToken
+        );
 
         var callEdges = new List<CallEdge>();
         await ReadAsync(
             connection,
             $"""
-            SELECT c.FromSym, c.ToSym, c.Kind, c.FilePath, c.Line, c.LoopKind, c.LoopDetail, {receiverSelect}, {handoffSelect}
+            SELECT c.FromSym, c.ToSym, c.Kind, c.FilePath, c.Line, c.LoopKind, c.LoopDetail, c.ReceiverType, c.HandoffDispatcher, c.DeliveryPrecision, c.NonVirtual, c.EnclosingGuards
             FROM call_edges c JOIN reach_set r ON c.{edgeJoinCol} = r.sym;
             """,
             reader =>
@@ -488,6 +423,8 @@ public static class SqlReachability
                 var to = reader.GetString(1);
                 var line = reader.IsDBNull(4) ? 0 : reader.GetInt32(4);
                 typeArgsByEdge.TryGetValue((from, to, line), out var typeArgs);
+                declBindingByEdge.TryGetValue((from, to, line), out var declBinding);
+                methBindingByEdge.TryGetValue((from, to, line), out var methBinding);
                 callEdges.Add(
                     new CallEdge(
                         Caller: from,
@@ -499,7 +436,12 @@ public static class SqlReachability
                         LoopDetail: reader.IsDBNull(6) ? null : reader.GetString(6),
                         ReceiverType: reader.IsDBNull(7) ? null : reader.GetString(7),
                         HandoffDispatcher: reader.IsDBNull(8) ? null : reader.GetString(8),
-                        TypeArguments: typeArgs
+                        TypeArguments: typeArgs,
+                        DeclaringTypeArgBinding: declBinding,
+                        MethodTypeArgBinding: methBinding,
+                        DeliveryPrecision: reader.IsDBNull(9) ? null : reader.GetString(9),
+                        NonVirtual: !reader.IsDBNull(10) && reader.GetInt64(10) != 0,
+                        EnclosingGuards: reader.IsDBNull(11) ? null : reader.GetString(11)
                     )
                 );
             },
@@ -554,29 +496,98 @@ public static class SqlReachability
         // dispatch exact-first over it, matching the full-graph oracle (and the materialised
         // dispatch_edges, which are built from the same facts). Loaded WHOLE like the type relations —
         // the table is tiny relative to reference_facts, and an unbounded superset can only agree with
-        // the full graph. Probed: a pre-dispatch-facts store has no table → null → CHA fallback,
-        // exactly matching its dispatch_edges (also built heuristic-only).
-        IReadOnlyList<DispatchFact>? minedDispatch = null;
-        if (await StorageProbes.TableExistsAsync(connection, "dispatch_facts", cancellationToken))
-        {
-            var mined = new HashSet<DispatchFact>();
-            await ReadAsync(
-                connection,
-                "SELECT DISTINCT SourceMember, TargetMember, Kind FROM dispatch_facts;",
-                reader =>
-                    mined.Add(
-                        new DispatchFact(SourceMember: reader.GetString(0), TargetMember: reader.GetString(1), Kind: reader.GetString(2))
-                    ),
-                cancellationToken
-            );
-            minedDispatch = mined.ToArray();
-        }
+        // the full graph. dispatch_facts is a FACT table guaranteed by the open-time index gate (it is
+        // part of the v1 fact schema), so no per-table probe — an old store fails fast at open, not here.
+        var mined = new HashSet<DispatchFact>();
+        await ReadAsync(
+            connection,
+            "SELECT DISTINCT SourceMember, TargetMember, Kind FROM dispatch_facts;",
+            reader =>
+                mined.Add(
+                    new DispatchFact(SourceMember: reader.GetString(0), TargetMember: reader.GetString(1), Kind: reader.GetString(2))
+                ),
+            cancellationToken
+        );
+        IReadOnlyList<DispatchFact>? minedDispatch = mined.ToArray();
 
         return new FactGraphData(callEdges, implEdges.ToArray(), methodById.Values.ToArray(), baseEdges.ToArray(), minedDispatch);
     }
 
-    // Builds the temp `reach_set` table = the directional closure of all pattern-matching symbols, in
-    // a single recursive CTE seeded straight from the LIKE match (no C# round-trip for the seeds).
+    // Builds the temp `reach_depth` table = the bounded closure from the pattern-seeds over
+    // call_edges ∪ dispatch_edges in `direction`, with each node's SHORTEST hop depth. Iterative
+    // level-BFS: each level expands ONLY the current frontier (depth = d), and INSERT OR IGNORE keeps the
+    // first (shortest) depth per sym, so total work is O(closure edges).
+    //
+    // The per-level joins are written `reach_depth CROSS JOIN <edges>` deliberately: CROSS JOIN pins the
+    // join order so the tiny depth-d frontier DRIVES and the edge table is probed via its
+    // FromSym/ToSym index. A plain JOIN lets the planner reorder — and with NO statistics on the temp
+    // frontier it assumes the frontier is large and inverts into a full SCAN of the edge table on every
+    // level. (`nodes`, the seed source via SeedSql, is part of the graph UNIT — present whenever this
+    // path runs, since every caller gates on HasGraphAsync first.)
+    private static async Task BuildReachDepthAsync(
+        DbConnection connection,
+        string pattern,
+        Direction direction,
+        int maxDepth,
+        bool includeHandoff,
+        CancellationToken cancellationToken
+    )
+    {
+        var (frontier, next) = direction == Direction.Forward ? ("FromSym", "ToSym") : ("ToSym", "FromSym");
+
+        await ExecNonQueryAsync(connection, "DROP TABLE IF EXISTS reach_depth;", null, cancellationToken);
+        await ExecNonQueryAsync(
+            connection,
+            "CREATE TEMP TABLE reach_depth(sym TEXT PRIMARY KEY, depth INTEGER NOT NULL);",
+            null,
+            cancellationToken
+        );
+        await ExecNonQueryAsync(connection, "CREATE INDEX temp.ix_reach_depth_depth ON reach_depth(depth);", null, cancellationToken);
+
+        await ExecNonQueryAsync(
+            connection,
+            $"INSERT OR IGNORE INTO reach_depth(sym, depth) SELECT sym, 0 FROM ({SeedSql(hasNodes: true)});",
+            command => AddLikeParam(command, pattern),
+            cancellationToken
+        );
+
+        var handoffFilter = includeHandoff ? "" : " AND ce.Kind <> 'handoff'";
+        for (var d = 0; d < maxDepth; d++)
+        {
+            var added = 0;
+            added += await ExecNonQueryAsync(
+                connection,
+                $"INSERT OR IGNORE INTO reach_depth(sym, depth) "
+                    + $"SELECT ce.{next}, {d + 1} FROM reach_depth r CROSS JOIN call_edges ce "
+                    + $"WHERE ce.{frontier} = r.sym AND r.depth = {d}{handoffFilter};",
+                null,
+                cancellationToken
+            );
+            added += await ExecNonQueryAsync(
+                connection,
+                $"INSERT OR IGNORE INTO reach_depth(sym, depth) "
+                    + $"SELECT de.{next}, {d + 1} FROM reach_depth r CROSS JOIN dispatch_edges de "
+                    + $"WHERE de.{frontier} = r.sym AND r.depth = {d};",
+                null,
+                cancellationToken
+            );
+            if (added == 0)
+            {
+                break; // frontier exhausted before the depth cap — the whole closure is enumerated
+            }
+        }
+    }
+
+    // Builds the temp `reach_set` table = the directional closure of all pattern-matching symbols: the
+    // FULL bounded closure (uncapped, handoff-INCLUSIVE superset — the in-memory ShapeGraph/traversal
+    // re-applies sync-cut over it).
+    //
+    // It walks via the iterative level-BFS (BuildReachDepthAsync), NOT a recursive CTE. Why: a SQLite
+    // recursive CTE may reference its own table only once, so the two edge tables had to be merged into a
+    // single `edges(frontier,next)` UNION — which SQLite materialises into an AUTOMATIC COVERING INDEX over
+    // the WHOLE call_edges ∪ dispatch_edges set (a full table SCAN of 600k+ wide rows) on EVERY query,
+    // regardless of result size. That was the dominant per-query disk read (~1 GB, measured). The level-BFS
+    // instead probes IX_call_edges_FromSym per frontier, so it touches only the closure's edges.
     private static async Task BuildReachSetAsync(
         DbConnection connection,
         string pattern,
@@ -584,41 +595,11 @@ public static class SqlReachability
         CancellationToken cancellationToken
     )
     {
-        var (frontierCol, nextCol) = direction == Direction.Forward ? ("FromSym", "ToSym") : ("ToSym", "FromSym");
+        await BuildReachDepthAsync(connection, pattern, direction, maxDepth: int.MaxValue, includeHandoff: true, cancellationToken);
 
         await ExecNonQueryAsync(connection, "DROP TABLE IF EXISTS reach_set;", null, cancellationToken);
         await ExecNonQueryAsync(connection, "CREATE TEMP TABLE reach_set(sym TEXT PRIMARY KEY);", null, cancellationToken);
-
-        var like = "%" + EscapeLike(pattern) + "%";
-        await ExecNonQueryAsync(
-            connection,
-            $"""
-            INSERT OR IGNORE INTO reach_set(sym)
-            WITH RECURSIVE
-            seeds(sym) AS (
-                {EdgeEndpointSeedUnion}
-            ),
-            edges(frontier, next) AS (
-                SELECT {frontierCol}, {nextCol} FROM call_edges
-                UNION ALL
-                SELECT {frontierCol}, {nextCol} FROM dispatch_edges
-            ),
-            reach(sym) AS (
-                SELECT sym FROM seeds
-                UNION
-                SELECT edges.next FROM edges JOIN reach ON edges.frontier = reach.sym
-            )
-            SELECT sym FROM reach;
-            """,
-            command =>
-            {
-                var p = command.CreateParameter();
-                p.ParameterName = "$pat";
-                p.Value = like;
-                command.Parameters.Add(p);
-            },
-            cancellationToken
-        );
+        await ExecNonQueryAsync(connection, "INSERT OR IGNORE INTO reach_set(sym) SELECT sym FROM reach_depth;", null, cancellationToken);
 
         // Give the planner statistics for the freshly-filled TEMP table. Without sqlite_stat1 for
         // reach_set, SQLite assumes it is large and INVERTS every `reference_facts JOIN reach_set`: it
@@ -668,7 +649,4 @@ public static class SqlReachability
         configure?.Invoke(command);
         return await command.ExecuteNonQueryAsync(cancellationToken);
     }
-
-    private static Task<DbConnection> OpenAsync(RigDbContext context, CancellationToken cancellationToken) =>
-        StorageProbes.OpenConnectionAsync(context, cancellationToken);
 }

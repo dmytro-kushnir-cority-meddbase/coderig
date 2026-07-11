@@ -10,25 +10,38 @@ namespace Rig.Cli.CommandLine;
 internal static class Root
 {
     internal static RootCommand Build(TextWriter output, TextWriter error, string workingDirectory) =>
-        new("Runtime Intelligence Graph")
+        new(
+            """
+            Runtime Intelligence Graph
+
+            Query commands (tree, reaches, callers, …) read the .rig store from the current directory.
+            Run them from the directory that contains the .rig/ folder, or create one with:
+
+              rig index <solution>          # one-time: build the fact store
+              rig runs                      # what's indexed
+              rig entrypoints               # list entry points
+              rig tree <EP> --view summary  # what an entry point touches
+            """
+        )
         {
             IndexCommands.BuildIndex(output, error, workingDirectory),
-            
+            IndexCommands.BuildGraph(output, error, workingDirectory),
             FactCommands.BuildRuns(output, error, workingDirectory),
             FactCommands.BuildDi(output, error, workingDirectory),
             FactCommands.BuildSymbols(output, error, workingDirectory),
             FactCommands.BuildRefs(output, error, workingDirectory),
-            
             PathCommand.Build(output, error, workingDirectory),
             TreeCommand.Build(output, error, workingDirectory),
             CallersCommand.Build(output, error, workingDirectory),
             ReachesCommand.Build(output, error, workingDirectory),
+            DispatchFansCommand.Build(output, error, workingDirectory),
             DeriveCommand.Build(output, error, workingDirectory),
+            EffectsDiffCommand.Build(output, error, workingDirectory),
             EntryPointsCommand.Build(output, error, workingDirectory),
             ImpactCommand.Build(output, error, workingDirectory),
-            
+            ServeCommand.Build(output, error, workingDirectory),
             // DeadCommand.Build(output, error, workingDirectory),
-            
+
             FactCommands.BuildFiles(output, error, workingDirectory),
             FactCommands.BuildProfile(output, error, workingDirectory),
         };

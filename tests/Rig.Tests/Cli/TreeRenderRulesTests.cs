@@ -60,6 +60,35 @@ public sealed class TreeRenderRulesTests
     }
 
     [Test]
+    public void Hazards_marker_is_appended_to_the_node_label_for_the_matching_method()
+    {
+        // `tree --hazards` passes a precomputed SymbolId -> marker map; the renderer appends it to that node's
+        // label only. Here Do carries a dual_write marker; its child Save does not.
+        var root = Node("M:App.Svc.Do()", Node("M:App.Repo.Save()"));
+        var hazards = new Dictionary<string, string>(StringComparer.Ordinal) { ["M:App.Svc.Do()"] = "  ⚠ dual_write(medium)" };
+
+        var output = new StringWriter();
+        TreeRenderer.RenderTreeNode(
+            root,
+            prefix: "",
+            isLast: true,
+            isRoot: true,
+            Effects(("M:App.Svc.Do()", "💾 efcore:commit")),
+            prune: false,
+            FactRenderRules.Empty,
+            new Dictionary<string, List<string>>(StringComparer.Ordinal),
+            output,
+            hazardsByMethod: hazards
+        );
+        var lines = output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r')).ToList();
+
+        // The marked node carries the ⚠ marker AFTER its effect tag; the unmarked child does not.
+        lines[0].ShouldStartWith("Svc.Do");
+        lines[0].ShouldContain("⚠ dual_write(medium)");
+        lines.ShouldContain(l => l.Contains("Repo.Save") && !l.Contains("⚠"));
+    }
+
+    [Test]
     public void Plain_mode_preserves_depth_via_two_space_indentation()
     {
         var root = Node("M:App.Root.Go()", Node("M:App.A.M()", Node("M:App.A1.M()")));
@@ -335,6 +364,29 @@ public sealed class TreeRenderRulesTests
         var rules = new FactRenderRules([], [new FactRenderRule("Echo.", "actor framework")]);
         rules.MatchOpaque("M:Echo.ActorContext.System(Echo.ProcessId)")!.Label.ShouldBe("actor framework");
         rules.MatchOpaque("M:App.Data.ImportSubscribeMsg.#ctor(App.ImportId,Echo.ProcessId)").ShouldBeNull();
+    }
+
+    [Test]
+    public void Wildcard_pattern_anchors_the_namespace_while_spanning_the_type()
+    {
+        // "*Cache.New" anchored to the DataAccessTier.EntityClasses namespace: the '*' spans the type name
+        // (Person/Account/…) so the whole entity-cache family folds — but a same-named cache in ANOTHER
+        // namespace does NOT (the fragile part of a plain "Cache.New" substring).
+        var rules = new FactRenderRules(
+            [new FactRenderRule("M:MedDBase.DataAccessTier.EntityClasses.*Cache.New", "entity cache fetch")],
+            []
+        );
+
+        rules
+            .MatchCollapseSeam("M:MedDBase.DataAccessTier.EntityClasses.PersonCache.New(System.Int32)")!
+            .Label.ShouldBe("entity cache fetch");
+        rules.MatchCollapseSeam("M:MedDBase.DataAccessTier.EntityClasses.AccountCache.New(MedDBase.AccountId)").ShouldNotBeNull();
+        // subsumes the .NewEntity overloads (substring within the segment)...
+        rules.MatchCollapseSeam("M:MedDBase.DataAccessTier.EntityClasses.ServiceCache.NewEntity()").ShouldNotBeNull();
+        // ...but a business-logic cache in another namespace is NOT caught (the whole point of anchoring).
+        rules.MatchCollapseSeam("M:MedDBase.ServiceTier.ChargeBand.BillingRulesCache.New()").ShouldBeNull();
+        // and the segments must appear IN ORDER — a param-type match can't satisfy the anchor.
+        rules.MatchCollapseSeam("M:App.Foo.Bar(MedDBase.DataAccessTier.EntityClasses.PersonCache)").ShouldBeNull();
     }
 
     [Test]

@@ -83,4 +83,33 @@ public static class FactStructuralContext
 
         return result;
     }
+
+    // One control-dependence guard on a call-site: the branch predicate's source TEXT (`a == null`, a
+    // switch governing expr, `a` for a `?.`) and the POLARITY under which control flows toward the effect
+    // (WhenTrue = the effect runs when the predicate holds). Frozen at index from
+    // ControlDependence.ComputeGuards; feeds the derive-side spine/guarded partition. Intra-method only.
+    public static string? EncodeGuards(IReadOnlyList<(string Predicate, bool WhenTrue)> guards) =>
+        guards.Count == 0
+            ? null
+            : string.Join(ListSeparator.ToString(), guards.Select(g => $"{g.Predicate}{FieldSeparator}{(g.WhenTrue ? "1" : "0")}"));
+
+    public static IReadOnlyList<(string Predicate, bool WhenTrue)> DecodeGuards(string? encoded)
+    {
+        if (string.IsNullOrEmpty(encoded))
+        {
+            return [];
+        }
+
+        var result = new List<(string, bool)>();
+        foreach (var entry in encoded!.Split(ListSeparator))
+        {
+            var fields = entry.Split(FieldSeparator);
+            if (fields.Length == 2)
+            {
+                result.Add((fields[0], fields[1] == "1"));
+            }
+        }
+
+        return result;
+    }
 }
