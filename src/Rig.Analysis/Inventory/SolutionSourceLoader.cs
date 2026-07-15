@@ -442,7 +442,7 @@ internal static class SolutionSourceLoader
         analyzer.SetGlobalProperty(key: "UseSharedCompilation", value: "false");
         var singleWatch = timings is null ? null : Stopwatch.StartNew();
         var info =
-            buildOrLoad(Path.GetFullPath(projectFilePath), () => analyzer.Build(CompileOnlyOptions()).FirstOrDefault())
+            buildOrLoad(Path.GetFullPath(projectFilePath), () => PreferredResult(analyzer.Build(CompileOnlyOptions())))
             ?? throw new InvalidOperationException($"Buildalyzer produced no build results for '{projectFilePath}'.");
         if (singleWatch is not null)
         {
@@ -536,7 +536,7 @@ internal static class SolutionSourceLoader
                     {
                         var info = buildOrLoad(
                             Path.GetFullPath(projectAnalyzer.ProjectFile.Path.ToString()),
-                            () => projectAnalyzer.Build(CompileOnlyOptions()).FirstOrDefault()
+                            () => PreferredResult(projectAnalyzer.Build(CompileOnlyOptions()))
                         );
                         if (info is not null)
                         {
@@ -1426,6 +1426,16 @@ internal static class SolutionSourceLoader
 
     private static bool IsProjectFile(string path) =>
         path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase);
+
+    // A multi-targeted project (<TargetFrameworks>net48;net8.0</TargetFrameworks>) yields one Buildalyzer
+    // result per TFM, and can also yield a SOURCELESS outer cross-targeting result; a blind
+    // FirstOrDefault() that lands on the empty one degrades a perfectly healthy project (0 source files
+    // after retries -> the whole index aborts; first hit: MedDBase.CrossPlatform). Prefer the first
+    // result that actually carries sources — results follow the csproj's TargetFrameworks order, so this
+    // deterministically picks the FIRST DECLARED TFM's compilation (net48 for the MedDBase monorepo,
+    // matching the rest of the app graph). Single-target projects are unaffected (one result, has sources).
+    private static IAnalyzerResult? PreferredResult(IAnalyzerResults results) =>
+        results.FirstOrDefault(r => r.SourceFiles is { Length: > 0 }) ?? results.FirstOrDefault();
 
     // Build ONLY the `Compile` target instead of Buildalyzer's default ["Clean", "Build"]. The default
     // runs `Clean` first — which DELETES the project's bin/obj — and then a design-time `Build`
