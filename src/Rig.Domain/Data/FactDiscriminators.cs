@@ -41,6 +41,13 @@ public static class EdgeKinds
     public const string MethodGroup = RefKinds.MethodGroup;
     public const string Ctor = RefKinds.Ctor;
     public const string Handoff = "handoff";
+
+    // A delegate-field JOIN edge: the direct caller->callable link synthesized by
+    // FactDelegateFieldJoin from a delegate-field invocation site to the callable(s) assigned to that
+    // field. Not a syntactic call — it crosses the mutable-field state the forward walk otherwise cuts at
+    // (the `saveFunc()` -> the lambda assigned to `saveFunc` seam). A plain (non-handoff) edge, so the
+    // sync traversal walks it like an ordinary call; distinguishable by this Kind in `--format tsv`.
+    public const string DelegateField = "delegate-field";
 }
 
 // CallEdge.DeliveryPrecision — set ONLY on publish→consumer delivery handoff edges emitted by
@@ -64,6 +71,22 @@ public static class DispatchKinds
     public const string Impl = "impl"; // interface method -> implementing member
     public const string Override = "override"; // base/virtual method -> overriding member
     public const string DelegateBind = "delegate_bind"; // delegate field/property/event slot -> bound target (18c)
+
+    // Delegate-FIELD join inputs (stage 1 → the FactDelegateFieldJoin derivation). Sourced at the FIELD
+    // slot (an `F:` DocID), so DispatchTargets' method-keyed resolution never touches them (ParseMethod
+    // rejects `F:`) — they are join DATA, not dispatch edges. Kept narrow on purpose: FIELDS only,
+    // EVENTS excluded (delivery is modeled by event_raise — see docs/FIX-event-raise-overapproximation.md).
+    //
+    //  * Bind:   F:slot -> the callable ASSIGNED to the field (lambda synthetic id / anon-method / method
+    //            group), emitted ONLY when the assignment site is lexically inside the field's declaring type.
+    //  * Escape: F:slot -> F:slot, emitted when an assignment to the field occurs OUTSIDE the declaring
+    //            type. Poisons the slot so the join is suppressed (the disclosed residual cut) — the field
+    //            is then a public plug-in point whose targets we can't be sure we see.
+    //  * Invoke: F:slot -> the invoking METHOD (an `M:`/lambda node), emitted ONLY when the invocation
+    //            site is lexically inside the declaring type.
+    public const string DelegateFieldBind = "delegate_field_bind";
+    public const string DelegateFieldEscape = "delegate_field_escape";
+    public const string DelegateFieldInvoke = "delegate_field_invoke";
 }
 
 // type_relation_facts.RelationKind.

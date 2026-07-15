@@ -249,6 +249,13 @@ internal static class TreeRenderer
             node.FoldedVia is not null ? $" «via {node.FoldedVia}»"
             : node.EdgeKind is "impl-dispatch" or "override-dispatch"
                 ? (children.Count > 1 ? $" «{dispatchTag} ×{children.Count} fan-out»" : $" «{dispatchTag}»")
+            // A delegate-field JOIN edge (`saveFunc()` -> the callable assigned to that field): a REAL sync
+            // call across the mutable-field seam, so it earns the quiet guillemet marker like dispatch — NOT
+            // the ⤳ handoff glyph. Multi-assignment fan-out is the reaching-edge Fanout (each union target is
+            // a sibling child, not one of this node's own body calls — so children.Count is the WRONG count
+            // here), mirroring the dispatch ×N form when >1.
+            : node.EdgeKind == EdgeKinds.DelegateField
+                ? (node.Fanout > 1 ? $" «{dispatchTag} ×{node.Fanout} fan-out»" : $" «{dispatchTag}»")
             : "";
         // An async handoff hop (only present under --async): mark the cross-thread boundary.
         var handoff = node.EdgeKind == EdgeKinds.Handoff ? $" ⤳handoff via {ShortName(node.HandoffVia)} [cross_thread]" : "";

@@ -14,7 +14,7 @@ two legs never pair. rig emits only `shared_state:mutate <Collection>` with **no
 `EpisodeDic` under parallel field-import workers — a real duplicate-creating race — showed in rig as just
 `shared_state mutate ConcurrentDictionary`, no hazard. The race was caught via `impact` (guard added on the fix)
 + source reading, NOT the detector. So a reviewer trusting "no `race_window`" would miss the class. (Captured as
-a caveat in the `meddbase-review` skill; this card is to close the recall gap itself.)
+a caveat in the `meddbase-review` skill, now in `C:\Git\meddbase-skills`; this card is to close the recall gap itself.)
 
 ## Shape to detect
 A method that, on a shared/static collection `C` (a `ConcurrentDictionary`/`Dictionary`/`HashSet`/… in a static

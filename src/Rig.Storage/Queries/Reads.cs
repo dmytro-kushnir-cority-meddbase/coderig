@@ -442,7 +442,10 @@ public static class Reads
         // re-applies the read pragmas — the single sqlite_master existence probe is the only irreducible cost.
         var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         var minedDispatch = await LoadDispatchFactsAsync(context, connection, cancellationToken);
-        return new FactGraphData(classifiedEdges, implEdges, methods, baseEdges, minedDispatch);
+        // Delegate-field join (mirrors FactGraphProjection.FromAnalysis so the two projections stay in
+        // parity): reconnect delegate-field invocations to their assigned callables. Reads only the new
+        // DelegateField* dispatch facts — a store mined before the feature yields no extra edges.
+        return FactDelegateFieldJoin.Apply(new FactGraphData(classifiedEdges, implEdges, methods, baseEdges, minedDispatch));
     }
 
     // The type-param-name source for static monomorphization (Phase 4, docs/design-dispatch-precision.md):
