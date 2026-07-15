@@ -233,10 +233,14 @@ a CFG control-dependence analysis frozen at INDEX onto each call site (`Referenc
 
 ## Env gotchas
 
-- **`rig index` builds internally — no external pre-build.** One `rig index <sln> --parallelism 16
-  --reuse-build-cache` call runs a parallel, cached design-time build itself then extracts; the old
-  "MSBuild first" step is obsolete. `index` is the sole extraction command; `index --from <csproj>` covers
-  the entry-scoped closure (the old `mine`). Never run two `index` commands against one clone at once.
+- **`rig index` builds internally — no external pre-build.** One bare `rig index <sln>` call runs a
+  parallel, cached design-time build itself then extracts (defaults are sane; `--parallelism`/
+  `--reuse-build-cache` are tuning knobs, not required); the old "MSBuild first" step is obsolete. `index`
+  is the sole extraction command. **Prefer the full solution**: `index --from <csproj>` (the entry-scoped
+  closure, the old `mine`) follows ProjectReference edges only — solution projects consumed as binary/paket
+  references fall outside the closure and their internals are absent from the store, while query-side rules
+  still tag their APIs at call sites, so the store looks complete without being traversable into them.
+  Never run two `index` commands against one clone at once.
 - **`rig index` REPLACES atomically** (temp + rename) — re-running a standalone `index` cleanly overwrites;
   no need to delete `.rig` first. Only `index --identity` (multi-solution accumulate) APPENDS in place.
 - **Multi-solution unified store — `rig index <sln> --merge`.** A repo with many solutions (MedDBase has

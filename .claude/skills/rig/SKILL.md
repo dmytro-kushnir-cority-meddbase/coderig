@@ -11,7 +11,9 @@ query/rule changes. Tool repo: `C:\git\coderig` (global tool `rig`).
 
 ## Model
 - **Extract** (`index`): runs Roslyn once, writes facts. Expensive — re-run only on source change. `index`
-  is the SOLE extraction command (`--from <entry.csproj>` = entry-scoped closure; the old `mine` is superseded).
+  is the SOLE extraction command; **prefer the bare full-solution form** (sane defaults; the internal build
+  cache makes warm re-runs fast). `--from <entry.csproj>` (entry-scoped closure) is a narrowing tool, not the
+  default (the old `mine` is superseded).
 - **Query/derive** (`derive` `reaches` `tree` `callers` `path` `refs` `symbols` `impact` `entrypoints`):
   read-only over facts. Detectors are JSON rules → new rule = new answer, NO re-extract.
 - **Run every query command from the dir holding `.rig/`** (cwd locates the DB). `--rules <path>`
@@ -23,8 +25,8 @@ query/rule changes. Tool repo: `C:\git\coderig` (global tool `rig`).
 
 ## Commands
 ```bash
-rig index Sln.slnx --parallelism 16          # whole solution, ONE call (internal parallel build + extract)
-rig index Sln.slnx --from Entry.csproj       # entry-scoped: Entry's transitive ProjectReference closure
+rig index Sln.slnx                           # PREFERRED: whole solution, ONE call, sane defaults (internal parallel cached build + extract)
+rig index Sln.slnx --from Entry.csproj       # narrowing ONLY: Entry's transitive ProjectReference closure — see gotcha below before reaching for this
 rig index Other.slnx --merge --rules r.json  # multi-solution: ACCUMULATE into the (commit-scoped) store; one run/solution, queries span all. Pass --rules every time. Loop w/ continue-on-failure for a many-solution repo.
 rig reaches "Type.Method" [--async]          # effects reachable from a node (sync; --async also walks handoffs)
 rig tree "Type.Method" [--view paths|full|effects|summary|hazards] [--format llm|llm-ids] [--guards] [--suppress ctors,lambdas] [--exclude throw] [--raw]   # call tree (default --view paths = effectful paths; --guards marks branch-gated edges)
@@ -125,7 +127,8 @@ bound); refine to "active-in" via rule-declared `provides`∩`requires` tokens. 
 - **Query cache**: `tree` caches forest+effects in `.rig/cache.db` (auto-invalidated on reindex). `--no-cache` to bypass; safe to delete anytime.
 
 ## Gotchas (full list in REFERENCE)
-- **`index` builds internally — NO external pre-build.** `--parallelism 16` is the safe standard (the internal build no longer clobbers shared `bin/`).
+- **`index` builds internally — NO external pre-build.** Bare `rig index <sln>` defaults are sane (parallel cached internal build; it no longer clobbers shared `bin/`); pass `--parallelism N` only to tune.
+- **Prefer FULL-solution index over `--from`.** An entry-scoped closure follows ProjectReference edges only, so solution projects consumed as binary/paket references are silently OUTSIDE it — their internals vanish from the store while rule-tagged effects still appear at call sites (`receiverTypes` matches the external type), so the store LOOKS complete but `path`/`tree` can't descend into them (MedDBase: `--from` the site csproj dropped the whole `dfs` project; `DFS.SaveText` effects showed, `AzureBlobStorageClient` didn't exist). Use `--from` only when you deliberately want that scoping and can name what it excludes.
 - **Standalone `index` REPLACES atomically** (write-temp + rename) — no need to delete `.rig` first. `index --merge` (or `--identity`) ACCUMULATES instead: one run per solution into a commit-scoped unified store (`rig runs` lists them; queries span all). A single-solution store makes other solutions' entry points invisible → false dead-code/phantom reach; index all app solutions before trusting cross-product reachability. See REFERENCE.md.
 - **Index with the global `rig`** (Debug *can* index now MEF deps are pinned, but global is reliable; don't index rig's own repo from its own `bin/` Debug dll — it self-clobbers mid-run).
 - Results are only as good as the rules + what's in scope — see the fundamental static-analysis limits in REFERENCE before trusting a count.

@@ -222,10 +222,12 @@ Reindex and rule edits are already covered by the store/rules axes — the bump 
   `rig.rules.json`, `deployments.json`). **Run every `rig` query command from that directory** — it picks
   up the rules + store + deployment map from cwd. The source it indexes is `c:/git/meddbase-main-application`.
 - Re-index after any **extraction** change (effects/EPs are query-side and need no re-index, but
-  `FactExtractor` changes do): build the app (MSBuild.exe — the legacy net48 web + `.sqlproj` projects that
-  `dotnet build` can't), then from `c:/git/meddbase-analysis` run
-  `rig index <MedDBase.slnx> --from …/MedDBase.Site/MedDBase/MedDBase.csproj --rules rig.rules.json`. A full
-  re-index is slow (whole monorepo build + extract).
+  `FactExtractor` changes do): from `c:/git/meddbase-analysis` run
+  `rig index <MedDBase.slnx> --rules rig.rules.json` — **bare full-solution, no `--from`, no external
+  MSBuild pre-build** (defaults are sane; observed ~3 min on a warm dtb cache, 2026-07-15). Do NOT use
+  `--from …/MedDBase.csproj`: the entry-scoped closure follows ProjectReference only, so paket/binary-referenced
+  solution projects (e.g. `src/dfs`) silently drop out — their effects still tag at call sites but their
+  internals aren't traversable.
 - **Index efficiently — the slow part is the monorepo BUILD, so don't repeat it:** (1) before indexing a
   commit, check `rig runs` / `.rig/<short-sha>/` — stores are commit-scoped, so if that commit is already
   indexed, **skip the build+index entirely**. (2) Index in the **primary checkout** (or a persistent

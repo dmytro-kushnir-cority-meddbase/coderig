@@ -221,9 +221,20 @@ internal static class FactExtractor
                 var resolvedTarget = target is IMethodSymbol bound
                     ? (bound.ReducedFrom ?? bound).OriginalDefinition
                     : target.OriginalDefinition;
-                if (symbolCache.DocId(resolvedTarget) is { } boundId && dispatchSeen.Add((slot, boundId, DispatchKinds.DelegateBind)))
+                if (symbolCache.DocId(resolvedTarget) is { } boundId)
                 {
-                    dispatch.Add(new DispatchFact(SourceMember: slot, TargetMember: boundId, Kind: DispatchKinds.DelegateBind));
+                    if (dispatchSeen.Add((slot, boundId, DispatchKinds.DelegateBind)))
+                    {
+                        dispatch.Add(new DispatchFact(SourceMember: slot, TargetMember: boundId, Kind: DispatchKinds.DelegateBind));
+                    }
+
+                    // Delegate-field join input: a method-group RHS bound to a delegate FIELD inside its
+                    // declaring type. (DelegateBindSlotOf also fires for properties/events — the FIELD-only
+                    // + declaring-type gate lives in EmitDelegateFieldBind/DelegateFieldAssignmentTarget.)
+                    if (DelegateFieldAssignmentTarget(name, model) is { } assignedField)
+                    {
+                        EmitDelegateFieldBind(dispatch, dispatchSeen, field: assignedField, callableId: boundId, site: name, model: model);
+                    }
                 }
             }
 
@@ -288,22 +299,37 @@ internal static class FactExtractor
         // target(s) via the delegate_bind facts (the delegate-as-degenerate-interface hop).
         void OnInvocation(InvocationExpressionSyntax invocation)
         {
-            if (DelegateSlotDocId(model.GetSymbolInfo(invocation.Expression).Symbol) is not { } slot)
+            var slotSymbol = model.GetSymbolInfo(invocation.Expression).Symbol;
+            if (DelegateSlotDocId(slotSymbol) is not { } slot)
             {
                 return;
             }
 
+            var invokerId = EnclosingSymbolId(invocation, model, lambdaIds, enclosingCache);
             references.Add(
                 new ReferenceFact(
                     TargetSymbolId: slot,
                     RefKind: RefKinds.Invocation,
-                    EnclosingSymbolId: EnclosingSymbolId(invocation, model, lambdaIds, enclosingCache),
+                    EnclosingSymbolId: invokerId,
                     TargetAssembly: assemblyName,
                     TargetInSource: true,
                     FilePath: tree.FilePath,
                     Line: tree.GetLineSpan(invocation.Span).StartLinePosition.Line + 1
                 )
             );
+
+            // Delegate-field join input: an invocation of a delegate FIELD, from inside its declaring type.
+            // The join fans this invoker to the callable(s) the field was assigned (the bind facts).
+            if (
+                DelegateFieldOrNull(slotSymbol) is { } field
+                && invokerId is not null
+                && field.GetDocumentationCommentId() is { } fieldId
+                && IsInDeclaringType(field, invocation, model)
+                && dispatchSeen.Add((fieldId, invokerId, DispatchKinds.DelegateFieldInvoke))
+            )
+            {
+                dispatch.Add(new DispatchFact(SourceMember: fieldId, TargetMember: invokerId, Kind: DispatchKinds.DelegateFieldInvoke));
+            }
         }
 
         // --- Throw sites -> "throw" refs (the thrown exception TYPE) ---
@@ -350,6 +376,8 @@ internal static class FactExtractor
                         lambda: lambda,
                         symbols: symbols,
                         references: references,
+                        dispatch: dispatch,
+                        dispatchSeen: dispatchSeen,
                         lambdaIds: lambdaIds,
                         ordinalByMember: lambdaOrdinalByMember,
                         assembly: assemblyName,
@@ -1448,6 +1476,89 @@ internal static class FactExtractor
         return null;
     }
 
+    // The delegate FIELD a value expression (a lambda / anonymous-method / method group) is being
+    // assigned to, or null when the expression is not a delegate-field assignment. FIELDS ONLY — the
+    // delegate-field join is deliberately narrower than the 18c slot seam: a delegate PROPERTY (resolved
+    // by 18c) and any EVENT (delivery is modeled by event_raise — see the DispatchKinds note) both return
+    // null here. Recognises `slot = rhs`, `slot += rhs`, and `slot ??= rhs` (all bindings that add a
+    // callable), plus a field initializer `Func<..> slot = rhs;`. Walks the same transparent wrappers as
+    // DelegateBindSlotOf. `slot` being an event surfaces as an IEventSymbol on the LHS, which the
+    // `as IFieldSymbol` pattern rejects.
+    private static IFieldSymbol? DelegateFieldAssignmentTarget(SyntaxNode rhs, SemanticModel model)
+    {
+        foreach (var ancestor in rhs.Ancestors())
+        {
+            switch (ancestor)
+            {
+                case AssignmentExpressionSyntax assign
+                    when assign.OperatorToken.IsKind(SyntaxKind.EqualsToken)
+                        || assign.OperatorToken.IsKind(SyntaxKind.PlusEqualsToken)
+                        || assign.OperatorToken.IsKind(SyntaxKind.QuestionQuestionEqualsToken):
+                    return DelegateFieldOrNull(model.GetSymbolInfo(assign.Left).Symbol);
+                case EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax variable }:
+                    return DelegateFieldOrNull(model.GetDeclaredSymbol(variable));
+                case MemberAccessExpressionSyntax:
+                case MemberBindingExpressionSyntax:
+                case ConditionalAccessExpressionSyntax:
+                case ParenthesizedExpressionSyntax:
+                case CastExpressionSyntax:
+                    continue;
+                default:
+                    return null;
+            }
+        }
+
+        return null;
+    }
+
+    // A plain, user-declared delegate FIELD, or null. `AssociatedSymbol: null` rules out compiler-
+    // generated backing fields — a field-like EVENT's backing field (events are excluded from the join)
+    // and an auto-property's backing field — which some contexts bind a bare name to.
+    private static IFieldSymbol? DelegateFieldOrNull(ISymbol? symbol) =>
+        symbol is IFieldSymbol { Type.TypeKind: TypeKind.Delegate, AssociatedSymbol: null } field ? field : null;
+
+    // True when the assignment/invocation `site` is lexically inside `field`'s declaring type — the
+    // soundness gate for the delegate-field join (a controlled seam only when writes/reads stay within
+    // the type). Robust to lambdas and nested scopes (the enclosing symbol's containing type is still the
+    // declaring type) and to partial classes (the ContainingType symbol is shared across files).
+    private static bool IsInDeclaringType(IFieldSymbol field, SyntaxNode site, SemanticModel model)
+    {
+        var enclosing = model.GetEnclosingSymbol(site.SpanStart);
+        var enclosingType = enclosing as INamedTypeSymbol ?? enclosing?.ContainingType;
+        return enclosingType is not null && SymbolEqualityComparer.Default.Equals(enclosingType, field.ContainingType);
+    }
+
+    // Emit the delegate-field join's per-assignment fact: a BIND (F:field -> callable) when the assignment
+    // sits inside the declaring type, else an ESCAPE (F:field -> F:field) that poisons the field so the
+    // join is suppressed. `callableId` is the assigned callable's node id (a lambda synthetic id or a
+    // method DocID). No-op when the field has no DocID.
+    private static void EmitDelegateFieldBind(
+        List<DispatchFact> dispatch,
+        HashSet<(string, string, string)> seen,
+        IFieldSymbol field,
+        string callableId,
+        SyntaxNode site,
+        SemanticModel model
+    )
+    {
+        if (field.GetDocumentationCommentId() is not { } fieldId)
+        {
+            return;
+        }
+
+        if (IsInDeclaringType(field, site, model))
+        {
+            if (seen.Add((fieldId, callableId, DispatchKinds.DelegateFieldBind)))
+            {
+                dispatch.Add(new DispatchFact(SourceMember: fieldId, TargetMember: callableId, Kind: DispatchKinds.DelegateFieldBind));
+            }
+        }
+        else if (seen.Add((fieldId, fieldId, DispatchKinds.DelegateFieldEscape)))
+        {
+            dispatch.Add(new DispatchFact(SourceMember: fieldId, TargetMember: fieldId, Kind: DispatchKinds.DelegateFieldEscape));
+        }
+    }
+
     // The DocID of a delegate-typed slot symbol (field/property of delegate type, or any event — events
     // are always delegate-typed), or null for any other symbol. The bind source the seam resolver keys on.
     private static string? DelegateSlotDocId(ISymbol? symbol) =>
@@ -1743,6 +1854,8 @@ internal static class FactExtractor
         AnonymousFunctionExpressionSyntax lambda,
         List<SymbolFact> symbols,
         List<ReferenceFact> references,
+        List<DispatchFact> dispatch,
+        HashSet<(string, string, string)> dispatchSeen,
         Dictionary<SyntaxNode, string> lambdaIds,
         Dictionary<string, int> ordinalByMember,
         string assembly,
@@ -1754,9 +1867,15 @@ internal static class FactExtractor
     )
     {
         var consumer = LambdaConsumerOf(lambda, model);
-        if (consumer is null)
+        // A lambda ASSIGNED to a delegate FIELD (not an argument) is the deferred-18c case the argument
+        // handoff never captured: give it a synthetic identity too so the delegate-field join has a
+        // callable node to point its edge at (and the body's effects re-root onto the lambda, reachable
+        // from the assignment site via the methodGroup edge below — as they were from the enclosing
+        // method before). Null for a lambda that is neither an argument nor a delegate-field assignment.
+        var assignedField = consumer is null ? DelegateFieldAssignmentTarget(lambda, model) : null;
+        if (consumer is null && assignedField is null)
         {
-            return; // not an argument-passed lambda — no deferred identity
+            return; // not an argument-passed lambda nor a delegate-field assignment — no deferred identity
         }
 
         var member = lambda.FirstAncestorOrSelf<MemberDeclarationSyntax>();
@@ -1804,6 +1923,13 @@ internal static class FactExtractor
                 DelegateConsumer: consumer
             )
         );
+
+        // Delegate-field join input: the lambda is the callable ASSIGNED to `assignedField` (its synthetic
+        // id `id` is the join edge's target node).
+        if (assignedField is not null)
+        {
+            EmitDelegateFieldBind(dispatch, dispatchSeen, field: assignedField, callableId: id, site: lambda, model: model);
+        }
     }
 
     // The dispatcher a lambda is handed to: the enclosing invocation/constructor the lambda is an

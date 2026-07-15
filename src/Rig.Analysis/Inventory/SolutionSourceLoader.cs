@@ -71,6 +71,7 @@ internal static class SolutionSourceLoader
         ReportProgress(progress, "Loading solution");
         var workspace = BuildWorkspace(
             solutionPath,
+            rules,
             progress,
             scopeProjectPaths,
             maxParallelism,
@@ -94,11 +95,24 @@ internal static class SolutionSourceLoader
             phase.Restart();
         }
 
-        var csharpProjects = workspace
+        var workspaceCSharpProjects = workspace
             .CurrentSolution.Projects.Where(p => p.Language == LanguageNames.CSharp)
-            .Where(p => !rules.IsExcludedProject(p.Name))
             .OrderBy(p => p.Name, StringComparer.Ordinal)
             .ToArray();
+
+        // Anything still matching projects.exclude here slipped past the pre-build filter (e.g. the
+        // single-project path, which doesn't apply it). Name what is dropped — a project that reaches
+        // the workspace and then vanishes without a log line reads as "indexed" when it isn't.
+        var excludedByRules = workspaceCSharpProjects.Where(p => rules.IsExcludedProject(p.Name)).Select(p => p.Name).ToArray();
+        if (excludedByRules.Length > 0)
+        {
+            ReportProgress(
+                progress,
+                $"Excluding {excludedByRules.Length} workspace project(s) by rules (projects.exclude): {FormatProjectList(excludedByRules)}"
+            );
+        }
+
+        var csharpProjects = workspaceCSharpProjects.Where(p => !rules.IsExcludedProject(p.Name)).ToArray();
 
         ReportProgress(progress, $"Loaded {csharpProjects.Length} C# project(s) to index");
 
@@ -210,6 +224,7 @@ internal static class SolutionSourceLoader
 
     private static AdhocWorkspace BuildWorkspace(
         string solutionPath,
+        RuleSet rules,
         Action<string>? progress,
         IReadOnlySet<string>? scopeProjectPaths,
         int parallelism,
@@ -370,6 +385,7 @@ internal static class SolutionSourceLoader
         {
             results = BuildSolutionProjectResults(
                 solutionPath,
+                rules,
                 progress,
                 options,
                 scopeProjectPaths,
@@ -441,6 +457,7 @@ internal static class SolutionSourceLoader
     // unwrapped from the AggregateException Parallel.ForEach produces.
     private static List<ProjectBuildInfo> BuildSolutionProjectResults(
         string solutionPath,
+        RuleSet rules,
         Action<string>? progress,
         AnalyzerManagerOptions options,
         IReadOnlySet<string>? scopeProjectPaths,
@@ -453,15 +470,33 @@ internal static class SolutionSourceLoader
 #pragma warning disable CS0618
         var manager = new AnalyzerManager(solutionPath, options);
 #pragma warning restore CS0618
-        // Select the C# projects to build: skip non-C# projects (sqlproj/fsproj fail to parse)
-        // and, when an entry-closure scope is given, everything outside it (test projects,
-        // unrelated tools) — BEFORE paying for their design-time builds.
-        var toBuild = manager
+        // Select the C# projects to build: skip non-C# projects (sqlproj/fsproj fail to parse),
+        // rule-excluded projects (projects.exclude — previously dropped only AFTER their build was
+        // paid for, and silently), and, when an entry-closure scope is given, everything outside it
+        // (test projects, unrelated tools) — BEFORE paying for their design-time builds.
+        var candidates = manager
             .Projects.Values.Where(pa =>
                 string.Equals(Path.GetExtension(pa.ProjectFile.Path.ToString()), ".csproj", StringComparison.OrdinalIgnoreCase)
             )
             .Where(pa => scopeProjectPaths is null || scopeProjectPaths.Contains(Path.GetFullPath(pa.ProjectFile.Path.ToString())))
             .Where(pa => !excludeTests || !IsTestProjectPath(pa.ProjectFile.Path.ToString()))
+            .ToList();
+
+        var rulesExcluded = candidates
+            .Select(pa => Path.GetFileNameWithoutExtension(pa.ProjectFile.Path.ToString()))
+            .Where(rules.IsExcludedProject)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+        if (rulesExcluded.Length > 0)
+        {
+            ReportProgress(
+                progress,
+                $"Excluding {rulesExcluded.Length} project(s) by rules (projects.exclude): {FormatProjectList(rulesExcluded)}"
+            );
+        }
+
+        var toBuild = candidates
+            .Where(pa => !rules.IsExcludedProject(Path.GetFileNameWithoutExtension(pa.ProjectFile.Path.ToString())))
             .ToList();
 
         ReportScopeProgress(progress, manager, toBuild, scopeProjectPaths, excludeTests);
@@ -677,6 +712,16 @@ internal static class SolutionSourceLoader
                     + "Check the target/--from path and that its reference closure includes at least one C# project."
             );
         }
+    }
+
+    // Renders an excluded-project list for one progress line: full names up to a cap, then a count of
+    // the rest — enough to spot a production project being dropped without flooding the log.
+    internal static string FormatProjectList(IReadOnlyList<string> names)
+    {
+        const int MaxShown = 10;
+        return names.Count <= MaxShown
+            ? string.Join(", ", names)
+            : string.Join(", ", names.Take(MaxShown)) + $", … (+{names.Count - MaxShown} more)";
     }
 
     // A project is a test project by name convention (matches the CLI's --from closure heuristic):
