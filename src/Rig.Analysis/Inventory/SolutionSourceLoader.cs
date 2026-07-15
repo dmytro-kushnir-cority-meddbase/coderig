@@ -442,7 +442,7 @@ internal static class SolutionSourceLoader
         analyzer.SetGlobalProperty(key: "UseSharedCompilation", value: "false");
         var singleWatch = timings is null ? null : Stopwatch.StartNew();
         var info =
-            buildOrLoad(Path.GetFullPath(projectFilePath), () => PreferredResult(analyzer.Build(CompileOnlyOptions())))
+            buildOrLoad(Path.GetFullPath(projectFilePath), () => BuildCompileOnly(analyzer))
             ?? throw new InvalidOperationException($"Buildalyzer produced no build results for '{projectFilePath}'.");
         if (singleWatch is not null)
         {
@@ -536,7 +536,7 @@ internal static class SolutionSourceLoader
                     {
                         var info = buildOrLoad(
                             Path.GetFullPath(projectAnalyzer.ProjectFile.Path.ToString()),
-                            () => PreferredResult(projectAnalyzer.Build(CompileOnlyOptions()))
+                            () => BuildCompileOnly(projectAnalyzer)
                         );
                         if (info is not null)
                         {
@@ -1427,13 +1427,25 @@ internal static class SolutionSourceLoader
     private static bool IsProjectFile(string path) =>
         path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase);
 
-    // A multi-targeted project (<TargetFrameworks>net48;net8.0</TargetFrameworks>) yields one Buildalyzer
-    // result per TFM, and can also yield a SOURCELESS outer cross-targeting result; a blind
-    // FirstOrDefault() that lands on the empty one degrades a perfectly healthy project (0 source files
-    // after retries -> the whole index aborts; first hit: MedDBase.CrossPlatform). Prefer the first
-    // result that actually carries sources — results follow the csproj's TargetFrameworks order, so this
-    // deterministically picks the FIRST DECLARED TFM's compilation (net48 for the MedDBase monorepo,
-    // matching the rest of the app graph). Single-target projects are unaffected (one result, has sources).
+    // A multi-targeted project (<TargetFrameworks>net48;net8.0</TargetFrameworks>) has NO `Compile`
+    // target on its OUTER project — only cross-targeting dispatch targets live there — so building it
+    // with CompileOnlyOptions unscoped fails with MSB4057 and yields zero usable results, degrading a
+    // perfectly healthy, restored project (0 source files after retries -> the whole index aborts;
+    // first hit: MedDBase.CrossPlatform). Scope the build to the FIRST DECLARED TFM explicitly (net48
+    // for the MedDBase monorepo — matches the rest of the app graph); single-target projects keep the
+    // unscoped build. Indexing one TFM is lossy under conditional compilation — the union extraction is
+    // designed in docs/backlog/todo/multi-tfm-union-extraction.md.
+    private static IAnalyzerResult? BuildCompileOnly(IProjectAnalyzer analyzer)
+    {
+        var targetFrameworks = analyzer.ProjectFile.TargetFrameworks;
+        var results = targetFrameworks is { Length: > 1 }
+            ? analyzer.Build(targetFrameworks[0], CompileOnlyOptions())
+            : analyzer.Build(CompileOnlyOptions());
+        return PreferredResult(results);
+    }
+
+    // Belt to BuildCompileOnly's scoping: prefer the first result that actually carries sources over a
+    // sourceless one, deterministically (results follow the csproj's TargetFrameworks declaration order).
     private static IAnalyzerResult? PreferredResult(IAnalyzerResults results) =>
         results.FirstOrDefault(r => r.SourceFiles is { Length: > 0 }) ?? results.FirstOrDefault();
 
