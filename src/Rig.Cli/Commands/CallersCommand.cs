@@ -246,12 +246,13 @@ internal static class CallersCommand
 
             var rootsRenderWatch = Stopwatch.StartNew();
             // --format tsv: one full-DocID root per line plus a trailing forwardConfirmed flag (ADDITIVE
-            // column — the existing single-DocID-per-line shape is unchanged). ALL roots are emitted (confirmed
-            // + reverse-only) so TSV consumers can filter on the flag. --raw emits the raw superset (all true).
+            // column — the existing single-DocID-per-line shape is unchanged). Reverse-only roots are HIDDEN by
+            // default, mirroring the text output, so the default TSV row count matches the confirmed headline;
+            // --include-reverse-only surfaces them (flagged false). --raw keeps the raw superset (all true).
             if (tsv)
             {
                 var reverseOnlySet = rootsReverseOnly.ToHashSet(StringComparer.Ordinal);
-                foreach (var r in roots.Take(max))
+                foreach (var r in CallersReverseOnly.VisibleTsvRows(roots.Take(max).ToList(), reverseOnlySet.Contains, opts.IncludeReverseOnly))
                 {
                     io.TextOutput.Output.WriteLine($"{r}\t{(reverseOnlySet.Contains(r) ? "false" : "true")}");
                 }
@@ -340,11 +341,13 @@ internal static class CallersCommand
         // --format tsv: depth + full DocID per reaching method, plus a trailing forwardConfirmed flag
         // (ADDITIVE column — the existing depth\tdocid columns are unchanged). Depth-0 rows are the BFS start
         // nodes (the matched target(s) and their lambdas, always forwardConfirmed=true), distinctly identified
-        // by their `0` depth — TSV consumers can filter depth > 0 for upstream callers only. ALL rows emitted
-        // (confirmed + reverse-only) so consumers can filter on the flag. --raw emits the raw superset (true).
+        // by their `0` depth — TSV consumers can filter depth > 0 for upstream callers only. Reverse-only rows
+        // are HIDDEN by default, mirroring the text output, so the default TSV row count matches the confirmed
+        // headline; --include-reverse-only surfaces them (flagged false). --raw emits the raw superset (true).
         if (tsv)
         {
-            foreach (var kv in reachable.OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).Take(max))
+            var ordered = reachable.OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).Take(max).ToList();
+            foreach (var kv in CallersReverseOnly.VisibleTsvRows(ordered, kv => IsReverseOnly(kv.Key), opts.IncludeReverseOnly))
             {
                 io.TextOutput.Output.WriteLine($"{kv.Value}\t{kv.Key}\t{(IsReverseOnly(kv.Key) ? "false" : "true")}");
             }
@@ -536,18 +539,21 @@ internal static class CallersCommand
 
         // --format tsv: one row per touching EP (full path), with the loaded + capability-active services,
         // a forwardConfirmed flag, and a trailing fqn (both ADDITIVE columns — existing columns unchanged).
-        // ALL touching EPs are emitted (confirmed + reverse-only) so TSV consumers can filter on the flag.
+        // Reverse-only EPs (in the reverse closure but with NO forward path — the reverse-dispatch
+        // over-approximation) are HIDDEN by default, exactly as in the text output, so the default TSV row set
+        // matches the text headline's forward-confirmed count. --include-reverse-only surfaces them in BOTH
+        // formats — it used to be a no-op for tsv, which then over-reported the EP count (e.g. 213 vs 789).
         // Columns: kind, route, file, line, requires, loadedServices, activeServices, forwardConfirmed, fqn
         // (the queryable dotted name; == route when the route already is the FQN, route fallback otherwise).
         if (tsv)
         {
-            for (var i = 0; i < touching.Count; i++)
+            var rows = touching.Select((e, i) => (Ep: e, Confirmed: confirmedFlags[i])).ToList();
+            foreach (var (e, isConfirmed) in CallersReverseOnly.VisibleTsvRows(rows, isReverseOnly: r => !r.Confirmed, includeReverseOnly))
             {
-                var e = touching[i];
                 var loaded = deployments.ServicesForFile(e.FilePath);
                 var active = deployments.ActiveServices(loadedServices: loaded, requires: e.Requires);
                 output.WriteLine(
-                    $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}\t{(confirmedFlags[i] ? "true" : "false")}\t{FqnOrRoute(route: e.Route, filePath: e.FilePath, line: e.Line, docIdBySite: docIdBySite)}"
+                    $"{e.Kind}\t{e.Route}\t{e.FilePath}\t{e.Line}\t{string.Join(',', e.Requires ?? [])}\t{string.Join(',', loaded)}\t{string.Join(',', active)}\t{(isConfirmed ? "true" : "false")}\t{FqnOrRoute(route: e.Route, filePath: e.FilePath, line: e.Line, docIdBySite: docIdBySite)}"
                 );
             }
             return 0;
@@ -624,4 +630,15 @@ internal static class CallersCommand
 
         return 0;
     }
+}
+
+// Shared TSV row-visibility policy for `rig callers` across all three lenses (default reachers, --roots,
+// --entrypoints). Reverse-only rows — in the reverse closure but with NO forward path, i.e. the reverse-dispatch
+// over-approximation the text output hides behind --include-reverse-only — are dropped from TSV by default too,
+// so the default TSV row count matches the text headline's forward-confirmed count and --include-reverse-only is
+// honoured uniformly across formats (it used to be a no-op for tsv, which silently over-reported callers/EPs).
+internal static class CallersReverseOnly
+{
+    internal static IEnumerable<T> VisibleTsvRows<T>(IReadOnlyList<T> rows, Func<T, bool> isReverseOnly, bool includeReverseOnly) =>
+        includeReverseOnly ? rows : rows.Where(r => !isReverseOnly(r));
 }
