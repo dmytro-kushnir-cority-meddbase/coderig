@@ -27,7 +27,9 @@ public static class SolutionAnalyzer
         // Directory for the design-time-build cache (rig index --reuse-build-cache). Null = disabled.
         string? buildCacheDir = null,
         // --verify-build-cache: build everything ignoring hits and diff fresh vs cached, reporting mismatches.
-        bool verifyBuildCache = false
+        bool verifyBuildCache = false,
+        // Explicit TFM selected for multi-targeted projects. Single-targeted projects retain their declared TFM.
+        string? framework = null
     )
     {
         var solutionFullPath = Path.GetFullPath(solutionPath);
@@ -41,6 +43,7 @@ public static class SolutionAnalyzer
             progress: progress,
             scopeProjectPaths: scopeProjectPaths,
             parallelism: parallelism,
+            framework: framework,
             excludeTests: excludeTests,
             timings: timings,
             buildCacheDir: buildCacheDir,

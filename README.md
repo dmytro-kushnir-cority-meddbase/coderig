@@ -58,7 +58,7 @@ All commands except `index`/`mine` are read-only and run from the directory that
 
 | Command | Description |
 |---|---|
-| `rig index <solution\|project> [--rules <p>...] [--from <entry.csproj>] [--parallelism <n>] [--durable]` | Index a `.sln`/`.slnx`/`.csproj` into `.rig/rig.db`. `--from` indexes only the entry project's non-test closure in one workspace |
+| `rig index <solution\|project> [--rules <p>...] [--from <entry.csproj>] [--framework <tfm>] [--parallelism <n>]` | Index a `.sln`/`.slnx`/`.csproj` into `.rig/rig.db`. `--from` indexes only the entry project's non-test closure; `--framework` selects one TFM from multi-targeted projects |
 | `rig mine <solution> --from <project.csproj> [--rules <p>...] [--parallelism <n>]` | BFS the project dependency graph from an entry project, indexing each project |
 | `rig graph` | Rebuild the derived call-graph views (`call_edges` + `dispatch_edges` + `nodes` + FTS) from facts — idempotent, no rescan |
 | `rig runs` | List indexed runs (entry-point / effect / symbol counts) |

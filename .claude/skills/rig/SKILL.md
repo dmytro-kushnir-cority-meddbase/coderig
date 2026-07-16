@@ -26,6 +26,7 @@ query/rule changes. Tool repo: `C:\git\coderig` (global tool `rig`).
 ## Commands
 ```bash
 rig index Sln.slnx                           # PREFERRED: whole solution, ONE call, sane defaults (internal parallel cached build + extract)
+rig index Sln.slnx --framework net10.0       # select this TFM in multi-targeted projects (default: first declared TFM)
 rig index Sln.slnx --from Entry.csproj       # narrowing ONLY: Entry's transitive ProjectReference closure — see gotcha below before reaching for this
 rig index Other.slnx --merge --rules r.json  # multi-solution: ACCUMULATE into the (commit-scoped) store; one run/solution, queries span all. Pass --rules every time. Loop w/ continue-on-failure for a many-solution repo.
 rig reaches "Type.Method" [--async]          # effects reachable from a node (sync; --async also walks handoffs)
