@@ -598,7 +598,6 @@ internal static class DeriveCommand
                 .GroupBy(f => f.Enclosing, StringComparer.Ordinal)
                 .Select(g =>
                 {
-                    // Best (worst-severity) confidence among this method's sites — the most urgent signal.
                     var worstConfidence = g.Select(f => f.Confidence).OrderBy(HazardConfidenceRank).First();
                     // Representative site: the one with the worst confidence (or first alphabetically on tie).
                     var representative = g.OrderBy(f => HazardConfidenceRank(f.Confidence))

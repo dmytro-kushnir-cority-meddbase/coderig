@@ -3,12 +3,6 @@ using Shouldly;
 
 namespace Rig.Tests.Analysis;
 
-// projects.exclude used to be applied only AFTER the excluded projects' design-time builds were paid
-// for, and silently — a production project in the exclude list (MedDBase: `dfs`) simply vanished
-// between "Assembling workspace from N" and "Loaded M C# project(s)", so the store looked complete
-// while whole assemblies were untraversable. The fix filters before the builds and names what it
-// drops; FormatProjectList renders that one progress line, capped so a big test-glob exclusion
-// doesn't flood the log.
 public sealed class ExcludedProjectReportingTests
 {
     [Test]

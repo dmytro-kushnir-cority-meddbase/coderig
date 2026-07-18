@@ -985,7 +985,6 @@ public static class FactEffectDeriver
             return typeName;
         }
 
-        // Split on dots, strip arity from each segment, rejoin.
         var segments = typeName.Split('.');
         for (int i = 0; i < segments.Length; i++)
         {

@@ -81,9 +81,6 @@ public static class FactGraphProjection
 
         var minedDispatch = (result.DispatchFacts ?? []).Distinct().ToList();
 
-        // Delegate-field join: synthesize the direct invoking-method -> assigned-callable edges the
-        // mutable-field seam otherwise cuts. Reads only the new DelegateField* facts, so a pre-feature
-        // store adds nothing here. Applied here AND in LoadFactGraphAsync so the two projections match.
         return FactDelegateFieldJoin.Apply(new FactGraphData(classifiedEdges, implEdges, methods, baseEdges, minedDispatch));
     }
 }

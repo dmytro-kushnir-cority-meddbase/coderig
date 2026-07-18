@@ -13,7 +13,6 @@ internal static class DependencyGraph
     {
         var graph = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
-        // Collect all .csproj paths from the solution file
         var projectPaths = await DiscoverProjectsAsync(solutionPath, log);
 
         foreach (var projPath in projectPaths)
