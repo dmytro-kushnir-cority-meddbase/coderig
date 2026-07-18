@@ -4,12 +4,6 @@ using Shouldly;
 
 namespace Rig.Tests.Rendering;
 
-// A delegate-field JOIN edge (EdgeKinds.DelegateField) is a REAL synchronous call across the mutable-field
-// seam (`saveFunc()` -> the callable assigned to that field). The tree renderer discloses it with the same
-// quiet guillemet marker dispatch uses — ` «delegate-field»` — NOT the ⤳ handoff glyph. Multi-assignment
-// fan-out (the reaching-edge Fanout) mirrors the dispatch ×N form. Verified against the real
-// `rig tree DistributedFileService.DFS.SaveText --view full` output, where the
-// `DFS.Save -> DFS.InitialiseFromRuntime<T> λ0` hop renders `«delegate-field»`.
 public sealed class DelegateFieldRenderingTests
 {
     private static TraceNode Child(string id, string edgeKind, int fanout = 0) => new(id, edgeKind, null, null, [], Fanout: fanout);
@@ -47,7 +41,6 @@ public sealed class DelegateFieldRenderingTests
 
         var lines = Lines(Render(root));
 
-        // The delegate-field child carries ` «delegate-field»`; the ordinary invocation sibling carries no marker.
         lines.ShouldContain(l => l.Contains("InitialiseFromRuntime") && l.Contains("«delegate-field»"));
         lines.ShouldContain(l => l.Contains("Metrics.Log1") && !l.Contains("«delegate-field»"));
     }
@@ -65,13 +58,12 @@ public sealed class DelegateFieldRenderingTests
 
         var rendered = Render(root);
         rendered.ShouldContain("«delegate-field»");
-        rendered.ShouldNotContain("⤳"); // it is a real sync call, not an async handoff
+        rendered.ShouldNotContain("⤳");
     }
 
     [Test]
     public void A_multi_assignment_fan_out_mirrors_the_dispatch_count_form()
     {
-        // A reaching-edge Fanout > 1 (multi-assignment field) shows the dispatch-style ×N fan-out suffix.
         var root = new TraceNode(
             "M:DFS.DFS.Save()",
             "invocation",

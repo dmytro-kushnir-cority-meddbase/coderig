@@ -88,7 +88,6 @@ public static class HazardsService
             )
         ).Where(f => treeMethods.Contains(f.Enclosing));
 
-        // Group by (method, type) → worst confidence + site count.
         return effectFindings
             .Concat(graphFindings)
             .GroupBy(f => (f.Enclosing, f.Type))

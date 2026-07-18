@@ -203,7 +203,6 @@ public static class FactHazardDeriver
 
             // STATIC CONSTRUCTOR EXEMPTION: the CLR type-init lock serializes #cctor execution — only one
             // thread ever runs a given #cctor, so a read→write pair inside a static constructor cannot race.
-            // Emit NO observation; add the effect unchanged and move on.
             // NOTE: instance .#ctor, getters, and Init-named methods are NOT exempted — they classify normally.
             if (SimpleMemberName(e.EnclosingSymbolId!) == "#cctor")
             {

@@ -249,11 +249,7 @@ internal static class TreeRenderer
             node.FoldedVia is not null ? $" «via {node.FoldedVia}»"
             : node.EdgeKind is "impl-dispatch" or "override-dispatch"
                 ? (children.Count > 1 ? $" «{dispatchTag} ×{children.Count} fan-out»" : $" «{dispatchTag}»")
-            // A delegate-field JOIN edge (`saveFunc()` -> the callable assigned to that field): a REAL sync
-            // call across the mutable-field seam, so it earns the quiet guillemet marker like dispatch — NOT
-            // the ⤳ handoff glyph. Multi-assignment fan-out is the reaching-edge Fanout (each union target is
-            // a sibling child, not one of this node's own body calls — so children.Count is the WRONG count
-            // here), mirroring the dispatch ×N form when >1.
+            // Delegate-field fan-out belongs to the reaching edge, not this node's child count.
             : node.EdgeKind == EdgeKinds.DelegateField
                 ? (node.Fanout > 1 ? $" «{dispatchTag} ×{node.Fanout} fan-out»" : $" «{dispatchTag}»")
             : "";
@@ -573,7 +569,6 @@ internal static class TreeRenderer
     {
         var list = effects.ToList();
 
-        // Collapse lock acquire+release pairs per resource.
         var acquiresByResource = list.Where(e => e.Provider == "lock" && e.Operation == "acquire")
             .GroupBy(e => e.ResourceType, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key ?? "", g => g.Count(), StringComparer.OrdinalIgnoreCase);
@@ -587,7 +582,6 @@ internal static class TreeRenderer
 
         var result = new List<string>();
 
-        // Emit one collapsed "lock" entry per paired resource.
         foreach (var resource in pairedResources.OrderBy(r => r, StringComparer.OrdinalIgnoreCase))
         {
             var lockEmoji = EmojiLookup.For(emoji, provider: "lock", operation: "held");
@@ -596,7 +590,6 @@ internal static class TreeRenderer
             result.Add($"{lockEmoji} lock{resourceLabel}");
         }
 
-        // Emit non-lock effects and any unpaired lock effects normally.
         foreach (var e in list)
         {
             var isPaired =

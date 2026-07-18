@@ -103,9 +103,6 @@ internal static class SolutionSourceLoader
             .OrderBy(p => p.Name, StringComparer.Ordinal)
             .ToArray();
 
-        // Anything still matching projects.exclude here slipped past the pre-build filter (e.g. the
-        // single-project path, which doesn't apply it). Name what is dropped — a project that reaches
-        // the workspace and then vanishes without a log line reads as "indexed" when it isn't.
         var excludedByRules = workspaceCSharpProjects.Where(p => rules.IsExcludedProject(p.Name)).Select(p => p.Name).ToArray();
         if (excludedByRules.Length > 0)
         {
@@ -477,10 +474,6 @@ internal static class SolutionSourceLoader
 #pragma warning disable CS0618
         var manager = new AnalyzerManager(solutionPath, options);
 #pragma warning restore CS0618
-        // Select the C# projects to build: skip non-C# projects (sqlproj/fsproj fail to parse),
-        // rule-excluded projects (projects.exclude — previously dropped only AFTER their build was
-        // paid for, and silently), and, when an entry-closure scope is given, everything outside it
-        // (test projects, unrelated tools) — BEFORE paying for their design-time builds.
         var candidates = manager
             .Projects.Values.Where(pa =>
                 string.Equals(Path.GetExtension(pa.ProjectFile.Path.ToString()), ".csproj", StringComparison.OrdinalIgnoreCase)
@@ -727,8 +720,6 @@ internal static class SolutionSourceLoader
         }
     }
 
-    // Renders an excluded-project list for one progress line: full names up to a cap, then a count of
-    // the rest — enough to spot a production project being dropped without flooding the log.
     internal static string FormatProjectList(IReadOnlyList<string> names)
     {
         const int MaxShown = 10;
@@ -1440,14 +1431,9 @@ internal static class SolutionSourceLoader
     private static bool IsProjectFile(string path) =>
         path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase);
 
-    // A multi-targeted project (<TargetFrameworks>net48;net8.0</TargetFrameworks>) has NO `Compile`
-    // target on its OUTER project — only cross-targeting dispatch targets live there — so building it
-    // with CompileOnlyOptions unscoped fails with MSB4057 and yields zero usable results, degrading a
-    // perfectly healthy, restored project (0 source files after retries -> the whole index aborts;
-    // first hit: MedDBase.CrossPlatform). Scope the build to the FIRST DECLARED TFM explicitly (net48
-    // for the MedDBase monorepo — matches the rest of the app graph); single-target projects keep the
-    // unscoped build. Indexing one TFM is lossy under conditional compilation — the union extraction is
-    // designed in docs/backlog/todo/multi-tfm-union-extraction.md.
+    // A multi-targeted outer project has no Compile target. Build one inner TFM explicitly;
+    // the first declared TFM preserves historical behavior when the caller does not choose one.
+    // Indexing a single TFM remains lossy under conditional compilation; see the union-extraction backlog.
     private static IAnalyzerResult? BuildCompileOnly(IProjectAnalyzer analyzer, string? framework)
     {
         var targetFrameworks = analyzer.ProjectFile.TargetFrameworks;
@@ -1478,8 +1464,7 @@ internal static class SolutionSourceLoader
             );
     }
 
-    // Belt to BuildCompileOnly's scoping: prefer the first result that actually carries sources over a
-    // sourceless one, deterministically (results follow the csproj's TargetFrameworks declaration order).
+    // Cross-targeting results can include a sourceless outer-project result before the usable inner result.
     private static IAnalyzerResult? PreferredResult(IAnalyzerResults results) =>
         results.FirstOrDefault(r => r.SourceFiles is { Length: > 0 }) ?? results.FirstOrDefault();
 
@@ -1500,11 +1485,8 @@ internal static class SolutionSourceLoader
         options.TargetsToBuild.Add("Compile");
         if (forExplicitFramework)
         {
-            // Buildalyzer restores before its design-time build. A project with TreatWarningsAsErrors=true
-            // can otherwise persist an SDK/NuGet warning as an Error in project.assets.json; Compile then
-            // produces no source result even though Roslyn could analyze the project (AngleSharp/net10:
-            // NU1510 for an inbox PackageReference). Force the selected TFM's restore to refresh stale assets
-            // and keep restore warnings non-fatal. Compilation diagnostics are still collected from Roslyn.
+            // A restore warning persisted as an error can prevent Buildalyzer from producing sources.
+            // Refresh the selected TFM's assets without weakening Roslyn compilation diagnostics.
             options.GlobalProperties["RestoreForceEvaluate"] = "true";
             options.GlobalProperties["TreatWarningsAsErrors"] = "false";
         }

@@ -303,7 +303,6 @@ public static class GenericSubstitution
             return receiverType;
         }
 
-        // Map each param NAME to its concrete (only those with an in-range binding can substitute).
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 0; i < typeParameterNames.Count; i++)
         {
