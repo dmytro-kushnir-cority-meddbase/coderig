@@ -6,21 +6,9 @@ SQLite runs and exposes per-entry-point call graphs annotated with external effe
 execution-context observations (loops, parallel fanout, resilience retries,
 concurrency hazards).
 
-The current product direction is captured in [docs/mvp-spec.md](docs/mvp-spec.md).
-Shared project vocabulary lives in
-[docs/ubiquitous-language.md](docs/ubiquitous-language.md).
-Current implementation handover notes live in
-[docs/handover.md](docs/handover.md).
-
 ## Quick Start
 
 ```powershell
-# build and pack
-dotnet pack src/Rig.Cli/Rig.Cli.csproj -c Release -o .rig-nupkg /p:TreatWarningsAsErrors=false
-
-# install globally from local package
-dotnet tool install -g rig --add-source .rig-nupkg
-
 # index a solution (pre-build it first so cross-assembly metadata binds)
 rig index playgrounds/EntryPointEffects/EntryPointEffects.slnx
 
@@ -38,17 +26,13 @@ rig path    "From.Method" "To.Method"   # one concrete path between two symbols
 ## Formatting
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\format.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\format.ps1 -Check
+.\scripts\format.ps1
 ```
 
-### Self-contained binary (win-x64, fastest startup)
+### Tests + local piblish as tool
 
 ```powershell
-dotnet publish src/Rig.Cli/Rig.Cli.csproj -c Release -r win-x64 --self-contained -o .rig-bin `
-  -p:PublishReadyToRun=true -p:DebugSymbols=false -p:DebugType=none `
-  /p:TreatWarningsAsErrors=false
-# binary at .rig-bin/Rig.exe (~295–350 ms per command, R2R win-x64)
+.\scripts\mini-ci.ps1
 ```
 
 ## CLI Commands
