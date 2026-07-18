@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Loader;
@@ -876,9 +877,10 @@ internal static class SolutionSourceLoader
     }
 
     // Builds the CSharpCompilationOptions for a project: OutputKind from OutputType property,
-    // AllowUnsafe from AllowUnsafeBlocks, and nullable context forced off (fact extraction is
-    // nullable-agnostic; skipping NullableWalker is principled and strictly less work).
-    private static CSharpCompilationOptions BuildCompilationOptions(ProjectBuildInfo result)
+    // AllowUnsafe from AllowUnsafeBlocks, strong-name settings from MSBuild, and nullable context
+    // forced off (fact extraction is nullable-agnostic; skipping NullableWalker is principled and
+    // strictly less work).
+    internal static CSharpCompilationOptions BuildCompilationOptions(ProjectBuildInfo result)
     {
         // Compilation options: OutputKind must be Library for class library / web projects
         // so the compiler doesn't require a Main method (CS5001).  AllowUnsafe and Nullable
@@ -892,6 +894,24 @@ internal static class SolutionSourceLoader
             result.Properties.TryGetValue(key: "AllowUnsafeBlocks", value: out var unsafeStr)
             && bool.TryParse(unsafeStr, out var unsafeBool)
             && unsafeBool;
+        var signAssembly = ReadBooleanProperty(result, "SignAssembly");
+        var delaySign = ReadBooleanProperty(result, "DelaySign");
+        var publicSign = ReadBooleanProperty(result, "PublicSign");
+        string? cryptoKeyFile = null;
+        StrongNameProvider? strongNameProvider = null;
+        if (
+            signAssembly
+            && result.Properties.TryGetValue(key: "AssemblyOriginatorKeyFile", value: out var keyFile)
+            && !string.IsNullOrWhiteSpace(keyFile)
+        )
+        {
+            var projectDirectory = Path.GetDirectoryName(result.ProjectFilePath) ?? Directory.GetCurrentDirectory();
+            cryptoKeyFile = Path.GetFullPath(keyFile, projectDirectory);
+            strongNameProvider = new DesktopStrongNameProvider(
+                keyFileSearchPaths: ImmutableArray.Create(projectDirectory),
+                tempPath: Path.GetTempPath()
+            );
+        }
         // Force nullable context OFF regardless of the project's <Nullable> setting: fact extraction is
         // nullable-AGNOSTIC (symbol resolution, DocIDs, references, type-relations and dispatch are
         // identical with or without it; nullable context only governs warnings, which we discard), so
@@ -901,8 +921,19 @@ internal static class SolutionSourceLoader
         // resolution / type construction), not nullable-flow-specific, so it allocates either way.
         // Kept because it's principled and strictly less work, not because it's a major win.
         const NullableContextOptions nullableContext = NullableContextOptions.Disable;
-        return new CSharpCompilationOptions(outputKind, allowUnsafe: allowUnsafe, nullableContextOptions: nullableContext);
+        return new CSharpCompilationOptions(
+            outputKind,
+            cryptoKeyFile: cryptoKeyFile,
+            delaySign: signAssembly ? delaySign : null,
+            publicSign: signAssembly && publicSign,
+            strongNameProvider: strongNameProvider,
+            allowUnsafe: allowUnsafe,
+            nullableContextOptions: nullableContext
+        );
     }
+
+    private static bool ReadBooleanProperty(ProjectBuildInfo result, string propertyName) =>
+        result.Properties.TryGetValue(key: propertyName, value: out var value) && bool.TryParse(value, out var parsed) && parsed;
 
     // Resolves a project's metadata references and in-workspace project references.
     // The transitive in-set closure of ProjectReferences is added as live Roslyn ProjectReferences (one
