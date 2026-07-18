@@ -44,26 +44,13 @@ public sealed class FrameworkSelectionIndexingTests
                 #endif
                 """
             );
-            await RunDotnetAsync(
-                ["restore", projectPath, "--force-evaluate", "-p:TreatWarningsAsErrors=false"],
-                directory
-            );
+            await RunDotnetAsync(["restore", projectPath, "--force-evaluate", "-p:TreatWarningsAsErrors=false"], directory);
 
             var rules = RuleSetLoader.Load(directory);
             var cacheDirectory = Path.Combine(directory, "build-cache");
 
-            var netEight = await SolutionAnalyzer.AnalyzeAsync(
-                projectPath,
-                rules,
-                buildCacheDir: cacheDirectory,
-                framework: "net8.0"
-            );
-            var netTen = await SolutionAnalyzer.AnalyzeAsync(
-                projectPath,
-                rules,
-                buildCacheDir: cacheDirectory,
-                framework: "net10.0"
-            );
+            var netEight = await SolutionAnalyzer.AnalyzeAsync(projectPath, rules, buildCacheDir: cacheDirectory, framework: "net8.0");
+            var netTen = await SolutionAnalyzer.AnalyzeAsync(projectPath, rules, buildCacheDir: cacheDirectory, framework: "net10.0");
 
             var netEightSymbols = netEight.Symbols ?? [];
             var netTenSymbols = netTen.Symbols ?? [];
@@ -97,11 +84,7 @@ public sealed class FrameworkSelectionIndexingTests
         var output = new StringWriter();
         var error = new StringWriter();
 
-        var exitCode = await CliApplication.RunAsync(
-            ["index", "C:/does-not-exist.slnx", "--framework", "net10.0"],
-            output,
-            error
-        );
+        var exitCode = await CliApplication.RunAsync(["index", "C:/does-not-exist.slnx", "--framework", "net10.0"], output, error);
 
         exitCode.ShouldBe(2);
         error.ToString().ShouldNotContain("Unrecognized command or argument");

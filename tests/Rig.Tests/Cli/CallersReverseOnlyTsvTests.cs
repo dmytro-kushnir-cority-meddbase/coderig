@@ -48,7 +48,12 @@ public sealed class CallersReverseOnlyTsvTests
 
         output.GetStringBuilder().Clear();
         (
-            await CliApplication.RunAsync(["callers", "CreateTeamAsync", "--entrypoints", "--format", "tsv"], output, error, workingDirectory)
+            await CliApplication.RunAsync(
+                ["callers", "CreateTeamAsync", "--entrypoints", "--format", "tsv"],
+                output,
+                error,
+                workingDirectory
+            )
         ).ShouldBe(0);
         var defaultRows = TsvRowCount(output.ToString());
         defaultRows.ShouldBe(headline, $"default tsv rows must equal the display headline.\nDISPLAY:\n{display}");

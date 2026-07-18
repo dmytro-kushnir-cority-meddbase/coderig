@@ -249,7 +249,9 @@ internal static class CallersCommand
             if (tsv)
             {
                 var reverseOnlySet = rootsReverseOnly.ToHashSet(StringComparer.Ordinal);
-                foreach (var r in CallersReverseOnly.VisibleTsvRows(roots.Take(max).ToList(), reverseOnlySet.Contains, opts.IncludeReverseOnly))
+                foreach (
+                    var r in CallersReverseOnly.VisibleTsvRows(roots.Take(max).ToList(), reverseOnlySet.Contains, opts.IncludeReverseOnly)
+                )
                 {
                     io.TextOutput.Output.WriteLine($"{r}\t{(reverseOnlySet.Contains(r) ? "false" : "true")}");
                 }
