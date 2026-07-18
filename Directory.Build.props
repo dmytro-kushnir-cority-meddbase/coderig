@@ -1,9 +1,5 @@
 <Project>
   <ItemGroup Condition="'$(IsPackable)' != 'false' and '$(MSBuildProjectName)' != 'UseNamedArgs'">
-    <PackageReference Include="Meziantou.Analyzer">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
-    </PackageReference>
     <!-- TODO(use-named-args-fs#1): delete the pinned source checkout and return to PackageReference after
          https://github.com/mykolav/use-named-args-fs/pull/1 is merged and its exclusions are published. -->
     <ProjectReference

@@ -20,7 +20,6 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.CommandLine" />
-    <PackageReference Remove="Meziantou.Analyzer" />
   </ItemGroup>
   <!-- `rig serve` hosts an in-process minimal-API + static React SPA (see Web/). The FrameworkReference
        makes this console tool ASP.NET-capable (Kestrel); the trade is that the packed tool now requires the

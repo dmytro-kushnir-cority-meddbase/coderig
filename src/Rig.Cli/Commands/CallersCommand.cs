@@ -514,7 +514,7 @@ internal static class CallersCommand
         var methodsBySite = new Dictionary<(string, int), List<string>>();
         foreach (var m in graph.Methods)
         {
-            var key = (m.FilePath, m.Line);
+            var key = (m.FilePath!, m.Line);
             if (!methodsBySite.TryGetValue(key, out var ids))
             {
                 ids = new List<string>();

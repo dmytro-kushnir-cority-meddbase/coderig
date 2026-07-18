@@ -1,6 +1,3 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup></PropertyGroup>
-  <ItemGroup>
-    <PackageReference Remove="Meziantou.Analyzer" />
-  </ItemGroup>
 </Project>
