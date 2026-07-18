@@ -8,6 +8,11 @@ concurrency hazards).
 
 ## Quick Start
 
+> **Source builds temporarily require the pinned `UseNamedArgs` submodule.** Clone with
+> `git clone --recurse-submodules ...`, or run `git submodule update --init` in an existing checkout.
+> Remove this note and return to the published package after
+> [`mykolav/use-named-args-fs#1`](https://github.com/mykolav/use-named-args-fs/pull/1) is merged and released.
+
 ```powershell
 # index a solution (pre-build it first so cross-assembly metadata binds)
 rig index playgrounds/EntryPointEffects/EntryPointEffects.slnx
