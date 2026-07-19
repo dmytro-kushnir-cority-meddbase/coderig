@@ -110,6 +110,7 @@ public static class SolutionAnalyzer
         var totalReferences = 0;
         var totalRelations = 0;
         var totalDispatch = 0;
+        var totalAllocations = 0;
         foreach (var result in extractionResults)
         {
             totalDi += result.DiRegistrations.Count;
@@ -117,6 +118,7 @@ public static class SolutionAnalyzer
             totalReferences += result.References.Count;
             totalRelations += result.TypeRelations.Count;
             totalDispatch += result.Dispatch.Count;
+            totalAllocations += result.Allocations.Count;
         }
 
         List<DiRegistrationInfo> diRegistrations = new(totalDi);
@@ -124,6 +126,7 @@ public static class SolutionAnalyzer
         List<ReferenceFact> referenceFacts = new(totalReferences);
         List<TypeRelationFact> typeRelationFacts = new(totalRelations);
         List<DispatchFact> dispatchFacts = new(totalDispatch);
+        List<AllocationFact> allocationFacts = new(totalAllocations);
 
         for (var i = 0; i < extractionResults.Length; i++)
         {
@@ -133,6 +136,7 @@ public static class SolutionAnalyzer
             referenceFacts.AddRange(result.References);
             typeRelationFacts.AddRange(result.TypeRelations);
             dispatchFacts.AddRange(result.Dispatch);
+            allocationFacts.AddRange(result.Allocations);
             // Release each per-file result as it is consumed so it can collect DURING the concat, instead of
             // all per-file arrays staying alive until the loop ends (then co-resident with the merged lists).
             extractionResults[i] = null!;
@@ -192,7 +196,8 @@ public static class SolutionAnalyzer
             Symbols: symbolFacts,
             References: referenceFacts,
             TypeRelations: typeRelationFacts,
-            DispatchFacts: dispatchFacts
+            DispatchFacts: dispatchFacts,
+            AllocationFacts: allocationFacts
         );
     }
 
@@ -215,7 +220,8 @@ public static class SolutionAnalyzer
             facts.Symbols,
             facts.References,
             facts.TypeRelations,
-            facts.Dispatch
+            facts.Dispatch,
+            facts.Allocations
         );
     }
 }

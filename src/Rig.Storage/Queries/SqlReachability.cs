@@ -254,6 +254,7 @@ public static class SqlReachability
         IReadOnlyList<FactInvocation> Invocations,
         IReadOnlyList<SymbolRef> CtorRefs,
         IReadOnlyList<SymbolRef> ThrowRefs,
+        IReadOnlyList<AllocationFact> AllocationFacts,
         FactEntryPointDeriver.FactEntryPointData? EpData = null
     );
 
@@ -359,7 +360,37 @@ public static class SqlReachability
             cancellationToken
         );
 
-        return new ReachInputs(graph, invocations, CtorRefs: ctorByLoc.Values.ToArray(), ThrowRefs: throwByKey.Values.ToArray());
+        var allocations = new List<AllocationFact>();
+        await ReadAsync(
+            connection,
+            """
+            SELECT a.Operation, a.ResourceType, a.EnclosingSymbolId, a.FilePath, a.Line,
+                   a.EnclosingLoopKind, a.EnclosingLoopDetail, a.EnclosingGuards
+            FROM allocation_facts a JOIN reach_set s ON a.EnclosingSymbolId = s.sym;
+            """,
+            reader =>
+                allocations.Add(
+                    new AllocationFact(
+                        Operation: reader.GetString(0),
+                        ResourceType: reader.GetString(1),
+                        EnclosingSymbolId: reader.GetString(2),
+                        FilePath: reader.IsDBNull(3) ? "" : reader.GetString(3),
+                        Line: reader.IsDBNull(4) ? 0 : reader.GetInt32(4),
+                        EnclosingLoopKind: reader.IsDBNull(5) ? null : reader.GetString(5),
+                        EnclosingLoopDetail: reader.IsDBNull(6) ? null : reader.GetString(6),
+                        EnclosingGuards: reader.IsDBNull(7) ? null : reader.GetString(7)
+                    )
+                ),
+            cancellationToken
+        );
+
+        return new ReachInputs(
+            graph,
+            invocations,
+            CtorRefs: ctorByLoc.Values.ToArray(),
+            ThrowRefs: throwByKey.Values.ToArray(),
+            AllocationFacts: allocations
+        );
     }
 
     // Loads the bounded FactGraphData from the already-built reach_set temp table. Forward joins

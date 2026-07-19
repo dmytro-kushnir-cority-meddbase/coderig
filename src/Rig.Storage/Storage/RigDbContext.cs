@@ -34,6 +34,8 @@ public sealed class RigDbContext(string databasePath, bool pooling = true, bool 
 
     public DbSet<DispatchFactEntity> DispatchFacts => Set<DispatchFactEntity>();
 
+    public DbSet<AllocationFactEntity> AllocationFacts => Set<AllocationFactEntity>();
+
     public DbSet<AssemblyEntity> Assemblies => Set<AssemblyEntity>();
 
     public DbSet<SolutionMembershipEntity> SolutionMemberships => Set<SolutionMembershipEntity>();
@@ -123,6 +125,13 @@ public sealed class RigDbContext(string databasePath, bool pooling = true, bool 
             entity.ToTable("dispatch_facts");
             entity.HasKey(d => new { d.RunId, d.DispatchFactIndex });
             entity.HasIndex(d => d.SourceMember);
+        });
+
+        modelBuilder.Entity<AllocationFactEntity>(entity =>
+        {
+            entity.ToTable("allocation_facts");
+            entity.HasKey(a => new { a.RunId, a.AllocationFactIndex });
+            entity.HasIndex(a => a.EnclosingSymbolId);
         });
 
         modelBuilder.Entity<AssemblyEntity>(entity =>

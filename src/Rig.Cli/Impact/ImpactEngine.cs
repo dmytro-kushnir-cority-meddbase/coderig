@@ -150,6 +150,7 @@ internal static class ImpactEngine
         var epSet = await DeriveEntryPointsAsync(context, epData, rules);
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
+        var allocationFacts = await Reads.LoadAllocationFactsAsync(context);
         // Hazard delta: impact loads the static-field read/write refs and runs the hazard post-pass on BOTH
         // stores (mirroring `derive`), so the derived effects carry hazard observations (race_window /
         // lazy_init_race; n_plus_1 / unserializable_payload ride along via the observation rules). Scoped to
@@ -176,7 +177,8 @@ internal static class ImpactEngine
             threadStaticCells: threadStaticCells,
             volatileCells: volatileCells,
             asyncMethodIds: asyncMethodIds,
-            gate: gate
+            gate: gate,
+            allocationFacts: allocationFacts
         );
         // The branch's enclosing→field/property-access-targets lookup, built ONCE so ComputeReachSets can union
         // each reachable method's read/write targets as degenerate `R:` nodes at O(reach) cost.
@@ -776,6 +778,7 @@ internal static class ImpactEngine
         var idBySite = MethodIdBySite(methods);
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
+        var allocationFacts = await Reads.LoadAllocationFactsAsync(context);
         // Hazard delta: derive hazards on the base side too (mirror RunAsync / DeriveCommand) so the base
         // per-EP hazard set is computed over hazard-bearing effects and the diff compares like-for-like.
         // F8: one combined scan instead of two back-to-back single-kind queries (mirrors the HEAD side).
@@ -800,7 +803,8 @@ internal static class ImpactEngine
             threadStaticCells: threadStaticCells,
             volatileCells: volatileCells,
             asyncMethodIds: asyncMethodIds,
-            gate: gate
+            gate: gate,
+            allocationFacts: allocationFacts
         );
 
         // Phase 3: union the base's field/property-access targets into its reach sets too, so the per-EP

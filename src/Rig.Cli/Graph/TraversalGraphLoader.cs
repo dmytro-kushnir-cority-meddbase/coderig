@@ -153,10 +153,18 @@ internal static class TraversalGraphLoader
         var graph = await Reads.LoadFactGraphAsync(context, handoffRules, redirectRules);
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
+        var allocationFacts = await Reads.LoadAllocationFactsAsync(context);
         var epData = await Reads.LoadFactEntryPointDataAsync(context);
         // F2: surface epData so callers that also need the EP site map (DeriveEpSiteKindAsync) can
         // reuse it instead of issuing a second LoadFactEntryPointDataAsync on the EF-fallback path.
-        return new SqlReachability.ReachInputs(graph, invocations, CtorRefs: epData.CtorRefs, ThrowRefs: throwRefs, EpData: epData);
+        return new SqlReachability.ReachInputs(
+            graph,
+            invocations,
+            CtorRefs: epData.CtorRefs,
+            ThrowRefs: throwRefs,
+            AllocationFacts: allocationFacts,
+            EpData: epData
+        );
     }
 
     // Base edges in the (TypeId, BaseId) shape FactEffectDeriver.Derive expects, from a graph's edges.

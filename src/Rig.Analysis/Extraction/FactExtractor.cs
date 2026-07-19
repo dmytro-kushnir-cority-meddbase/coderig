@@ -32,6 +32,8 @@ internal static class FactExtractor
         var references = new List<ReferenceFact>();
         var relations = new List<TypeRelationFact>();
         var dispatch = new List<DispatchFact>();
+        var allocations = new List<AllocationFact>();
+        var boxingSeen = new HashSet<(int Start, int Length, string Type)>();
         var dispatchSeen = new HashSet<(string, string, string)>();
         // Per-file memo for EnclosingSymbolId: enclosing node -> its owning DocID. Shared across the lambda
         // pass and every reference so a member's DocID is built once, not once per contained reference.
@@ -264,6 +266,75 @@ internal static class FactExtractor
                     symbolCache: symbolCache
                 );
             }
+
+            if (model.GetOperation(creation) is IObjectCreationOperation { Type.IsReferenceType: true } operation)
+            {
+                AddAllocation(operation: "object", allocatedType: operation.Type, creation);
+            }
+        }
+
+        void OnArrayCreation(ExpressionSyntax creation)
+        {
+            if (model.GetOperation(creation) is IArrayCreationOperation operation)
+            {
+                AddAllocation(operation: "array", allocatedType: operation.Type, creation);
+            }
+        }
+
+        void OnBoxing(ExpressionSyntax expression)
+        {
+            var operation = model.GetOperation(expression);
+            var conversion = operation as IConversionOperation ?? operation?.Parent as IConversionOperation;
+            if (conversion is null || !model.GetConversion(expression).IsBoxing)
+            {
+                return;
+            }
+
+            var allocatedType = conversion.Operand.Type;
+            var typeName = symbolCache.TypeDisplay(allocatedType);
+            if (string.IsNullOrEmpty(typeName) || !boxingSeen.Add((expression.SpanStart, expression.Span.Length, typeName)))
+            {
+                return;
+            }
+
+            AddAllocation(operation: "boxing", allocatedType: allocatedType, expression);
+        }
+
+        void AddAllocation(string operation, ITypeSymbol? allocatedType, SyntaxNode site)
+        {
+            // Attribute arguments are serialized into metadata; their object/array-shaped syntax and
+            // conversions do not execute at runtime and therefore allocate nothing at the usage site.
+            if (site.AncestorsAndSelf().Any(n => n is AttributeSyntax))
+            {
+                return;
+            }
+
+            var typeName = symbolCache.TypeDisplay(allocatedType);
+            var enclosing = EnclosingSymbolId(site, model, lambdaIds, enclosingCache);
+            // Effects must be owned by a call-graph node. Field/auto-property initializers currently resolve
+            // to F:/P: owners, so omit them until initializer-to-ctor ownership is implemented.
+            if (
+                string.IsNullOrEmpty(typeName)
+                || enclosing is null
+                || (!enclosing.StartsWith("M:", StringComparison.Ordinal) && !enclosing.Contains("~λ", StringComparison.Ordinal))
+            )
+            {
+                return;
+            }
+
+            var structural = StructuralContextOf(site, model, symbolCache);
+            allocations.Add(
+                new AllocationFact(
+                    Operation: operation,
+                    ResourceType: typeName,
+                    EnclosingSymbolId: enclosing,
+                    FilePath: tree.FilePath,
+                    Line: tree.GetLineSpan(site.Span).StartLinePosition.Line + 1,
+                    EnclosingLoopKind: structural.LoopKind,
+                    EnclosingLoopDetail: structural.LoopDetail,
+                    EnclosingGuards: EncodedGuardsFor(site, model, cfgGuardCache)
+                )
+            );
         }
 
         // --- Constructor initializers -> ctor refs ---
@@ -364,6 +435,11 @@ internal static class FactExtractor
 
         foreach (var node in root.DescendantNodes())
         {
+            if (node is ExpressionSyntax expression)
+            {
+                OnBoxing(expression);
+            }
+
             switch (node)
             {
                 case AnonymousFunctionExpressionSyntax lambda:
@@ -386,6 +462,14 @@ internal static class FactExtractor
 
                 case BaseObjectCreationExpressionSyntax creation:
                     OnCreation(creation);
+                    break;
+
+                case ArrayCreationExpressionSyntax arrayCreation:
+                    OnArrayCreation(arrayCreation);
+                    break;
+
+                case ImplicitArrayCreationExpressionSyntax implicitArrayCreation:
+                    OnArrayCreation(implicitArrayCreation);
                     break;
 
                 case ConstructorInitializerSyntax initializer:
@@ -436,7 +520,7 @@ internal static class FactExtractor
             AddLockStatementRefs(references, lockStatements, model, tree, lambdaIds, enclosingCache, symbolCache);
         }
 
-        return new FactExtractionResult(symbols, references, relations, dispatch);
+        return new FactExtractionResult(symbols, references, relations, dispatch, allocations);
     }
 
     // Emit synthetic Monitor.Enter (acquire) and Monitor.Exit (release) invocation refs for every
@@ -2070,5 +2154,6 @@ internal sealed record FactExtractionResult(
     IReadOnlyList<SymbolFact> Symbols,
     IReadOnlyList<ReferenceFact> References,
     IReadOnlyList<TypeRelationFact> TypeRelations,
-    IReadOnlyList<DispatchFact> Dispatch
+    IReadOnlyList<DispatchFact> Dispatch,
+    IReadOnlyList<AllocationFact> Allocations
 );

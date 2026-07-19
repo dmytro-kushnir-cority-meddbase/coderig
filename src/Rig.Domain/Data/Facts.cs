@@ -150,6 +150,22 @@ public sealed record TypeRelationFact(
 /// </summary>
 public sealed record DispatchFact(string SourceMember, string TargetMember, string Kind);
 
+/// <summary>A compiler-proven managed allocation site.</summary>
+/// <remarks>
+/// Core fact: unlike user effect rules, allocation identity is fixed by Roslyn semantics at index time.
+/// Operation is object|array|boxing; ResourceType is the allocated static type.
+/// </remarks>
+public sealed record AllocationFact(
+    string Operation,
+    string ResourceType,
+    string EnclosingSymbolId,
+    string FilePath,
+    int Line,
+    string? EnclosingLoopKind = null,
+    string? EnclosingLoopDetail = null,
+    string? EnclosingGuards = null
+);
+
 // --- Stage-3 (read) query projections ---
 
 public sealed record SymbolSearchHit(string SymbolId, string Kind, string Signature, string FilePath, int Line, string DefiningAssembly);

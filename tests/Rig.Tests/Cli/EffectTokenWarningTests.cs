@@ -8,7 +8,8 @@ namespace Rig.Tests.Cli;
 // UX research panel items #1 and #16: silent-failure trust bug — --only/--exclude tokens that match
 // no known effect are accepted silently, causing the user to read an empty result as "no such effects"
 // when the token was wrong. Pins:
-//   (1) KnownProviders / KnownProviderOps derive the valid set from the effective rule set.
+//   (1) KnownProviders / KnownProviderOps derive the valid set from the effective rule set plus core-owned
+//       effect families such as allocation.
 //   (2) WarnUnknownFilterTokens emits a non-fatal warning to STDERR for each unrecognised token.
 //   (3) A fully-valid filter emits NO warning.
 //   (4) `rig derive --list-providers` prints the valid set and exits 0 without opening a store.
@@ -37,7 +38,8 @@ public sealed class EffectTokenWarningTests
 
         providers.ShouldContain("http");
         providers.ShouldContain("db_command");
-        providers.Count.ShouldBe(2);
+        providers.ShouldContain("alloc");
+        providers.Count.ShouldBe(3);
     }
 
     [Test]
@@ -59,7 +61,10 @@ public sealed class EffectTokenWarningTests
 
         ops.ShouldContain("http:GET");
         ops.ShouldContain("db_command:execute");
-        ops.Count.ShouldBe(2);
+        ops.ShouldContain("alloc:object");
+        ops.ShouldContain("alloc:array");
+        ops.ShouldContain("alloc:boxing");
+        ops.Count.ShouldBe(5);
     }
 
     [Test]
@@ -73,10 +78,12 @@ public sealed class EffectTokenWarningTests
     }
 
     [Test]
-    public void KnownProviders_returns_empty_set_when_no_rules()
+    public void KnownProviders_keeps_core_providers_when_no_rules()
     {
         var rules = new RuleSet { Effects = [] };
-        EffectDerivation.KnownProviders(rules).ShouldBeEmpty();
+        var providers = EffectDerivation.KnownProviders(rules);
+        providers.ShouldContain("alloc");
+        providers.Count.ShouldBe(1);
     }
 
     [Test]
@@ -92,8 +99,8 @@ public sealed class EffectTokenWarningTests
             ],
         };
 
-        EffectDerivation.KnownProviders(rules).Count.ShouldBe(1);
-        EffectDerivation.KnownProviderOps(rules).Count.ShouldBe(2);
+        EffectDerivation.KnownProviders(rules).Count.ShouldBe(2);
+        EffectDerivation.KnownProviderOps(rules).Count.ShouldBe(5);
     }
 
     // --- WarnUnknownFilterTokens ---

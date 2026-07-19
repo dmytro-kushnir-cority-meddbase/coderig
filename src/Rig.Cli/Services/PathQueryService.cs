@@ -118,7 +118,8 @@ public static class PathQueryService
             invocations: inputs.Invocations,
             baseEdges: BaseEdgeTuples(graph),
             ctorRefs: inputs.CtorRefs,
-            throwRefs: inputs.ThrowRefs
+            throwRefs: inputs.ThrowRefs,
+            allocationFacts: inputs.AllocationFacts
         );
         var effectsBySymbol = effects
             .Where(e => e.EnclosingSymbolId is not null)

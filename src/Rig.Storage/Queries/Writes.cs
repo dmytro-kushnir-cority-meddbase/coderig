@@ -273,7 +273,14 @@ public static class Writes
 
     private const int FactProgressInterval = 50_000;
 
-    private static readonly string[] FactTableNames = ["symbol_facts", "reference_facts", "type_relation_facts", "dispatch_facts"];
+    private static readonly string[] FactTableNames =
+    [
+        "symbol_facts",
+        "reference_facts",
+        "type_relation_facts",
+        "dispatch_facts",
+        "allocation_facts",
+    ];
 
     // Bulk-inserts the symbol/reference/type-relation/dispatch facts over RAW ADO — a single reused
     // prepared INSERT per table (param.Value reset per row, as GraphMaterializer/EntryPointSiteStore do),
@@ -297,7 +304,8 @@ public static class Writes
         var references = result.References ?? [];
         var relations = result.TypeRelations ?? [];
         var dispatch = result.DispatchFacts ?? [];
-        long total = symbols.Count + references.Count + relations.Count + dispatch.Count;
+        var allocations = result.AllocationFacts ?? [];
+        long total = symbols.Count + references.Count + relations.Count + dispatch.Count + allocations.Count;
         long saved = 0;
 
         var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
@@ -349,6 +357,33 @@ public static class Writes
                     p[13].Value = s.DefiningAssembly;
                     p[14].Value = s.IsOverride ? 1 : 0;
                     p[15].Value = s.BodyHash;
+                },
+                alreadySaved: saved,
+                total: total,
+                progress,
+                cancellationToken
+            );
+
+            saved += InsertRows(
+                connection,
+                transaction,
+                "INSERT INTO allocation_facts (RunId, AllocationFactIndex, Operation, ResourceType, EnclosingSymbolId, FilePath, Line, "
+                    + "EnclosingLoopKind, EnclosingLoopDetail, EnclosingGuards) "
+                    + "VALUES ($run,$idx,$op,$resource,$enc,$file,$line,$loopkind,$loopdetail,$guards);",
+                ["$run", "$idx", "$op", "$resource", "$enc", "$file", "$line", "$loopkind", "$loopdetail", "$guards"],
+                allocations,
+                (p, a, i) =>
+                {
+                    p[0].Value = runId;
+                    p[1].Value = i;
+                    p[2].Value = a.Operation;
+                    p[3].Value = a.ResourceType;
+                    p[4].Value = a.EnclosingSymbolId;
+                    p[5].Value = a.FilePath;
+                    p[6].Value = a.Line;
+                    p[7].Value = (object?)a.EnclosingLoopKind ?? DBNull.Value;
+                    p[8].Value = (object?)a.EnclosingLoopDetail ?? DBNull.Value;
+                    p[9].Value = (object?)a.EnclosingGuards ?? DBNull.Value;
                 },
                 alreadySaved: saved,
                 total: total,
