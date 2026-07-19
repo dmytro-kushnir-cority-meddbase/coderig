@@ -1,5 +1,7 @@
 # Web explorer — reverse-navigation "wins" (breadcrumbs · service lens · path-highlight)
 
+**Status:** PROGRESS — W1 breadcrumbs shipped in `c9699b60`; W2 service lens and W3 path-highlight remain.
+
 Follow-ups from the reverse-navigation session (2026-07-06). The backend endpoints and the first SPA surfaces
 shipped that session:
 - `/api/callers` (roots + entrypoints, service-annotated), `/api/path`, `/api/reaches` + `DeploymentAttributionLookup`
@@ -7,16 +9,12 @@ shipped that session:
 - SPA node context menu + reverse-nav drawer (who-reaches / EPs-by-service, + loading/filter/async/reroot-sync)
   (commit `25355c65`); P3 path + P4 reaches SPA surfaces (drawer modes + per-EP path affordance).
 
-These three are the deferred, SPA-heavy "web-only" wins — they're what a GUI does that the CLI can't, and each
-touches the shared SPA files (`components.js`/`main.js`/`store.js`/`index.html`), so they're sequential, not
-parallelizable, and were left out of the first pass to avoid a half-integrated pile.
+The remaining two are SPA-heavy, touch shared SPA files, and should land sequentially.
 
-## W1 — Pivot history / breadcrumbs
-Every pivot today (re-root, drawer EP click, impact cross-link) replaces the tree with no trail. Push a crumb
-per navigation (forward-tree → callers → path → re-root) so an investigation is a navigable session, not a
-single query. Back/forward should restore the prior `from` + drawer state. State: a `history[]` + cursor in the
-store; the URL already carries `?from=` (extend to encode the drawer/mode). This is the real 10× over the CLI —
-the CLI makes you retype an FQN; the web should let you walk a chain and step back.
+## W1 — Pivot history / breadcrumbs — ✅ SHIPPED (`c9699b60`, 2026-07-08)
+
+The SPA now keeps a crumb trail plus browser back/forward state across tree, callers, reaches, path, re-root,
+and impact pivots. Do not rebuild.
 
 ## W2 — Service lens on TREE nodes
 Deployment attribution currently rides only on the **callers EP list** (`EntryPointDto.Services`). Extend it to

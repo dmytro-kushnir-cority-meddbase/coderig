@@ -1,8 +1,17 @@
 # Dispatch-precision substrate — remaining work
 
+**Status:** DONE / TERMINAL (audited against code 2026-07-19). Dispatch correctness, one-hop traversal,
+receiver narrowing, disclosure, and generic monomorphization are shipped. The additive persisted-`~mono`
+proposal was measured and rejected below because it does not shrink the dispatch-inflated SQL closure.
+Bounded warm reuse is independently tracked in
+[warm-graph-across-queries.md](../todo/warm-graph-across-queries.md); heavy receiver-narrowed persistence is
+not approved work and should get a new design card only if current measurements justify it.
+
 **Shipped record + spec:** [../done/dispatch-precision-substrate-shipped.md]. The core landed (dispatch-fan
 disclosure + static monomorphization; forward ≡ reverse on the synthetic seams; the `#4460` phantom gone).
-The precision worklist is retired (below); one open item remains (graph-time materialization, perf).
+The precision worklist is retired. The original additive graph-time monomorphization plan was measured and
+rejected below because it does not shrink the dispatch-inflated closure. The remaining fork is either a much
+heavier receiver-narrowed persisted graph or bounded warm reuse in `rig serve`; neither is approved to build.
 
 ## Precision worklist — RETIRED (2026-06-25, calibrated by demonstration, not assertion)
 The framing first: **forward** (`Successors`, context-carrying) is the PRECISE path; **reverse**
@@ -81,7 +90,8 @@ narrowing later prunes to a handful. Two real options remain:
 - **Heavy: bake receiver-narrowed dispatch at graph time** so the CTE closure itself is ~157, not 41k (cuts the
   walk AND both reference_facts reads). Context-sensitive dispatch persistence — hard, `dispatch_edges`
   blow-up risk, schema bump. The only thing that attacks the 1.1 GB floor.
-- **Amortize instead of cut: warm-graph/MCP** ([warm-graph-across-queries.md](warm-graph-across-queries.md)).
+- **Amortize instead of cut: bounded warm graph in `rig serve`**
+  ([warm-graph-across-queries.md](../todo/warm-graph-across-queries.md)).
   Since the cold load is structurally ~5s and hard to cut cheaply, holding the graph warm across queries (pay
   it once) regains priority over trying to shrink it. The earlier "stateless-first" ordering was predicated on
   materialization cheaply cutting the cold load — the spike shows it can't, so the bounded/stateful tradeoff

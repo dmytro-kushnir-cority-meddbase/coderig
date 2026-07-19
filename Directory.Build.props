@@ -1,15 +1,5 @@
 <Project>
-  <ItemGroup Condition="'$(IsPackable)' != 'false' and '$(MSBuildProjectName)' != 'UseNamedArgs'">
-    <!-- TODO(use-named-args-fs#1): delete the pinned source checkout and return to PackageReference after
-         https://github.com/mykolav/use-named-args-fs/pull/1 is merged and its exclusions are published. -->
-    <ProjectReference
-      Include="$(MSBuildThisFileDirectory)tools\use-named-args-fs\UseNamedArgs\UseNamedArgs.fsproj"
-      OutputItemType="Analyzer"
-      ReferenceOutputAssembly="false"
-    />
-  </ItemGroup>
-
-  <PropertyGroup Condition="'$(MSBuildProjectName)' != 'UseNamedArgs'">
+  <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>

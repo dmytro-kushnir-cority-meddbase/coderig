@@ -6,7 +6,7 @@ structural FR-7 signal is correct (verified: Person bulk_write, only `ContactCac
 invalidated on the path, never `PersonCache`).
 
 - **`cache_coherence`/`event_cycle` not in per-EP `tree --view hazards`** → extracted to
-  [todo/cache-coherence-per-ep-hazards.md](../todo/cache-coherence-per-ep-hazards.md).
+  [cache-coherence-per-ep-hazards.md](cache-coherence-per-ep-hazards.md).
 - **~~opaqueType render-collapse HIDES effects inside a redirected-override subtree~~ — RETRACTED (2026-06-25):
   NOT a render bug; an index/cache-time artifact.** Initially diagnosed as a render-rule bug (the override body
   + `ContactCache.Remove` were missing from `tree` while the ORM-runtime `opaqueType` was active). Could NOT be
@@ -27,7 +27,7 @@ invalidated on the path, never `PersonCache`).
   `redirectRules` change, `rig graph` (re-materialize) before trusting forward reachability.** No render fix
   needed; the fold + opaque interaction is correct.
 - **`rig index --from` 0-projects crash** → extracted to
-  [todo/index-from-zero-projects-crash.md](../todo/index-from-zero-projects-crash.md).
+  [index-from-zero-projects-crash.md](index-from-zero-projects-crash.md).
 - **Multi-solution unified store now in use + documented** (skill updated): `rig index <sln> --merge --rules
   r.json` accumulates one run/solution into the commit-scoped store; queries span all. MedDBase merged 11/20
   solutions clean (`cache_coherence` across them = unchanged 4, all the one reviewed-benign case); net48-web +

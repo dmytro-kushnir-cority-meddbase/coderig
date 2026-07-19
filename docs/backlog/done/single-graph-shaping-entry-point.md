@@ -1,13 +1,16 @@
 ## Refactor: single graph-shaping entry point (`LoadShapedGraphAsync`)
 
-**Status:** PARTIAL (audited 2026-07-02) — `Reads.LoadShapedGraphAsync` SHIPPED (`9caef5d1`) and is the
-shaping entry point for `derive` (`DeriveCommand.cs`) and `impact` (`ImpactCommand.cs:298` head, `:1201`
-base); test `LoadShapedGraphTests.cs`. That closed the derive double-load (F1) and impact's delivery-edge
-gap. **Remaining live work: route `GraphMaterializer` through the shared entry point** (it still persists
-via its own `RewriteGenericFactories`/`AddDeliveryEdges` sequence, `GraphMaterializer.cs:86,100`).
-**EF-fallback routing is a WON'T DO** (2026-06-23 decision — see the residual note in
-`../done/perf-redundant-work-per-ep.md`): the fallback only fires on `--no-graph`/pre-graph stores and the
-fix risks the contended shaping path. So acceptance criteria 1–2 below are trimmed accordingly.
+**Status:** DONE / INTENTIONAL SPLIT (audited against code 2026-07-19). `Reads.LoadShapedGraphAsync`
+shipped in `9caef5d1` and is the single query-time entry point used by `derive` and both sides of `impact`.
+`GraphMaterializer.BuildFromGraphAsync` deliberately remains a separate persistence pipeline: it consumes
+freshly extracted in-memory facts during indexing, persists only the sound-superset edge shaping (factory
+rewrites + delivery edges), and must not persist query-only monomorphization, cuts, context dispatch, or
+event-subscription handoff state. Both paths already call the same pure `FactPathFinder` transformations;
+forcing the materializer through the DB-loading query entry point would add a fact-store reread and blur the
+persisted-vs-traversal boundary. Existing `LoadShapedGraphTests`, projection-parity, and SQL-reachability
+tests cover the seam. EF-fallback routing remains a WON'T DO.
+
+The remainder of this file is the original consolidation proposal and performance record.
 
 ### Problem
 

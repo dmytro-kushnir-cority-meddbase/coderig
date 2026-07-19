@@ -1,6 +1,7 @@
 ## 🪦 The cursed project — `ContractManagement.Site` won't index (here be dragons)
 
-**Status:** abandoned-for-now · lowest priority · do not feed after midnight.
+**Status:** PARKED / DONE-FOR-NOW — moved out of the active queue 2026-07-19. Reopen only when
+`ContractManagement.Site` is needed and a Buildalyzer design-time-build binlog can be captured.
 
 `rig index ContractManagement.Site.(slnx|csproj) [--merge]` always fails with
 `DegradedBuildException: 'ContractManagement.Site' design-time build produced 0 source files after 3

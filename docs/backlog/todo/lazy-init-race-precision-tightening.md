@@ -1,6 +1,9 @@
 # `lazy_init_race` precision tightening (calibration: 57.5% → ~92%)
 
-**Status:** bucket #1 ✅ SHIPPED (2026-07-02) · bucket #2 deferred (needs condition extraction) · **Found:** 2026-06-26 (adversarial source verification of all 40 MedDBase sites) · **Family:** detector-precision
+**Status:** TODO / MEDDBASE-DEPENDENT — bucket #1 ✅ SHIPPED (2026-07-02); bucket #2 needs condition
+extraction plus a MedDBase re-index and source-backed recalibration. Moved back to `todo/` 2026-07-19 while
+those inputs are unavailable. · **Found:** 2026-06-26 (adversarial source verification of all 40 MedDBase
+sites) · **Family:** detector-precision
 
 ## Shipped: bucket #1 — the lock-enclosed tier (2026-07-02)
 

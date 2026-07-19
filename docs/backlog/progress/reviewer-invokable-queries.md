@@ -1,6 +1,9 @@
 # Reviewer-invokable queries — rig grounds the reviewer's whole-program questions
 
-**Status:** todo · **Source:** concurrent bug-triage-scan, 500-issue MedDBase corpus (5 batches, 2024-01→2026-06), 2026-06-26
+**Status:** PROGRESS — the effect/guard parity primitive is shipped through `effects-diff`; peer discovery,
+reviewer-authored assertions, and the heavier guard/type/transaction queries remain. The former empty
+`llm-tailored-review-instructions-with-domain-rules-mined.md` placeholder is folded into the skill-facing
+part of this card. · **Source:** concurrent bug-triage-scan, 500-issue MedDBase corpus (5 batches, 2024-01→2026-06), 2026-06-26
 **Frame:** ship hazards as **reviewer-invokable queries** (rig answers a question posed about a specific diff),
 not only as whole-store scans. **The reviewer poses; rig grounds.**
 
@@ -19,7 +22,7 @@ effect/guard divergence across paths** — which 1–4 below let an LLM reviewer
    save vs save-as). Serves the dominant ~35-of-65 pattern "two paths to one write, the set differs": FR-8
    import-vs-manual (#557/#766/#775/#1542/#1548/#558), guard-divergent (#1718/#1742), branch-divergent
    (#1254/#1537/#1238/#763). **⚠ EXTENDS the already-shipped `rig effects-diff <a> <b>`** (effect-set diff for
-   two EPs is done — see done/effects-diff.md); parity = effects-diff **+ the guard/assert set on the path**.
+   two EPs is done — see [effects-diff](../done/effects-diff.md)); parity = effects-diff **+ the guard/assert set on the path**.
    So build = add guard/assert capture to the existing diff, not a new command from scratch. (`impact` diffs
    one EP across commits; this diffs two EPs at one commit — a new axis.)
 

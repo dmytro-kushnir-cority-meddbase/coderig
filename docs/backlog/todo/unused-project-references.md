@@ -1,8 +1,9 @@
 # `rig refs --unused` — declared-but-unused ProjectReferences (build-time pruning)
 
-**Status:** SLICE 1 (CLI core) SHIPPED 2026-07-08 — `rig refs --unused` / `--usage` / `--tsv`, folded into
-`refs` (not a standalone command); validated on MedDBase (361 candidates, reproduces PACS→ServiceLayer).
-Remaining: slice 2 (reflection/markup risk column), slice 3 (web view). See "Slices" below.
+**Status:** TODO / MEDDBASE-DEPENDENT — slice 1 (CLI) and slice 3 (web view) shipped 2026-07-08. The remaining
+reflection/markup risk ranking requires the MedDBase project tree, source/store, and AUT-backed acceptance.
+Moved back to `todo/` 2026-07-19 while those inputs are unavailable. Runtime-loaded and package-reference
+analysis remain independent follow-ons.
 **Found:** 2026-07-08 (Slack #platform thread: Damian's ReferenceTrimmer run + Nick's deployable-artifact angle) · **Family:** query-side analysis / new command
 **Related:** reuses the deployment-attribution csproj `<ProjectReference>` parsing; complements [[detector-coverage-gaps]]. Runtime-loaded-DLL gate is a follow-on (below).
 
@@ -53,18 +54,17 @@ The three joins (this IS the implementation):
   candidates grouped by declaring assembly (validated live: 361 / 112 projects, PACS→ServiceLayer). Shared
   `UnusedRefsQueryService` (CLI + `/api/refs/*` endpoints — one codepath, no drift); client fetch is UNcached
   (csproj mtime isn't on the derivation-version axis). Remaining below.
-- **Slice 3 (orig) — web view.** Expose in the web UI (`RigApiEndpoints` + `wwwroot`): per-project declared-vs-used
-  drill-down, the assembly→assembly usage graph with unused edges highlighted, the `--usage` ranking as a
-  sortable table; risk column (slice 2) as color-coding; runtime-loaded overlay (follow-on) as a second layer.
-  This is the shareable-report surface the platform team actually wants (Nick hand-built Claude artifacts for
-  it). Cache note: query-side, so it does NOT ride `derivationVersion` — its cache axis is store + csproj
-  mtime; needs its own web cache-key handling, not the `*Schema` machinery.
+- **Future web expansion (not part of the shipped view):** an assembly graph with unused edges highlighted
+  and a runtime-loaded overlay. Track this as a separate card if the simpler shipped tables prove insufficient.
 
 ## Follow-ons (separate items when v1 lands)
 - **Runtime-loaded gate (closes the reflection gap).** Ingest an AUT-run loaded-module list (`(Get-Process w3wp).Modules`, the net48 Fusion binding log, or `AppDomain.CurrentDomain.GetAssemblies()`) as a deployment-scoped observed-loaded fact stream. Cut decision becomes a 2×2: static-unused ∩ **not** runtime-loaded = high-confidence cut; static-unused ∩ runtime-loaded = keep (reflection). Evidence not proof (coverage-bounded) — ranks, pairs with AUT.
 - **Package references (Damian's gap).** `TargetAssembly` is assembly-level; a paket/NuGet package → 1+ assemblies. Need an assembly→package map (derivable from the resolved DLL paths in `ProjectBuildInfo.References`, which sit under the packages/paket dirs) to roll used-assemblies up to used-packages and diff against declared PackageReferences.
 
-## Verdict
-BUILD query-side (no re-index; prototype already proves the numbers + reproduces the human result). Ship candidates as **ranked-by-reflection-risk**, framed as "AUT-gated cut queue," never as verdicts. **Surface fork for Dmytro:** standalone `rig unused-refs` vs folding into `rig refs`/`rig dead`; and whether the reflection-risk column is v1 or a fast-follow. DEFER the runtime-loaded gate and package-refs to follow-on items above.
+## Current decision
+
+The command surface is settled as `rig refs` and the CLI/web inventory is shipped. Next, add the
+reflection/markup risk ranking as an AUT-gated queue, never as a safe-to-delete verdict. Runtime-loaded evidence
+and package references remain separate follow-ons.
 
 _Prototype scripts (session scratchpad, transient): `ref-usage.sh` / `ref-usage-v2.sh` / `diff-fix.sh` — the three joins above are the durable record._

@@ -6,26 +6,26 @@ effect observations, and deployment attribution live in [README.md](README.md). 
 [docs/README.md](docs/README.md). Work tracking: [docs/backlog/](docs/backlog/README.md).
 This file is only the things that aren't obvious from those and that you'd otherwise re-derive.
 
-## Current state — 2026-07-18
+## Current state — 2026-07-19
 
-- `main` is synchronized with `origin/main` at `e091bff4` (`feat(index): select target framework explicitly`).
-  The July 15–16 indexing work made multi-target projects deterministic: indexing prefers the first declared
-  TFM by default and `rig index --framework <tfm>` can select one explicitly. `callers --format tsv` also
-  now honors `--include-reverse-only`.
+- `main` is one local commit ahead of `origin/main`: HEAD `8498260f` preserves strong-name compilation
+  options; origin is `8f61eb3a`. The July 15–16 indexing work made multi-target projects deterministic:
+  indexing prefers the first declared TFM by default and `rig index --framework <tfm>` can select one
+  explicitly. `callers --format tsv` also honors `--include-reverse-only`.
 - The product is well past the original CLI-only MVP. The load-bearing path remains
   Roslyn/MSBuild extraction → immutable SQLite facts → query-time derivation/reachability, but the CLI now
   also exposes `serve` (interactive web explorer), `impact`/`effects-diff`, hazard views, deployment
   attribution, per-commit stores, and assembly-reference usage. Treat README's command table and
   `Rig.Cli/CommandLine/Root.cs` as the current surface, not archived milestone docs.
 - Work is tracked as files in `docs/backlog/{todo,progress,done}/`; the old `docs/progress.md` and
-  `docs/handover.md` no longer exist. There are currently two partial items in `progress/`:
-  `aaa-web-timing-unification-ui.md` (only finer impact timing phases remain) and
-  `rules-only-effect-gaps.md` (only the low-priority `*Inbox` suffix-rule support remains).
+  `docs/handover.md` no longer exist. The 2026-07-19 code audit leaves 16 todo cards and 5 locally actionable
+  partial items in `progress/`; the directory listing is authoritative. Four cards with shipped slices but
+  MedDBase-dependent remaining work live in `todo/` while that external source/store is unavailable.
 - Important known gaps: `dead` is deliberately unregistered until it uses the same one-hop dispatch engine
-  as forward traversals; `--include-tests` can abort after a degraded build; one flaky generated
-  ClientPage-proxy extraction test is skipped; and multi-TFM indexing selects one framework rather than
-  unioning all target-framework source sets. See the corresponding files in `docs/backlog/todo/` before
-  picking up any of these.
+  as forward traversals; one flaky generated ClientPage-proxy extraction test is skipped; and multi-TFM
+  indexing selects one framework rather than unioning all target-framework source sets. The known
+  `--include-tests` degraded-build limitation is deliberately parked in `docs/backlog/done/` until a
+  concrete workflow requires it. Read the corresponding backlog card before starting any of these.
 - The primary real-world calibration target is MedDBase. Its current indexed store/config is
   `C:/git/meddbase-analysis`; its source checkout is `C:/git/meddbase-main-application`. Query from the
   analysis directory so rules, deployments, and `.rig/` resolve together.

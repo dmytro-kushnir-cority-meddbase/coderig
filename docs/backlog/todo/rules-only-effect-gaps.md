@@ -1,8 +1,9 @@
 ## Rules-only effect / detector gaps (no engine change)
 
-**Status (2026-07-06): only F4 remains open** — everything else below is resolved (shipped, verified
-correct as-is, parked as a documented known-FP, or attempted-and-reverted on real-store calibration).
-Moved todo → progress accordingly.
+**Status:** TODO / MEDDBASE-DEPENDENT — only F4 remains open; everything else below is resolved (shipped,
+verified correct as-is, parked as a documented known-FP, or attempted-and-reverted on real-store
+calibration). F4 replaces the MedDBase `rig.rules.json` inbox-name list with a suffix convention and requires
+that repo's rules/store for acceptance. Moved back to `todo/` 2026-07-19 while those inputs are unavailable.
 **Source:** extracted from `docs/rig-review-issues.md`, 2026-06-25 (VS-G8, VS-G9 partial, VS-G6 partial,
 VS-C2, VS-C4, VS-G14, F4 suffix-match, plus VS-C1/VS-G10/VS-G11 rule-layer follow-ons)
 

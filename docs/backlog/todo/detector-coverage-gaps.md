@@ -1,5 +1,9 @@
 ## Detector coverage gaps (RCA production corpus)
 
+**Status:** TODO / MEDDBASE-DEPENDENT — the corpus and four detector families are shipped, but the remaining
+FR-1 precision slices and VS-G2/G3/G4/G7 residuals require the MedDBase source, rules, store, or real-store
+calibration. Moved back to `todo/` 2026-07-19 while those inputs are unavailable.
+
 Source: `meddbase-analysis/docs/rca-corpus-meddbase.md` (real production reverts/fixes), made executable by
 `tests/Rig.Tests/Fixtures/ProductionFixCorpus.cs` + `…/Analysis/ProductionFixCorpusTests.cs` — each bug is
 compiled in-memory and run through the real extract→derive with shipped rules; `_Gap_`-named tests pin a
@@ -42,7 +46,7 @@ residual, VS-G7 residual; the quick-win slices of these were already shipped 202
 
 ### VS-G2 — `permission:assert` family (new detector family)
 
-**Status: rules-only base is cheap; the valuable per-right-name extraction needs nth-argument engine work.**
+**Status: nth-argument extraction is shipped (`c10815f0`); provider rules + MedDBase calibration remain.**
 
 `CertificateEntity.AssertRight/AssertAnyRight/AssertAccountRight`, `HasRight` (non-throwing),
 `PersonCache.IfCanView` (every patient load gates `CanViewPatientDemographic`) are entirely unmodeled.
@@ -53,10 +57,10 @@ Design (2026-06-15 survey):
 - **"An assert happened here" — rules-only**, zero effort: `declaringType=CertificateEntity` gate already
   excludes the polluting LLBLGen entity-nav `AssertRight()`. Emit `permission:assert` with
   `resource:declaring_type`. Ships the provider.
-- **Per-right-name capture — needs nth-argument engine primitive.** `Rights.*` sits at DIFFERENT positions:
-  arg-1 for dominant `CertificateEntity.HasRight(cert, Rights.X.Y, txn)`, arg-0 for chamber/workflow
-  wrappers. `argument_name` lifts arg-0 wrappers only; arg-1 majority needs `argumentIndex:1` support.
-  Bitwise-OR composites (`A | B`) and param-flowed variables are further nuances.
+- **Per-right-name capture — primitive shipped.** `argument_name` + `argumentIndex` can select the dominant
+  arg-1 `CertificateEntity.HasRight(cert, Rights.X.Y, txn)` shape as well as arg-0 wrappers. The remaining
+  work is rule data, fixtures, and real-store calibration; bitwise-OR composites and param-flowed variables
+  remain disclosed limits.
 - Secondary clean surfaces: `[Authorize(Roles=Roles.X)]` attributes (EnterpriseApi ~68), isolated
   `RequirePermission(PermissionKinds)` (WebDav).
 

@@ -1,7 +1,6 @@
 ## `rig impact` — base store entry-point data loaded twice
 
-**Status:** todo — open perf bug (re-verified against code 2026-07-02; anchors below refreshed to the
-post-refactor method names — the original `ComputeBehavioral*Async` names no longer exist)
+**Status:** todo — open perf bug, re-verified against `ImpactEngine.cs` on 2026-07-19.
 **Source:** promoted from `docs/bugs/impact-base-store-ep-data-loaded-twice.md` (🟡 open); leave the bugs/
 file in place as the detailed record. 2026-06-25.
 
@@ -16,11 +15,11 @@ Both the `--per-ep` and default paths are affected. See the full runtime trace i
 
 ### Fix direction
 
-The two independent opens today (verified 2026-07-02): `ComputeEpDiffAsync` (`ImpactCommand.cs:589-591`)
-and `ComputeBaseSideAsync` (`ImpactCommand.cs:1200-1206`) each `new RigDbContext(baseDbPath, readOnly:true)`
-→ `Reads.LoadFactEntryPointDataAsync` → `DeriveEntryPointsAsync`. Both are reached on a cold run:
-`AssembleImpactDiffAsync` calls `ComputeBaseSideAsync` (`:410`) and `ComputeBranchSideAsync` calls
-`ComputeEpDiffAsync` (`:359`).
+The two independent opens today: `ComputeEpDiffAsync` (`ImpactEngine.cs:346-350`) and
+`ComputeBaseSideAsync` (`:767-774`) each open the base store and call
+`Reads.LoadFactEntryPointDataAsync` → `DeriveEntryPointsAsync`. Both run on a cold diff:
+the branch-side flow calls `ComputeEpDiffAsync` at `:217`, then assembly calls `ComputeBaseSideAsync` at
+`:268`.
 
 Open the base store **once** and share its `epData` (and the derived base EP set) across both
 `ComputeEpDiffAsync` and `ComputeBaseSideAsync` — mirroring what the branch side already does with its

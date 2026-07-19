@@ -1,16 +1,22 @@
 # Redundant `GraphIndex` rebuild per traversal — `impact` pays it 6× / run
 
-**Status:** todo · **Found:** 2026-06-28 (app-wide query-redundancy investigation; opus agent, verified against code) · **Family:** perf / query-path-redundancy
+**Status:** todo — re-verified against code 2026-07-19 · **Found:** 2026-06-28 · **Family:** perf / query-path-redundancy
 **Related:** [[warm-graph-across-queries]] (the across-command structural lever) · `perf-redundant-work-per-ep.md` (F1–F9, the already-mined micro-redundancy seam) · fed by [[alloc-effect-detector]] (the detector that would surface this class automatically)
 
 ## The finding (CONFIRMED against the code)
 `FactPathFinder.BuildIndex(graph)` (`FactPathFinder.GraphIndex.cs:280`) is rebuilt on **every** traversal call — its ~13 callers are essentially the whole query surface (`BuildTree`, `Find`, `Reaches*`, `ReachableFromAll`, `ReachedBy*`, `EntryRootsReaching`, `DispatchFanReport`, `AllDispatchEdges`, `BuildReverseMaps`). Each rebuild does the full adjacency build + four-key sort of every adjacency list + `MethodsByStrippedType`/`ImplsByInterface`/`StrippedBaseEdges`/context-families/mined-dispatch construction.
 
-**The cleanly-fixable redundancy: `rig impact` rebuilds the index 6× per run** over byte-identical graphs. Verified at `ImpactCommand.cs:357/370/379` — on the cold (cache-miss) path, `ComputeReachSets` → `ReachesFromEachSeed`, `ComputeFootprints` → `ReachesInfoFromEachSeed`, `ComputeHazardSets` → `ReachesFromEachSeed`, all over the **same** `headData.Graph`, each calling `BuildIndex` afresh — **3× per side × (HEAD + BASE) = 6×**. The three passes run unconditionally on a cold impact; warm (cache hit) runs none.
+**The cleanly-fixable redundancy: `rig impact` rebuilds the index 6× per run** over byte-identical graphs.
+The current calls are in `ImpactEngine.cs:473/539/616`: `ComputeReachSets` → `ReachesFromEachSeed`,
+`ComputeFootprints` → `ReachesInfoFromEachSeed`, and `ComputeHazardSets` → `ReachesFromEachSeed`. Each public
+batch method constructs its own private `GraphIndex`, so the same graph pays three builds per side —
+**3× × (HEAD + BASE) = 6×** on a cold diff; a cache hit runs none.
 
 ## Scope of the fix
-- **Cheap half (NON-CONFLICT, do first):** in `ImpactCommand.ComputeBranchSideAsync`/`ComputeBaseSideAsync`, build the `GraphIndex` **once per side** and pass it to all three passes. `ImpactCommand.cs` is fully clear of the concurrent render edits.
-- **Engine half (coordinate/defer):** add an overload of `ReachesFromEachSeed`/`ReachesInfoFromEachSeed` (or a small internal `Reaches` that accepts a prebuilt `GraphIndex`). Lands in `FactPathFinder.cs` — same class the dispatch/render agent is editing; coordinate or defer until that settles. The index is already designed to be shared (its `DescendantsCache` is a `ConcurrentDictionary` precisely so the parallel `ReachesFromEachSeed` can share one).
+- Add a narrow Domain traversal session/API that owns one `GraphIndex` and exposes both set-only and
+  `ReachInfo` batch traversals; `GraphIndex` is currently private, so `ImpactEngine` should not construct it.
+- Create one session per side in `ImpactEngine` and reuse it for reach sets, footprints, and hazards. The
+  index is already safe to share across the parallel per-seed walks (`DescendantsCache` is concurrent).
 
 ## What this is NOT
 - NOT the across-command cold-graph LOAD (`warm-graph-across-queries.md`) — that's the ~5s/~1.5 GB-disk structural lever and dwarfs this. This card is the *within-`impact`* CPU waste of rebuilding the index over an already-loaded graph.

@@ -4,7 +4,7 @@ The static-monomorphization rework shipped transitive + lambda-closure materiali
 `DebtorOverride.SaveIncludedServices` 665→38 reach, verified sound) on a uniform EF load path behind the
 `meta` schema-version gate, then went unconditional + FP-calibrated. Shipped sub-items below. The remaining
 SUBSTRATE work (graph-time materialization end-state; forward≡reverse real-store validation) is NOT here — it
-lives in [../progress/dispatch-precision-substrate.md].
+lives in [dispatch-precision-substrate.md](dispatch-precision-substrate.md).
 
 ### Re-enable the SQL reads fast path (binding-aware) — ✅ DONE (2026-06-25, `71f35478`)
 `SqlReachability.LoadGraphFromReachSetAsync` now re-attaches `DeclaringTypeArgBinding`/`MethodTypeArgBinding`
@@ -17,7 +17,7 @@ the CHA SUPERSET so it reproduces the full-EF narrowed reach (`Bounded_graph_rep
 ### Materialize the monomorphized subgraph at `rig graph` time — ➡️ OPEN, moved to the substrate tracker
 The next perf lever (bake `~mono` into persisted `call_edges`/`dispatch_edges` at `rig graph` time so the CTE
 walks an already-narrowed graph). This is the substrate's end-state and now lives in
-[../progress/dispatch-precision-substrate.md] (item 1) — not duplicated here.
+[dispatch-precision-substrate.md](dispatch-precision-substrate.md) (item 1) — not duplicated here.
 
 ### Single static SQL connection across the app — ❌ WON'T DO (2026-06-25)
 Decided not to pursue. Each query opening its own `RigDbContext`/connection is fine; the warm shared-connection
@@ -28,7 +28,7 @@ The 8 parked reverse-dispatch tests are **✅ RECONCILED (2026-06-25, `cc9a529b`
 the narrowed truth: the reverse walk excludes CHA phantoms (forward≡reverse on those seams) and
 dispatch-declaration waypoints (interface/base-virtual decls aren't caller-origins), keeping the real
 caller/EP assertions. Suite has **zero** skips now. The real-store forward≡reverse validation at scale is OPEN
-and tracked in [../progress/dispatch-precision-substrate.md] (item 2).
+and tracked in [dispatch-precision-substrate.md](dispatch-precision-substrate.md) (item 2).
 
 ### Monomorphization FP-calibration before trusting on-by-default — ✅ LIVE (2026-06-25)
 **Went live: the `Reads.MonomorphizeEnabled` toggle is REMOVED — monomorphization is unconditional.** A/B on
