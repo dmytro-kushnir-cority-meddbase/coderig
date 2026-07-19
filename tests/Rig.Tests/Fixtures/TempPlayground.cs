@@ -18,6 +18,8 @@ public sealed class TempPlayground : IDisposable
 
     public string WorkingDirectory { get; }
 
+    public Task BuildAsync() => RunDotnetAsync(["build", SolutionPath, "--no-restore"], WorkingDirectory);
+
     public static Task<TempPlayground> CreateEntryPointEffectsAsync() =>
         CreateAsync("EntryPointEffects", "EntryPointEffects.slnx", "rig-entrypoint-effects-");
 
