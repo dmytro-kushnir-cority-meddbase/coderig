@@ -24,6 +24,9 @@ public sealed class TempPlayground : IDisposable
     public static Task<TempPlayground> CreateLegacyNet48Async() =>
         CreateAsync("LegacyNet48Web", "LegacyNet48Web.slnx", "rig-legacy-net48-");
 
+    public static Task<TempPlayground> CreateCoreAllocationsAsync() =>
+        CreateAsync("CoreAllocations", "CoreAllocations.slnx", "rig-core-allocations-");
+
     private static async Task<TempPlayground> CreateAsync(string playgroundName, string solutionFileName, string tempPrefix)
     {
         var repositoryRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
