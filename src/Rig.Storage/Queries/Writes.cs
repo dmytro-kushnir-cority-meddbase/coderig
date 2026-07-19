@@ -368,9 +368,25 @@ public static class Writes
                 connection,
                 transaction,
                 "INSERT INTO allocation_facts (RunId, AllocationFactIndex, Operation, ResourceType, EnclosingSymbolId, FilePath, Line, "
-                    + "EnclosingLoopKind, EnclosingLoopDetail, EnclosingGuards) "
-                    + "VALUES ($run,$idx,$op,$resource,$enc,$file,$line,$loopkind,$loopdetail,$guards);",
-                ["$run", "$idx", "$op", "$resource", "$enc", "$file", "$line", "$loopkind", "$loopdetail", "$guards"],
+                    + "EnclosingLoopKind, EnclosingLoopDetail, EnclosingGuards, Mechanism, Cardinality, ShallowSizeBytes, SizeConfidence, SizeBasis) "
+                    + "VALUES ($run,$idx,$op,$resource,$enc,$file,$line,$loopkind,$loopdetail,$guards,$mechanism,$cardinality,$size,$confidence,$basis);",
+                [
+                    "$run",
+                    "$idx",
+                    "$op",
+                    "$resource",
+                    "$enc",
+                    "$file",
+                    "$line",
+                    "$loopkind",
+                    "$loopdetail",
+                    "$guards",
+                    "$mechanism",
+                    "$cardinality",
+                    "$size",
+                    "$confidence",
+                    "$basis",
+                ],
                 allocations,
                 (p, a, i) =>
                 {
@@ -384,6 +400,11 @@ public static class Writes
                     p[7].Value = (object?)a.EnclosingLoopKind ?? DBNull.Value;
                     p[8].Value = (object?)a.EnclosingLoopDetail ?? DBNull.Value;
                     p[9].Value = (object?)a.EnclosingGuards ?? DBNull.Value;
+                    p[10].Value = (object?)a.Mechanism ?? DBNull.Value;
+                    p[11].Value = (object?)a.Cardinality ?? DBNull.Value;
+                    p[12].Value = (object?)a.ShallowSizeBytes ?? DBNull.Value;
+                    p[13].Value = (object?)a.SizeConfidence ?? DBNull.Value;
+                    p[14].Value = (object?)a.SizeBasis ?? DBNull.Value;
                 },
                 alreadySaved: saved,
                 total: total,

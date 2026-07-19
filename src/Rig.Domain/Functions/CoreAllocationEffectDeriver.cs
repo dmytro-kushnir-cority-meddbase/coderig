@@ -18,13 +18,21 @@ public static class CoreAllocationEffectDeriver
                 Line: a.Line,
                 Observations: FactObservationDeriver.Derive(
                     methodName: "",
-                    loopKind: a.EnclosingLoopKind,
-                    loopDetail: a.EnclosingLoopDetail,
+                    // A compiler-cached delegate may be referenced from a loop, but its allocation happens
+                    // only on first use; presenting it as loop-amplified would turn honest cardinality into a
+                    // false hot-path signal. Keep the raw lexical loop on the fact, not the derived observation.
+                    loopKind: a.Cardinality == "cached_first_use" ? null : a.EnclosingLoopKind,
+                    loopDetail: a.Cardinality == "cached_first_use" ? null : a.EnclosingLoopDetail,
                     enclosingInvocations: [],
                     catchTypes: [],
                     rules: observationRules
                 ),
-                EnclosingGuards: a.EnclosingGuards
+                EnclosingGuards: a.EnclosingGuards,
+                Mechanism: a.Mechanism,
+                Cardinality: a.Cardinality,
+                ShallowSizeBytes: a.ShallowSizeBytes,
+                SizeConfidence: a.SizeConfidence,
+                SizeBasis: a.SizeBasis
             ))
             .ToList();
 }

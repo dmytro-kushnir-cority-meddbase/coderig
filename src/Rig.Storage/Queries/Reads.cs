@@ -1098,7 +1098,12 @@ public static class Reads
                 a.Line,
                 a.EnclosingLoopKind,
                 a.EnclosingLoopDetail,
-                a.EnclosingGuards
+                a.EnclosingGuards,
+                a.Mechanism,
+                a.Cardinality,
+                a.ShallowSizeBytes,
+                a.SizeConfidence,
+                a.SizeBasis
             ))
             .ToListAsync(cancellationToken);
     }

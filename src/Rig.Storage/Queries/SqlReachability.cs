@@ -365,7 +365,8 @@ public static class SqlReachability
             connection,
             """
             SELECT a.Operation, a.ResourceType, a.EnclosingSymbolId, a.FilePath, a.Line,
-                   a.EnclosingLoopKind, a.EnclosingLoopDetail, a.EnclosingGuards
+                   a.EnclosingLoopKind, a.EnclosingLoopDetail, a.EnclosingGuards,
+                   a.Mechanism, a.Cardinality, a.ShallowSizeBytes, a.SizeConfidence, a.SizeBasis
             FROM allocation_facts a JOIN reach_set s ON a.EnclosingSymbolId = s.sym;
             """,
             reader =>
@@ -378,7 +379,12 @@ public static class SqlReachability
                         Line: reader.IsDBNull(4) ? 0 : reader.GetInt32(4),
                         EnclosingLoopKind: reader.IsDBNull(5) ? null : reader.GetString(5),
                         EnclosingLoopDetail: reader.IsDBNull(6) ? null : reader.GetString(6),
-                        EnclosingGuards: reader.IsDBNull(7) ? null : reader.GetString(7)
+                        EnclosingGuards: reader.IsDBNull(7) ? null : reader.GetString(7),
+                        Mechanism: reader.IsDBNull(8) ? null : reader.GetString(8),
+                        Cardinality: reader.IsDBNull(9) ? null : reader.GetString(9),
+                        ShallowSizeBytes: reader.IsDBNull(10) ? null : reader.GetInt64(10),
+                        SizeConfidence: reader.IsDBNull(11) ? null : reader.GetString(11),
+                        SizeBasis: reader.IsDBNull(12) ? null : reader.GetString(12)
                     )
                 ),
             cancellationToken

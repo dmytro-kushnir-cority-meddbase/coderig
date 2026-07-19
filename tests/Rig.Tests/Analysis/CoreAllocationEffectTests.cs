@@ -4,6 +4,7 @@ using Rig.Analysis;
 using Rig.Analysis.Extraction;
 using Rig.Cli.Effects;
 using Rig.Domain.Data;
+using Rig.Domain.Functions;
 using Rig.Storage.Queries;
 using Rig.Storage.Storage;
 using Shouldly;
@@ -56,6 +57,9 @@ public sealed class CoreAllocationEffectTests
         facts.Allocations.Count(a => a.Operation == "array" && a.ResourceType == "int[]").ShouldBe(2);
         facts.Allocations.ShouldNotContain(a => a.ResourceType.Contains("ValueType", StringComparison.Ordinal));
         facts.Allocations.Count.ShouldBe(4);
+        facts.Allocations.Where(a => a.Operation == "object").ShouldAllBe(a => a.Mechanism == "object_creation");
+        facts.Allocations.Where(a => a.Operation == "array").ShouldAllBe(a => a.Mechanism == "array_creation");
+        facts.Allocations.ShouldAllBe(a => a.Cardinality == "per_evaluation" && a.ShallowSizeBytes > 0);
     }
 
     [Test]
@@ -85,6 +89,209 @@ public sealed class CoreAllocationEffectTests
         var boxing = facts.Allocations.Where(a => a.Operation == "boxing").ToList();
         boxing.Count.ShouldBe(2);
         boxing.ShouldAllBe(a => a.ResourceType == "App.Value");
+        boxing.ShouldAllBe(a => a.Mechanism == "boxing" && a.ShallowSizeBytes == 24);
+    }
+
+    [Test]
+    public void Nullable_boxing_is_conditional_and_boxes_the_underlying_value_type()
+    {
+        var facts = Extract(
+            """
+            namespace App;
+            public sealed class Cases
+            {
+                public object Run(int? value) => value;
+            }
+            """
+        );
+
+        var boxing = facts.Allocations.Single(a => a.Mechanism == "boxing");
+        boxing.ResourceType.ShouldBe("int");
+        boxing.Cardinality.ShouldBe("conditional");
+        boxing.ShallowSizeBytes.ShouldBe(24);
+    }
+
+    [Test]
+    public void Cached_first_use_delegate_inside_a_loop_is_not_reported_as_loop_amplified()
+    {
+        var facts = Extract(
+            """
+            using System;
+            namespace App;
+            public sealed class Cases
+            {
+                private static void Target() { }
+                public void Run()
+                {
+                    for (var i = 0; i < 2; i++)
+                    {
+                        Action action = Target;
+                        action();
+                    }
+                }
+            }
+            """
+        );
+
+        var effects = CoreAllocationEffectDeriver.Derive(facts.Allocations, EmptyObservations);
+        var cached = effects.Single(e => e.Mechanism == "delegate");
+        cached.Cardinality.ShouldBe("cached_first_use");
+        (cached.Observations ?? []).ShouldNotContain(observation => observation.Type == "looped_effect");
+        facts.Allocations.Single(a => a.Mechanism == "delegate").EnclosingLoopKind.ShouldBe("for");
+    }
+
+    [Test]
+    public void Expanded_params_arrays_are_detected_but_existing_and_omitted_arrays_are_not()
+    {
+        var facts = Extract(
+            """
+            namespace App;
+            public sealed class Cases
+            {
+                private static int Sum(params int[] values) => values.Length;
+                public int Expanded() => Sum(1, 2, 3);
+                public int Existing(int[] values) => Sum(values);
+                public int Omitted() => Sum();
+            }
+            """
+        );
+
+        var allocation = facts.Allocations.Single();
+        allocation.Operation.ShouldBe("array");
+        allocation.Mechanism.ShouldBe("implicit_params");
+        allocation.Cardinality.ShouldBe("per_evaluation");
+        allocation.EnclosingSymbolId.ShouldContain("Expanded");
+        allocation.ShallowSizeBytes.ShouldBe(40);
+    }
+
+    [Test]
+    public void Iterator_allocation_is_owned_by_the_caller_and_async_is_not_inferred()
+    {
+        var facts = Extract(
+            """
+            using System.Collections.Generic;
+            using System.Threading.Tasks;
+            namespace App;
+            public sealed class Cases
+            {
+                private static IEnumerable<int> Values() { yield return 1; }
+                public IEnumerable<int> Call() => Values();
+                public async Task<int> AsyncControl() { await Task.Yield(); return 1; }
+            }
+            """
+        );
+
+        var allocation = facts.Allocations.Single(a => a.Mechanism == "iterator_state_machine");
+        allocation.EnclosingSymbolId.ShouldContain("Call");
+        allocation.ResourceType.ShouldContain("Values");
+        allocation.ResourceType.ShouldContain("~iterator");
+        allocation.ShallowSizeBytes.ShouldBeNull();
+        facts.Allocations.ShouldNotContain(a => a.EnclosingSymbolId.Contains("AsyncControl", StringComparison.Ordinal));
+    }
+
+    [Test]
+    public void Delegate_and_closure_evidence_has_outer_ownership_and_honest_cardinality()
+    {
+        var facts = Extract(
+            """
+            using System;
+            namespace App;
+            public sealed class Cases
+            {
+                private static int StaticTarget() => 1;
+                private int InstanceTarget() => 2;
+                public Func<int> Capturing(int value) => () => value;
+                public (Func<int>, Func<int>) SharedClosure(int value) => (() => value, () => value + 1);
+                public Func<int> CapturingLocalFunction(int value)
+                {
+                    int Local() => value;
+                    return Local;
+                }
+                public (Func<int>, Func<int>) SeparateScopes()
+                {
+                    Func<int> first;
+                    { int value = 1; first = () => value; }
+                    Func<int> second;
+                    { int value = 2; second = () => value; }
+                    return (first, second);
+                }
+                public Func<int> NonCapturing() => static () => 1;
+                public Func<int> StaticGroup() => StaticTarget;
+                public Func<int> InstanceGroup() => InstanceTarget;
+                public Func<int> Explicit() => new Func<int>(StaticTarget);
+            }
+            """
+        );
+
+        var allocations = facts.Allocations;
+        allocations.Count(a => a.Mechanism == "closure").ShouldBe(5);
+        allocations.Where(a => a.Mechanism == "closure").ShouldAllBe(a => a.Cardinality == "per_scope");
+        allocations.Count(a => a.Mechanism == "closure" && a.EnclosingSymbolId.Contains("SharedClosure")).ShouldBe(1);
+        allocations.Count(a => a.Mechanism == "closure" && a.EnclosingSymbolId.Contains("CapturingLocalFunction")).ShouldBe(1);
+        allocations.Count(a => a.Mechanism == "closure" && a.EnclosingSymbolId.Contains("SeparateScopes")).ShouldBe(2);
+        allocations
+            .Single(a => a.Mechanism == "delegate" && a.EnclosingSymbolId.Contains(".Capturing(", StringComparison.Ordinal))
+            .Cardinality.ShouldBe("per_evaluation");
+        allocations
+            .Single(a => a.Mechanism == "delegate" && a.EnclosingSymbolId.Contains("CapturingLocalFunction", StringComparison.Ordinal))
+            .Cardinality.ShouldBe("per_evaluation");
+        allocations
+            .Single(a => a.Mechanism == "delegate" && a.EnclosingSymbolId.Contains("NonCapturing"))
+            .Cardinality.ShouldBe("cached_first_use");
+        allocations
+            .Single(a => a.Mechanism == "delegate" && a.EnclosingSymbolId.Contains("StaticGroup"))
+            .Cardinality.ShouldBe("cached_first_use");
+        allocations
+            .Single(a => a.Mechanism == "delegate" && a.EnclosingSymbolId.Contains("InstanceGroup"))
+            .Cardinality.ShouldBe("per_evaluation");
+        allocations.Count(a => a.EnclosingSymbolId.Contains("Explicit")).ShouldBe(1);
+        allocations.Single(a => a.EnclosingSymbolId.Contains("Explicit")).Mechanism.ShouldBe("object_creation");
+    }
+
+    [Test]
+    public void String_range_concat_and_interpolation_are_detected_with_constant_and_span_controls()
+    {
+        var facts = Extract(
+            """
+            using System;
+            namespace App;
+            public sealed class Cases
+            {
+                public string Range(string raw) => raw[7..];
+                public string RangeVariable(string raw, Range range) => raw[range];
+                public string ConstantRange() => "raw-end-tag"[4..7];
+                public string FullRange(string raw) => raw[..];
+                public string EmptyRange(string raw) => raw[1..1];
+                public ReadOnlySpan<char> Span(string raw) => raw.AsSpan(7);
+                public string Concat(string raw, int n) => (raw + ":") + n;
+                public string Interpolate(string raw, int n) => $"{raw}:{n}";
+                public FormattableString Formattable(string raw, int n) => $"{raw}:{n}";
+                public string Constants()
+                {
+                    const string suffix = "tag";
+                    const string interpolation = $"raw{suffix}";
+                    return "raw" + "tag" + interpolation;
+                }
+            }
+            """
+        );
+
+        facts.Allocations.Count(a => a.Mechanism == "string_range").ShouldBe(3);
+        facts.Allocations.Count(a => a.Mechanism == "string_concat").ShouldBe(1);
+        facts.Allocations.Count(a => a.Mechanism == "string_interpolation").ShouldBe(1);
+        facts
+            .Allocations.Where(a => a.Mechanism!.StartsWith("string_", StringComparison.Ordinal))
+            .ShouldAllBe(a => (a.ResourceType == "string" || a.ResourceType == "System.String") && a.Cardinality == "conditional");
+        facts.Allocations.ShouldNotContain(a => a.EnclosingSymbolId.Contains("Span", StringComparison.Ordinal));
+        facts.Allocations.ShouldNotContain(a => a.EnclosingSymbolId.Contains("FullRange", StringComparison.Ordinal));
+        facts.Allocations.ShouldNotContain(a => a.EnclosingSymbolId.Contains("EmptyRange", StringComparison.Ordinal));
+        facts.Allocations.ShouldNotContain(a => a.EnclosingSymbolId.Contains("Constants", StringComparison.Ordinal));
+        facts.Allocations.ShouldNotContain(a =>
+            a.Mechanism == "string_interpolation" && a.EnclosingSymbolId.Contains("Formattable", StringComparison.Ordinal)
+        );
+        var knownRange = facts.Allocations.Single(a => a.EnclosingSymbolId.Contains("ConstantRange", StringComparison.Ordinal));
+        knownRange.ShallowSizeBytes.ShouldBe(32);
+        knownRange.SizeConfidence.ShouldBe("estimated");
     }
 
     [Test]
@@ -216,6 +423,12 @@ public sealed class CoreAllocationEffectTests
                 var bounded = await SqlReachability.LoadReachInputsAsync(read, "Cases.Root", SqlReachability.Direction.Forward);
                 bounded.AllocationFacts.Count.ShouldBe(1);
                 bounded.AllocationFacts[0].EnclosingSymbolId.ShouldContain("Root");
+                bounded.AllocationFacts[0].Mechanism.ShouldBe("object_creation");
+                bounded.AllocationFacts[0].Cardinality.ShouldBe("per_evaluation");
+                bounded.AllocationFacts[0].ShallowSizeBytes.ShouldNotBeNull();
+                bounded.AllocationFacts[0].SizeConfidence.ShouldBe("estimated");
+                bounded.AllocationFacts[0].SizeBasis.ShouldNotBeNull();
+                bounded.AllocationFacts[0].SizeBasis!.ShouldContain("x64");
             }
         }
         finally

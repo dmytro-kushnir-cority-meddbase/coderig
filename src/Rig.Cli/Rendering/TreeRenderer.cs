@@ -601,7 +601,7 @@ internal static class TreeRenderer
             }
 
             var glyph = EmojiLookup.For(emoji, provider: e.Provider, operation: e.Operation);
-            result.Add($"{glyph} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}");
+            result.Add($"{glyph} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}{AllocationEvidenceFormatter.Suffix(e)}");
         }
 
         // Dedup: collapse identical strings to "label ×N".
@@ -619,7 +619,7 @@ internal static class TreeRenderer
         // condition; mark it with ⎇ like a resolved call edge. Empty (must-run) → no glyph.
         var guardText = ShortGuards(e.EnclosingGuards);
         var guardTag = guardText.Length == 0 ? "" : $" ⎇ [{guardText}]";
-        return $"{glyph} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}{guardTag}{loc}";
+        return $"{glyph} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}{AllocationEvidenceFormatter.Suffix(e)}{guardTag}{loc}";
     }
 
     // `tree --full`: a library call that produced NO effect (resolved to a referenced-assembly target, but

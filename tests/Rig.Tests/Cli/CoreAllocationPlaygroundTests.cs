@@ -24,10 +24,6 @@ public sealed class CoreAllocationPlaygroundTests
         (await CliApplication.RunAsync(["derive", "--format", "tsv"], output, error, workingDirectory)).ShouldBe(0);
 
         var effects = TsvRows(output.ToString()).Where(row => row[0] == "effect").ToList();
-        effects.Count.ShouldBe(9);
-        effects.Count(row => row[1] == "alloc" && row[2] == "object").ShouldBe(5);
-        effects.Count(row => row[1] == "alloc" && row[2] == "array").ShouldBe(2);
-        effects.Count(row => row[1] == "alloc" && row[2] == "boxing").ShouldBe(2);
         effects.Count(row => row[3] == "CoreAllocations.Payload" && row[4].Contains("CreateReferenceObjects")).ShouldBe(2);
         effects.Count(row => row[3] == "int[]" && row[4].Contains("CreateArrays")).ShouldBe(2);
         effects.Count(row => row[3] == "CoreAllocations.MarkerValue" && row[4].Contains("BoxValues")).ShouldBe(2);
@@ -35,10 +31,26 @@ public sealed class CoreAllocationPlaygroundTests
 
         effects.ShouldNotContain(row => row[3].Contains("SmallValue", StringComparison.Ordinal));
         effects.ShouldNotContain(row => row[3].Contains("Span", StringComparison.Ordinal));
-        effects.ShouldNotContain(row => row[3] == "string" || row[3] == "System.String");
+        effects.ShouldNotContain(row =>
+            (row[3] == "string" || row[3] == "System.String") && row[4].Contains("ExerciseNegativeControls", StringComparison.Ordinal)
+        );
         effects.ShouldNotContain(row => row[4].Contains("AttributeMetadataControl", StringComparison.Ordinal));
         effects.ShouldNotContain(row => row[4].Contains("MetadataValuesAttribute", StringComparison.Ordinal));
-        effects.ShouldNotContain(row => row[4].Contains("CompilerLoweredScenarios", StringComparison.Ordinal));
+        effects.Count(row => row[8] == "object_creation").ShouldBe(5);
+        effects.Count(row => row[8] == "array_creation").ShouldBe(2);
+        effects.Count(row => row[8] == "boxing" && row[3] == "CoreAllocations.MarkerValue").ShouldBe(2);
+        effects.Count(row => row[8] == "implicit_params").ShouldBe(1);
+        effects.Count(row => row[8] == "delegate").ShouldBe(2);
+        effects.Count(row => row[8] == "closure").ShouldBe(1);
+        effects.Count(row => row[8] == "iterator_state_machine").ShouldBe(1);
+        effects.Count(row => row[8] == "string_range").ShouldBe(1);
+        effects.Count(row => row[8] == "string_concat").ShouldBe(1);
+        effects.Count(row => row[8] == "string_interpolation").ShouldBe(1);
+        effects.ShouldNotContain(row => row[4].Contains("CallWithExistingParamsArray", StringComparison.Ordinal));
+        effects.ShouldNotContain(row => row[4].Contains("CallWithNoParamsArguments", StringComparison.Ordinal));
+        effects.ShouldNotContain(row => row[4].Contains("SliceRawEndTagWithoutAllocation", StringComparison.Ordinal));
+        effects.ShouldNotContain(row => row[4].Contains("ConstantConcatenation", StringComparison.Ordinal));
+        effects.ShouldNotContain(row => row[4].Contains("ConstantInterpolation", StringComparison.Ordinal));
 
         await using (var context = new RigDbContext(StoreLayout.DbPath(workingDirectory), pooling: false, readOnly: true))
         {
@@ -74,6 +86,22 @@ public sealed class CoreAllocationPlaygroundTests
         tree.Single(row => row[1].Contains("ExerciseNegativeControls", StringComparison.Ordinal))[5].ShouldBeEmpty();
         tree.ShouldNotContain(row => row[1].Contains("Unreachable", StringComparison.Ordinal));
         tree.ShouldNotContain(row => row[1].Contains("UnreachablePayload", StringComparison.Ordinal));
+
+        output.GetStringBuilder().Clear();
+        (
+            await CliApplication.RunAsync(
+                ["tree", "CompilerLoweredScenarios.LoweredRun", "--only", "alloc", "--view", "full"],
+                output,
+                error,
+                workingDirectory
+            )
+        ).ShouldBe(0);
+        output.ToString().ShouldContain("[implicit_params");
+        output.ToString().ShouldContain("[iterator_state_machine");
+        output.ToString().ShouldContain("[string_range, conditional");
+        output.ToString().ShouldContain("[string_concat");
+        output.ToString().ShouldContain("[string_interpolation");
+        output.ToString().ShouldContain("[delegate, cached_first_use");
     }
 
     private static IReadOnlyList<string[]> TsvRows(string text) =>

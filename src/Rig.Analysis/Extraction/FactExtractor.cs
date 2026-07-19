@@ -34,6 +34,11 @@ internal static class FactExtractor
         var dispatch = new List<DispatchFact>();
         var allocations = new List<AllocationFact>();
         var boxingSeen = new HashSet<(int Start, int Length, string Type)>();
+        var allocationSeen = new HashSet<(int Start, int Length, string Mechanism)>();
+        var closureScopes = new HashSet<(string Owner, int ScopeStart)>();
+        var iteratorMethods = new Dictionary<IMethodSymbol, bool>(SymbolEqualityComparer.Default);
+        var objectSizeEstimates = new Dictionary<ITypeSymbol, AllocationSizeEstimate>(SymbolEqualityComparer.Default);
+        var boxingSizeEstimates = new Dictionary<ITypeSymbol, AllocationSizeEstimate>(SymbolEqualityComparer.Default);
         var dispatchSeen = new HashSet<(string, string, string)>();
         // Per-file memo for EnclosingSymbolId: enclosing node -> its owning DocID. Shared across the lambda
         // pass and every reference so a member's DocID is built once, not once per contained reference.
@@ -187,6 +192,10 @@ internal static class FactExtractor
             // frozen here — see branch-aware-effects). Same nodes that carry structural context.
             var enclosingGuards = structuralRoot is null ? null : EncodedGuardsFor(structuralRoot, model, cfgGuardCache);
             var delegateConsumer = refKind == RefKinds.MethodGroup ? DelegateConsumerOf(name, model) : null;
+            if (refKind == RefKinds.MethodGroup)
+            {
+                AddDelegateAllocation(name.Parent is MemberAccessExpressionSyntax member && member.Name == name ? member : name);
+            }
             // A `base.M(...)` call is NON-VIRTUAL (C# spec: CIL `call`, not `callvirt`): the instance
             // receiver is the `base` keyword, so it binds to exactly the base implementation and can never
             // dispatch to a sibling override. Detect it here (only for an invocation through a member access
@@ -267,9 +276,35 @@ internal static class FactExtractor
                 );
             }
 
-            if (model.GetOperation(creation) is IObjectCreationOperation { Type.IsReferenceType: true } operation)
+            if (model.GetOperation(creation) is IObjectCreationOperation operation)
             {
-                AddAllocation(operation: "object", allocatedType: operation.Type, creation);
+                var createdType = operation.Type;
+                if (createdType?.IsReferenceType == true)
+                {
+                    AddAllocation(
+                        operation: "object",
+                        allocatedType: createdType,
+                        site: creation,
+                        mechanism: "object_creation",
+                        cardinality: "per_evaluation",
+                        size: CachedObjectSize(createdType)
+                    );
+                }
+                AddImplicitParams(operation.Arguments, creation);
+            }
+            else if (model.GetOperation(creation) is IDelegateCreationOperation { Type: { } delegateType })
+            {
+                // Roslyn represents explicit `new Func<...>(target)` as a delegate creation rather than an
+                // object creation operation. It is still an explicit, per-evaluation managed allocation;
+                // the implicit-delegate pass deliberately excludes this syntax to avoid a duplicate fact.
+                AddAllocation(
+                    operation: "object",
+                    allocatedType: delegateType,
+                    site: creation,
+                    mechanism: "object_creation",
+                    cardinality: "per_evaluation",
+                    size: CachedObjectSize(delegateType)
+                );
             }
         }
 
@@ -277,7 +312,17 @@ internal static class FactExtractor
         {
             if (model.GetOperation(creation) is IArrayCreationOperation operation)
             {
-                AddAllocation(operation: "array", allocatedType: operation.Type, creation);
+                AddAllocation(
+                    operation: "array",
+                    allocatedType: operation.Type,
+                    site: creation,
+                    mechanism: "array_creation",
+                    cardinality: "per_evaluation",
+                    size: AllocationSizeEstimator.Array(
+                        operation.Type as IArrayTypeSymbol,
+                        AllocationSizeEstimator.ConstantArrayLength(operation)
+                    )
+                );
             }
         }
 
@@ -291,16 +336,62 @@ internal static class FactExtractor
             }
 
             var allocatedType = conversion.Operand.Type;
+            var cardinality = "per_evaluation";
+            if (allocatedType is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } nullable)
+            {
+                // Boxing Nullable<T> produces null when HasValue=false and otherwise boxes the underlying T;
+                // there is never a boxed Nullable<T> object.
+                allocatedType = nullable.TypeArguments[0];
+                cardinality = "conditional";
+            }
             var typeName = symbolCache.TypeDisplay(allocatedType);
             if (string.IsNullOrEmpty(typeName) || !boxingSeen.Add((expression.SpanStart, expression.Span.Length, typeName)))
             {
                 return;
             }
 
-            AddAllocation(operation: "boxing", allocatedType: allocatedType, expression);
+            AddAllocation(
+                operation: "boxing",
+                allocatedType: allocatedType,
+                site: expression,
+                mechanism: "boxing",
+                cardinality: cardinality,
+                size: allocatedType is null
+                    ? AllocationSizeEstimate.Unknown("boxed value type is unavailable")
+                    : CachedBoxingSize(allocatedType)
+            );
         }
 
-        void AddAllocation(string operation, ITypeSymbol? allocatedType, SyntaxNode site)
+        AllocationSizeEstimate CachedObjectSize(ITypeSymbol type)
+        {
+            if (!objectSizeEstimates.TryGetValue(type, out var estimate))
+            {
+                estimate = AllocationSizeEstimator.Object(type);
+                objectSizeEstimates[type] = estimate;
+            }
+            return estimate;
+        }
+
+        AllocationSizeEstimate CachedBoxingSize(ITypeSymbol type)
+        {
+            if (!boxingSizeEstimates.TryGetValue(type, out var estimate))
+            {
+                estimate = AllocationSizeEstimator.Boxing(type);
+                boxingSizeEstimates[type] = estimate;
+            }
+            return estimate;
+        }
+
+        void AddAllocation(
+            string operation,
+            ITypeSymbol? allocatedType,
+            SyntaxNode site,
+            string mechanism,
+            string cardinality,
+            AllocationSizeEstimate size,
+            string? resourceOverride = null,
+            string? enclosingOverride = null
+        )
         {
             // Attribute arguments are serialized into metadata; their object/array-shaped syntax and
             // conversions do not execute at runtime and therefore allocate nothing at the usage site.
@@ -309,8 +400,8 @@ internal static class FactExtractor
                 return;
             }
 
-            var typeName = symbolCache.TypeDisplay(allocatedType);
-            var enclosing = EnclosingSymbolId(site, model, lambdaIds, enclosingCache);
+            var typeName = resourceOverride ?? symbolCache.TypeDisplay(allocatedType);
+            var enclosing = enclosingOverride ?? EnclosingSymbolId(site, model, lambdaIds, enclosingCache);
             // Effects must be owned by a call-graph node. Field/auto-property initializers currently resolve
             // to F:/P: owners, so omit them until initializer-to-ctor ownership is implemented.
             if (
@@ -318,6 +409,10 @@ internal static class FactExtractor
                 || enclosing is null
                 || (!enclosing.StartsWith("M:", StringComparison.Ordinal) && !enclosing.Contains("~λ", StringComparison.Ordinal))
             )
+            {
+                return;
+            }
+            if (!allocationSeen.Add((site.SpanStart, site.Span.Length, mechanism)))
             {
                 return;
             }
@@ -332,9 +427,271 @@ internal static class FactExtractor
                     Line: tree.GetLineSpan(site.Span).StartLinePosition.Line + 1,
                     EnclosingLoopKind: structural.LoopKind,
                     EnclosingLoopDetail: structural.LoopDetail,
-                    EnclosingGuards: EncodedGuardsFor(site, model, cfgGuardCache)
+                    EnclosingGuards: EncodedGuardsFor(site, model, cfgGuardCache),
+                    Mechanism: mechanism,
+                    Cardinality: cardinality,
+                    ShallowSizeBytes: size.Bytes,
+                    SizeConfidence: size.Confidence,
+                    SizeBasis: size.Basis
                 )
             );
+        }
+
+        void AddImplicitParams(ImmutableArray<IArgumentOperation> arguments, SyntaxNode site)
+        {
+            foreach (var argument in arguments)
+            {
+                if (argument.ArgumentKind != ArgumentKind.ParamArray || argument.Value is not IArrayCreationOperation array)
+                {
+                    continue;
+                }
+                var count = AllocationSizeEstimator.ConstantArrayLength(array);
+                // The compiler uses Array.Empty<T>() for an omitted params argument; there is no per-call array.
+                if (count == 0)
+                {
+                    continue;
+                }
+                AddAllocation(
+                    operation: "array",
+                    allocatedType: array.Type,
+                    site: site,
+                    mechanism: "implicit_params",
+                    cardinality: "per_evaluation",
+                    size: AllocationSizeEstimator.Array(array.Type as IArrayTypeSymbol, count)
+                );
+            }
+        }
+
+        void AddIteratorAllocation(IInvocationOperation invocation, SyntaxNode site)
+        {
+            var target = (invocation.TargetMethod.ReducedFrom ?? invocation.TargetMethod).OriginalDefinition;
+            if (!iteratorMethods.TryGetValue(target, out var isIterator))
+            {
+                isIterator = !target.IsAsync && target.DeclaringSyntaxReferences.Any(reference => ContainsYield(reference.GetSyntax()));
+                iteratorMethods[target] = isIterator;
+            }
+            if (!isIterator)
+            {
+                return;
+            }
+
+            var targetId = symbolCache.DocId(target) ?? target.ToDisplayString();
+            AddAllocation(
+                operation: "object",
+                allocatedType: null,
+                site: site,
+                mechanism: "iterator_state_machine",
+                cardinality: "per_evaluation",
+                size: AllocationSizeEstimate.Unknown("compiler-generated iterator layout is runtime-dependent"),
+                resourceOverride: $"{targetId}~iterator"
+            );
+        }
+
+        void AddDelegateAllocation(ExpressionSyntax expression)
+        {
+            var delegateType = model.GetTypeInfo(expression).ConvertedType as INamedTypeSymbol;
+            if (delegateType?.TypeKind != TypeKind.Delegate || expression.FirstAncestorOrSelf<AttributeSyntax>() is not null)
+            {
+                return;
+            }
+            if (
+                expression.Ancestors().OfType<BaseObjectCreationExpressionSyntax>().FirstOrDefault() is { } explicitCreation
+                && explicitCreation.ArgumentList?.Arguments.Any(a => a.Expression.Span.Contains(expression.Span)) == true
+            )
+            {
+                return;
+            }
+
+            var owner = EnclosingSymbolId(expression.Parent ?? expression, model, lambdaIds, enclosingCache);
+            if (owner is null)
+            {
+                return;
+            }
+
+            var isLambda = expression is AnonymousFunctionExpressionSyntax;
+            var method = isLambda ? null : model.GetSymbolInfo(expression).Symbol as IMethodSymbol;
+            var localFunction =
+                method?.MethodKind == MethodKind.LocalFunction
+                    ? method
+                        .DeclaringSyntaxReferences.Select(reference => reference.GetSyntax())
+                        .OfType<LocalFunctionStatementSyntax>()
+                        .FirstOrDefault()
+                    : null;
+            var captures = isLambda
+                ? model.AnalyzeDataFlow(expression)?.CapturedInside.Any() == true
+                : localFunction is not null && model.AnalyzeDataFlow(localFunction)?.CapturedInside.Any() == true;
+            var cached = isLambda ? !captures : method?.IsStatic == true;
+            AddAllocation(
+                operation: "object",
+                allocatedType: delegateType,
+                site: expression,
+                mechanism: "delegate",
+                cardinality: cached ? "cached_first_use" : "per_evaluation",
+                size: AllocationSizeEstimate.Unknown("delegate layout is runtime-dependent"),
+                enclosingOverride: owner
+            );
+            var closureScopeStart =
+                expression
+                    .Ancestors()
+                    .FirstOrDefault(node => node is BlockSyntax or MemberDeclarationSyntax or AccessorDeclarationSyntax)
+                    ?.SpanStart
+                ?? expression.SpanStart;
+            if (captures && closureScopes.Add((owner, closureScopeStart)))
+            {
+                AddAllocation(
+                    operation: "object",
+                    allocatedType: null,
+                    site: expression,
+                    mechanism: "closure",
+                    cardinality: "per_scope",
+                    size: AllocationSizeEstimate.Unknown("compiler-generated closure layout is runtime-dependent"),
+                    resourceOverride: $"{owner}~closure",
+                    enclosingOverride: owner
+                );
+            }
+        }
+
+        void AddStringAllocation(ExpressionSyntax expression)
+        {
+            if (
+                expression is ElementAccessExpressionSyntax { ArgumentList.Arguments.Count: 1 } rangeAccess
+                && model.GetTypeInfo(rangeAccess.Expression).Type?.SpecialType == SpecialType.System_String
+                && IsSystemRange(rangeAccess.ArgumentList.Arguments[0].Expression)
+            )
+            {
+                if (IsDefinitelyNonAllocatingStringRange(rangeAccess.ArgumentList.Arguments[0].Expression))
+                {
+                    return;
+                }
+                var length = ConstantStringRangeLength(rangeAccess);
+                AddAllocation(
+                    operation: "object",
+                    allocatedType: model.Compilation.GetSpecialType(SpecialType.System_String),
+                    site: expression,
+                    mechanism: "string_range",
+                    cardinality: "conditional",
+                    size: AllocationSizeEstimator.String(length, "substring length is not statically known"),
+                    resourceOverride: "System.String"
+                );
+                return;
+            }
+
+            if (expression is InterpolatedStringExpressionSyntax interpolation)
+            {
+                var interpolationType = model.GetTypeInfo(interpolation);
+                var producesString = (interpolationType.ConvertedType ?? interpolationType.Type)?.SpecialType == SpecialType.System_String;
+                if (producesString && !model.GetConstantValue(interpolation).HasValue)
+                {
+                    AddAllocation(
+                        operation: "object",
+                        allocatedType: model.Compilation.GetSpecialType(SpecialType.System_String),
+                        site: interpolation,
+                        mechanism: "string_interpolation",
+                        cardinality: "conditional",
+                        size: AllocationSizeEstimator.String(null, "formatted interpolation length is not statically known"),
+                        resourceOverride: "System.String"
+                    );
+                }
+                return;
+            }
+
+            var isConcat =
+                expression is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AddExpression } binary
+                && model.GetTypeInfo(binary).Type?.SpecialType == SpecialType.System_String;
+            var isCompoundConcat =
+                expression is AssignmentExpressionSyntax { RawKind: (int)SyntaxKind.AddAssignmentExpression }
+                && model.GetTypeInfo(expression).Type?.SpecialType == SpecialType.System_String;
+            if (!isConcat && !isCompoundConcat)
+            {
+                return;
+            }
+            if (isConcat && IsNestedInStringConcat(expression))
+            {
+                return; // one fact for the maximal concat chain
+            }
+            if (model.GetConstantValue(expression).HasValue)
+            {
+                return;
+            }
+            AddAllocation(
+                operation: "object",
+                allocatedType: model.Compilation.GetSpecialType(SpecialType.System_String),
+                site: expression,
+                mechanism: "string_concat",
+                cardinality: "conditional",
+                size: AllocationSizeEstimator.String(null, "concatenated string length is not statically known"),
+                resourceOverride: "System.String"
+            );
+        }
+
+        bool IsSystemRange(ExpressionSyntax argument)
+        {
+            var type = model.GetTypeInfo(argument).ConvertedType ?? model.GetTypeInfo(argument).Type;
+            return type?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == "global::System.Range";
+        }
+
+        bool IsDefinitelyNonAllocatingStringRange(ExpressionSyntax argument)
+        {
+            if (argument is not RangeExpressionSyntax range)
+            {
+                return false;
+            }
+
+            int? FromStartConstant(ExpressionSyntax? bound, int fallback)
+            {
+                if (bound is null)
+                {
+                    return fallback;
+                }
+                if (bound is PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.IndexExpression })
+                {
+                    return null;
+                }
+                return model.GetConstantValue(bound) is { HasValue: true, Value: int value } ? value : null;
+            }
+
+            var start = FromStartConstant(range.LeftOperand, 0);
+            var end = range.RightOperand is null ? null : FromStartConstant(range.RightOperand, 0);
+            // `s[..]` / `s[0..]` returns the original string; equal known bounds return String.Empty.
+            return start == 0 && range.RightOperand is null || start is { } s && end is { } e && s == e;
+        }
+
+        int? ConstantStringRangeLength(ElementAccessExpressionSyntax access)
+        {
+            if (
+                model.GetConstantValue(access.Expression) is not { HasValue: true, Value: string source }
+                || access.ArgumentList.Arguments[0].Expression is not RangeExpressionSyntax range
+            )
+            {
+                return null;
+            }
+            int? Bound(ExpressionSyntax? bound, int fallback)
+            {
+                if (bound is null)
+                {
+                    return fallback;
+                }
+                if (bound is PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.IndexExpression })
+                {
+                    return null; // from-end bounds are deliberately left unknown for now
+                }
+                return model.GetConstantValue(bound) is { HasValue: true, Value: int value } ? value : null;
+            }
+
+            var start = Bound(range.LeftOperand, 0);
+            var end = Bound(range.RightOperand, source.Length);
+            return start is { } s && end is { } e && s >= 0 && e >= s && e <= source.Length ? e - s : null;
+        }
+
+        bool IsNestedInStringConcat(ExpressionSyntax expression)
+        {
+            SyntaxNode? parent = expression.Parent;
+            while (parent is ParenthesizedExpressionSyntax or CheckedExpressionSyntax)
+            {
+                parent = parent.Parent;
+            }
+            return parent is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AddExpression } binary
+                && model.GetTypeInfo(binary).Type?.SpecialType == SpecialType.System_String;
         }
 
         // --- Constructor initializers -> ctor refs ---
@@ -367,6 +724,12 @@ internal static class FactExtractor
         // target(s) via the delegate_bind facts (the delegate-as-degenerate-interface hop).
         void OnInvocation(InvocationExpressionSyntax invocation)
         {
+            if (model.GetOperation(invocation) is IInvocationOperation operation)
+            {
+                AddImplicitParams(operation.Arguments, invocation);
+                AddIteratorAllocation(operation, invocation);
+            }
+
             var slotSymbol = model.GetSymbolInfo(invocation.Expression).Symbol;
             if (DelegateSlotDocId(slotSymbol) is not { } slot)
             {
@@ -438,6 +801,7 @@ internal static class FactExtractor
             if (node is ExpressionSyntax expression)
             {
                 OnBoxing(expression);
+                AddStringAllocation(expression);
             }
 
             switch (node)
@@ -458,6 +822,7 @@ internal static class FactExtractor
                         enclosingCache: enclosingCache,
                         symbolCache: symbolCache
                     );
+                    AddDelegateAllocation(lambda);
                     break;
 
                 case BaseObjectCreationExpressionSyntax creation:
@@ -2148,6 +2513,13 @@ internal static class FactExtractor
         || assembly is "mscorlib" or "netstandard" or "WindowsBase"
         || assembly.StartsWith("PresentationCore", StringComparison.Ordinal)
         || assembly.StartsWith("PresentationFramework", StringComparison.Ordinal);
+
+    private static bool ContainsYield(SyntaxNode declaration) =>
+        declaration
+            .DescendantNodes(descendIntoChildren: node =>
+                node == declaration || node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)
+            )
+            .Any(node => node is YieldStatementSyntax);
 }
 
 internal sealed record FactExtractionResult(

@@ -163,7 +163,12 @@ public sealed record AllocationFact(
     int Line,
     string? EnclosingLoopKind = null,
     string? EnclosingLoopDetail = null,
-    string? EnclosingGuards = null
+    string? EnclosingGuards = null,
+    string? Mechanism = null,
+    string? Cardinality = null,
+    long? ShallowSizeBytes = null,
+    string? SizeConfidence = null,
+    string? SizeBasis = null
 );
 
 // --- Stage-3 (read) query projections ---
@@ -768,7 +773,12 @@ public sealed record DerivedEffect(
     // CFG control-dependence guard set of the producing call-site (branch-aware-effects), copied from the
     // originating reference fact. Lets `tree --view full --guards` mark a guarded effect leaf with ⎇. Null
     // = must-run. Query-side only; carried through the hazard-effects cache (see HazardEffectsCacheKey).
-    string? EnclosingGuards = null
+    string? EnclosingGuards = null,
+    string? Mechanism = null,
+    string? Cardinality = null,
+    long? ShallowSizeBytes = null,
+    string? SizeConfidence = null,
+    string? SizeBasis = null
 );
 
 // Fact-side projections of the observation rules (the same AnalysisRuleSet.*Observations data the

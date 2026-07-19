@@ -12,4 +12,9 @@ public sealed class AllocationFactEntity
     public string? EnclosingLoopKind { get; set; }
     public string? EnclosingLoopDetail { get; set; }
     public string? EnclosingGuards { get; set; }
+    public string? Mechanism { get; set; }
+    public string? Cardinality { get; set; }
+    public long? ShallowSizeBytes { get; set; }
+    public string? SizeConfidence { get; set; }
+    public string? SizeBasis { get; set; }
 }
