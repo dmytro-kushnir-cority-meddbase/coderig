@@ -1,9 +1,3 @@
 <Project>
   <Import Project="..\Directory.Build.props" />
-
-  <!-- Playground projects are indexing fixtures; the temporary F# analyzer project must not alter
-       their design-time build graph. -->
-  <ItemGroup>
-    <ProjectReference Remove="$(MSBuildThisFileDirectory)..\tools\use-named-args-fs\UseNamedArgs\UseNamedArgs.fsproj" />
-  </ItemGroup>
 </Project>

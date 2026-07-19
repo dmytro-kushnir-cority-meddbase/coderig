@@ -31,17 +31,6 @@ This file is only the things that aren't obvious from those and that you'd other
   analysis directory so rules, deployments, and `.rig/` resolve together.
 - Before starting work, run `git status --short --branch` and inspect `docs/backlog/progress/`. This snapshot
   is orientation, not a replacement for current Git state or the backlog cards.
-- `UseNamedArgs 0.0.3` is not on NuGet.org (0.0.2 is the nearest public version). Until upstream publishes
-  the required changes, the analyzer source is pinned as the `tools/use-named-args-fs` submodule from
-  [`dmytro-kushnir-cority-meddbase/use-named-args-fs`](https://github.com/dmytro-kushnir-cority-meddbase/use-named-args-fs),
-  branch `feature/exclusion-config`, commit `f62fa418`; its nuspec declares `0.0.3` and adds the
-  `UseNamedArgs.exclude_*` configuration used by this repo. It is proposed upstream as
-  [`mykolav/use-named-args-fs#1`](https://github.com/mykolav/use-named-args-fs/pull/1), which is still open
-  with four commits and no review as of 2026-07-18. Upstream is
-  [`mykolav/use-named-args-fs`](https://github.com/mykolav/use-named-args-fs) and only publishes `0.0.2`.
-  `Directory.Build.props` references the pinned analyzer project directly. After the PR is merged and a
-  suitable package is published, delete the submodule and return to a private `PackageReference`.
-
 ## The `rig` skill — source of truth is THIS REPO
 
 The canonical `rig` skill lives in-repo at **`.agents/skills/rig/`** (`SKILL.md` + `REFERENCE.md`) — version
@@ -146,12 +135,9 @@ The rules that make this produce mergeable code, not plausible diffs:
   Do not put MSBuild switches such as `-m:1` or `--no-incremental` on `dotnet test`: MTP forwards unknown
   switches to TUnit, which rejects them. When those switches are needed, run `dotnet build ... -m:1
   --no-incremental` first, then `dotnet test ... --no-build --no-restore`.
-- **`-warnaserror` is OFF** (removed from mini-ci 2026-06-22). Analyzer diagnostics — the forked
-  `UseNamedArgs` (`use-named-args-fs`, fires on every multi-arg first-party call), `MA0011`
-  (format-provider) — are now **non-fatal warnings**, not build errors: the build no longer fails on them
-  and there's no fix-it round-trip. Still worth following for readability where cheap (named args on new
-  multi-arg first-party calls; `CultureInfo.InvariantCulture` on formatting), and `.editorconfig`
-  `UseNamedArgs.exclude_methods` still suppresses the noisy stdlib ones — but none of it gates the build.
+- **`-warnaserror` is OFF** (removed from mini-ci 2026-06-22). Analyzer diagnostics such as `MA0011`
+  (format-provider) are **non-fatal warnings**, not build errors: the build no longer fails on them and
+  there's no fix-it round-trip. Still worth following for readability where cheap, but none of it gates the build.
   - **Don't run csharpier format CONCURRENTLY with a `dotnet build`** (format edits a file the compiler is
     reading) → spurious "N Error(s)" with no diagnostic. mini-ci avoids this by formatting as a discrete
     step BEFORE build; the trap only bites if you kick off a manual format mid-build. Re-run the build once
