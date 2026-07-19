@@ -2,20 +2,14 @@
   <PropertyGroup>
     <IsPackable>false</IsPackable>
     <OutputType>Exe</OutputType>
-    <!--    <Features>runtime-async=on</Features>-->
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Testing.Platform.MSBuild">
-    </PackageReference>
-    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage">
-    </PackageReference>
-    <PackageReference Include="TUnit">
-    </PackageReference>
-    <PackageReference Include="Shouldly">
-    </PackageReference>
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp">
-    </PackageReference>
+    <PackageReference Include="Microsoft.Testing.Platform.MSBuild" />
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
+    <PackageReference Include="TUnit" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Rig.Analysis\Rig.Analysis.csproj" />

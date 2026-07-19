@@ -6,8 +6,7 @@
     <ServerGarbageCollection>true</ServerGarbageCollection>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="BenchmarkDotNet">
-    </PackageReference>
+    <PackageReference Include="BenchmarkDotNet" />
   </ItemGroup>
   <ItemGroup>
     <!-- The rule loader resolves builtin-rules.json next to the running assembly (AppContext.BaseDirectory),
