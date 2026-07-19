@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
     <OutputType>Exe</OutputType>
-    <!-- BDN requires Release for trustworthy numbers; never publish/pack this scratch project. -->
     <IsPackable>false</IsPackable>
     <ServerGarbageCollection>true</ServerGarbageCollection>
   </PropertyGroup>
@@ -9,8 +9,6 @@
     <PackageReference Include="BenchmarkDotNet" />
   </ItemGroup>
   <ItemGroup>
-    <!-- The rule loader resolves builtin-rules.json next to the running assembly (AppContext.BaseDirectory),
-         so copy the CLI's copy into the bench output — same as the test project does. -->
     <Content Include="..\..\src\Rig.Cli\builtin-rules.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
