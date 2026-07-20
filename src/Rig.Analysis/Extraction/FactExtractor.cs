@@ -239,9 +239,7 @@ internal static class FactExtractor
                         dispatch.Add(new DispatchFact(SourceMember: slot, TargetMember: boundId, Kind: DispatchKinds.DelegateBind));
                     }
 
-                    // Delegate-field join input: a method-group RHS bound to a delegate FIELD inside its
-                    // declaring type. (DelegateBindSlotOf also fires for properties/events — the FIELD-only
-                    // + declaring-type gate lives in EmitDelegateFieldBind/DelegateFieldAssignmentTarget.)
+                    // Delegate-field join input (fields only, gated in EmitDelegateFieldBind).
                     if (DelegateFieldAssignmentTarget(name, model) is { } assignedField)
                     {
                         EmitDelegateFieldBind(dispatch, dispatchSeen, field: assignedField, callableId: boundId, site: name, model: model);
@@ -1925,14 +1923,9 @@ internal static class FactExtractor
         return null;
     }
 
-    // The delegate FIELD a value expression (a lambda / anonymous-method / method group) is being
-    // assigned to, or null when the expression is not a delegate-field assignment. FIELDS ONLY — the
-    // delegate-field join is deliberately narrower than the 18c slot seam: a delegate PROPERTY (resolved
-    // by 18c) and any EVENT (delivery is modeled by event_raise — see the DispatchKinds note) both return
-    // null here. Recognises `slot = rhs`, `slot += rhs`, and `slot ??= rhs` (all bindings that add a
-    // callable), plus a field initializer `Func<..> slot = rhs;`. Walks the same transparent wrappers as
-    // DelegateBindSlotOf. `slot` being an event surfaces as an IEventSymbol on the LHS, which the
-    // `as IFieldSymbol` pattern rejects.
+    // The delegate FIELD a value expression is being assigned to, or null — fields only (a delegate
+    // property/event returns null; narrower than the 18c slot seam). Recognises `=`, `+=`, `??=`, and a
+    // field initializer.
     private static IFieldSymbol? DelegateFieldAssignmentTarget(SyntaxNode rhs, SemanticModel model)
     {
         foreach (var ancestor in rhs.Ancestors())
@@ -1960,15 +1953,12 @@ internal static class FactExtractor
         return null;
     }
 
-    // A plain, user-declared delegate FIELD, or null. `AssociatedSymbol: null` rules out compiler-
-    // generated backing fields — a field-like EVENT's backing field (events are excluded from the join)
-    // and an auto-property's backing field — which some contexts bind a bare name to.
+    // A plain, user-declared delegate FIELD. AssociatedSymbol: null excludes event/auto-property backing fields.
     private static IFieldSymbol? DelegateFieldOrNull(ISymbol? symbol) =>
         symbol is IFieldSymbol { Type.TypeKind: TypeKind.Delegate, AssociatedSymbol: null } field ? field : null;
 
-    // True when the assignment/invocation `site` is lexically inside `field`'s declaring type — the
-    // soundness gate for the delegate-field join (a controlled seam only when writes/reads stay within
-    // the type). Robust to lambdas and nested scopes (the enclosing symbol's containing type is still the
+    // True when `site` is lexically inside `field`'s declaring type — the soundness gate for the join.
+    // Robust to lambdas and nested scopes (the enclosing symbol's containing type is still the
     // declaring type) and to partial classes (the ContainingType symbol is shared across files).
     private static bool IsInDeclaringType(IFieldSymbol field, SyntaxNode site, SemanticModel model)
     {
@@ -1977,10 +1967,8 @@ internal static class FactExtractor
         return enclosingType is not null && SymbolEqualityComparer.Default.Equals(enclosingType, field.ContainingType);
     }
 
-    // Emit the delegate-field join's per-assignment fact: a BIND (F:field -> callable) when the assignment
-    // sits inside the declaring type, else an ESCAPE (F:field -> F:field) that poisons the field so the
-    // join is suppressed. `callableId` is the assigned callable's node id (a lambda synthetic id or a
-    // method DocID). No-op when the field has no DocID.
+    // BIND (field -> callable) for an in-type assignment, else ESCAPE (field -> field) which poisons the
+    // field so the join is suppressed.
     private static void EmitDelegateFieldBind(
         List<DispatchFact> dispatch,
         HashSet<(string, string, string)> seen,
@@ -2316,15 +2304,12 @@ internal static class FactExtractor
     )
     {
         var consumer = LambdaConsumerOf(lambda, model);
-        // A lambda ASSIGNED to a delegate FIELD (not an argument) is the deferred-18c case the argument
-        // handoff never captured: give it a synthetic identity too so the delegate-field join has a
-        // callable node to point its edge at (and the body's effects re-root onto the lambda, reachable
-        // from the assignment site via the methodGroup edge below — as they were from the enclosing
-        // method before). Null for a lambda that is neither an argument nor a delegate-field assignment.
+        // A lambda assigned to a delegate field (not an argument) also needs a synthetic identity, so the
+        // delegate-field join has a callable node to point at.
         var assignedField = consumer is null ? DelegateFieldAssignmentTarget(lambda, model) : null;
         if (consumer is null && assignedField is null)
         {
-            return; // not an argument-passed lambda nor a delegate-field assignment — no deferred identity
+            return;
         }
 
         var member = lambda.FirstAncestorOrSelf<MemberDeclarationSyntax>();
@@ -2373,8 +2358,6 @@ internal static class FactExtractor
             )
         );
 
-        // Delegate-field join input: the lambda is the callable ASSIGNED to `assignedField` (its synthetic
-        // id `id` is the join edge's target node).
         if (assignedField is not null)
         {
             EmitDelegateFieldBind(dispatch, dispatchSeen, field: assignedField, callableId: id, site: lambda, model: model);

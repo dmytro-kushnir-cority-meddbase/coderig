@@ -6,16 +6,10 @@ using Shouldly;
 
 namespace Rig.Tests.Cli;
 
-// Regression for the `rig callers` display/TSV entry-point cardinality mismatch: the text output headlines and
-// lists only the FORWARD-CONFIRMED entry points (reverse-only EPs — in the reverse closure but with no forward
-// path — are the reverse-dispatch over-approximation, hidden behind --include-reverse-only), but every --format
-// tsv branch used to emit the FULL touching set (confirmed + reverse-only) unconditionally, ignoring
-// --include-reverse-only. On the MedDBase store that read 213 confirmed EPs in the display vs 789 tsv rows for
-// the same query. The fix routes all three tsv lenses through CallersReverseOnly.VisibleTsvRows so reverse-only
-// rows are hidden by default (matching the text output) and surfaced only under --include-reverse-only.
+// Regression: --format tsv used to emit reverse-only entry points unconditionally, so the tsv row count
+// (789) diverged from the display headline's forward-confirmed count (213). Fixed via CallersReverseOnly.VisibleTsvRows.
 public sealed class CallersReverseOnlyTsvTests
 {
-    // The pure visibility policy: reverse-only rows dropped by default, all rows kept under --include-reverse-only.
     [Test]
     public void VisibleTsvRows_hides_reverse_only_by_default()
     {
@@ -38,10 +32,6 @@ public sealed class CallersReverseOnlyTsvTests
             .ShouldBe(["a", "b", "c"]);
     }
 
-    // End-to-end contract: the display headline count and the default --format tsv row count must AGREE on the
-    // set of entry points (this was the reported divergence). --include-reverse-only may only ADD rows, never
-    // remove them — it is the one lens that surfaces the reverse-only over-approximation, and it must do so in
-    // tsv now that the flag is honoured across formats (previously a no-op for tsv).
     [Test]
     public async Task Entrypoints_display_headline_and_default_tsv_row_count_agree()
     {
@@ -52,22 +42,24 @@ public sealed class CallersReverseOnlyTsvTests
 
         (await CliApplication.RunAsync(["index", playground.SolutionPath], output, error, workingDirectory)).ShouldBe(0);
 
-        // Display: the headline count is the forward-confirmed answer.
         output.GetStringBuilder().Clear();
         (await CliApplication.RunAsync(["callers", "CreateTeamAsync", "--entrypoints"], output, error, workingDirectory)).ShouldBe(0);
         var display = output.ToString();
         var headline = HeadlineCount(display);
         headline.ShouldBeGreaterThan(0, display);
 
-        // Default tsv: one row per confirmed EP — must equal the display headline (the bug: it emitted more).
         output.GetStringBuilder().Clear();
         (
-            await CliApplication.RunAsync(["callers", "CreateTeamAsync", "--entrypoints", "--format", "tsv"], output, error, workingDirectory)
+            await CliApplication.RunAsync(
+                ["callers", "CreateTeamAsync", "--entrypoints", "--format", "tsv"],
+                output,
+                error,
+                workingDirectory
+            )
         ).ShouldBe(0);
         var defaultRows = TsvRowCount(output.ToString());
         defaultRows.ShouldBe(headline, $"default tsv rows must equal the display headline.\nDISPLAY:\n{display}");
 
-        // --include-reverse-only tsv: never fewer than the default (it only adds the reverse-only remainder).
         output.GetStringBuilder().Clear();
         (
             await CliApplication.RunAsync(

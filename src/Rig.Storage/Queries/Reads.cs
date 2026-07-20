@@ -442,9 +442,7 @@ public static class Reads
         // re-applies the read pragmas — the single sqlite_master existence probe is the only irreducible cost.
         var connection = await StorageProbes.OpenConnectionAsync(context, cancellationToken);
         var minedDispatch = await LoadDispatchFactsAsync(context, connection, cancellationToken);
-        // Delegate-field join (mirrors FactGraphProjection.FromAnalysis so the two projections stay in
-        // parity): reconnect delegate-field invocations to their assigned callables. Reads only the new
-        // DelegateField* dispatch facts — a store mined before the feature yields no extra edges.
+        // Mirrors FactGraphProjection.FromAnalysis so the two projections stay in parity.
         return FactDelegateFieldJoin.Apply(new FactGraphData(classifiedEdges, implEdges, methods, baseEdges, minedDispatch));
     }
 
