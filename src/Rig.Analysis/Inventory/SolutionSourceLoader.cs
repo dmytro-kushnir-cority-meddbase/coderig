@@ -104,6 +104,8 @@ internal static class SolutionSourceLoader
             .OrderBy(p => p.Name, StringComparer.Ordinal)
             .ToArray();
 
+        // Catches projects.exclude matches that slipped past the pre-build filter (e.g. the single-project
+        // path). Name what's dropped so it doesn't silently read as "indexed".
         var excludedByRules = workspaceCSharpProjects.Where(p => rules.IsExcludedProject(p.Name)).Select(p => p.Name).ToArray();
         if (excludedByRules.Length > 0)
         {
@@ -475,6 +477,8 @@ internal static class SolutionSourceLoader
 #pragma warning disable CS0618
         var manager = new AnalyzerManager(solutionPath, options);
 #pragma warning restore CS0618
+        // Skip non-C# projects, rule-excluded projects, and (when scoped) everything outside the entry
+        // closure — before paying for their design-time builds.
         var candidates = manager
             .Projects.Values.Where(pa =>
                 string.Equals(Path.GetExtension(pa.ProjectFile.Path.ToString()), ".csproj", StringComparison.OrdinalIgnoreCase)
@@ -721,6 +725,7 @@ internal static class SolutionSourceLoader
         }
     }
 
+    // Full names up to a cap, then a count of the rest — one progress line, no log flooding.
     internal static string FormatProjectList(IReadOnlyList<string> names)
     {
         const int MaxShown = 10;
@@ -1462,9 +1467,10 @@ internal static class SolutionSourceLoader
     private static bool IsProjectFile(string path) =>
         path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase);
 
-    // A multi-targeted outer project has no Compile target. Build one inner TFM explicitly;
-    // the first declared TFM preserves historical behavior when the caller does not choose one.
-    // Indexing a single TFM remains lossy under conditional compilation; see the union-extraction backlog.
+    // A multi-targeted project's outer csproj has no `Compile` target — unscoped CompileOnlyOptions fails
+    // with MSB4057 and yields zero sources. Scope to the caller-selected `framework`, or the first declared
+    // TFM by default; single-target projects build unscoped. Lossy under conditional compilation — see
+    // docs/backlog/todo/multi-tfm-union-extraction.md.
     private static IAnalyzerResult? BuildCompileOnly(IProjectAnalyzer analyzer, string? framework)
     {
         var targetFrameworks = analyzer.ProjectFile.TargetFrameworks;
@@ -1475,6 +1481,7 @@ internal static class SolutionSourceLoader
         return PreferredResult(results);
     }
 
+    // Null for single-target projects; else the requested TFM (throwing if not declared) or the first one.
     internal static string? SelectFramework(string projectName, IReadOnlyList<string>? targetFrameworks, string? requestedFramework)
     {
         if (targetFrameworks is not { Count: > 1 })
@@ -1495,7 +1502,7 @@ internal static class SolutionSourceLoader
             );
     }
 
-    // Cross-targeting results can include a sourceless outer-project result before the usable inner result.
+    // Prefer the first result that actually carries sources over a sourceless one.
     private static IAnalyzerResult? PreferredResult(IAnalyzerResults results) =>
         results.FirstOrDefault(r => r.SourceFiles is { Length: > 0 }) ?? results.FirstOrDefault();
 

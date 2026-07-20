@@ -239,6 +239,7 @@ internal static class FactExtractor
                         dispatch.Add(new DispatchFact(SourceMember: slot, TargetMember: boundId, Kind: DispatchKinds.DelegateBind));
                     }
 
+                    // Delegate-field join input (fields only, gated in EmitDelegateFieldBind).
                     if (DelegateFieldAssignmentTarget(name, model) is { } assignedField)
                     {
                         EmitDelegateFieldBind(dispatch, dispatchSeen, field: assignedField, callableId: boundId, site: name, model: model);
@@ -749,6 +750,8 @@ internal static class FactExtractor
                 )
             );
 
+            // Delegate-field join input: an invocation of a delegate FIELD, from inside its declaring type.
+            // The join fans this invoker to the callable(s) the field was assigned (the bind facts).
             if (
                 DelegateFieldOrNull(slotSymbol) is { } field
                 && invokerId is not null
@@ -1920,7 +1923,9 @@ internal static class FactExtractor
         return null;
     }
 
-    // Deliberately accepts delegate fields only; properties and events use different graph seams.
+    // The delegate FIELD a value expression is being assigned to, or null — fields only (a delegate
+    // property/event returns null; narrower than the 18c slot seam). Recognises `=`, `+=`, `??=`, and a
+    // field initializer.
     private static IFieldSymbol? DelegateFieldAssignmentTarget(SyntaxNode rhs, SemanticModel model)
     {
         foreach (var ancestor in rhs.Ancestors())
@@ -1948,11 +1953,13 @@ internal static class FactExtractor
         return null;
     }
 
-    // AssociatedSymbol excludes property and event backing fields.
+    // A plain, user-declared delegate FIELD. AssociatedSymbol: null excludes event/auto-property backing fields.
     private static IFieldSymbol? DelegateFieldOrNull(ISymbol? symbol) =>
         symbol is IFieldSymbol { Type.TypeKind: TypeKind.Delegate, AssociatedSymbol: null } field ? field : null;
 
-    // The join is sound only while reads and writes remain inside the field's declaring type.
+    // True when `site` is lexically inside `field`'s declaring type — the soundness gate for the join.
+    // Robust to lambdas and nested scopes (the enclosing symbol's containing type is still the
+    // declaring type) and to partial classes (the ContainingType symbol is shared across files).
     private static bool IsInDeclaringType(IFieldSymbol field, SyntaxNode site, SemanticModel model)
     {
         var enclosing = model.GetEnclosingSymbol(site.SpanStart);
@@ -1960,7 +1967,8 @@ internal static class FactExtractor
         return enclosingType is not null && SymbolEqualityComparer.Default.Equals(enclosingType, field.ContainingType);
     }
 
-    // An external assignment emits an escape fact, suppressing the join for that field.
+    // BIND (field -> callable) for an in-type assignment, else ESCAPE (field -> field) which poisons the
+    // field so the join is suppressed.
     private static void EmitDelegateFieldBind(
         List<DispatchFact> dispatch,
         HashSet<(string, string, string)> seen,
@@ -2296,7 +2304,8 @@ internal static class FactExtractor
     )
     {
         var consumer = LambdaConsumerOf(lambda, model);
-        // Field-assigned lambdas need the same synthetic identity as argument-passed lambdas.
+        // A lambda assigned to a delegate field (not an argument) also needs a synthetic identity, so the
+        // delegate-field join has a callable node to point at.
         var assignedField = consumer is null ? DelegateFieldAssignmentTarget(lambda, model) : null;
         if (consumer is null && assignedField is null)
         {

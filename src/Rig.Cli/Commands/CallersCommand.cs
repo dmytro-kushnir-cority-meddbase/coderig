@@ -245,7 +245,8 @@ internal static class CallersCommand
             timing.Record("traversal", traversalWatch.Elapsed);
 
             var rootsRenderWatch = Stopwatch.StartNew();
-            // TSV appends forwardConfirmed after the existing DocID column.
+            // Reverse-only roots are hidden by default (matching the text output); --include-reverse-only
+            // surfaces them flagged false. --raw keeps the raw superset.
             if (tsv)
             {
                 var reverseOnlySet = rootsReverseOnly.ToHashSet(StringComparer.Ordinal);
@@ -337,7 +338,8 @@ internal static class CallersCommand
         timing.Record("traversal", defaultTraversalWatch.Elapsed);
 
         var renderWatch = Stopwatch.StartNew();
-        // TSV appends forwardConfirmed after depth and DocID; depth 0 identifies matched targets.
+        // Depth-0 rows are the BFS start nodes (always forwardConfirmed=true). Reverse-only rows are
+        // hidden by default, matching the text output; --include-reverse-only surfaces them.
         if (tsv)
         {
             var ordered = reachable.OrderBy(k => k.Value).ThenBy(k => k.Key, StringComparer.Ordinal).Take(max).ToList();
@@ -531,8 +533,8 @@ internal static class CallersCommand
         var confirmed = touching.Where((_, i) => confirmedFlags[i]).ToList();
         var reverseOnly = touching.Where((_, i) => !confirmedFlags[i]).ToList();
 
-        // Columns: kind, route, file, line, requires, loadedServices, activeServices, forwardConfirmed, fqn
-        // (the queryable dotted name; == route when the route already is the FQN, route fallback otherwise).
+        // Reverse-only EPs (no forward path) are hidden by default, matching the text output; --include-reverse-only surfaces them.
+        // Columns: kind, route, file, line, requires, loadedServices, activeServices, forwardConfirmed, fqn.
         if (tsv)
         {
             var rows = touching.Select((e, i) => (Ep: e, Confirmed: confirmedFlags[i])).ToList();
@@ -620,7 +622,8 @@ internal static class CallersCommand
     }
 }
 
-// Keep TSV visibility aligned with text output across callers, roots, and entry points.
+// Shared TSV row-visibility policy across all three `rig callers` lenses: reverse-only rows (no forward
+// path) are dropped by default, matching the text output, and shown under --include-reverse-only.
 internal static class CallersReverseOnly
 {
     internal static IEnumerable<T> VisibleTsvRows<T>(IReadOnlyList<T> rows, Func<T, bool> isReverseOnly, bool includeReverseOnly) =>

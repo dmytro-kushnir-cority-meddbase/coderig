@@ -2,9 +2,11 @@ using Rig.Domain.Data;
 
 namespace Rig.Domain.Functions;
 
-// Reconnects in-type delegate-field invocations to the field's known assigned callables.
-// Any external assignment suppresses the join; otherwise multiple assignments conservatively fan out.
-// Old stores contain none of these facts and therefore gain no synthesized edges.
+// Reconnects a delegate-field invocation (`saveFunc(...)`) to the callable(s) assigned to that field —
+// a hop the forward walk otherwise cuts at the mutable-field seam. Built from the extractor's per-site
+// bind/invoke/escape facts; a field with ANY escape (an assignment outside its declaring type) is
+// dropped entirely rather than trusted. One hop only — the joined callable's body walks normally but
+// isn't itself re-dispatched. Applied identically in both FactGraphData builders to stay in parity.
 public static class FactDelegateFieldJoin
 {
     public static FactGraphData Apply(FactGraphData graph)

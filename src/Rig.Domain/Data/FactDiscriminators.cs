@@ -42,7 +42,8 @@ public static class EdgeKinds
     public const string Ctor = RefKinds.Ctor;
     public const string Handoff = "handoff";
 
-    // A synchronous caller-to-callable edge synthesized across a delegate field.
+    // Synthesized by FactDelegateFieldJoin: caller->callable across a delegate field. A plain edge (not
+    // a handoff), so the sync traversal walks it like an ordinary call.
     public const string DelegateField = "delegate-field";
 }
 
@@ -68,8 +69,10 @@ public static class DispatchKinds
     public const string Override = "override"; // base/virtual method -> overriding member
     public const string DelegateBind = "delegate_bind"; // delegate field/property/event slot -> bound target (18c)
 
-    // Join data keyed by field DocID: assigned callable, external-assignment escape, and invoker.
-    // Events remain on the event_raise path; any escape suppresses the field join.
+    // Delegate-FIELD join inputs, keyed at the FIELD slot (`F:`), for FactDelegateFieldJoin. Fields only —
+    // events stay on the event_raise path. Bind = field -> assigned callable (in-type assignment). Escape =
+    // field -> field, emitted for an out-of-type assignment, poisoning the slot so the join is suppressed.
+    // Invoke = field -> invoking method (in-type invocation).
     public const string DelegateFieldBind = "delegate_field_bind";
     public const string DelegateFieldEscape = "delegate_field_escape";
     public const string DelegateFieldInvoke = "delegate_field_invoke";

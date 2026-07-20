@@ -4,6 +4,7 @@ using Shouldly;
 
 namespace Rig.Tests.Rendering;
 
+// Verified against real `rig tree --view full` output.
 public sealed class DelegateFieldRenderingTests
 {
     private static TraceNode Child(string id, string edgeKind, int fanout = 0) => new(id, edgeKind, null, null, [], Fanout: fanout);

@@ -3,6 +3,7 @@ using Shouldly;
 
 namespace Rig.Tests.Analysis;
 
+// FormatProjectList renders the excluded-project progress line, capped so a big exclusion doesn't flood the log.
 public sealed class ExcludedProjectReportingTests
 {
     [Test]

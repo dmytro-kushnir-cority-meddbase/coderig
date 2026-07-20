@@ -249,7 +249,8 @@ internal static class TreeRenderer
             node.FoldedVia is not null ? $" «via {node.FoldedVia}»"
             : node.EdgeKind is "impl-dispatch" or "override-dispatch"
                 ? (children.Count > 1 ? $" «{dispatchTag} ×{children.Count} fan-out»" : $" «{dispatchTag}»")
-            // Delegate-field fan-out belongs to the reaching edge, not this node's child count.
+            // Delegate-field join: a real sync call, so it gets the dispatch marker not the ⤳ handoff glyph.
+            // Fan-out uses the reaching-edge Fanout, not children.Count (each union target is a sibling).
             : node.EdgeKind == EdgeKinds.DelegateField
                 ? (node.Fanout > 1 ? $" «{dispatchTag} ×{node.Fanout} fan-out»" : $" «{dispatchTag}»")
             : "";

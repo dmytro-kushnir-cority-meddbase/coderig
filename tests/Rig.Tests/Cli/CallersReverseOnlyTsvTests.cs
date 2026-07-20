@@ -6,6 +6,8 @@ using Shouldly;
 
 namespace Rig.Tests.Cli;
 
+// Regression: --format tsv used to emit reverse-only entry points unconditionally, so the tsv row count
+// (789) diverged from the display headline's forward-confirmed count (213). Fixed via CallersReverseOnly.VisibleTsvRows.
 public sealed class CallersReverseOnlyTsvTests
 {
     [Test]

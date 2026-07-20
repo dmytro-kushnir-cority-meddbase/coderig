@@ -58,7 +58,6 @@ try {
         -o $packageOutput `
         /p:PackageVersion=$ToolVersion `
         /p:Version=$ToolVersion
-    
     if ($LASTEXITCODE -ne 0) { throw "Pack failed (exit $LASTEXITCODE) - not installing." }
 
     if (-not $SkipToolInstall) {
@@ -68,20 +67,22 @@ try {
         dotnet tool uninstall --global rig *> $null
         $ErrorActionPreference = $previousErrorActionPreference
 
-
+        # Keep BOTH pins. `rig` is a TAKEN package id on nuget.org (an unrelated dev launcher whose
+        # 1.5.0 outranks our 0.1.1-ci.*), so any unpinned install/update resolves the stranger's
+        # package — an ad-hoc `dotnet tool update -g rig --prerelease` did exactly that (2026-07-15).
         dotnet tool install --global rig `
             --add-source $packageOutput `
             --version $ToolVersion
         if ($LASTEXITCODE -ne 0) {
             throw "Global tool install failed (exit $LASTEXITCODE). A running rig process (e.g. 'rig web') can lock the tool store - stop it and re-run."
         }
-        
+        # Native failure reports via exit code (same trap as above), and a locked/failed swap can leave a
+        # STALE rig on PATH while everything above was green — verify the binary actually is this build.
         $installedVersion = rig --version
         if ($LASTEXITCODE -ne 0 -or -not "$installedVersion".StartsWith($ToolVersion)) {
             throw "Installed rig reports '$installedVersion', expected $ToolVersion - global tool did not update."
         }
         $installedVersion
-        
     }
 }
 finally {

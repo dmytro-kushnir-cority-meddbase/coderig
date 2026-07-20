@@ -8,6 +8,7 @@ using Shouldly;
 
 namespace Rig.Tests.Domain;
 
+// Assertions run over the shipped engine (FactGraphProjection.FromAnalysis + FactPathFinder.Reaches).
 public sealed class DelegateFieldJoinTests
 {
     private static readonly MetadataReference[] FrameworkReferences = ((AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string) ?? "")

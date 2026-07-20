@@ -81,6 +81,7 @@ public static class FactGraphProjection
 
         var minedDispatch = (result.DispatchFacts ?? []).Distinct().ToList();
 
+        // Applied here AND in LoadFactGraphAsync so the two projections match.
         return FactDelegateFieldJoin.Apply(new FactGraphData(classifiedEdges, implEdges, methods, baseEdges, minedDispatch));
     }
 }
