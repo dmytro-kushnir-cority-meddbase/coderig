@@ -11,7 +11,7 @@ namespace Rig.Analysis.Inventory;
 // the build INPUTS (refs/options/file-set) are unchanged. Best-effort: any IO/JSON failure degrades to
 // a miss (rebuild); the cache can never block, corrupt, or wrong an index. Sidecars live OUTSIDE the
 // per-commit store so they persist/shared across indexes.
-internal sealed class BuildResultCache(string cacheDirectory)
+internal sealed class BuildResultCache(string cacheDirectory, string? framework = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
@@ -50,7 +50,13 @@ internal sealed class BuildResultCache(string cacheDirectory)
     // Stable filename from the normalised project path (content of the path, not the project).
     private string SidecarPath(string projectFilePath)
     {
-        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(projectFilePath))))[..16];
+        var identity = Path.GetFullPath(projectFilePath);
+        if (framework is not null)
+        {
+            identity += $"\nframework:{framework.ToUpperInvariant()}";
+        }
+
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..16];
         return Path.Combine(cacheDirectory, key + ".json");
     }
 }

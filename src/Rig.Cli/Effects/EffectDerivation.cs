@@ -48,7 +48,8 @@ internal static class EffectDerivation
         // pure inventory noise (it can never pair with a write for the race_window TOCTOU hazard). Pure
         // presentation/inventory filtering: race_window is unaffected (its matcher already only pairs same-cell
         // read+write, so an unpaired read contributes nothing). `--no-gate` flips this off (emit every read).
-        bool gate = true
+        bool gate = true,
+        IReadOnlyList<AllocationFact>? allocationFacts = null
     )
     {
         // Pre-filter the static-field READ refs to cells that are also WRITTEN somewhere (the gate). An unpaired
@@ -70,6 +71,10 @@ internal static class EffectDerivation
             staticFieldWriteRefs: staticFieldWriteRefs,
             staticFieldReadRefs: staticFieldReadRefs
         );
+        if (allocationFacts is { Count: > 0 })
+        {
+            effects = effects.Concat(CoreAllocationEffectDeriver.Derive(allocationFacts, observationRules)).ToList();
+        }
 
         // Annotate qualifying effects with hazard observations — pure post-passes over the derived effects
         // that add observations and drop nothing:
@@ -108,6 +113,7 @@ internal static class EffectDerivation
         epData ??= await Reads.LoadFactEntryPointDataAsync(context);
         var invocations = await Reads.LoadInvocationRefsAsync(context);
         var throwRefs = await Reads.LoadThrowRefsAsync(context);
+        var allocationFacts = await Reads.LoadAllocationFactsAsync(context);
         // Perf (#3): one reference_facts scan for both the write and read static-field arms (was two).
         var (staticFieldWriteRefs, staticFieldReadRefs) = await Reads.LoadStaticFieldAccessRefsByKindAsync(context);
         var threadStaticCells = await Reads.LoadThreadStaticFieldIdsAsync(context);
@@ -132,7 +138,8 @@ internal static class EffectDerivation
             threadStaticCells: threadStaticCells,
             volatileCells: volatileCells,
             asyncMethodIds: asyncMethodIds,
-            gate: gate
+            gate: gate,
+            allocationFacts: allocationFacts
         );
     }
 
@@ -317,12 +324,15 @@ internal static class EffectDerivation
     // The distinct provider strings (e.g. "http", "throw") known from the effective rule set.
     // A bare-provider --only/--exclude token is valid iff it appears here.
     internal static HashSet<string> KnownProviders(RuleSet rules) =>
-        new(rules.Effects.Select(r => r.Provider), StringComparer.OrdinalIgnoreCase);
+        new(rules.Effects.Select(r => r.Provider).Append("alloc"), StringComparer.OrdinalIgnoreCase);
 
     // The distinct provider:operation strings (e.g. "http:GET", "throw:access_denied") known from
     // the effective rule set. A provider:operation token is valid iff it appears here.
     internal static HashSet<string> KnownProviderOps(RuleSet rules) =>
-        new(rules.Effects.Select(r => $"{r.Provider}:{r.Operation}"), StringComparer.OrdinalIgnoreCase);
+        new(
+            rules.Effects.Select(r => $"{r.Provider}:{r.Operation}").Concat(["alloc:object", "alloc:array", "alloc:boxing"]),
+            StringComparer.OrdinalIgnoreCase
+        );
 
     // Warn to STDERR for any --only/--exclude token that cannot match any known provider or
     // provider:operation from the effective rule set. Non-fatal: the command still runs. A token is

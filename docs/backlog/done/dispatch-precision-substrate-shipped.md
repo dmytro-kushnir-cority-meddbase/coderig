@@ -1,7 +1,7 @@
 # Dispatch-precision substrate — shipped record + spec
 
 The shipped core of the dispatch-precision substrate (the CEP gate). **Remaining/open work:**
-[../progress/dispatch-precision-substrate.md]. Impl status of the monomorphization rework:
+[dispatch-precision-substrate.md](dispatch-precision-substrate.md). Impl status of the monomorphization rework:
 [./monomorphization-rework.md].
 
 Summary: per-edge receiver narrowing + static monomorphization landed; forward ≡ reverse holds on the

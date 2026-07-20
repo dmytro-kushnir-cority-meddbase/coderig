@@ -239,7 +239,6 @@ public static class FactEntryPointDeriver
     // We want: "page PAGE Accounts/MakePaymentComponents/Create2(int, int, int, bool)"
     private static string BuildPageDisplayName(FactEntryPointRule rule, string route, string signature)
     {
-        // Extract the parenthesised params portion, if any
         var paren = signature.IndexOf('(');
         var paramsPart = paren >= 0 ? signature.Substring(paren) : "";
         return $"{rule.Kind} {rule.DefaultMethod} {route}{paramsPart}";
@@ -475,8 +474,6 @@ public static class FactEntryPointDeriver
         // truncating at the first '`' would wrongly drop the method name for generic declaring types.
         body = StripArityMarkers(body);
 
-        // body = "MedDBase.Pages.Accounts.AdvancedPayerDialog.HandleEvent"
-        // Strip namespace prefix "MedDBase.Pages."
         if (!body.StartsWith(namespacePrefix, StringComparison.Ordinal))
         {
             return null;
@@ -484,15 +481,12 @@ public static class FactEntryPointDeriver
 
         body = body.Substring(namespacePrefix.Length);
 
-        // "Accounts.AdvancedPayerDialog.HandleEvent"
-        // Find the last '.' which separates ClassName.MethodName
         var lastDot = body.LastIndexOf('.');
         if (lastDot < 0)
         {
             return body; // single-segment method (no class prefix)
         }
 
-        // Everything before the last dot: replace remaining '.' with '/'
         var classPath = body.Substring(startIndex: 0, length: lastDot).Replace(oldChar: '.', newChar: '/');
         var methodName = body.Substring(lastDot); // includes the '.'
         return classPath + methodName; // e.g. "Accounts/AdvancedPayerDialog.HandleEvent"

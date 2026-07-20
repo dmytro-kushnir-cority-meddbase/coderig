@@ -26,6 +26,10 @@ cover the cases that map to the "rig cannot adjudicate" bucket from the audit.
 
 Evidence: `RtfPipe.Rtf.ToHtml`; Medicare dialog proxy; webhook Redis handoff (F6 in the register).
 
+Also cover custom `DelegatingHandler.SendAsync` pipelines: calls made inside a handler are currently invisible
+from the client wiring path, so the tree should disclose the handler/framework seam instead of silently ending.
+This absorbs the former VS-G13 residual from the completed deferred-delegate card.
+
 ### Relationship
 
 These two items are independent UX fixes that both improve the actionability of rig output. Grouping them

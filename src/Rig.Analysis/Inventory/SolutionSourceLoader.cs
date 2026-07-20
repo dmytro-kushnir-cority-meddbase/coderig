@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Loader;
@@ -43,6 +44,8 @@ internal static class SolutionSourceLoader
         // (the CPU count). The design-time builds run out-of-process with UseSharedCompilation=false
         // and emit no binaries, so concurrency is safe — this is the dominant indexing cost.
         int? parallelism = null,
+        // Explicit TFM selected for multi-targeted projects. Null preserves the historical first-declared-TFM default.
+        string? framework = null,
         // Drop test projects (by name convention) before their design-time build — --no-tests.
         bool excludeTests = false,
         // Optional per-phase timing collector (rig index --time). Records workspace-build,
@@ -75,6 +78,7 @@ internal static class SolutionSourceLoader
             progress,
             scopeProjectPaths,
             maxParallelism,
+            framework,
             excludeTests,
             timings,
             buildCacheDir,
@@ -228,6 +232,7 @@ internal static class SolutionSourceLoader
         Action<string>? progress,
         IReadOnlySet<string>? scopeProjectPaths,
         int parallelism,
+        string? framework,
         bool excludeTests,
         PhaseTimings? timings = null,
         string? buildCacheDir = null,
@@ -241,7 +246,7 @@ internal static class SolutionSourceLoader
 
         // Design-time-build cache (rig index --reuse-build-cache). On a fingerprint hit the (dominant)
         // out-of-process build is skipped and the cached ProjectBuildInfo is replayed. Null = disabled.
-        var cache = buildCacheDir is null ? null : new BuildResultCache(buildCacheDir);
+        var cache = buildCacheDir is null ? null : new BuildResultCache(buildCacheDir, framework);
         var cacheHits = 0;
         var cacheMisses = 0;
 
@@ -379,7 +384,7 @@ internal static class SolutionSourceLoader
         List<ProjectBuildInfo> results;
         if (IsProjectFile(solutionPath))
         {
-            results = BuildSingleProjectResults(solutionPath, progress, options, timings, BuildOrLoad);
+            results = BuildSingleProjectResults(solutionPath, progress, options, timings, framework, BuildOrLoad);
         }
         else
         {
@@ -390,6 +395,7 @@ internal static class SolutionSourceLoader
                 options,
                 scopeProjectPaths,
                 parallelism,
+                framework,
                 excludeTests,
                 timings,
                 BuildOrLoad
@@ -426,6 +432,7 @@ internal static class SolutionSourceLoader
         Action<string>? progress,
         AnalyzerManagerOptions options,
         PhaseTimings? timings,
+        string? framework,
         Func<string, Func<IAnalyzerResult?>, ProjectBuildInfo?> buildOrLoad
     )
     {
@@ -442,7 +449,7 @@ internal static class SolutionSourceLoader
         analyzer.SetGlobalProperty(key: "UseSharedCompilation", value: "false");
         var singleWatch = timings is null ? null : Stopwatch.StartNew();
         var info =
-            buildOrLoad(Path.GetFullPath(projectFilePath), () => BuildCompileOnly(analyzer))
+            buildOrLoad(Path.GetFullPath(projectFilePath), () => BuildCompileOnly(analyzer, framework))
             ?? throw new InvalidOperationException($"Buildalyzer produced no build results for '{projectFilePath}'.");
         if (singleWatch is not null)
         {
@@ -462,6 +469,7 @@ internal static class SolutionSourceLoader
         AnalyzerManagerOptions options,
         IReadOnlySet<string>? scopeProjectPaths,
         int parallelism,
+        string? framework,
         bool excludeTests,
         PhaseTimings? timings,
         Func<string, Func<IAnalyzerResult?>, ProjectBuildInfo?> buildOrLoad
@@ -536,14 +544,14 @@ internal static class SolutionSourceLoader
                     {
                         var info = buildOrLoad(
                             Path.GetFullPath(projectAnalyzer.ProjectFile.Path.ToString()),
-                            () => BuildCompileOnly(projectAnalyzer)
+                            () => BuildCompileOnly(projectAnalyzer, framework)
                         );
                         if (info is not null)
                         {
                             resultsBag.Add(info);
                         }
                     }
-                    catch (Exception ex) when (ex is not DegradedBuildException)
+                    catch (Exception ex) when (ex is not DegradedBuildException and not FrameworkSelectionException)
                     {
                         // A per-project build failure is non-fatal: skip it and carry on. A DegradedBuildException
                         // (0 sources after retries) is the EXCEPTION — it's filtered out here so it propagates.
@@ -567,6 +575,12 @@ internal static class SolutionSourceLoader
             if (fatal is not null)
             {
                 throw fatal;
+            }
+
+            var frameworkFailure = aggregate.Flatten().InnerExceptions.OfType<FrameworkSelectionException>().FirstOrDefault();
+            if (frameworkFailure is not null)
+            {
+                throw frameworkFailure;
             }
 
             throw;
@@ -872,9 +886,10 @@ internal static class SolutionSourceLoader
     }
 
     // Builds the CSharpCompilationOptions for a project: OutputKind from OutputType property,
-    // AllowUnsafe from AllowUnsafeBlocks, and nullable context forced off (fact extraction is
-    // nullable-agnostic; skipping NullableWalker is principled and strictly less work).
-    private static CSharpCompilationOptions BuildCompilationOptions(ProjectBuildInfo result)
+    // AllowUnsafe from AllowUnsafeBlocks, strong-name settings from MSBuild, and nullable context
+    // forced off (fact extraction is nullable-agnostic; skipping NullableWalker is principled and
+    // strictly less work).
+    internal static CSharpCompilationOptions BuildCompilationOptions(ProjectBuildInfo result)
     {
         // Compilation options: OutputKind must be Library for class library / web projects
         // so the compiler doesn't require a Main method (CS5001).  AllowUnsafe and Nullable
@@ -888,6 +903,24 @@ internal static class SolutionSourceLoader
             result.Properties.TryGetValue(key: "AllowUnsafeBlocks", value: out var unsafeStr)
             && bool.TryParse(unsafeStr, out var unsafeBool)
             && unsafeBool;
+        var signAssembly = ReadBooleanProperty(result, "SignAssembly");
+        var delaySign = ReadBooleanProperty(result, "DelaySign");
+        var publicSign = ReadBooleanProperty(result, "PublicSign");
+        string? cryptoKeyFile = null;
+        StrongNameProvider? strongNameProvider = null;
+        if (
+            signAssembly
+            && result.Properties.TryGetValue(key: "AssemblyOriginatorKeyFile", value: out var keyFile)
+            && !string.IsNullOrWhiteSpace(keyFile)
+        )
+        {
+            var projectDirectory = Path.GetDirectoryName(result.ProjectFilePath) ?? Directory.GetCurrentDirectory();
+            cryptoKeyFile = Path.GetFullPath(keyFile, projectDirectory);
+            strongNameProvider = new DesktopStrongNameProvider(
+                keyFileSearchPaths: ImmutableArray.Create(projectDirectory),
+                tempPath: Path.GetTempPath()
+            );
+        }
         // Force nullable context OFF regardless of the project's <Nullable> setting: fact extraction is
         // nullable-AGNOSTIC (symbol resolution, DocIDs, references, type-relations and dispatch are
         // identical with or without it; nullable context only governs warnings, which we discard), so
@@ -897,8 +930,19 @@ internal static class SolutionSourceLoader
         // resolution / type construction), not nullable-flow-specific, so it allocates either way.
         // Kept because it's principled and strictly less work, not because it's a major win.
         const NullableContextOptions nullableContext = NullableContextOptions.Disable;
-        return new CSharpCompilationOptions(outputKind, allowUnsafe: allowUnsafe, nullableContextOptions: nullableContext);
+        return new CSharpCompilationOptions(
+            outputKind,
+            cryptoKeyFile: cryptoKeyFile,
+            delaySign: signAssembly ? delaySign : null,
+            publicSign: signAssembly && publicSign,
+            strongNameProvider: strongNameProvider,
+            allowUnsafe: allowUnsafe,
+            nullableContextOptions: nullableContext
+        );
     }
+
+    private static bool ReadBooleanProperty(ProjectBuildInfo result, string propertyName) =>
+        result.Properties.TryGetValue(key: propertyName, value: out var value) && bool.TryParse(value, out var parsed) && parsed;
 
     // Resolves a project's metadata references and in-workspace project references.
     // The transitive in-set closure of ProjectReferences is added as live Roslyn ProjectReferences (one
@@ -1431,17 +1475,41 @@ internal static class SolutionSourceLoader
     // target on its OUTER project — only cross-targeting dispatch targets live there — so building it
     // with CompileOnlyOptions unscoped fails with MSB4057 and yields zero usable results, degrading a
     // perfectly healthy, restored project (0 source files after retries -> the whole index aborts;
-    // first hit: MedDBase.CrossPlatform). Scope the build to the FIRST DECLARED TFM explicitly (net48
-    // for the MedDBase monorepo — matches the rest of the app graph); single-target projects keep the
-    // unscoped build. Indexing one TFM is lossy under conditional compilation — the union extraction is
-    // designed in docs/backlog/todo/multi-tfm-union-extraction.md.
-    private static IAnalyzerResult? BuildCompileOnly(IProjectAnalyzer analyzer)
+    // first hit: MedDBase.CrossPlatform). Scope the build to the FIRST DECLARED TFM by default (net48
+    // for the MedDBase monorepo — matches the rest of the app graph), or to the caller-selected `framework`
+    // when given; single-target projects keep the unscoped build. Indexing one TFM is lossy under
+    // conditional compilation — the union extraction is designed in docs/backlog/todo/multi-tfm-union-extraction.md.
+    private static IAnalyzerResult? BuildCompileOnly(IProjectAnalyzer analyzer, string? framework)
     {
         var targetFrameworks = analyzer.ProjectFile.TargetFrameworks;
-        var results = targetFrameworks is { Length: > 1 }
-            ? analyzer.Build(targetFrameworks[0], CompileOnlyOptions())
+        var selectedFramework = SelectFramework(analyzer.ProjectFile.Name, targetFrameworks, framework);
+        var results = selectedFramework is not null
+            ? analyzer.Build(selectedFramework, CompileOnlyOptions(forExplicitFramework: framework is not null))
             : analyzer.Build(CompileOnlyOptions());
         return PreferredResult(results);
+    }
+
+    // Resolves which TFM to build for a multi-targeted project: null for single-target projects (unscoped
+    // build), the first declared TFM when the caller didn't ask for one (historical default), or the
+    // caller-requested TFM — throwing FrameworkSelectionException if the project doesn't declare it.
+    internal static string? SelectFramework(string projectName, IReadOnlyList<string>? targetFrameworks, string? requestedFramework)
+    {
+        if (targetFrameworks is not { Count: > 1 })
+        {
+            return null;
+        }
+
+        if (requestedFramework is null)
+        {
+            return targetFrameworks[0];
+        }
+
+        var selected = targetFrameworks.FirstOrDefault(tfm => tfm.Equals(requestedFramework, StringComparison.OrdinalIgnoreCase));
+        return selected
+            ?? throw new FrameworkSelectionException(
+                $"Project '{projectName}' does not target requested framework '{requestedFramework}'. "
+                    + $"Available target frameworks: {string.Join(", ", targetFrameworks)}."
+            );
     }
 
     // Belt to BuildCompileOnly's scoping: prefer the first result that actually carries sources over a
@@ -1459,11 +1527,19 @@ internal static class SolutionSourceLoader
     // CopyFilesToOutputDirectory, and Before/AfterBuild. Non-destructive, and a 30-50% cold-load speedup
     // with identical reference/document counts (Buildalyzer#344). A fresh instance per call: the parallel
     // build loop must not share one mutable options object across threads.
-    private static EnvironmentOptions CompileOnlyOptions()
+    private static EnvironmentOptions CompileOnlyOptions(bool forExplicitFramework = false)
     {
         var options = new EnvironmentOptions();
         options.TargetsToBuild.Clear();
         options.TargetsToBuild.Add("Compile");
+        if (forExplicitFramework)
+        {
+            // A restore warning persisted as an error can prevent Buildalyzer from producing sources.
+            // Refresh the selected TFM's assets without weakening Roslyn compilation diagnostics.
+            options.GlobalProperties["RestoreForceEvaluate"] = "true";
+            options.GlobalProperties["TreatWarningsAsErrors"] = "false";
+        }
+
         return options;
     }
 
@@ -1478,6 +1554,8 @@ internal static class SolutionSourceLoader
     // index command's existing load-failure handler catches it (clean exit, no raw stack trace), and is a
     // distinct type so the per-project "skip on build failure" catch can let it through to abort the run.
     private sealed class DegradedBuildException(string message) : InvalidOperationException(message);
+
+    private sealed class FrameworkSelectionException(string message) : InvalidOperationException(message);
 
     private sealed record ProjectSourceLoadResult(IReadOnlyList<SourceFileInfo> SourceFiles, IReadOnlyList<SourceModel> Sources);
 

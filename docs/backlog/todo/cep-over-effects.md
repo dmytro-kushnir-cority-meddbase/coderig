@@ -1,9 +1,9 @@
-## Feature: CEP over effects — a pattern engine for hazard detectors ⭐ HIGHEST PRIORITY (deferred)
+## Feature: CEP over effects — a pattern engine for hazard detectors (strategic, deferred)
 
-**Status:** highest-priority forward work, DEFERRED (gated on the dispatch-precision substrate fix in
-[bug-callers-reverse-overreach.md](../../bug-callers-reverse-overreach.md) + a design pass). Conceptual model:
-memory `project_coderig_effect_correlation_model` + the shipped `FactCorrelationDeriver` (FR-7
-`cache_coherence` is its first instance).
+**Status:** TODO / DESIGN-GATED. The dispatch correctness prerequisite shipped; see the
+[shipped substrate](../done/dispatch-precision-substrate-shipped.md). Start only with the design document below,
+then prove one operator migration against byte-equivalent output before considering a DSL. The shipped
+`FactCorrelationDeriver` (FR-7 `cache_coherence`) is the durable precedent.
 
 ### Idea
 Treat the program's effects as an EVENT STREAM and express hazard detectors as declarative PATTERN QUERIES
@@ -37,9 +37,10 @@ generalize it into a small operator set + a JSON pattern DSL, and migrate the be
 5. new detectors as pure data (dual_write, …); FP-calibrate each on the real store before on-by-default.
 
 ### Hard constraints
-- **Substrate dependency (why deferred):** CEP runs over the reachability graph; the dispatch
-  over-approximation (the `base.M()` ×49 fan + receiver-less calls) pollutes happens-before → phantom pattern
-  matches. The dispatch-precision fixes are a **prerequisite** for trustworthy CEP.
+- **Dispatch semantics:** the one-hop forward engine is the CEP reachability substrate. Residual receiver-less
+  CHA fan-out remains an explicitly disclosed source of phantom structural matches; do not use the reverse
+  all-hops oracle as CEP time. The terminal [dispatch calibration](../done/dispatch-precision-substrate.md)
+  is not a correctness gate for the design pass.
 - **Path-insensitivity ceiling:** ordering is structural reachability, not execution → sound findings
   (structural absence/presence), **unsound clears**; `dominance` needs a CFG. Disclose, don't pretend.
 

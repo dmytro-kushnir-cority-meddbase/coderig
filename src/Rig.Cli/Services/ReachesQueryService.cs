@@ -70,7 +70,8 @@ public static class ReachesQueryService
             inputs.Invocations,
             BaseEdgeTuples(graph),
             ctorRefs: inputs.CtorRefs,
-            throwRefs: inputs.ThrowRefs
+            throwRefs: inputs.ThrowRefs,
+            allocationFacts: inputs.AllocationFacts
         );
 
         // Effects whose enclosing method is reachable from the entry point — same join ReachesCommand does

@@ -1079,6 +1079,38 @@ public static class Reads
         return rows;
     }
 
+    // Compiler-owned allocation facts for the ordinary whole-store effect derivation path.
+    public static async Task<IReadOnlyList<AllocationFact>> LoadAllocationFactsAsync(
+        RigDbContext context,
+        IReadOnlyCollection<string>? enclosingScope = null,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var query = context.AllocationFacts.AsNoTracking().AsQueryable();
+        if (enclosingScope is not null)
+        {
+            query = query.Where(a => enclosingScope.Contains(a.EnclosingSymbolId));
+        }
+
+        return await query
+            .Select(a => new AllocationFact(
+                a.Operation,
+                a.ResourceType,
+                a.EnclosingSymbolId,
+                a.FilePath,
+                a.Line,
+                a.EnclosingLoopKind,
+                a.EnclosingLoopDetail,
+                a.EnclosingGuards,
+                a.Mechanism,
+                a.Cardinality,
+                a.ShallowSizeBytes,
+                a.SizeConfidence,
+                a.SizeBasis
+            ))
+            .ToListAsync(cancellationToken);
+    }
+
     // Library call SITES made by the given enclosing methods: invocations whose target is NOT in the
     // indexed source (TargetInSource = 0) — the raw calls that reach OUT to a referenced assembly.
     // `tree --full` renders the ones not already surfaced as effects as dimmed leaves. Chunked over

@@ -1,6 +1,10 @@
 ## Deferred-delegate → promoted async entry point
 
-**Status:** todo — design landed 2026-06-15; extraction not yet built
+**Status:** DONE — delegate consumers/handoff EPs, lambda identity, stored delegate bindings, and the Rx
+rule all shipped in the commits recorded below. The only unrelated residual, custom `DelegatingHandler` boundary
+disclosure, is now tracked by [CLI paths and boundaries](../todo/cli-ux-file-paths-and-boundaries.md).
+
+The remainder of this file is the pre-implementation design and evidence record.
 **Source:** extracted from `docs/rig-review-issues.md`, 2026-06-25 (F3, VS-G1, VS-C1, VS-G10, VS-G11, VS-G13, #18b, #18c from the audit register)
 
 ### The unified theme
@@ -27,7 +31,7 @@ defer their delegate arg → promote to async EP node; otherwise inline (synchro
 
 **Note: (1) without (2) is a consumer-less no-op — ship them together. Both require a re-mine.**
 
-### Specific open items (in priority order)
+### Historical worklist (all delegate slices shipped; do not recreate)
 
 **#18a — Rx `Subscribe` handoff rule (rule data, no engine change)**
 Add Rx Subscribe consumers to `handoffDispatchers`. ONLY fixes the method-group form (`obs.Subscribe(Handle)`);
@@ -69,19 +73,18 @@ Fix: the two coordinated primitives above (delegate-binding fact + re-keyed invo
 Note: shipping (1) without (2) is a consumer-less no-op — do them together. Lower frequency than arg-lambdas
 (#18b) so lower priority despite being the "delegate-as-interface" framing.
 
-**VS-G13 — `DelegatingHandler.SendAsync` not traversed**
-HTTP made inside a custom `LoggingHandler` is invisible to trees rooted where the handler is wired.
-`Nhs.Pds/Client/LoggingHandler.cs:33`. Known DelegatingHandler blind spot — document in `reaches` output as
-a boundary. Sev: Low.
+**VS-G13 — `DelegatingHandler.SendAsync` not traversed — MOVED**
+This was not a delegate-binding defect. Its boundary-disclosure requirement now lives in
+[CLI paths and boundaries](../todo/cli-ux-file-paths-and-boundaries.md).
 
-### Already shipped (do NOT recreate)
+### Shipped implementation (do NOT recreate)
 - #18 infra (2026-06-15): `DelegateConsumer` fact, `HandoffClassifier`, `TraversalMode.AsyncInclude`,
   `handoffDispatchers` for schedulers/IAsyncEvent/Echo/WithGlobal.Schedule, `HandoffEntryPoint` derivation,
   `rig handoffs`/`derive`. Validated live (b82ce792: 267,843 symbols, 38,513 lambda symbols, 699 delegate_bind
   facts). 18b `c10815f`/`ae81461`, 18c `77dec49`, 18a meddbase `15585db`.
 - VS-C3 (SemaphoreSlim → `async_lock:acquire/release`, 2026-06-15 quick-win batch).
 
-### Acceptance shape
+### Original acceptance shape (met by the shipped implementation)
 - `new BackgroundProcessSchedule(…, ProcessHealthcodeQueue, …)` → `ProcessHealthcodeQueue` appears in
   `rig derive --entrypoints` and `rig reaches ProcessHealthcodeQueue` reports `soap:submit`.
 - `obs.Subscribe(handler)` does NOT pull `handler`'s effects into a synchronous `reaches` of the wiring method.

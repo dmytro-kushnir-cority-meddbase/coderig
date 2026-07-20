@@ -1,5 +1,10 @@
 ## External-virtual-override orphans — first-party overrides unreachable through an external base call
 
+**Status:** DONE (audited against code 2026-07-19). The `redirectRules` mechanism shipped end-to-end and was
+calibrated in the original environment. The remaining rule-mining skill and offline decompilation ideas are
+optional research, not approved implementation work; create a fresh todo if a concrete corpus exposes
+another external trampoline seam. The backlog section below is retained as the discovery record.
+
 **Root cause of the "DoWhenCommitted" symptom above (verified 2026-06-23, in-repro + MedDBase store).** A call
 to a method *declared on an external base class* whose **first-party override** carries the effect:
 `document.Save()` (parameterless) statically binds to `M:SD.LLBLGen.Pro.ORMSupportClasses.EntityBase.Save`

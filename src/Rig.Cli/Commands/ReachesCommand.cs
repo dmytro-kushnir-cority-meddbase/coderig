@@ -135,7 +135,8 @@ internal static class ReachesCommand
             inputs.Invocations,
             BaseEdgeTuples(graph),
             ctorRefs: inputs.CtorRefs,
-            throwRefs: inputs.ThrowRefs
+            throwRefs: inputs.ThrowRefs,
+            allocationFacts: inputs.AllocationFacts
         );
         effects = ApplyEffectFilters(effects, only: opts.Only, exclude: opts.Exclude); // --only / --exclude (e.g. --exclude throw)
         traversalWatch.Stop();

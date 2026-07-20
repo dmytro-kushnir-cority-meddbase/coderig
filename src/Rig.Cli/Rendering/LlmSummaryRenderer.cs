@@ -498,7 +498,6 @@ internal static class LlmSummaryRenderer
     {
         var rules = renderRules ?? FactRenderRules.Empty;
 
-        // Determine whether this node is suppressed.
         if (IsSuppressed(node.SymbolId, suppress))
         {
             // Suppressed node is transparent: walk its non-truncated children at the same depth
@@ -570,7 +569,6 @@ internal static class LlmSummaryRenderer
             var arity = ParseArity(node.SymbolId).ToString(CultureInfo.InvariantCulture);
             var calls = node.CallSites.ToString(CultureInfo.InvariantCulture);
 
-            // Merge this node's own effects with any rolled-up effects from suppressed children.
             List<string> rawEffects;
             if (hasEffect && hasRolledUp)
             {
@@ -610,7 +608,6 @@ internal static class LlmSummaryRenderer
             // A folded node adds opaque:<label> / collapsed:<label> so the fold is greppable + machine-parseable.
             var flags = AppendFoldFlag(BuildFlags(node), fold);
 
-            // Emit the row: fixed column count, no trailing tab.
             // Each projection has a fixed column count (paths/full = 6, effects = 7); empty fields
             // are empty strings. The row ends at the last column — no trailing tab, even when the
             // last column (flags) is empty. --guards appends one trailing `guards` column.
@@ -656,8 +653,6 @@ internal static class LlmSummaryRenderer
         }
     }
 
-    // Emit a TSV row with NO trailing tab: fields are joined by '\t' without a trailing separator.
-    // Variadic params — number of fields determines the projection column count.
     private static void EmitRow(TextWriter output, params string[] fields)
     {
         output.WriteLine(string.Join("\t", fields));
@@ -841,8 +836,6 @@ internal static class LlmSummaryRenderer
                 string truncFlag;
                 if (node.TruncationCause == TruncationCause.AlreadyExpanded)
                 {
-                    // Look up the canonical id for this SymbolId; if we haven't seen it expanded yet
-                    // (e.g. it was only ever truncated), use 0 (no canonical).
                     var canonicalId = firstEmissionId.TryGetValue(node.SymbolId, out var cid) ? cid : 0;
                     truncFlag = canonicalId > 0 ? $"seen:{canonicalId.ToString(CultureInfo.InvariantCulture)}" : "seen";
                 }
@@ -866,7 +859,6 @@ internal static class LlmSummaryRenderer
             }
             else
             {
-                // Record the first expanded emission.
                 if (!firstEmissionId.ContainsKey(node.SymbolId))
                 {
                     firstEmissionId[node.SymbolId] = thisId;

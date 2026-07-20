@@ -573,7 +573,6 @@ internal static class TreeRenderer
     {
         var list = effects.ToList();
 
-        // Collapse lock acquire+release pairs per resource.
         var acquiresByResource = list.Where(e => e.Provider == "lock" && e.Operation == "acquire")
             .GroupBy(e => e.ResourceType, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key ?? "", g => g.Count(), StringComparer.OrdinalIgnoreCase);
@@ -587,7 +586,6 @@ internal static class TreeRenderer
 
         var result = new List<string>();
 
-        // Emit one collapsed "lock" entry per paired resource.
         foreach (var resource in pairedResources.OrderBy(r => r, StringComparer.OrdinalIgnoreCase))
         {
             var lockEmoji = EmojiLookup.For(emoji, provider: "lock", operation: "held");
@@ -596,7 +594,6 @@ internal static class TreeRenderer
             result.Add($"{lockEmoji} lock{resourceLabel}");
         }
 
-        // Emit non-lock effects and any unpaired lock effects normally.
         foreach (var e in list)
         {
             var isPaired =
@@ -608,7 +605,7 @@ internal static class TreeRenderer
             }
 
             var glyph = EmojiLookup.For(emoji, provider: e.Provider, operation: e.Operation);
-            result.Add($"{glyph} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}");
+            result.Add($"{glyph} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}{AllocationEvidenceFormatter.Suffix(e)}");
         }
 
         // Dedup: collapse identical strings to "label ×N".
@@ -626,7 +623,7 @@ internal static class TreeRenderer
         // condition; mark it with ⎇ like a resolved call edge. Empty (must-run) → no glyph.
         var guardText = ShortGuards(e.EnclosingGuards);
         var guardTag = guardText.Length == 0 ? "" : $" ⎇ [{guardText}]";
-        return $"{glyph} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}{guardTag}{loc}";
+        return $"{glyph} {e.Provider}:{e.Operation} {ShortName(e.ResourceType)}{AllocationEvidenceFormatter.Suffix(e)}{guardTag}{loc}";
     }
 
     // `tree --full`: a library call that produced NO effect (resolved to a referenced-assembly target, but

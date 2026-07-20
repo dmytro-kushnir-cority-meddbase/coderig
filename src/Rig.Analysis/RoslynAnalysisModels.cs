@@ -16,7 +16,8 @@ internal sealed record SourceExtractionResult(
     IReadOnlyList<SymbolFact> Symbols,
     IReadOnlyList<ReferenceFact> References,
     IReadOnlyList<TypeRelationFact> TypeRelations,
-    IReadOnlyList<DispatchFact> Dispatch
+    IReadOnlyList<DispatchFact> Dispatch,
+    IReadOnlyList<AllocationFact> Allocations
 );
 
 internal sealed record SourceModel(string ProjectName, string FilePath, SyntaxTree Tree, SyntaxNode Root, SemanticModel SemanticModel);

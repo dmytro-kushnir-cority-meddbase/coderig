@@ -123,7 +123,8 @@ public static class TreeQueryService
                     invocations: inputs.Invocations,
                     baseEdges: BaseEdgeTuples(graph),
                     ctorRefs: inputs.CtorRefs,
-                    throwRefs: inputs.ThrowRefs
+                    throwRefs: inputs.ThrowRefs,
+                    allocationFacts: inputs.AllocationFacts
                 );
 
         return new TreeComputation(roots, effects, graph, inputs.EpData);

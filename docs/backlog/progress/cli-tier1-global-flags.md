@@ -1,6 +1,7 @@
 ## CLI Tier-1 global flags — uniform across all query commands
 
-**Status:** todo — mostly shipped; what remains is `--time`/`--no-cache` uniformity.
+**Status:** PROGRESS — `--format`, `--limit`, and `impact --time` are shipped. Remaining work is
+`--time` on `derive`/`entrypoints` and `--no-cache` on the cached derive/entry-point paths.
 **Source:** extracted from `docs/rig-review-issues.md`, 2026-06-25 (#10 / E2 Tier-1 deferred section)
 
 ### Shipped slices (verified against code 2026-07-02)
@@ -22,14 +23,17 @@
   `PhaseTimings` + OS/proc CPU/disk/RAM sampler + `TimingReport`, via a disposable `QueryTiming` helper)
   on `tree`/`callers`/`reaches`/`path`/`dispatch-fans`/`effects-diff`. It paid off immediately —
   attributed the reverse-query ~8s floor to **graph load (disk-IO, 1.5 GB read/query, CPU-idle), not
-  traversal** (see [warm-graph-across-queries.md](warm-graph-across-queries.md)).
-  **Still absent on `derive`/`entrypoints`/`impact`.**
+  traversal** (see [warm-graph-across-queries.md](../todo/warm-graph-across-queries.md)).
+- **`impact --time` ✅ SHIPPED (`d2c71d1b`, 2026-07-06)** — uses the same `QueryTiming`/
+  `TimingReport` model and telemetry CSV as indexing. The finer phase split remains separately tracked in
+  [web timing unification](aaa-web-timing-unification-ui.md).
+  **Still absent on `derive`/`entrypoints`.**
 
 ### Remaining work
 
-- `--time` on `derive`/`entrypoints`/`impact` — the `QueryTiming` helper exists; additive wiring.
-- `--no-cache` — today only `tree` (`TreeCommand.cs:70`) and `impact` (`ImpactCommand.cs:56`); extend
-  to every command with a render cache.
+- `--time` on `derive`/`entrypoints` — the `QueryTiming` helper exists; additive wiring.
+- `--no-cache` — today exposed only by `tree` and `impact`, while effect and entry-point derivation also use
+  `QueryCache`. Thread an opt-out through those command paths; commands with no cache need no flag.
 
 The broader E2 flag-surface audit (dead aliases, mode-group validation, rename deprecations) was DONE
 2026-06-14. This item is specifically the **Tier-1 generalization** that was explicitly deferred as

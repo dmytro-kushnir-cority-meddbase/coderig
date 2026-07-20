@@ -9,5 +9,6 @@ public sealed record AnalysisResult(
     IReadOnlyList<SymbolFact>? Symbols = null,
     IReadOnlyList<ReferenceFact>? References = null,
     IReadOnlyList<TypeRelationFact>? TypeRelations = null,
-    IReadOnlyList<DispatchFact>? DispatchFacts = null
+    IReadOnlyList<DispatchFact>? DispatchFacts = null,
+    IReadOnlyList<AllocationFact>? AllocationFacts = null
 );

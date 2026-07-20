@@ -42,36 +42,17 @@ New-Item -ItemType Directory -Force -Path $packageOutput | Out-Null
 
 Push-Location $repoRoot
 try {
-    dotnet tool restore
-    # Native tools report failure via EXIT CODE, not a terminating error, so $ErrorActionPreference="Stop"
-    # does NOT halt on them (same trap as the test gate below). Gate the CHEAP checks explicitly so a
-    # compile break fails in seconds — BEFORE the expensive build/test/pack/install — instead of sailing
-    # through to a buried failure at the end.
-    #
-    # csharpier FORMATS in place (not `check`) — publish always formats everything so nobody has to format
-    # inline. The repo is kept format-clean, so this only rewrites files that drifted (the changed ones);
-    # it runs as a discrete step BEFORE build, so it never races an in-flight compile.
     dotnet csharpier format .
     if ($LASTEXITCODE -ne 0) { throw "csharpier format failed (exit $LASTEXITCODE)." }
-    dotnet restore $solution
-    if ($LASTEXITCODE -ne 0) { throw "Restore failed (exit $LASTEXITCODE)." }
-    dotnet build $solution -c $Configuration /p:UseSharedCompilation=false
+    
+    dotnet build $solution -c $Configuration 
     if ($LASTEXITCODE -ne 0) { throw "Build failed (exit $LASTEXITCODE) - not testing/packing." }
 
     if (-not $SkipTests) {
-        # `dotnet test` (Microsoft.Testing.Platform) reports failures via EXIT CODE, not a terminating
-        # error, so $ErrorActionPreference="Stop" does NOT halt on a red suite. Gate explicitly, or a
-        # failing test silently sails through to pack + global reinstall ("green" that isn't).
-        dotnet test $solution -c $Configuration --no-build /p:UseSharedCompilation=false
+        dotnet test $solution -c $Configuration --no-build --no-restore
         if ($LASTEXITCODE -ne 0) { throw "Tests failed (exit $LASTEXITCODE) - not packing/installing." }
     }
-
-    # PORTABLE pack — do NOT add `-r <rid>`/`-p:PublishReadyToRun=true`. A RID-specific / ReadyToRun
-    # publish of the tool silently breaks Buildalyzer's design-time builds of .NET FRAMEWORK (net4x)
-    # projects: they return no result and are DROPPED from the index (net48 web/Pages vanish, ~half the
-    # symbols lost), while netstandard/modern projects still index. The loader code is fine — only the
-    # packaging triggers it. Verified on playgrounds/LegacyNet48Web: portable = 408 symbols, R2R = 35.
-    # See memory `feedback_coderig_r2r_publish_net48`.
+    
     dotnet pack $toolProject `
         -c $Configuration `
         -o $packageOutput `
@@ -80,6 +61,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Pack failed (exit $LASTEXITCODE) - not installing." }
 
     if (-not $SkipToolInstall) {
+        
         $previousErrorActionPreference = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         dotnet tool uninstall --global rig *> $null
@@ -94,7 +76,6 @@ try {
         if ($LASTEXITCODE -ne 0) {
             throw "Global tool install failed (exit $LASTEXITCODE). A running rig process (e.g. 'rig web') can lock the tool store - stop it and re-run."
         }
-
         # Native failure reports via exit code (same trap as above), and a locked/failed swap can leave a
         # STALE rig on PATH while everything above was green — verify the binary actually is this build.
         $installedVersion = rig --version

@@ -214,6 +214,7 @@ internal static class DeriveCommand
         {
             // TSV column reference (tab-separated; one row per record):
             //   effect      \t provider \t operation \t resource \t enclosing \t file \t line \t observations(csv of Type)
+            //               \t mechanism \t cardinality \t shallowSizeBytes \t sizeConfidence \t sizeBasis
             //   hazard      \t type \t confidence \t reason \t cell/context \t enclosing \t file \t line \t detail
             //   entrypoint  \t kind \t method \t route \t file \t line \t services(csv) \t activeServices(csv) \t fqn
             // The `effect` row's observations column keeps the comma-joined Type list (back-compat: existing
@@ -223,7 +224,7 @@ internal static class DeriveCommand
             {
                 var observations = string.Join(',', (e.Observations ?? []).Select(o => o.Type));
                 io.TextOutput.Output.WriteLine(
-                    $"effect\t{e.Provider}\t{e.Operation}\t{e.ResourceType}\t{e.EnclosingSymbolId}\t{e.FilePath}\t{e.Line}\t{observations}"
+                    $"effect\t{e.Provider}\t{e.Operation}\t{e.ResourceType}\t{e.EnclosingSymbolId}\t{e.FilePath}\t{e.Line}\t{observations}\t{e.Mechanism}\t{e.Cardinality}\t{e.ShallowSizeBytes}\t{e.SizeConfidence}\t{e.SizeBasis}"
                 );
             }
 
@@ -255,7 +256,7 @@ internal static class DeriveCommand
             foreach (var e in group.Take(opts.Limit / 8 + 1))
             {
                 io.TextOutput.Output.WriteLine(
-                    $"{Indent.L3}{ShortName(e.ResourceType)}  <- {ShortName(e.EnclosingSymbolId)}  {ShortenPath(e.FilePath)}:{e.Line}"
+                    $"{Indent.L3}{ShortName(e.ResourceType)}{AllocationEvidenceFormatter.Suffix(e)}  <- {ShortName(e.EnclosingSymbolId)}  {ShortenPath(e.FilePath)}:{e.Line}"
                 );
             }
         }
@@ -598,7 +599,6 @@ internal static class DeriveCommand
                 .GroupBy(f => f.Enclosing, StringComparer.Ordinal)
                 .Select(g =>
                 {
-                    // Best (worst-severity) confidence among this method's sites — the most urgent signal.
                     var worstConfidence = g.Select(f => f.Confidence).OrderBy(HazardConfidenceRank).First();
                     // Representative site: the one with the worst confidence (or first alphabetically on tie).
                     var representative = g.OrderBy(f => HazardConfidenceRank(f.Confidence))

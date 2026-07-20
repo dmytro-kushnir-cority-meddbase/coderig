@@ -106,12 +106,9 @@ The rules that make this produce mergeable code, not plausible diffs:
   (prints help, "Zero tests ran"). Run a subset with:
   `dotnet run --project tests/Rig.Tests --no-build -- --treenode-filter "/*/*/<ClassName>/*"`
   (path is `/Assembly/Namespace/Class/Test`; `*` wildcards each segment). `dotnet test` with no filter is fine.
-- **`-warnaserror` is OFF** (removed from mini-ci 2026-06-22). Analyzer diagnostics — the forked
-  `UseNamedArgs` (`use-named-args-fs`, fires on every multi-arg first-party call), `MA0011`
-  (format-provider) — are now **non-fatal warnings**, not build errors: the build no longer fails on them
-  and there's no fix-it round-trip. Still worth following for readability where cheap (named args on new
-  multi-arg first-party calls; `CultureInfo.InvariantCulture` on formatting), and `.editorconfig`
-  `UseNamedArgs.exclude_methods` still suppresses the noisy stdlib ones — but none of it gates the build.
+- **`-warnaserror` is OFF** (removed from mini-ci 2026-06-22). Analyzer diagnostics such as `MA0011`
+  (format-provider) are **non-fatal warnings**, not build errors: the build no longer fails on them and
+  there's no fix-it round-trip. Still worth following for readability where cheap, but none of it gates the build.
   - **Don't run csharpier format CONCURRENTLY with a `dotnet build`** (format edits a file the compiler is
     reading) → spurious "N Error(s)" with no diagnostic. mini-ci avoids this by formatting as a discrete
     step BEFORE build; the trap only bites if you kick off a manual format mid-build. Re-run the build once

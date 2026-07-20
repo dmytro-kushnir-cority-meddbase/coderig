@@ -1,7 +1,7 @@
 # rig — feature backlog
 
 Forward-looking feature specs not yet scheduled. Distinct from
-[rig-review-issues.md](../rig-review-issues.md) (the MR-!10645 audit punch-list). Promote an item to a branch
+[rig-review-issues.md](../archive/rig-review-issues.md) (the MR-!10645 audit punch-list). Promote an item to a branch
 + commits when picked up; convert to a GitHub issue (`gh issue create`, remote `dv00d00/coderig`) if tracked
 externally.
 
@@ -11,8 +11,8 @@ externally.
 
 ```
 docs/backlog/
-  todo/       proposed / not-started
-  progress/   has shipped AND open sub-items, or actively in-flight
+  todo/       proposed / not-started, plus remaining work blocked on unavailable external corpora
+  progress/   has shipped AND locally actionable open sub-items, or actively in-flight
   done/       fully shipped / superseded / retracted / parked-wontfix / reference
 ```
 

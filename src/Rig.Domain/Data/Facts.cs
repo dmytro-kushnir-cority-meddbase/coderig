@@ -150,6 +150,27 @@ public sealed record TypeRelationFact(
 /// </summary>
 public sealed record DispatchFact(string SourceMember, string TargetMember, string Kind);
 
+/// <summary>A compiler-proven managed allocation site.</summary>
+/// <remarks>
+/// Core fact: unlike user effect rules, allocation identity is fixed by Roslyn semantics at index time.
+/// Operation is object|array|boxing; ResourceType is the allocated static type.
+/// </remarks>
+public sealed record AllocationFact(
+    string Operation,
+    string ResourceType,
+    string EnclosingSymbolId,
+    string FilePath,
+    int Line,
+    string? EnclosingLoopKind = null,
+    string? EnclosingLoopDetail = null,
+    string? EnclosingGuards = null,
+    string? Mechanism = null,
+    string? Cardinality = null,
+    long? ShallowSizeBytes = null,
+    string? SizeConfidence = null,
+    string? SizeBasis = null
+);
+
 // --- Stage-3 (read) query projections ---
 
 public sealed record SymbolSearchHit(string SymbolId, string Kind, string Signature, string FilePath, int Line, string DefiningAssembly);
@@ -752,7 +773,12 @@ public sealed record DerivedEffect(
     // CFG control-dependence guard set of the producing call-site (branch-aware-effects), copied from the
     // originating reference fact. Lets `tree --view full --guards` mark a guarded effect leaf with ⎇. Null
     // = must-run. Query-side only; carried through the hazard-effects cache (see HazardEffectsCacheKey).
-    string? EnclosingGuards = null
+    string? EnclosingGuards = null,
+    string? Mechanism = null,
+    string? Cardinality = null,
+    long? ShallowSizeBytes = null,
+    string? SizeConfidence = null,
+    string? SizeBasis = null
 );
 
 // Fact-side projections of the observation rules (the same AnalysisRuleSet.*Observations data the

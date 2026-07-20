@@ -86,6 +86,10 @@ internal static class IndexCommands
         var identity = new Option<string?>("--identity") { Description = "Store identity for an append (multi-solution) index." };
         var from = new Option<string?>("--from") { Description = "Index only the entry project's transitive closure (one workspace)." };
         var parallelism = new Option<int?>("--parallelism") { Description = "Max concurrent project analyses." };
+        var framework = new Option<string?>("--framework")
+        {
+            Description = "Target framework moniker to select for multi-targeted projects (for example, net10.0).",
+        };
         var merge = new Option<bool>("--merge") { Description = "Accumulate into an existing store (multi-solution unified store)." };
         var includeTests = new Option<bool>("--include-tests") { Description = "Keep test projects (excluded by default)." };
         var noGraph = new Option<bool>("--no-graph")
@@ -122,6 +126,7 @@ internal static class IndexCommands
             identity,
             from,
             parallelism,
+            framework,
             merge,
             includeTests,
             noGraph,
@@ -142,6 +147,7 @@ internal static class IndexCommands
                         identity: pr.GetValue(identity),
                         fromProject: pr.GetValue(from) is { } f ? Path.GetFullPath(f) : null,
                         parallelism: pr.GetValue(parallelism),
+                        framework: pr.GetValue(framework),
                         merge: pr.GetValue(merge),
                         includeTests: pr.GetValue(includeTests),
                         noGraph: pr.GetValue(noGraph),
@@ -173,6 +179,7 @@ internal static class IndexCommands
         string? identity,
         string? fromProject,
         int? parallelism,
+        string? framework,
         bool merge,
         bool includeTests,
         bool noGraph,
@@ -260,6 +267,11 @@ internal static class IndexCommands
                 output.WriteLine($"Parallelism: {parallelism}");
             }
 
+            if (framework is not null)
+            {
+                output.WriteLine($"Framework: {framework}");
+            }
+
             output.WriteLine($"Store: {Path.Combine(StoreLayout.RigDir(workingDirectory), storeId)}");
             if (provenance.Commit is { } sourceCommit)
             {
@@ -276,6 +288,7 @@ internal static class IndexCommands
                 projectIdentity: identity,
                 scopeProjectPaths: scopeProjectPaths,
                 parallelism: parallelism,
+                framework: framework,
                 // Tests are EXCLUDED by default (they add graph width, not reach); `--include-tests` opts
                 // them back in.
                 excludeTests: !includeTests,

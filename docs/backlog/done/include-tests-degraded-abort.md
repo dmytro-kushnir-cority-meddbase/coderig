@@ -1,6 +1,8 @@
 # `rig index --include-tests` aborts the whole solution on one un-buildable test project
 
-**Status:** todo (parked 2026-07-08) · **Found:** dogfooding MR-!10898 reference-cut review — wanted test
+**Status:** PARKED / DONE-FOR-NOW (2026-07-08; moved out of the active queue 2026-07-19). Reopen when a
+concrete workflow requires test projects in the graph; the accepted direction is still to make the build
+phase honor explicit `projects.exclude`, never to silently drop degraded projects. · **Found:** dogfooding MR-!10898 reference-cut review — wanted test
 projects indexed so rig could cross-check ReferenceTrimmer's "unused" claim on test-project cuts.
 **Family:** index / robustness
 
